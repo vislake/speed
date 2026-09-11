@@ -186,7 +186,7 @@ func (m *Module) Register(reg *pkgcore.ComponentRegistry) error {
 		}
 	}
 	// The handler is built here with the registry's resolved event bus
-	// (reg.EventBus()) as well as m.credentials: Bootstrap resolves every
+	// (reg.EventBus()) as well as m.credentials: the assembly resolves every
 	// seam before Register runs, so Register is the earliest point at which
 	// the platform-credential operation's audited system-context publish
 	// (handler.go's tenancy.WithSystemContext call) has a bus to publish

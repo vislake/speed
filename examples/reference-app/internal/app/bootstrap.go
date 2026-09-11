@@ -106,7 +106,7 @@ type hostConfig struct {
 	// RedisAddr names APP_REDIS_ADDR: the Redis server address ("host:port")
 	// the injected EventBus AND KVStore connect to -- one Redis instance backs
 	// both seams, sharing one *redis.Client. Empty -- the default -- leaves
-	// both seams on the in-process implementations the Preset resolves, so
+	// both seams on the in-process implementations the builtin composition resolves, so
 	// zero-setup standalone development keeps working with nothing else
 	// running; set it to compose real Redis-backed implementations into the
 	// SAME standalone deployment mode (a deployment mode constrains which
@@ -201,7 +201,7 @@ type hostConfig struct {
 	// that one preset entry with these values, and the registration builds
 	// the S3-compatible store from them. All four are
 	// required together -- the transform fails loudly when only some of them
-	// are set, rather than silently falling back to the local-directory Preset
+	// are set, rather than silently falling back to the builtin local-directory default
 	// default, since a partially named S3 target is far more likely a typo than
 	// a deliberate choice. S3Region, S3UseSSL and S3BucketLookup below
 	// refine the same composition.
@@ -233,12 +233,12 @@ type hostConfig struct {
 	// (host/bucket/key) or "virtual_host" (bucket.host/key). Optional and
 	// meaningful only alongside a complete APP_S3_* group. The value is
 	// validated where the composition is resolved -- the "objectstore.s3"
-	// registration refuses anything outside the three at Bootstrap, naming
+	// registration refuses anything outside the three at assembly time, naming
 	// the key -- so it passes through the transform as a plain string.
 	S3BucketLookup string `config:"env=APP_S3_BUCKET_LOOKUP"`
 
 	// ObjectStoreRoot names APP_OBJECT_STORE_ROOT: a fixed local directory for
-	// the "objectstore" seam instead of the Preset's throwaway temp directory
+	// the "objectstore" seam instead of the builtin composition's throwaway temp directory
 	// (pkgcore.NewLocalObjectStore, injected with the SurvivesRestart
 	// capability alone -- a directory this process wrote survives this
 	// process's restart, but nothing about a single-process local store is safe
@@ -248,7 +248,7 @@ type hostConfig struct {
 	// refuses the combination for the same fail-loud-on-ambiguous-config reason
 	// the S3 completeness rule gives. The field exists because a host that
 	// needs its objects to outlive one process must name the directory itself
-	// -- the Preset default is a throwaway MkdirTemp -- which is what the
+	// -- the builtin default is a throwaway MkdirTemp -- which is what the
 	// two-boot expiry-sweep flow test (flowtests/periodic_scheduler_flow_test.go)
 	// needs: boot 2's sweep must find the bytes boot 1 wrote.
 	ObjectStoreRoot string `config:"env=APP_OBJECT_STORE_ROOT"`
@@ -263,7 +263,7 @@ type hostConfig struct {
 	// fail-loud-on-partial-config reason the S3 group gives; username and
 	// password are optional -- SMTP AUTH activates only when a username is set
 	// (pkgcore.SMTPConfig.Username's own doc comment). All unset -- the default
-	// -- leaves the "mailer" seam on the Preset's console default, exactly like
+	// -- leaves the "mailer" seam on the builtin composition's console default, exactly like
 	// every other seam here. The port is an int: a port of 0 is no usable SMTP
 	// port and reads as unset, and an emptied APP_SMTP_PORT refuses the load
 	// rather than arriving as 0.
@@ -464,7 +464,7 @@ func hostConfigDefaults() hostConfig {
 // (BootstrapDevDefaults, handed to the assembly's loader options) -- before
 // anything is constructed; the published material is what this app's wiring
 // reads. This pass exists so the option values that depend on the loaded
-// configuration (the database DSN, the listen address, the kernel's seam
+// configuration (the database DSN, the listen address, the assembly's seam
 // composition) are resolved before the engine assembles anything.
 //
 // The two derivation options are this app's whole root-key wiring.
@@ -564,7 +564,7 @@ func serverConfigFrom(hc hostConfig) (ServerConfig, error) {
 	}
 
 	// s3Endpoint/s3Bucket/s3AccessKey/s3SecretKey stay empty when unset,
-	// leaving the "objectstore" seam on the Preset's local-directory default;
+	// leaving the "objectstore" seam on the builtin composition's local-directory default;
 	// when any one of them is set, all four are required -- the S3 fields' own
 	// doc comment explains why a partial S3 target is refused rather than
 	// silently ignored.
@@ -595,7 +595,7 @@ func serverConfigFrom(hc hostConfig) (ServerConfig, error) {
 	s3UseSSL := hc.S3UseSSL
 	// s3BucketLookup stays empty when unset, which the registration's own
 	// parse maps onto the endpoint-derived default; any other unrecognized
-	// value fails Bootstrap there, naming the key and the allowed set.
+	// value fails the assembly there, naming the key and the allowed set.
 	s3BucketLookup := hc.S3BucketLookup
 
 	// readFlyClientIP is APP_READ_FLY_CLIENT_IP's strict bool: 'true' is this
@@ -614,7 +614,7 @@ func serverConfigFrom(hc hostConfig) (ServerConfig, error) {
 	}
 
 	// objectStoreRoot is the local-directory twin of the S3 composition above:
-	// unset leaves "objectstore" on the Preset's throwaway temp-directory
+	// unset leaves "objectstore" on the builtin composition's throwaway temp-directory
 	// default, set names a fixed directory whose contents survive this
 	// process's restart (the field's own doc comment has the capability
 	// reasoning). Both compositions at once would name two different stores for
@@ -627,7 +627,7 @@ func serverConfigFrom(hc hostConfig) (ServerConfig, error) {
 	}
 
 	// smtpHost/smtpPort mirror the S3 group above: both unset leaves the
-	// "mailer" seam on the Preset's console default, and a partial APP_SMTP_*
+	// "mailer" seam on the builtin composition's console default, and a partial APP_SMTP_*
 	// set is refused rather than silently ignored -- SMTPReplyTo alone
 	// included, because the console default it would compose with has no
 	// Reply-To knob and the value would go silently unused. The port's zero
@@ -639,7 +639,7 @@ func serverConfigFrom(hc hostConfig) (ServerConfig, error) {
 	smtpReplyTo := hc.SMTPReplyTo
 	switch {
 	case smtpHost == "" && smtpPort == 0 && smtpReplyTo == "":
-		// All unset: the "mailer" seam stays on its Preset default.
+		// All unset: the "mailer" seam stays on its builtin default.
 	case smtpHost == "" || smtpPort == 0:
 		return ServerConfig{}, fmt.Errorf(
 			"reference-app: an SMTP Mailer composition needs both APP_SMTP_HOST and APP_SMTP_PORT set")
@@ -705,7 +705,7 @@ func serverConfigFrom(hc hostConfig) (ServerConfig, error) {
 	// names "mailer.smtp" in the preset entry the resolved SMTPHost group
 	// overrides and hands the four values over as that entry's Config -- the
 	// registration builds the mailer, the host pre-builds nothing (the
-	// ServerConfig.SMTPHost doc comment and BuildServer's kernel-options
+	// ServerConfig.SMTPHost doc comment and BuildServer's composition-options
 	// comment carry the full split).
 	return cfg, nil
 }

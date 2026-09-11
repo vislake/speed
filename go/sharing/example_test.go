@@ -55,7 +55,7 @@ func Example() {
 		return
 	}
 
-	// Bootstrap wires the module's permissions, audit action, event
+	// the assembly wires the module's permissions, audit action, event
 	// catalog and config schema onto a real *pkgcore.ComponentRegistry, and attaches
 	// that registry to the module's Service -- the same path a host takes.
 	if _, bootErr := componenttest.DeclareModules(module); bootErr != nil {

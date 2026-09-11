@@ -263,7 +263,7 @@ func newTestServiceWithDB(t *testing.T, db *gorm.DB, provider aigateway.ImagePro
 		t.Fatalf("SetPlatformCredential: %v", err)
 	}
 
-	// storageModule is never bootstrapped through the real kernel here --
+	// storageModule is never driven through the real assembly here --
 	// this file's tests never reach a job handler that would need a real
 	// ObjectStore -- so ObjectService() is real but inert (its host seams
 	// are attached only by Module.Register, which nothing here calls).

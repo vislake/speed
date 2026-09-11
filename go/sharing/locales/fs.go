@@ -9,7 +9,7 @@
 // and pki's own locale bundles follow.
 //
 // The two files must carry identical id sets. i18n.Builder.AddModule rejects
-// a module whose languages disagree (ErrParityMismatch) while the kernel
+// a module whose languages disagree (ErrParityMismatch) while the assembly
 // merges the catalog, and tools/check_i18n_keys.py checks the same parity
 // over the raw files in CI. There is no cross-language fallback anywhere in
 // the stack: a key missing from the loaded language surfaces as an error,

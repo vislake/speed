@@ -127,7 +127,7 @@ func WithGateways(gateways map[string]PaymentGateway) Option {
 // host-constructed *metering.Aggregator -- see UsageReader's own doc
 // comment for why go/billing importing go/metering directly is sanctioned
 // here). Constructing a Module performs no I/O: opening and migrating db
-// is the host's responsibility, done before Bootstrap ever calls Register.
+// is the host's responsibility, done before the assembly ever calls Register.
 func NewModule(db *gorm.DB, usage UsageReader, opts ...Option) *Module {
 	plans := NewPlanStore(db)
 	subscriptions := NewSubscriptionRepository(db)
@@ -240,7 +240,7 @@ func (m *Module) OpenAPISpec() []byte { return openAPISpecYAML }
 // here, not in NewModule, deliberately -- the same reasoning go/storage's
 // Register doc comment spells out for its own handler: every Option a
 // caller passed to NewModule has already run by the time Register is
-// called (Bootstrap calls Register only after NewModule has returned), so
+// called (the assembly calls Register only after NewModule has returned), so
 // the handler serves the service instances the host actually configured,
 // never versions captured before the options ran. Routes.Mount is a plain
 // registration, no I/O, so Register's no-I/O contract stands.

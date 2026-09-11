@@ -87,8 +87,8 @@ func startOnFreeHostPortCore(start func(hostPort string) error) (hostPort string
 // HostPortFree reports whether hostPort can be bound on 0.0.0.0 right now,
 // by attempting exactly that bind and closing the listener again on
 // success. It is the pre-flight check for the one fixture shape that
-// cannot pick its port -- go/pkgcore/integration_test's kernel-lifecycle
-// legs bind the literal default ports (6379/4222) because the
+// cannot pick its port -- the integration legs that
+// bind the literal default ports (6379/4222) because the
 // zero-configuration seam constructors under test dial exactly those
 // addresses, so the collision-free fix there is to skip when the required
 // port is genuinely occupied rather than fail the run.

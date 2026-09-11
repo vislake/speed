@@ -165,7 +165,7 @@ Feature **flags** are different, and org does declare two: a flag is a boolean, 
 
 ### The bootstrap key it declares
 
-`Register` declares one process-start key on the `Registry.Bootstrap` seat: `org.invitation_email_index_key`, the HMAC key the invitation-address blind indexer is built from (`WithEmailIndexer` over `dbkit.NewBlindIndexer`). It is `hexkey` and Sensitive, its documented fallback is a non-secret development default, and it must be a DIFFERENT secret from the host's encryption key -- dbkit takes the two through separate constructors for exactly that reason, and an index built under a rotated key can never find its addresses again. The declaration states the contract; the host resolves the value and injects the indexer. org never reads the environment.
+`Register` declares one process-start key on the component descriptor's `BootstrapKeys`: `org.invitation_email_index_key`, the HMAC key the invitation-address blind indexer is built from (`WithEmailIndexer` over `dbkit.NewBlindIndexer`). It is `hexkey` and Sensitive, its documented fallback is a non-secret development default, and it must be a DIFFERENT secret from the host's encryption key -- dbkit takes the two through separate constructors for exactly that reason, and an index built under a rotated key can never find its addresses again. The declaration states the contract; the host resolves the value and injects the indexer. org never reads the environment.
 
 ## Public API
 
@@ -173,7 +173,7 @@ Feature **flags** are different, and org does declare two: a flag is a boolean, 
 
 | Signature | Purpose |
 |---|---|
-| `func NewModule(db *gorm.DB, opts ...Option) *Module` | Constructs the module. Performs no I/O; the host opens and migrates `db` before `Bootstrap` |
+| `func NewModule(db *gorm.DB, opts ...Option) *Module` | Constructs the module. Performs no I/O; the host opens and migrates `db` before the assembly |
 | `WithEmailIndexer` / `WithFeatureGate` / `WithMaxDepth` / `WithInvitationTTL` / `WithMailFrom` / `WithReplyTo` / `WithInvitationLinkBuilder` / `WithInvitationEmailDisabled` | The host wiring. See "Two wirings are required at boot" for the two that are not optional; `WithReplyTo` is optional -- module-level configuration (the inviter's own address is not reachable here), empty writes no Reply-To header |
 | `func (m *Module) Tree() *TreeService` | The tree runtime. Returns the same service on every call |
 | `func (m *Module) Members() *MemberService` | The roster runtime |

@@ -49,7 +49,7 @@ const (
 //
 // It declares its own permissions, events and audit actions during
 // Register, and takes the frozen snapshot of EVERY module's declared
-// permissions during Attach -- after Bootstrap has returned, because
+// permissions during Attach -- after the assembly has returned, because
 // modules register in bootstrap order and a snapshot taken earlier would
 // be partial. That is the same two-phase shape go/config uses for its
 // configuration schema, for the same reason.
@@ -124,7 +124,7 @@ func WithQueue(queue jobs.Queue) Option {
 
 // NewModule returns a Module whose tables live in db. Constructing a
 // Module performs no I/O -- opening and migrating db is the caller's
-// responsibility, done once at startup before Bootstrap ever calls
+// responsibility, done once at startup before the assembly ever calls
 // Register. db must not be nil by the time Attach runs; Register itself
 // never touches it, per the module contract's "declares, never performs I/O"
 // contract.
@@ -239,7 +239,7 @@ func (m *Module) Attach(reg *pkgcore.ComponentRegistry) (*Service, error) {
 	// Register: they execute the reaping through the very Service this call
 	// builds, and nothing can enqueue a reap before the subscriptions below
 	// exist -- a host drains reg.Jobs.Handlers() onto its queue after
-	// Bootstrap AND after its Attach calls (the reference app does exactly
+	// the assembly AND after its Attach calls (the reference app does exactly
 	// that), so a handler registered here is on the queue before any org
 	// event can ever fire. A host that wires no queue (WithQueue absent)
 	// registers them all the same -- harmless, since its subscribers never

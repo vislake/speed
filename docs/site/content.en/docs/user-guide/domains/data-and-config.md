@@ -193,10 +193,11 @@ func main() {
 		panic(err)
 	}
 
-	// Bootstrap walks the module graph, calling Register on each; Attach --
-	// exactly once, afterwards -- freezes the union of every declaration.
-	reg, err := pkgcore.app.Assemble().Bootstrap(ctx, subscriptionsModule{}, configModule)
-	if err != nil {
+	// the engine's Assemble drives the composition; each module's Register runs
+	// in the assembly's Init stage, and Attach -- exactly once, afterwards --
+	// freezes the union of every declaration.
+	reg := pkgcore.NewComponentRegistry()
+	if err := app.Assemble(ctx, reg, app.LoadSpec{Host: &hostConfig, Options: loaderOpts}); err != nil {
 		panic(err)
 	}
 	svc, err := configModule.Attach(reg)

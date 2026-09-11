@@ -51,8 +51,8 @@ func ExampleNewObjectStore() {
 // the same store ExampleNewObjectStore builds, plus the capability
 // declaration the objectstore value's configuration block takes, in one call -- and a
 // configuration with a field missing or an endpoint minio-go rejects comes
-// back as an error here, where NewObjectStore panics, so a host assembling
-// Kernel options can still abandon them. Nothing is dialed, and there is
+// back as an error here, where NewObjectStore panics, so a host composing
+// the objectstore value gets the error instead of a panic. Nothing is dialed, and there is
 // nothing to release afterwards: the minio-go client exposes no close.
 func ExampleFromConfig() {
 	store, caps, err := s3.FromConfig(s3.Config{

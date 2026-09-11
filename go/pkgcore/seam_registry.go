@@ -14,8 +14,8 @@ var ErrDuplicateImplementation = errors.New("pkgcore: duplicate seam implementat
 // no Registration ever added to that SeamRegistry.
 var ErrUnknownImplementation = errors.New("pkgcore: unknown seam implementation")
 
-// Config carries the flat scalar settings a Preset entry hands to a seam
-// implementation's constructor: what a preset file or environment can
+// Config carries the flat scalar settings a composition entry hands to a
+// component's constructor: what a configuration file or environment can
 // naturally provide, keyed by whatever name the implementation documents.
 // The type is deliberately shallow -- a host constructor that wants a typed
 // configuration builds it from these strings -- because it is the boundary
@@ -72,7 +72,7 @@ type Registration[T any] struct {
 // through, whose built-in implementations register themselves from their own
 // packages' init.
 //
-// It is deliberately not the kernel's seam machinery: which EventBus,
+// It is deliberately not the assembly's seam machinery: which EventBus,
 // KVStore, Mailer or ObjectStore value an assembly runs is the composition
 // configuration's decision, made by selecting a component and configuring
 // it, and the resolved values are published into (and read from) the

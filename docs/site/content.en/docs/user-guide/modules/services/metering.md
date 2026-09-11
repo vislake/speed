@@ -64,7 +64,7 @@ pair the summaries with admin's usage-summary endpoint.
 ## Wiring it in
 
 ```go
-m := metering.NewModule(db)          // module in your the assembly set
+m := metering.NewModule(db)          // module in your assembly's module set
 m.Start(ctx)                         // starts the analytics flush and dispatcher loops
 defer m.Stop()
 

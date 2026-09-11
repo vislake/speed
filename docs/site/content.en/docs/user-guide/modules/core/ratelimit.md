@@ -11,7 +11,7 @@ whether one more hit against a caller-supplied `key` is within a
 caller-supplied `Limit`, backed entirely by `pkgcore.KVStore`. It is a
 **pure library** — unlike every other module in the platform it does
 not implement `the module contract`: nothing to register, nothing to wire
-into a Kernel, a consumer just calls `ratelimit.New(store)`. It exists
+into the assembly, a consumer just calls `ratelimit.New(store)`. It exists
 because six otherwise-unrelated modules each need rate limiting —
 `authn`'s login brute-force guard, `integration`'s three-layer API-key
 throttling, `notification`'s verification-code budgets, `org`'s

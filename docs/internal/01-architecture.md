@@ -102,7 +102,7 @@ graph BT
 
 ## 模块接入契约
 
-每个后端模块实现统一的 `Module` 接口，由 Kernel 装配。**模块需要向宿主注册的东西远不止路由**——配置、文案、开关、任务、通知、权限、审计动作各有一套注册表，如果不在接口里一次定义清楚，后续每加一类注册机制就要改一次核心接口，而 lockstep 版本下改核心接口是破坏性变更。
+每个后端模块携带统一的模块契约（`Name`/`DependsOn`/`Migrations`/`Locales`/`OpenAPISpec` 加 `Register(*pkgcore.ComponentRegistry) error`），由装配驱动在 Init 阶段调用。**模块需要向宿主注册的东西远不止路由**——配置、文案、开关、任务、通知、权限、审计动作各有一套注册表，如果不在接口里一次定义清楚，后续每加一类注册机制就要改一次核心接口，而 lockstep 版本下改核心接口是破坏性变更。
 
 ```go
 type Module interface {
@@ -118,11 +118,11 @@ type Module interface {
     Locales() embed.FS            // zh-CN / en-US 资源
     OpenAPISpec() []byte          // 该模块的 API 契约片段
 
-    // 注册（由 Kernel 在装配阶段依次调用）
-    Register(reg Registrar) error
+    // 注册（由装配驱动在 Init 阶段依次调用）
+    Register(reg *pkgcore.ComponentRegistry) error
 }
 
-// Registry 汇总所有注册面，声明面即 Registrar 视图；新增一类注册只加座席，不动 Module 接口
+// ComponentRegistry 汇总所有注册面；新增一类注册只加座席，不动模块契约
 type Registry struct {
     Routes        RouteRegistrar        // HTTP 路由（实现由 spec 生成的 server interface）
     Config        ConfigSchemaRegistrar // 引导配置结构体片段 + 动态配置项 schema
@@ -135,7 +135,7 @@ type Registry struct {
 }
 ```
 
-**为什么用一个 `Register(reg Registrar)` 而不是 8 个方法**：新增一类横切机制（比如将来加"数据导出器"）只需在声明面加一个座席（`Registrar` 上的访问器 + `Registry` 上的字段），已有模块不受影响、无需重新实现接口；如果每类都是接口方法，加一个方法就会让所有模块都编译失败——这在 lockstep 发布下是破坏性变更。
+**为什么用一个 `Register(*pkgcore.ComponentRegistry)` 而不是 8 个方法**：新增一类横切机制（比如将来加"数据导出器"）只需在声明面加一个座席（`ComponentRegistry` 上的访问器 + 字段），已有模块不受影响、无需重新实现接口；如果每类都是接口方法，加一个方法就会让所有模块都编译失败——这在 lockstep 发布下是破坏性变更。
 
 **声明式注册带来的三个副产品**（都在别处被依赖，不是为了好看）：
 - 权限清单自动汇总 → 运营后台的角色配置页面自动渲染，无需手工维护权限列表

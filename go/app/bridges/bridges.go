@@ -100,7 +100,7 @@ func UsageRecorder(recorder metering.Recorder) aigateway.UsageRecorderFunc {
 // Both modules must be part of the single the assembly call -- so
 // their permissions, audit actions, events and routes are declared there
 // -- while the *config.Service is only produced by configModule.Attach,
-// strictly after Bootstrap returns. The handle resolves the Service per
+// strictly after the assembly returns. The handle resolves the Service per
 // call and reports the config module's own not-attached refusal in the
 // window before Attach, so a read in that window fails closed instead of
 // panicking on a nil *config.Service.

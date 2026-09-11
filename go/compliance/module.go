@@ -288,7 +288,7 @@ func (m *Module) Register(reg *pkgcore.ComponentRegistry) error {
 	// every retention sweep this module orchestrates also reaps stored
 	// export manifests whose delivery share has expired (export_cleanup.go's
 	// header comment has the full mechanism). Register runs before any
-	// host-populated post-Bootstrap Add, so the reserved
+	// host-populated post-assembly Add, so the reserved
 	// compliance.export_manifests name can never collide with a host's
 	// participant.
 	if err := reg.RetentionSeat().Add(exportManifestsParticipant(m.auditRepo, reg.ObjectStore())); err != nil {
@@ -296,7 +296,7 @@ func (m *Module) Register(reg *pkgcore.ComponentRegistry) error {
 	}
 
 	// Claim the retention-sweep task handler so a host that drains
-	// reg.Jobs.Handlers() onto its jobs.Queue after Bootstrap gets a
+	// reg.Jobs.Handlers() onto its jobs.Queue after the assembly gets a
 	// worker that runs it -- a plain catalog insertion, no I/O.
 	if err := reg.JobsSeat().Handle(taskTypeRetentionSweep, retentionSweepHandler{svc: m.retention}); err != nil {
 		return err

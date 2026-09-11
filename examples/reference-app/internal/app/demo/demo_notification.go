@@ -73,7 +73,7 @@ import (
 // adapter shape the app wires everywhere else -- the host implements, the
 // modules consume, neither module imports the other -- and it holds the
 // authn MODULE rather than a service because this wiring runs before
-// Bootstrap: Service() is nil until authn's Register has run, and a
+// the assembly: Service() is nil until authn's Register has run, and a
 // request can only reach the seam after that.
 type AuthnUserLocales struct {
 	Authn *authn.Module

@@ -46,7 +46,7 @@ import in the other direction is a merge blocker rather than a style note.
 
 ### Declared bootstrap keys
 
-`Register` declares two process-start keys on the `Registry.Bootstrap` seat: `authn.pii_cipher_key` (the AES key behind `RegisterPIISerializer`'s field serializer) and `authn.blind_index_key` (the HMAC key behind `WithBlindIndexKey`). Both are `hexkey` and Sensitive, both documented as a non-secret development default, and both are separate secrets on purpose -- an AES key never doubles as an HMAC key, and the rule spans modules, not only authn's own two keys. The declaration states the module's contract; the host resolves the values (flags, environment, an optional file, its own defaults) and injects them through the options above. The module never reads the environment itself. `pkgcore/AGENTS.md` carries the seat's own contract, including why a key declared on both the bootstrap and the runtime configuration layers is refused.
+`Register` declares two process-start keys on the component descriptor's `BootstrapKeys`: `authn.pii_cipher_key` (the AES key behind `RegisterPIISerializer`'s field serializer) and `authn.blind_index_key` (the HMAC key behind `WithBlindIndexKey`). Both are `hexkey` and Sensitive, both documented as a non-secret development default, and both are separate secrets on purpose -- an AES key never doubles as an HMAC key, and the rule spans modules, not only authn's own two keys. The declaration states the module's contract; the host resolves the values (flags, environment, an optional file, its own defaults) and injects them through the options above. The module never reads the environment itself. `pkgcore/AGENTS.md` carries the seat's own contract, including why a key declared on both the bootstrap and the runtime configuration layers is refused.
 
 ### Feature flags are enforced through a host-supplied gate
 
@@ -66,7 +66,7 @@ config. **A host that has the config module in its deployment should wire its
 service here** (read lazily at call time: `FeatureGateFunc` over the config
 module's lazy `Handle`, `authn.FeatureGateFunc(configModule.Handle().IsEnabled)`,
 is the canonical shape, since `configModule.Attach` produces the service only
-after `Bootstrap` returns and the handle reports the config module's own
+after the assembly returns and the handle reports the config module's own
 not-attached refusal until then). A
 nil gate -- the no-config-module deployment -- leaves every channel enabled:
 there is no feature store for an operator to have disabled anything in, so
@@ -563,8 +563,8 @@ explicit SMS sender (`WithSMSSender`) rather than silently defaulting to
 distributed replica pool is reading. It is the ONE piece of deployment-mode
 awareness this module carries, and it lives in `newOptions`' validation —
 never in `Service`'s business logic — because the pkgcore SMS seam has no
-kernel seat that could enforce the requirement (see `pkgcore.SMSSender`'s
-doc comment): the kernel resolves no SMS sender, so the module that needs a
+assembly seat that could enforce the requirement (see `pkgcore.SMSSender`'s
+doc comment): the assembly resolves no SMS sender, so the module that needs a
 real one in a distributed deployment says so at wiring time, the same
 moment `newOptions` validates `WithKeySource` and `WithBlindIndexKey`.
 Omitting `the composition's deployment field` — every standalone deployment — is equivalent
@@ -582,8 +582,8 @@ pkgcore's too: `pkgcore.NewConsoleSMSSender(w)` (the standalone console
 transport, which doubles as the test double), `pkgcore.NewHTTPSMSSender`
 (an operator-run JSON gateway, SSRF-guarded through `pkgcore/safehttp`),
 and the three real carrier adapters under `pkgcore/sms/` (next section).
-The seam deliberately has no registry, preset or capability seat in
-pkgcore's kernel machinery — every consumer resolves its sender through its
+The seam deliberately has no registry, composition entry or capability seat
+in pkgcore's assembly machinery — every consumer resolves its sender through its
 own module option, so registration machinery would serve nobody, and this
 module's distributed-mode requirement above is the wiring-time enforcement
 that stays here.

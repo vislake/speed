@@ -33,7 +33,7 @@ var ErrInvalidBootstrapKeyPath = errors.New("pkgcore: invalid bootstrap key path
 // that takes the booted registry's declared keys, is what the call sites
 // require: a host derives these materials before the declaration turn can run
 // (dbkit serializer registration precedes dbkit.Open, which precedes
-// Bootstrap), so the registry is not yet in hand where the derivation
+// the assembly), so the registry is not yet in hand where the derivation
 // happens. Whether a path is a declared key at all is the host's binding
 // check (config.Verify against the registry's declarations), and resolving
 // the precedence between a derived material and an explicitly configured one

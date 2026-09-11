@@ -444,7 +444,7 @@ func TestServer_RealRedisEventBusComposition_NotesAuditEventCrossesProcesses(t *
 	})
 
 	// Wait for the child to finish booting: BuildServer (SQLite migrations,
-	// module registration, kernel bootstrap with the injected Redis bus)
+	// module registration, the assembly drive with the injected Redis bus)
 	// all happen before anything listens, so a 200 from /healthz means the
 	// composition is genuinely up -- with the app's audit persister
 	// subscribed to the SAME Redis streams the observer reads.

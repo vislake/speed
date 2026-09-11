@@ -129,7 +129,7 @@ flowchart TD
 
 由于 Go 按**包**而非按符号解析依赖,同一立场延伸到打包:**二进制包含哪些实现,由应用组装者决定。** 每套实现住在自己的子包里(`go/pkgcore/kv/redis`、`go/jobs/queue/asynq`……),在自己的 `init()` 中自我注册;确定只用 SQLite 的应用只 import 一个方言包、只承担一套方言的依赖——`database/sql` 就是模型。要接受的代价也是 `database/sql` 的:没人 import 的实现会以启动错误现身,报错信息点名修复它所需的 import。
 
-业务代码永远看不到这两条轴——模块逻辑里没有 `if mode == "standalone"`,因为模块逻辑根本不持有模式;模式与实现只活在 Kernel 的装配代码里。进程内那批实现的附带收益是它们同时充当测试替身,多数单元测试因此不需要容器。
+业务代码永远看不到这两条轴——模块逻辑里没有 `if mode == "standalone"`,因为模块逻辑根本不持有模式;模式与实现只活在 装配的代码里。进程内那批实现的附带收益是它们同时充当测试替身,多数单元测试因此不需要容器。
 
 ## 模块接线契约
 
@@ -139,7 +139,7 @@ flowchart TD
 
 注册是声明式的,这在外界换来三份红利:权限清单自动汇入运营后台的角色配置界面,配置与开关 schema 自动汇入生成的配置文档,通知类型自动汇入用户可见的偏好矩阵。每个模块还把自己的资产——双方言 SQL 迁移、`zh-CN`/`en-US` 语言包、自己的 OpenAPI 片段——与代码一同发布,模块版本与资产永不脱节。
 
-Kernel 由选项组装,而不是由模式参数组装——`app.Assemble(opts...)` 加 `the composition's deployment field`、`the composition configuration` 与逐接缝注入。`Bootstrap` 遍历模块图、解析并校验每个接缝、安装合并后的消息目录;模块在 `Register` 期间声明,在此之后读取已解析的状态。
+装配驱动负责解析,而不是由模式参数组装——`app.Assemble(opts...)` 加 `the composition's deployment field`、`the composition configuration` 与逐接缝注入。驱动装配遍历模块图、解析并校验每个组件、安装合并后的消息目录;模块在 `Register` 期间声明,在此之后读取已解析的状态。
 
 HTTP 中间件链有一个固定、不可随意调整的顺序,`go/app/chain` 是它唯一
 的实现:`authn.Middleware(verifier)` 包住整个组合,把两个结构性豁免
@@ -169,7 +169,7 @@ HTTP 中间件链有一个固定、不可随意调整的顺序,`go/app/chain` �
 
 ## 设计详情所在
 
-用户指南讲*怎么做*:装模块、接 Kernel、搭组织树、运维生成的项目。本栏(Developer docs)讲*为什么*。姊妹页[设计原则](/zh-cn/docs/developer-docs/design-principles/)是这一页的搭档:每个模块都遵守的纪律清单,每条规则附理由与执行处。
+用户指南讲*怎么做*:装模块、驱动装配、搭组织树、运维生成的项目。本栏(Developer docs)讲*为什么*。姊妹页[设计原则](/zh-cn/docs/developer-docs/design-principles/)是这一页的搭档:每个模块都遵守的纪律清单,每条规则附理由与执行处。
 
 ## 相关页面
 

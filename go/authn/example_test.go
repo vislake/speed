@@ -289,7 +289,7 @@ func ExampleNewPrincipalResolver() {
 }
 
 // ExampleNewModule wires authn into a host and registers it, which is what
-// pkgcore.the assembly does for every module.
+// the assembly does for every module.
 //
 // The membership reader is the seam through which authn asks whether a user
 // belongs to a tenant without importing the module that owns memberships.

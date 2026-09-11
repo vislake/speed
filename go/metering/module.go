@@ -74,7 +74,7 @@ var configItemDecls = []pkgcore.ConfigItem{
 // AnalyticsRecorder, Dispatcher) but starts nothing -- constructing a
 // Module must not start goroutines any more than it may perform I/O,
 // mirroring go/jobs.StandaloneQueue's identical New/Start split. A host
-// calls Start(ctx) once Bootstrap has returned, and Stop() to shut both
+// calls Start(ctx) once the assembly has returned, and Stop() to shut both
 // background loops down cleanly.
 type Module struct {
 	db *gorm.DB
@@ -176,7 +176,7 @@ func WithOutboxRetention(d time.Duration) Option {
 
 // NewModule returns a Module whose tables live in db. Constructing a
 // Module performs no I/O: opening and migrating db is the host's
-// responsibility, done before Bootstrap ever calls Register.
+// responsibility, done before the assembly ever calls Register.
 func NewModule(db *gorm.DB, opts ...Option) *Module {
 	summaries := NewSummaryRepository(db)
 	aggregator := NewAggregator(summaries)
@@ -211,7 +211,7 @@ func (m *Module) Recorder() Recorder { return m.analytics }
 func (m *Module) Dispatcher() *Dispatcher { return m.dispatcher }
 
 // Start begins both background pipelines: AnalyticsRecorder's flush loop
-// and Dispatcher's poll loop. It must be called after Bootstrap has
+// and Dispatcher's poll loop. It must be called after the assembly has
 // returned (Register itself performs no I/O and starts nothing). Safe to
 // call while a pipeline is already running (a no-op for that pipeline);
 // after a completed Stop, a fresh Start runs both loops again.

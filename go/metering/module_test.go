@@ -159,7 +159,7 @@ func TestModule_Locales_ShipsBothLanguages(t *testing.T) {
 }
 
 // TestModule_Register_DeclaresItsSurface bootstraps metering through the
-// real kernel -- the same path a host takes -- and asserts every
+// real assembly -- the same path a host takes -- and asserts every
 // declaration arrives on the registry. Bootstrapping rather than calling
 // Register against a hand-built Registry is deliberate: it also proves
 // metering's locale files survive i18n.Builder.AddModule's parity
@@ -168,7 +168,7 @@ func TestModule_Register_DeclaresItsSurface(t *testing.T) {
 	m := NewModule(newTestDB(t))
 	reg, err := componenttest.DeclareModules(m)
 	if err != nil {
-		t.Fatalf("Bootstrap: %v", err)
+		t.Fatalf("assembly: %v", err)
 	}
 
 	t.Run("config items", func(t *testing.T) {
@@ -229,7 +229,7 @@ func TestModule_Register_DeclaresItsSurface(t *testing.T) {
 func TestModule_Register_CoexistsWithAnotherModule(t *testing.T) {
 	reg, err := componenttest.DeclareModules(NewModule(newTestDB(t)), neighbourModule{})
 	if err != nil {
-		t.Fatalf("Bootstrap: %v", err)
+		t.Fatalf("assembly: %v", err)
 	}
 	var keys []string
 	for _, item := range reg.ConfigSeat().Items() {

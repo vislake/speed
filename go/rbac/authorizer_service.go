@@ -173,7 +173,7 @@ func (s *Service) ListPermissions(ctx context.Context, sub Subject) ([]string, e
 }
 
 // DeclaredPermissions returns every resource:action permission any module
-// declared through pkgcore's PermissionRegistrar during Bootstrap -- the
+// declared through pkgcore's PermissionRegistrar during the assembly -- the
 // catalog frozen in Attach (catalog.go's own doc comment has the full
 // "why a snapshot" rationale) -- in sorted order.
 //

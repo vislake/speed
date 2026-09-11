@@ -20,7 +20,7 @@ import (
 // TestLocalObjectStore_ConformsToObjectStoreContract proves the local
 // ObjectStore this package builds still satisfies the shared contract
 // objectstoretest.AssertConforms checks, after the deployment-composition
-// retrofit (Phase 1) generalized how a Kernel resolves and validates its
+// retrofit (Phase 1) generalized how the assembly resolves and validates its
 // ObjectStore seam — this is what proves the retrofit did not silently
 // change NewLocalObjectStore's own behavior for its existing callers.
 func TestLocalObjectStore_ConformsToObjectStoreContract(t *testing.T) {

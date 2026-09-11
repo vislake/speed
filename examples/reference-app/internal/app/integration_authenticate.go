@@ -99,9 +99,9 @@ type integrationWhoamiResponse struct {
 // budget is spent answers 429 with authentication never running.
 //
 // The option is applied here, not at integration.NewModule: the guard's
-// LayeredLimiter must be built over the kernel-resolved KVStore seam (kv
+// LayeredLimiter must be built over the assembly-resolved KVStore seam (kv
 // below -- reg.KVStore(), the identical store every other rate-limited
-// surface in this codebase would use), which exists only after Bootstrap has
+// surface in this codebase would use), which exists only after the assembly has
 // run. That is sound because the option is a plain Module-field setter whose
 // field AuthMiddleware reads at call time, and no request can reach this
 // route before BuildServer returns -- applying it here is equivalent to

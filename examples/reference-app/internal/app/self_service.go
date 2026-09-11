@@ -79,7 +79,7 @@ import (
 // carries the new user id and nothing else (authn.UserCreatedPayload
 // deliberately carries no personal data). The subscription is installed
 // on the app's own bus (reg.Events, the same bus every module subscribed
-// to during Bootstrap) AFTER the boot-time demo seeds have run their
+// to during the assembly) AFTER the boot-time demo seeds have run their
 // registrations, which is the discriminator that keeps the demo path
 // byte-identical: an event published by SeedDemoUsers' or
 // SeedDemoPlatformStaff's own register POSTs (registration happens inside
@@ -221,8 +221,8 @@ type SelfServiceProvisioner struct {
 	authnSvc *authn.Service
 	// catalog is the merged message catalog the clinic's org root is
 	// named from when the registrant registered no display name
-	// (the assembly view's catalog, non-nil once Bootstrap has run -- the
-	// subscription is installed after Bootstrap, so it is always non-nil
+	// (the assembly view's catalog, non-nil once the assembly has run -- the
+	// subscription is installed after the assembly, so it is always non-nil
 	// here).
 	catalog *i18n.Catalog
 	// queue is the app's own standalone queue a failed synchronous

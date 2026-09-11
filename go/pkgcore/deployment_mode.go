@@ -6,9 +6,9 @@ import (
 	"strings"
 )
 
-// DeploymentMode identifies the runtime deployment mode the kernel and every
+// DeploymentMode identifies the runtime deployment mode the assembly and every
 // module boot under. The same business code must behave identically in both
-// deployment modes; only kernel wiring is allowed to branch on the value.
+// deployment modes; only assembly wiring is allowed to branch on the value.
 type DeploymentMode string
 
 const (
@@ -51,8 +51,8 @@ func (m DeploymentMode) Valid() bool {
 	}
 }
 
-// RequiredCapabilities returns the Capability every seam a Kernel bootstraps
-// under m must declare. DeploymentModeDistributed requires MultiReplicaSafe,
+// RequiredCapabilities returns the Capability every component the assembly
+// runs under m must declare. DeploymentModeDistributed requires MultiReplicaSafe,
 // because more than one replica may be running at once and every seam
 // carries state the replicas must share; DeploymentModeStandalone requires
 // nothing extra, because a single process has no other replica to share

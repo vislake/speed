@@ -77,7 +77,7 @@ ca := pkiModule.CA()
 err := ca.CreateRootCA(ctx, pki.RootCAParams{ /* subject, validity */ })
 ```
 
-Lifecycle plumbing: after `Bootstrap`, call `EnsurePurpose` for each
+Lifecycle plumbing: after the assembly, call `EnsurePurpose` for each
 purpose your product signs for; the expiry scan is declared on the
 registry's `Schedules` seat, so a host that runs a `jobs.Scheduler`
 drives it (or call `EnqueueExpiryScan` from your own periodic-task

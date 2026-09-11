@@ -20,7 +20,7 @@ import (
 // TestMemoryKVStore_ConformsToKVStoreContract proves the in-memory KVStore
 // this package builds still satisfies the shared contract
 // kvstoretest.AssertConforms checks, after the deployment-composition
-// retrofit (Phase 1) generalized how a Kernel resolves and validates its
+// retrofit (Phase 1) generalized how the assembly resolves and validates its
 // KVStore seam — this is what proves the retrofit did not silently change
 // NewMemoryKVStore's own behavior for its existing callers.
 //

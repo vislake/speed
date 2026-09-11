@@ -57,7 +57,7 @@ c := compliance.NewModule(auditRepo, // 与你审计接线共用的同一个 *au
     compliance.WithSharing(sharingModule.Service()), // 武装导出投递
     // 可选:compliance.WithTenantLister(lister)、WithConfigService(cfg)
 )
-// 放进你的 the assembly 模块集。Bootstrap 之后,注册编排可能碰
+// 放进你的装配模块集。装配返回之后,注册编排可能碰
 // 到的业务模块的行——参考应用的 notes 模块注册的正是这个形态,回
 // 调由它自己的仓库的 HardDelete 与读方法背书:
 if err := reg.Retention.Add(
@@ -73,7 +73,7 @@ _, err := c.Erasure().Erase(ctx, pkgcore.SubjectRef{
 }, requestedBy)
 ```
 
-`RetentionParticipant`(声明在 `pkgcore`,经 `Registry.Retention` 注
+`RetentionParticipant`(声明在 `pkgcore`,经 `Retention` 席位注
 册)是 `Name` 加 `Sweep`/`Erase`/`Export` 三个回调;注册时 `Sweep`
 与 `Erase` 必填、`Export` 可选,每个回调都被期望调参与者自己的
 `dbkit.Repository[T]` 方法——compliance 从不 import、也从不直查业

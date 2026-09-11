@@ -174,9 +174,10 @@ func main() {
 		panic(err)
 	}
 
-	// Bootstrap 遍历模块图,逐个调用 Register;Attach——恰好一次,在其
+	// 装配遍历模块图,逐个执行各阶段;Register 在 Init 阶段运行;Attach——恰好一次,在其
 	// 之后——冻结所有声明的并集。
-	reg, err := pkgcore.app.Assemble().Bootstrap(ctx, subscriptionsModule{}, configModule)
+	reg := pkgcore.NewComponentRegistry()
+if err := app.Assemble(ctx, reg, app.LoadSpec{Host: &hostConfig, Options: loaderOpts}); err != nil { /* handle err */ }
 	if err != nil {
 		panic(err)
 	}

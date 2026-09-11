@@ -224,9 +224,9 @@ func Example_generateImage() {
 	queue := jobs.NewStandaloneQueue(db, jobs.WithPollInterval(5*time.Millisecond))
 
 	// go/storage's ObjectService is safe to call right after NewModule,
-	// before Bootstrap has attached its seams (storage/module.go's own doc
+	// before the assembly has attached its seams (storage/module.go's own doc
 	// comment) -- which is what lets it be handed to WithImageGeneration
-	// below before the single Bootstrap call at the end of this function.
+	// below before the single assembly call at the end of this function.
 	storageModule := storage.NewModule(db, storage.WithQueue(queue))
 
 	module := aigateway.NewModule(db,
@@ -266,7 +266,7 @@ func Example_generateImage() {
 		return
 	}
 
-	// Wire the queue to every job handler Bootstrap's Register calls
+	// Wire the queue to every job handler the assembly's Register calls
 	// declared (the image-generate handler this module claims, plus
 	// storage's own thumbnail-derive and expiry-sweep handlers) and start
 	// it -- the identical call examples/reference-app/internal/app/server.go's

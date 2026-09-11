@@ -178,12 +178,12 @@ type Option func(*Module)
 // This takes the *authn.Module, NOT its *authn.Service directly, and
 // admin's own Register reads authnModule.Service() lazily, at Register
 // time -- never here, at option-application time, which runs before
-// Bootstrap and therefore before authn's own Register has ever built its
+// the assembly and therefore before authn's own Register has ever built its
 // Service (Module.Service's own doc comment: "nil until Register has
-// run"). DependsOn() below declares "authn" so Bootstrap's dependency sort
+// run"). DependsOn() below declares "authn" so the assembly's dependency sort
 // always runs authn's Register before admin's, exactly the ordering this
 // lazy read depends on -- the same "read a host seam at call time, never
-// capture it before Bootstrap has finished" idiom org's own hostSeams and
+// capture it before the assembly has finished" idiom org's own hostSeams and
 // the reference app's config-handle gate adapters both apply for the
 // identical reason.
 func WithAuthn(authnModule *authn.Module) Option {
@@ -228,7 +228,7 @@ func WithQueue(queue jobs.Queue) Option {
 // (metering.Module.Summaries().List). OPTIONAL, unlike the options above:
 // a host that never calls this simply gets no metering dimension in the
 // dashboard's response rows (nil MeteringSummaries on every row) rather
-// than failing Bootstrap -- see UsageService's own doc comment for why
+// than failing the assembly -- see UsageService's own doc comment for why
 // go/metering and go/billing are each independently optional rather than
 // both mandatory the way authn/org/compliance/notification are.
 func WithMetering(meteringModule *metering.Module) Option {
@@ -246,7 +246,7 @@ func WithBilling(billingModule *billing.Module) Option {
 
 // NewModule returns a Module whose two platform-data tables live in db.
 // Constructing a Module performs no I/O: opening and migrating db is the
-// host's responsibility, done once at startup before Bootstrap ever calls
+// host's responsibility, done once at startup before the assembly ever calls
 // Register, exactly like every other module in this codebase.
 func NewModule(db *gorm.DB, opts ...Option) *Module {
 	tenantRepo := NewTenantRepository(db)
@@ -295,7 +295,7 @@ func (m *Module) Export() *ExportService { return m.exportSvc }
 // whose catalog snapshot is already frozen: the host calls it right after
 // its own rbacModule.Attach(registry) succeeds -- a call that, by rbac's
 // own documented contract, must run strictly after
-// pkgcore.the assembly returns, because Attach freezes the snapshot of
+// the assembly returns, because Attach freezes the snapshot of
 // every permission every module declared -- and the component descriptor
 // (component.go) calls it from the assembly's Init stage, where the
 // *rbac.Service sits in the by-type context after rbac's own Init turn
@@ -303,13 +303,13 @@ func (m *Module) Export() *ExportService { return m.exportSvc }
 //
 // This is why rbac is NOT wired through a WithXxx(*rbac.Module)
 // construction-time Option the way authn, org, compliance and
-// notification are: admin's own Module.Register runs DURING Bootstrap,
-// strictly before the host's own post-Bootstrap rbacModule.Attach call,
+// notification are: admin's own Module.Register runs DURING the assembly,
+// strictly before the host's own post-assembly rbacModule.Attach call,
 // so a *rbac.Module handed to admin at construction time would have no
 // Service to read yet at the one point (Register) admin could read it
 // from. AttachRBAC is therefore a distinct, later wiring step the host
 // performs itself -- see role.go's RoleService doc comment for the full
-// reasoning. Calling this before Bootstrap, or not at all, leaves every
+// reasoning. Calling this before the assembly, or not at all, leaves every
 // RoleService method failing closed with ErrRBACServiceRequired rather
 // than panicking on a nil service.
 //
@@ -317,14 +317,14 @@ func (m *Module) Export() *ExportService { return m.exportSvc }
 // ImpersonationService.attachRBAC lets a live grant be automatically
 // ended when the administrator's own admin:impersonate permission is
 // later revoked (see impersonation_service.go's endIfNoLongerPermitted
-// for the mechanism) -- the identical post-Bootstrap-only timing
+// for the mechanism) -- the identical post-assembly-only timing
 // constraint applies, since the check calls rbac.Service.Can. And because
 // that automatic end is the only thing standing between a revoked
 // administrator and a still-live grant, ImpersonationService.Start
 // refuses with ErrRBACServiceRequired until this call has run
 // (impersonation_service.go's own rbacSvc doc comment) -- the same
 // fail-closed gate every RoleService method above applies, on the very
-// same seam. Calling this before Bootstrap, or not at all, thus leaves
+// same seam. Calling this before the assembly, or not at all, thus leaves
 // the whole role-management surface AND impersonation grant-starting
 // failing closed rather than a nil-service panic or a grant the module
 // could never automatically end.
@@ -342,12 +342,12 @@ func (m *Module) Name() string { return moduleName }
 // m.complianceModule.AuditQuery(), m.notificationModule.Deliveries() -- is
 // safe regardless of registration order, because each of those three
 // modules builds the returned value inside its own NewModule constructor,
-// before Bootstrap ever runs. authn is the one exception:
+// before the assembly ever runs. authn is the one exception:
 // authn.Module.Service() is documented nil until authn's OWN Register has
 // built it (see WithAuthn's doc comment), so admin's Register must run
 // strictly after authn's -- this is exactly what DependsOn exists to
 // express, and the assembly's own dependency sort (sortModulesByDependency)
-// honors it regardless of the order modules were passed to Bootstrap in.
+// honors it regardless of the order modules were passed to the assembly in.
 // The component descriptor states the same edge as a Requirement token on
 // (*authn.Module)(nil), which is what orders admin's declaration stage
 // after authn's in the assembly.
@@ -396,11 +396,11 @@ func (m *Module) Register(reg *pkgcore.ComponentRegistry) error {
 	}
 	authnSvc := m.authnModule.Service()
 	if authnSvc == nil {
-		// DependsOn() declares "authn", so Bootstrap's dependency sort
+		// DependsOn() declares "authn", so the assembly's dependency sort
 		// should make this unreachable in practice -- but Register must
 		// still fail closed rather than hand SearchService a nil
 		// *authn.Service if that guarantee is ever violated (a host
-		// calling Register directly, bypassing Bootstrap, say).
+		// calling Register directly, bypassing the assembly, say).
 		return ErrAuthnServiceRequired
 	}
 	if m.orgModule == nil {

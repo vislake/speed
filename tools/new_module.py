@@ -458,7 +458,7 @@ const (
 
 	// PermissionRead and PermissionWrite are this module's
 	// resource:action permission strings. Declaring them here puts them
-	// in the permission catalog rbac freezes after Bootstrap; granting
+	// in the permission catalog rbac freezes after the assembly runs; granting
 	// them to the roles that should hold them is the application's job.
 	PermissionRead  = "__NAME__:read"
 	PermissionWrite = "__NAME__:write"
@@ -495,7 +495,7 @@ type Module struct {
 // dbkit.Open; constructing a Module performs no I/O of its own --
 // opening, migrating and registering db is the application assembly's
 // job (register NewModule(db) with the migration registry there, then
-// pass the same module to Bootstrap).
+// put its descriptor on the assembly's component registry).
 func NewModule(db *gorm.DB) *Module {
 	return &Module{repo: NewRepository(db)}
 }
@@ -1215,7 +1215,7 @@ def app_registration_checklist(module_name: str, target_dir: str) -> list[str]:
         "compose them the way the generated server.go does.",
         "  3. Grant the module's permissions: '" + module_name + ":read' "
         "and '" + module_name + ":write' are in the permission catalog "
-        "after Bootstrap; grant them to the roles that should hold them "
+        "after the assembly runs; grant them to the roles that should hold them "
         "wherever the application already grants permissions.",
         "  4. Run `go mod tidy` in the application: the scaffold's imports "
         "(uuid, the dbkit packages) may currently be indirect requires; "

@@ -507,9 +507,9 @@ func TestBuildServer_PermissionGate_GrantsDoNotCrossTenants(t *testing.T) {
 // BuildServer succeeds -- was deliberately NOT added here, and this is a
 // real gap, not a silent one: this app's own SeedDemoGrants
 // (internal/app/demo/demo_subject.go), which every BuildServer call runs unconditionally
-// after Bootstrap to seed the demo tenants' built-in roles, makes a
+// after the assembly to seed the demo tenants' built-in roles, makes a
 // SYNCHRONOUS rbac.Service call that publishes on whatever EventBus
-// Bootstrap resolved -- eventbus/redis.EventBus.Publish genuinely appends
+// the assembly resolved -- eventbus/redis.EventBus.Publish genuinely appends
 // to the Redis stream inline, unlike Subscribe's fire-and-forget background
 // reader. Pointing cfg.RedisAddr at a fake address therefore fails this
 // seeding step with a real "connection refused" the moment Redis is

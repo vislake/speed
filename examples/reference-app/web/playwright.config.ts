@@ -402,13 +402,13 @@ export default defineConfig({
           // server that fails to boot still says so in the test report.
           //
           // THE COST OF THAT, worth knowing: everything
-          // Kernel.Bootstrap says goes to stderr and is therefore NOT in
+          // the assembly says goes to stderr and is therefore NOT in
           // this file. pkgcore announces its resolved seam composition
           // and warns about implementations that do not survive a
           // restart through slog.Default() -- it cannot do otherwise,
           // being the module every other one sits on, so it can never
           // import observability -- and this app runs BuildServer, which
-          // is where Bootstrap happens, deliberately BEFORE obs.Init
+          // is where the assembly happens, deliberately BEFORE obs.Init
           // (main.go says why). So those lines are Go's default text
           // format on stderr while everything a gate reads here is the
           // structured logger's stdout.

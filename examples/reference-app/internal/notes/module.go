@@ -39,7 +39,7 @@ const (
 	// permission strings.
 	//
 	// They are really enforced. Declaring them here is what puts them in
-	// the permission catalog go/rbac freezes after Bootstrap, and cmd/server
+	// the permission catalog go/rbac freezes after the assembly, and cmd/server
 	// wraps this module's route in rbac's permission gate: a GET of
 	// /api/v1/notes requires PermissionRead and anything that writes
 	// requires PermissionWrite (see internal/app/demo/demo_subject.go, which
@@ -212,7 +212,7 @@ var noteCreatedNotificationType = pkgcore.NotificationType{
 // NewModule returns a Module whose repository is backed by db. db is
 // expected to come from dbkit.Open; constructing a Module performs no I/O
 // of its own -- opening and migrating db is the caller's responsibility,
-// done once at startup before Bootstrap ever calls Register (see
+// done once at startup before the assembly ever calls Register (see
 // internal/app's wiring for the exact sequence, and Register's own doc
 // comment below for why Register itself still must not touch the
 // database).
@@ -299,7 +299,7 @@ func (m *Module) Register(reg *pkgcore.ComponentRegistry) error {
 	// every value's meaning and default belongs to the module that owns
 	// the key. pkgcore validates the declarations on Add (a malformed
 	// item or a duplicated key fails registration), and config.Attach
-	// freezes them into the runtime schema after Bootstrap.
+	// freezes them into the runtime schema after the assembly.
 	if err := reg.ConfigSeat().Add(
 		pkgcore.ConfigItem{
 			Key:         ConfigKeyBrandSiteName,

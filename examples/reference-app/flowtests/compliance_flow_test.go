@@ -24,7 +24,7 @@ import (
 // is a real consumer of go/compliance's retention mechanism (see
 // internal/notes/retention_participant.go's own doc comment for what that
 // discharges): notes' pkgcore.RetentionParticipant is registered on the
-// kernel's Retention registrar by BuildServer, so the compliance module's
+// registry's Retention registrar by BuildServer, so the compliance module's
 // three orchestrations reach real notes rows through the module it was
 // built over.
 //

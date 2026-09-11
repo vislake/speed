@@ -98,8 +98,8 @@ var (
 	ErrUnknownCode = errors.New("i18n: unknown message code")
 )
 
-// Builder aggregates the locale bundles of every module during kernel
-// wiring, one Builder per bootstrap, and freezes them into a Catalog.
+// Builder aggregates the locale bundles of every module during the assembly's
+// declaration turn, one Builder per assembly, and freezes them into a Catalog.
 //
 // The catalog's languages are declared by the locale files themselves,
 // never by this package: a file is <language>.toml at the root of a
@@ -117,7 +117,7 @@ var (
 // that can be wrong with a module's message resources therefore fails the
 // bootstrap at the module that owns it, before the catalog exists and
 // while the error can still name the file. A Builder is not safe for
-// concurrent use and does not need to be: Bootstrap drives it
+// concurrent use and does not need to be: the assembly drives it
 // sequentially.
 type Builder struct {
 	modules map[string]struct{}

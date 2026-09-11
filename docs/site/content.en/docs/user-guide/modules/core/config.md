@@ -15,7 +15,7 @@ overrides), with reads falling back from the narrow tier to the wide
 one and then to the schema default. speed's other configuration
 layer — process-start bootstrap input (flags, env and files) — is
 outside this module's scope: it is declared on `pkgcore`'s bootstrap
-seat (`Registry.Bootstrap`), resolved by the general-purpose
+declaration (the component descriptor's `BootstrapKeys`), resolved by the general-purpose
 `pkgcore/config` loader (host-driven against its own target struct;
 a zero-dependency package this module never imports), and its
 key-material derivation convention — one purpose string per declared
@@ -52,8 +52,9 @@ migrations := dbkit.NewMigrationRegistry()
 if err := migrations.Register(configModule); err != nil { /* handle err */ }
 if err := migrations.Apply(ctx, db, dbkit.DialectSQLite); err != nil { /* handle err */ }
 
-reg, err := pkgcore.app.Assemble().Bootstrap(ctx, &myModule{}, configModule)
-// handle err
+reg := pkgcore.NewComponentRegistry()
+// register the host's own components on reg (or let the loader select them)
+if err := app.Assemble(ctx, reg, app.LoadSpec{Host: &hostConfig, Options: loaderOpts}); err != nil { /* handle err */ }
 
 svc, err := configModule.Attach(reg)
 // handle err

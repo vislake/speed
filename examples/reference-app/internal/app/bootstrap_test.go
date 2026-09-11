@@ -386,8 +386,8 @@ func TestServerConfigFrom_ResolvesEmptyValuesToTheirDefaults(t *testing.T) {
 // pins the complete-composition branch's resolution shape: a host and port
 // together carry the SMTP target fields on the resolved config, and
 // deliberately pre-build no Mailer. The mailer itself is composed from these
-// fields through the Preset's config channel in BuildServer (its
-// kernel-options comment has the full split), so constructing
+// fields through the builtin composition's config channel in BuildServer (its
+// composition-options comment has the full split), so constructing
 // pkgcore.NewSMTPMailer here would only duplicate what the "mailer.smtp"
 // registration already does from the same four values.
 func TestServerConfigFrom_CompleteSMTPCarriesTheTargetWithoutBuildingAMailer(t *testing.T) {

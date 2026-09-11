@@ -31,7 +31,7 @@ import (
 // go/rbac/reap.go's own header comment -- so a test that needs BOTH real
 // services on one real bus cannot live inside either module's own test
 // package. This file adds no production wiring to internal/app/server.go; it builds its
-// own minimal two-module kernel, independent of BuildServer's much larger
+// own minimal two-module assembly, independent of BuildServer's much larger
 // composition.
 //
 // The property: a binding scoped to a deleted node must not stay live.
@@ -39,7 +39,7 @@ import (
 // the real bus; a rbac with no such subscriber would leave the binding
 // granted after the delete forever.
 
-// newOrgRBACReapHarness boots a minimal, self-contained kernel of exactly
+// newOrgRBACReapHarness boots a minimal, self-contained assembly of exactly
 // two modules -- org and rbac -- over a fresh SQLite file, migrated and
 // bootstrapped the same way BuildServer composes the full app, just without
 // every other module the full app also wires. It returns the real

@@ -65,7 +65,7 @@ over-quota request through on aggregation delay.
 ## Compliance: retention, erasure and export
 
 `compliance` owns no table — its three services operate *your* data
-through participants that register onto the kernel's `Registry.Retention`
+through participants that register onto the registry's `Retention` seat
 seat:
 
 - `RetentionService` sweeps each participant's data past the retention
@@ -252,7 +252,7 @@ fire-and-forget analytics record may be. (The analytics tier is the
 same pipeline: an `AnalyticsRecorder.Record` call with its own feature
 key — never a feature the billing-grade path also measures — folds into
 the same counters.) Your module's compliance obligations ride the same
-`Register` call: implementing the `Registry.Retention` seat's
+`Register` call: implementing the `Retention` seat's
 participant shape covers your rows with retention, erasure and export
 orchestration — see the module pages' `AGENTS.md` files for the exact
 participant wiring.

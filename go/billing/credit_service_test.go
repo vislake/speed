@@ -21,7 +21,7 @@ func newCreditService(t *testing.T) *CreditService {
 // newAuditedCreditService returns a CreditService wired with a real
 // pkgcore.MemoryEventBus and a pkgcore.AuditActionRegistrar carrying this
 // module's five declared credit audit actions -- exactly what module.go's
-// Register wires onto m.credits at Bootstrap time (module_test.go's own
+// Register wires onto m.credits at assembly time time (module_test.go's own
 // TestModule_Register_PerformsNoIO builds the identical Registry shape for
 // Register itself), reached here directly by setting the two unexported
 // fields since this test file lives in package billing. received collects

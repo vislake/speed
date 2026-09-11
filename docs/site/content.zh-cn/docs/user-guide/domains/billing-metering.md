@@ -52,7 +52,7 @@ flowchart LR
 ## Compliance:保留、擦除与导出
 
 `compliance` 自己没有任何表——它的三个服务通过注册到内核
-`Registry.Retention` 席位的参与者操作*你的*数据:
+`Retention` 席位上的参与者操作*你的*数据:
 
 - `RetentionService` 清扫各参与者超过保留窗口的数据。
 - `ErasureService` 执行被遗忘权,租户有界:一次擦除绝不触碰别的
@@ -224,7 +224,7 @@ func entitledMeteredAndCharged() {
 记录那样被静默丢弃(analytics 级是同一条管道:用独立的 feature 键调
 `AnalyticsRecorder.Record`——绝不要用计费级路径也在测量的 feature
 键——汇入同样的计数器)。合规义务挂在同一次 `Register` 调用上:实
-现 `Registry.Retention` 席位要求的参与者形态,你的行就进入保留、擦
+现 `Retention` 席位要求的参与者形态,你的行就进入保留、擦
 除与导出编排——精确的参与者写法见模块页的 `AGENTS.md`。
 
 运行步骤:

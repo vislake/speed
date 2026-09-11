@@ -1,8 +1,8 @@
 package app
 
-// This file runs the host's two post-Bootstrap assembly steps.
-// runPostBootstrap executes after the kernel bootstrapped the module set: the
-// typed Attach calls every module requires exactly once after Bootstrap, the
+// This file runs the host's two post-assembly assembly steps.
+// runPostBootstrap executes after the engine assembled the module set: the
+// typed Attach calls every module requires exactly once after the assembly, the
 // host steps interleaved with them (the channel flags, the demo seeds, the
 // rbac hand-off), and the platform credentials the gateway's write path
 // needs. runPostAttach executes after that: the stores and services whose
@@ -70,16 +70,16 @@ func SocialChannelFlagKey(name string) string {
 // system row down, so every request sees the same answer, while a
 // tenant-tier row can still narrow a channel for one tenant.
 //
-// The step must run after Bootstrap: a system-tier write needs the system
-// context under config.SystemPurposeSystemWrite, a purpose the config
-// component declares in its descriptor -- registered at the assembly's Init
-// entry, before this step's own Init callback runs -- and the schema the
-// write validates against is frozen by configModule.Attach. Running here,
-// before any route can serve, makes the page/API agreement hold from the
-// very first request: without the gate wired into authn, config rows could
-// hide a channel on the page while its endpoint kept issuing tokens;
-// without this step, the wired gate would refuse a channel this host
-// genuinely configured.
+// The step must run after the assembly: a system-tier write needs the
+// system context under config.SystemPurposeSystemWrite, a purpose the
+// config component declares in its descriptor -- registered at the
+// assembly's Init entry, before this step's own Init callback runs -- and
+// the schema the write validates against is frozen by configModule.Attach.
+// Running here, before any route can serve, makes the page/API agreement
+// hold from the very first request: without the gate wired into authn,
+// config rows could hide a channel on the page while its endpoint kept
+// issuing tokens; without this step, the wired gate would refuse a channel
+// this host genuinely configured.
 //
 // No providers assembled means no rows are written at all, and the schema
 // defaults alone keep password and SMS sign-in open. The writes are
@@ -94,7 +94,7 @@ func openConfiguredAuthnChannels(ctx context.Context, cfgService *config.Service
 	}
 	// The bare pkgcore.WithSystemContext is deliberate here rather than
 	// tenancy.WithSystemContext, the audited wrapper: this is a boot-time
-	// declaration, run once per process start between Bootstrap and the
+	// declaration, run once per process start between the assembly and the
 	// first served request, re-affirming host configuration under the fixed
 	// "reference-app-boot" actor -- no operator session, request or ticket
 	// exists yet to attribute an audit row to, and a row every restart
@@ -214,9 +214,9 @@ func (b *serverBuild) runPostBootstrap(ctx context.Context, reg *pkgcore.Compone
 		return seedErr
 	}
 
-	// notes' retention participant is registered here, after Bootstrap --
+	// notes' retention participant is registered here, after the assembly --
 	// compliance's Register is what attaches the Retention registrar the
-	// assembly's Retention seat resolves to, so Add before Bootstrap would
+	// assembly's Retention seat resolves to, so Add before the assembly would
 	// silently register onto a registrar nothing sweeps with. The
 	// participant is built over the very dbkit.Open *gorm.DB the notes
 	// Module already uses -- share the connection, never a second pool.
@@ -240,7 +240,7 @@ func (b *serverBuild) runPostBootstrap(ctx context.Context, reg *pkgcore.Compone
 // handlers is the queue component's own Start. The host's post-attach
 // component calls it.
 func (b *serverBuild) runPostAttach(ctx context.Context, view assemblyView) error {
-	// The attestation layer's two boot steps run here, after Bootstrap (the
+	// The attestation layer's two boot steps run here, after the assembly (the
 	// pki migrations the CA chain's pki_authorities rows live in were
 	// applied there) and before any request can reach the surfaces that
 	// attest or gate: EnsureSchema creates the app table, and

@@ -1017,7 +1017,7 @@ func TestServer_DistributedMode_IncompleteComposition_FailsClosedAtBoot(t *testi
 			// the same as it always was: an incomplete distributed
 			// composition still fails closed, and it is the component,
 			// capability and mode naming that proves it.
-			name:     "SMS sender present, every kernel seam left on its in-process default",
+			name:     "SMS sender present, every assembly-resolved seam left on its in-process default",
 			extraEnv: []string{"APP_SMS_GATEWAY_URL=http://127.0.0.1:1/sms"},
 			wantSubstr: []string{
 				// pkgcore.ErrCapabilityUnsatisfied's own Error() text --

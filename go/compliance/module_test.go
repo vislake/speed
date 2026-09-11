@@ -79,12 +79,12 @@ func (q *recordingQueue) Cancel(context.Context, jobs.JobID) error           { r
 var _ jobs.Queue = (*recordingQueue)(nil)
 
 // TestModule_Register_RefusesAQueuelessBoot pins WithQueue's requirement:
-// a Module built with no queue fails Bootstrap with ErrQueueRequired.
+// a Module built with no queue fails the assembly with ErrQueueRequired.
 func TestModule_Register_RefusesAQueuelessBoot(t *testing.T) {
 	m := NewModule(newTestAuditRepo(t))
 	_, err := componenttest.DeclareModules(m)
 	if !apperr.HasCode(err, ErrQueueRequired.Code) {
-		t.Fatalf("Bootstrap without a queue error = %v, want %s", err, ErrQueueRequired.Code)
+		t.Fatalf("assembly without a queue error = %v, want %s", err, ErrQueueRequired.Code)
 	}
 }
 
@@ -95,7 +95,7 @@ func TestModule_Register_DeclaresItsSurface(t *testing.T) {
 	m := NewModule(newTestAuditRepo(t), WithQueue(&recordingQueue{}))
 	reg, err := componenttest.DeclareModules(m)
 	if err != nil {
-		t.Fatalf("Bootstrap: %v", err)
+		t.Fatalf("assembly: %v", err)
 	}
 
 	foundConfig := false
@@ -129,13 +129,13 @@ func TestModule_Register_DeclaresItsSurface(t *testing.T) {
 }
 
 // TestModule_Register_WiresTheRetentionSweepJobHandler proves a host that
-// drains reg.Jobs.Handlers() after Bootstrap gets a handler for
+// drains reg.Jobs.Handlers() after the assembly gets a handler for
 // taskTypeRetentionSweep.
 func TestModule_Register_WiresTheRetentionSweepJobHandler(t *testing.T) {
 	m := NewModule(newTestAuditRepo(t), WithQueue(&recordingQueue{}))
 	reg, err := componenttest.DeclareModules(m)
 	if err != nil {
-		t.Fatalf("Bootstrap: %v", err)
+		t.Fatalf("assembly: %v", err)
 	}
 	handlers := reg.JobsSeat().Handlers()
 	h, ok := handlers[taskTypeRetentionSweep]
@@ -148,7 +148,7 @@ func TestModule_Register_WiresTheRetentionSweepJobHandler(t *testing.T) {
 }
 
 // TestModule_Register_WiresServicesFromTheRegistry proves the three
-// services and AuditQuery are ready to use once Bootstrap returns: their
+// services and AuditQuery are ready to use once the assembly returns: their
 // registry-derived seams (Retention, EventBus, AuditActions, ObjectStore)
 // are non-nil, so a call into any of them does not panic on a nil field.
 func TestModule_Register_WiresServicesFromTheRegistry(t *testing.T) {
@@ -158,16 +158,16 @@ func TestModule_Register_WiresServicesFromTheRegistry(t *testing.T) {
 	reg := componenttest.NewRegistry()
 	reg.Put(pkgcore.NewLocalObjectStore(t.TempDir()))
 	if err := componenttest.DeclareInto(reg, m); err != nil {
-		t.Fatalf("Bootstrap: %v", err)
+		t.Fatalf("assembly: %v", err)
 	}
 	if m.Retention().retention == nil || m.Retention().bus == nil || m.Retention().actions == nil {
-		t.Error("RetentionService seams not wired after Bootstrap")
+		t.Error("RetentionService seams not wired after the assembly")
 	}
 	if m.Erasure().retention == nil || m.Erasure().bus == nil || m.Erasure().actions == nil {
-		t.Error("ErasureService seams not wired after Bootstrap")
+		t.Error("ErasureService seams not wired after the assembly")
 	}
 	if m.Export().retention == nil || m.Export().bus == nil || m.Export().actions == nil || m.Export().store == nil {
-		t.Error("ExportService seams not wired after Bootstrap")
+		t.Error("ExportService seams not wired after the assembly")
 	}
 }
 
@@ -182,7 +182,7 @@ func TestModule_Register_RegistersItsOwnExportManifestCleanupParticipant(t *test
 	m := NewModule(newTestAuditRepo(t), WithQueue(&recordingQueue{}))
 	reg, err := componenttest.DeclareModules(m)
 	if err != nil {
-		t.Fatalf("Bootstrap: %v", err)
+		t.Fatalf("assembly: %v", err)
 	}
 
 	found := false
@@ -204,7 +204,7 @@ func TestModule_Register_RegistersItsOwnExportManifestCleanupParticipant(t *test
 // attaches the given SharingCreator onto ExportService directly at
 // construction time -- unlike the registry-derived seams
 // TestModule_Register_WiresServicesFromTheRegistry checks, this one needs
-// no Bootstrap at all, since WithSharing is not a pkgcore.ComponentRegistry seam
+// no assembly at all, since WithSharing is not a pkgcore.ComponentRegistry seam
 // (module.go's Register doc comment explains why).
 func TestModule_WithSharing_WiresExportServiceSharing(t *testing.T) {
 	fake := &fakeSharingCreator{}

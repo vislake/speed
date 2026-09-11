@@ -136,10 +136,11 @@ func uploadDeriveAndShare() {
 	must(registry.Register(media))
 	must(registry.Register(links))
 	must(registry.Apply(ctx, db, dbkit.DialectSQLite))
-	// A real kernel: Bootstrap runs both modules' Register, attaching
+	// A real assembly: the engine runs both modules' Register, attaching
 	// the object store, event bus and registry seats their services read
 	// at call time — the same path a host takes.
-	reg, err := pkgcore.app.Assemble().Bootstrap(ctx, media, links)
+	reg := pkgcore.NewComponentRegistry()
+	err := app.Assemble(ctx, reg, app.LoadSpec{Host: &hostConfig, Options: loaderOpts})
 	must(err)
 	must(jobs.Wire(ctx, queue, reg.Jobs))
 	must(queue.Start(ctx))

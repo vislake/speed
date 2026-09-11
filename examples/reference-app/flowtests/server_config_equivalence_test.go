@@ -210,7 +210,7 @@ func legacyConfigFromEnv() (app.ServerConfig, map[string][]byte, error) {
 	}
 	// The SMTP group resolves to the four target fields alone, exactly like
 	// production: no Mailer is built here either -- BuildServer composes
-	// "mailer.smtp" from those fields through the Preset's config channel.
+	// "mailer.smtp" from those fields through the builtin composition's config channel.
 	return cfg, materials, nil
 }
 

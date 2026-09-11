@@ -80,15 +80,15 @@ bootstrap loudly for what its declared surface requires.
 ```go
 a := admin.NewModule(db,
     admin.WithAuthn(authnModule),           // mandatory: each missing
-    admin.WithOrg(orgModule),               //   option fails Bootstrap
+    admin.WithOrg(orgModule),               //   option fails the assembly
     admin.WithCompliance(complianceModule), //   with its own named error
     admin.WithNotification(notificationModule),
     admin.WithQueue(queue),                 // audit export must never run in-request
     admin.WithMetering(meteringModule),     // optional: usage-summary dimensions
     admin.WithBilling(billingModule),       // optional, independent of metering
 )
-// in your the assembly set. Then, after Bootstrap — rbac.Service only
-// exists once rbac's own post-Bootstrap Attach has frozen the catalog:
+// in your assembly's module set. Then, after the assembly returns — rbac.Service only
+// exists once rbac's own post-assembly Attach has frozen the catalog:
 if err := a.AttachRBAC(rbacService); err != nil { /* handle */ }
 ```
 
@@ -113,7 +113,7 @@ rest of that one request and stamps the dual identity onto its context.
 ## Core concepts and API surface
 
 - **Module accessors:** `Tenants()`, `Impersonation()`, `Search()`,
-  `Roles()`, `Usage()`, `Export()` — plus the post-Bootstrap
+  `Roles()`, `Usage()`, `Export()` — plus the post-assembly
   `AttachRBAC(svc)`. `Roles()` and `Impersonation()` fail closed with
   `ErrRBACServiceRequired` until `AttachRBAC` runs, so no grant is born
   before the machinery that must be able to cut it off exists.

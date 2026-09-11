@@ -165,11 +165,11 @@ itself); the usage dashboard stitches `go/metering`'s and
 `go/billing`'s per-tenant reads into one view with no aggregate table
 of its own. Wiring is honest about necessity: five `With*` options
 (`WithAuthn`, `WithOrg`, `WithCompliance`, `WithNotification`,
-`WithQueue`) are mandatory and fail `Bootstrap` with named errors when
+`WithQueue`) are mandatory and fail the assembly with named errors when
 missing — `WithMetering`/`WithBilling` are optional because a host
 without a
 metering dimension should not stand up two modules just to boot — and
-the rbac seam arrives through a distinct post-`Bootstrap` `AttachRBAC`
+the rbac seam arrives through a distinct post-assembly `AttachRBAC`
 call, because rbac's permission catalog may only freeze after every
 module has registered. Impersonation grants cannot be born before that
 attach runs; until then the service fails closed, loudly rather than

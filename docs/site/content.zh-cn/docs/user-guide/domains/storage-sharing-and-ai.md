@@ -70,7 +70,7 @@ base URL 在拨号时受 SSRF 防护。用量记录与权益检查是可选的
 组装,以 `jobs.Wire` 从 `reg.Jobs` 接入队列)写出派生行。诊所随后为这张
 已完成的图给患者铸一条分享链接,患者在无任何认证的情况下打开它,
 之后一次撤销让紧接着的下一次访问立即被拒。演练在单进程里、用内存
-SQLite 数据库和真实内核 Bootstrap 跑完全部流程——独立部署模式的寻
+SQLite 数据库和真实装配跑完全部流程——独立部署模式的寻
 常形态。
 
 前置条件:你的消费模块在 `go.mod` 里用 `replace` 把各 speed 模块指
@@ -117,10 +117,11 @@ func uploadDeriveAndShare() {
 	must(registry.Register(media))
 	must(registry.Register(links))
 	must(registry.Apply(ctx, db, dbkit.DialectSQLite))
-	// A real kernel: Bootstrap runs both modules' Register, attaching
+	// A real assembly: the engine runs both modules' Register, attaching
 	// the object store, event bus and registry seats their services read
 	// at call time — the same path a host takes.
-	reg, err := pkgcore.app.Assemble().Bootstrap(ctx, media, links)
+	reg := pkgcore.NewComponentRegistry()
+err := app.Assemble(ctx, reg, app.LoadSpec{Host: &hostConfig, Options: loaderOpts})
 	must(err)
 	must(jobs.Wire(ctx, queue, reg.Jobs))
 	must(queue.Start(ctx))
@@ -188,7 +189,7 @@ func uploadDeriveAndShare() {
 }
 ```
 
-同一产品的 AI 半段——网关模块用 `WithModelRoute` 键 Bootstrap(图像
+同一产品的 AI 半段——网关模块用 `WithModelRoute` 组装(图像
 还需要 `WithImageGeneration(queue, objects)`),BYOK 凭据配置在平台或
 租户层,业务代码只碰两个入口:
 
@@ -237,7 +238,7 @@ fmt.Println("image job enqueued:", imageJobID)
 1. 在你的消费 `go.mod` 里为 `go/dbkit`、`go/pkgcore`、`go/jobs`、
    `go/storage`、`go/sharing` 加 `replace` 行,然后 `go mod tidy`。
 2. 把第一个代码块放进你自己 `main` 包的文件,运行 `go run .`。
-3. 演练会从零迁移两个模块、Bootstrap 真实内核、经真实队列 worker
+3. 演练会从零迁移两个模块、驱动真实装配、经真实队列 worker
    派生缩略图然后退出——不需要 Docker。
 
 预期输出:

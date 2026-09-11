@@ -11,9 +11,9 @@
 // component as a side effect (see component.go), the same database/sql-
 // style driver-registration pattern kv/redis uses, now with a second name
 // under the "kv" module. The built-in composition still names "kv.redis" by
-// default -- adding this implementation does not change what any existing
-// Preset resolves -- so a host that wants NATS instead either builds its own
-// Preset naming "kv.nats" or calls NewKVStore directly and wires it with
+// default -- adding this implementation does not change what the builtin
+// composition resolves -- so a host that wants NATS instead points the "kv"
+// module at it in its own composition, or calls NewKVStore directly and wires it with
 // the kv value's configuration block.
 //
 // # Why a JetStream KV bucket needs its own envelope

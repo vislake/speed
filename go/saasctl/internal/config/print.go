@@ -412,7 +412,7 @@ func smtpPortValue(cfg appconfig.Config) string {
 // provenance describes where one resolved value came from: the variable
 // that carried it (fromEnv), or the exact text describing what it fell
 // back to when unset -- a built-in default, or which seam stays on its
-// Preset default for an infrastructure variable. The unset text is never
+// builtin default for an infrastructure variable. The unset text is never
 // empty and never renders a secret's bytes.
 func provenance(envName string, fromEnv bool, unsetText string) string {
 	if fromEnv {

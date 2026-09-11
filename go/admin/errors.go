@@ -141,9 +141,9 @@ var (
 	// ErrRBACServiceRequired is returned by every RoleService method and
 	// by ImpersonationService.Start when Module.AttachRBAC has not been
 	// called yet. Unlike the wiring errors above, this is NOT a
-	// Register-time (Bootstrap) failure: rbac.Service does not exist
+	// Register-time (assembly) failure: rbac.Service does not exist
 	// until the host calls rbacModule.Attach(reg), which must run
-	// strictly AFTER Bootstrap returns -- a full cycle later than admin's
+	// strictly AFTER the assembly returns -- a full cycle later than admin's
 	// own Register runs. See role.go's own RoleService doc comment and
 	// Module.AttachRBAC for the full reasoning. A request reaching the
 	// role-management HTTP surface before the host has called AttachRBAC
@@ -225,7 +225,7 @@ var (
 	// ErrImpersonationNotWired is returned by Start when the
 	// ImpersonationService was never attached by Module.Register's attach
 	// call -- the state a service is in before Register runs, reachable
-	// through Module.Impersonation() before Bootstrap. A service in that
+	// through Module.Impersonation() before the assembly. A service in that
 	// state cannot run the mandatory validate-and-notify pass (target
 	// existence and locale resolution, tenant-membership validation, and
 	// the security notification), so Start refuses outright rather than

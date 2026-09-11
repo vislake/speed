@@ -52,7 +52,7 @@ import { attachSession, useCurrentTenant } from '@speed/auth-core'
 import type { AuthSession } from '@speed/auth-core'
 import { PRODUCT_SHELL_NAMESPACE, productShellResources, ProductShell } from '@speed/product-shell'
 
-// Bootstrap, once, before render:
+// Boot once, before render:
 const i18n = createI18n({
   supportedLanguages: ['zh-CN', 'en-US'],
   defaultLanguage: 'zh-CN',

@@ -43,7 +43,7 @@ func init() {
 		// state of its own -- every call is an independent HTTP request --
 		// so it genuinely satisfies all three capability bits, though
 		// nothing validates them the way the assembly validates the
-		// four kernel seams: this registry is ai-gateway's own private
+		// four assembly-resolved seams: this registry is ai-gateway's own private
 		// mechanism, not one of pkgcore's four deployment-mode-validated
 		// seams.
 		Capabilities: pkgcore.MultiReplicaSafe | pkgcore.SurvivesRestart | pkgcore.Stateless,

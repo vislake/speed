@@ -617,13 +617,13 @@ func WithFederationHTTPClient(client *http.Client) Option {
 // DeploymentModeDistributed) and no SMSSender was supplied with
 // WithSMSSender.
 //
-// It exists for exactly the reason pkgcore's own kernel refuses to resolve a
-// distributed composition onto an in-process seam: pkgcore.NewConsoleSMSSender
+// It exists for exactly the reason pkgcore's own builtin composition refuses to
+// resolve a distributed deployment onto an in-process seam: pkgcore.NewConsoleSMSSender
 // prints to a writer nobody in a distributed deployment's replica pool is
 // reading, so silently defaulting to it there would look like phone sign-in
 // works right up until the first person tries to use the code that was never
 // actually delivered. The SMS seam is pkgcore's, but it deliberately has no
-// kernel seat (see pkgcore.SMSSender's doc comment) -- the kernel resolves
+// assembly seat (see pkgcore.SMSSender's doc comment) -- the assembly resolves
 // no SMS sender for this module, which receives it through this option -- so
 // the enforcement happens here, at the same wiring-time moment newOptions
 // already validates WithKeySource and WithBlindIndexKey, against the
@@ -648,9 +648,9 @@ func WithSMSSender(sender pkgcore.SMSSender) Option {
 // that prints to a writer nobody in that deployment mode is reading. This
 // is the one piece of deployment-mode awareness this module carries, and it
 // lives entirely in this wiring-time validation function -- never in
-// Service's business logic -- for the same reason pkgcore.Kernel's own
-// resolveMailer and resolveObjectStore live in kernel wiring rather than in
-// a business module: "do not branch on deployment mode in business logic"
+// Service's business logic -- for the same reason capability validation
+// lives in the assembly rather than in a business module: "do not branch on
+// deployment mode in business logic"
 // governs behavior selection inside a request, not a once-at-construction-time
 // checked precondition. Omitting this option is equivalent to standalone: it
 // is not itself a required option and existing callers that never call it

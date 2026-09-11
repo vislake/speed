@@ -90,7 +90,7 @@ func attachedService(t *testing.T, opts ...Option) *Service {
 }
 
 // testService builds a *Service directly (bypassing Module.Attach, which
-// needs a full *pkgcore.ComponentRegistry from a real Bootstrap) over a fresh
+// needs a full *pkgcore.ComponentRegistry from a real assembly) over a fresh
 // migrated SQLite database, an in-memory EventBus and a fixed clock, so
 // every test in this file is deterministic and needs no wall-clock
 // tolerance.

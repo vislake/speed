@@ -17,9 +17,9 @@
 // database/sql-style driver-registration pattern kv/redis follows, applied
 // a second time for a second implementation of the same seam. It is not
 // the "kv" component the built-in composition names, which still points "kv" at
-// "kv.redis"; a host that wants this implementation instead builds its own
-// Preset (a plain map literal, see Preset's own doc comment) or bypasses the
-// preset layer entirely by constructing NewKVStore and wiring it with
+// "kv.redis"; a host that wants this implementation instead points the "kv"
+// module at "kv.postgres" in its own composition, or bypasses the loader
+// entirely by constructing NewKVStore and wiring it with
 // the kv value's configuration block, exactly as a host choosing kv/redis explicitly does.
 //
 // # Sharing an existing connection pool

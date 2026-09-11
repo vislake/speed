@@ -22,7 +22,7 @@ import (
 // dimension's own key, built on the shared allowRateLimit helper, with the
 // underlying Limiter built lazily over the host's KVStore (rateLimiter,
 // below) so it always reads whichever implementation the running deployment
-// mode actually resolved, never one captured before Bootstrap ran.
+// mode actually resolved, never one captured before the assembly ran.
 //
 // Deliberately NOT a Module Option: unlike TenantConfigReader (an
 // optional-by-design seam with a documented, correct default) or WithQueue
@@ -30,11 +30,10 @@ import (
 // default a host would ever deliberately choose for a genuinely
 // unauthenticated public endpoint -- so rather than adding a WithRateLimiter
 // wiring point a host could forget, this module reads the registry's own
-// KVStore, which every Bootstrap already resolves for every deployment
+// KVStore, which the builtin composition always resolves for every deployment
 // mode, through the identical hostSeams.KVStore() seam
 // org.InviteService.rateLimiter reads. A host cannot boot this module at
-// all without a KVStore somewhere in its composition (pkgcore.Kernel
-// resolves one unconditionally), so rate limiting is real the moment
+// all without a KVStore somewhere in its composition (the builtin composition always resolves one), so rate limiting is real the moment
 // Module.Register attaches the registry, with no separate opt-in to forget.
 
 // The rate-limit budget this module applies. Package constants, not dynamic

@@ -9,7 +9,7 @@ bookCollapseSection: true
 
 core 组的七个模块是每个 speed 二进制的依赖地板。分工,每模块一句话:
 
-- **pkgcore**——装配契约(`Module`/`Registry`/`Kernel`)、带 N 套实现与能力声明的基础设施 seam 接口、租户上下文原语、结构化错误与消息目录。不 import 任何其它 speed 模块。
+- **pkgcore**——装配契约(`Module`/`ComponentRegistry`/`Component`)、带 N 套实现与能力声明的基础设施 seam 接口、租户上下文原语、结构化错误与消息目录。不 import 任何其它 speed 模块。
 - **dbkit**——双方言数据访问层:安全包裹的 `Open`、带标记删除与门禁硬删除语义的强制泛型 `Repository[T]`、迁移聚合、字段级加密与盲索引。在上下文已携带租户之后执行租户隔离。
 - **tenancy**——隔离的输入侧:决定请求携带哪个租户(解析中间件)、系统上下文逃生舱的带审计封装,以及每个仓储必须运行的隔离断言套件。
 - **observability**——导出器选择是一个选项的 OpenTelemetry 装配、默认开启脱敏的上下文感知结构化日志器、标签有界的 HTTP 埋点。

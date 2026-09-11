@@ -81,7 +81,7 @@ func newTestImpersonationService(t *testing.T, notifier Notifier) (*Impersonatio
 	// rbacSvc is deliberately NOT left nil the way authnSvc and members
 	// are: Start refuses while it is nil (its own doc comment), and nearly
 	// every test in this file calls Start. Attach a real, Attach()-ed *rbac.Service over the same db,
-	// exactly as a wired host's post-Bootstrap Module.AttachRBAC would;
+	// exactly as a wired host's post-assembly Module.AttachRBAC would;
 	// the pre-attach refusal itself is pinned separately, by
 	// TestImpersonationService_Start_BeforeAttachRBAC_Refused.
 	svc.attachRBAC(newAttachedRBAC(t, db))
@@ -195,7 +195,7 @@ func TestImpersonationService_Start_BeforeAttachRBAC_Refused(t *testing.T) {
 // The service is built through the in-package constructor and run through
 // attach first, exactly like the Start-refusal test above: the shape that
 // matches the Warn's scenario is a host whose Module.Register ran (the
-// attached flag is set) but whose post-Bootstrap Module.AttachRBAC call
+// attached flag is set) but whose post-assembly Module.AttachRBAC call
 // never happened.
 func TestImpersonationService_RoleRevokedBeforeAttachRBAC_Warns(t *testing.T) {
 	db := testutil.NewDB(t)

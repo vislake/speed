@@ -69,7 +69,7 @@ func TestConfigFromEnv_Defaults(t *testing.T) {
 		t.Fatalf("DemoUsersPassword = %q, want the empty default (demo-user seed skipped)", cfg.DemoUsersPassword)
 	}
 	if cfg.ObjectStoreRoot != "" {
-		t.Fatalf("ObjectStoreRoot = %q, want the empty default (Preset local-store directory)", cfg.ObjectStoreRoot)
+		t.Fatalf("ObjectStoreRoot = %q, want the empty default (builtin local-store directory)", cfg.ObjectStoreRoot)
 	}
 	if cfg.DisableDemoUserHeader {
 		t.Fatal("DisableDemoUserHeader = true, want false (the default: demo.DemoUserHeader keeps winning, unchanged)")

@@ -104,13 +104,13 @@ type ImpersonationService struct {
 	// than a structurally-typed seam. Nil only before Module.Register calls
 	// attach (see attach's own doc comment) -- WithAuthn is a mandatory
 	// option, so this is never nil in a correctly wired production
-	// Bootstrap.
+	// the assembly.
 	authnSvc *authn.Service
 
 	// members confirms the impersonation target's tenant membership
 	// (validateTargetMembership). Nil until Module.Register calls attach --
 	// WithOrg is a mandatory option, so this is never nil in a correctly
-	// wired production Bootstrap; tolerated as nil otherwise by skipping
+	// wired production assembly; tolerated as nil otherwise by skipping
 	// the check, the same pre-Register tolerance every other seam on this
 	// struct documents.
 	members MembershipChecker
@@ -119,15 +119,15 @@ type ImpersonationService struct {
 	// uses to re-verify, when notified of a role-binding revoke or a role
 	// redefinition in rbac.SystemDomain, whether an administrator holding a
 	// live impersonation grant still actually holds admin:impersonate. Nil
-	// until Module.AttachRBAC is called -- the same post-Bootstrap-only
+	// until Module.AttachRBAC is called -- the same post-assembly-only
 	// wiring RoleService's own rbacSvc field requires (role.go's own doc
 	// comment has the full reasoning for why this cannot be a
 	// construction-time option).
 	//
 	// Unlike the Register-time seams above (bus, notifier, authnSvc,
 	// members -- each enforced by a mandatory With* option failing
-	// Bootstrap), AttachRBAC is a host-performed call nothing in this
-	// module can enforce at Bootstrap. Start therefore refuses while
+	// the assembly), AttachRBAC is a host-performed call nothing in this
+	// module can enforce at assembly time. Start therefore refuses while
 	// rbacSvc is nil (ErrRBACServiceRequired, mirroring RoleService.require's
 	// fail-closed gate on this very seam): a grant born before AttachRBAC
 	// could outlive its administrator's admin:impersonate permission with
@@ -150,7 +150,7 @@ type ImpersonationService struct {
 // mandatory security notification entirely. Construction is therefore
 // package-private, and the only sanctioned path to a service is NewModule,
 // whose Register always attaches those seams (each backed by a mandatory
-// With* option that fails Bootstrap with its own named error when missing).
+// With* option that fails the assembly with its own named error when missing).
 // A service reached before that moment -- Module.Impersonation() before
 // Register has run, say -- fails closed at Start with
 // ErrImpersonationNotWired rather than degrading.
@@ -260,7 +260,7 @@ func (s *ImpersonationService) Start(ctx context.Context, in StartInput) (*Imper
 	}
 	// The automatic permission-revocation end (onRoleBindingRevoked /
 	// onRoleChanged) runs only once Module.AttachRBAC has attached a real
-	// *rbac.Service -- a host-performed, post-Bootstrap wiring step nothing
+	// *rbac.Service -- a host-performed, post-assembly wiring step nothing
 	// else in this module can enforce (see rbacSvc's own doc comment). A
 	// grant born while it is missing could outlive its administrator's own
 	// admin:impersonate permission with no reconciliation ever able to end
@@ -301,7 +301,7 @@ func (s *ImpersonationService) Start(ctx context.Context, in StartInput) (*Imper
 	// shapes whose attach passes a subset of the seams
 	// (newTestImpersonationService's nil notifier, say): Module.Register
 	// always attaches all three -- each is a MANDATORY With* option backed
-	// by its own named Bootstrap failure -- and no public path constructs
+	// by its own named assembly failure -- and no public path constructs
 	// a service outside Register, so no production wiring can ever land
 	// here half-wired. The gate therefore exists purely so a lightweight
 	// unit test exercising unrelated behavior (Lookup/End/ListActive
@@ -539,7 +539,7 @@ func (s *ImpersonationService) enterTargetSystemContext(ctx context.Context, in 
 // before this point when attach has not run at all
 // (ErrImpersonationNotWired), and Module.Register always attaches a real
 // org seam -- WithOrg is mandatory in a correctly wired production
-// Bootstrap -- so this branch is reachable only from the in-package test
+// the assembly -- so this branch is reachable only from the in-package test
 // shapes.
 func (s *ImpersonationService) validateTargetMembership(ctx context.Context, in StartInput) error {
 	if s.members == nil {
@@ -670,7 +670,7 @@ func newImpersonationNoticeOccurrenceID() (string, error) {
 // test shapes, since Start refuses pre-attach outright with
 // ErrImpersonationNotWired and Module.Register always attaches a real
 // *authn.Service, WithAuthn being mandatory in a correctly wired
-// production Bootstrap), and an empty Locale with no way to resolve one
+// production assembly), and an empty Locale with no way to resolve one
 // refuses with ErrImpersonationTargetValidationUnavailable.
 func (s *ImpersonationService) resolveNotificationLocale(ctx context.Context, in StartInput) (string, error) {
 	if s.authnSvc == nil {

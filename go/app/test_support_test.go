@@ -32,7 +32,7 @@ func testKey(seed byte) []byte {
 
 // The declared bootstrap key the app package's own tests resolve. It is not
 // a fixture: the go/config module declares config.cipher_key, and the
-// package's own kernel tests import go/config, so this test binary's
+// package's own engine tests import go/config, so this test binary's
 // registration carries the real declaration -- the same shape a consumer
 // gets by importing the module packages whose components declare their keys.
 const testCipherKeyPath = "config.cipher_key"

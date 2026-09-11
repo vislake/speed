@@ -150,14 +150,14 @@ type ServerConfig struct {
 
 	// S3Endpoint, S3Bucket, S3AccessKey, S3SecretKey, S3Region, S3UseSSL
 	// and S3BucketLookup name the registered "objectstore.s3"
-	// implementation for the "objectstore" seam through the Preset's
+	// implementation for the "objectstore" seam through the builtin composition's
 	// config channel when S3Endpoint is non-empty: BuildServer overrides
-	// that one entry of the standalone Preset with these values, and the
+	// that one entry of the builtin standalone composition with these values, and the
 	// registration builds the S3-compatible ObjectStore from them -- the
 	// host pre-builds nothing. The S3 fields' own doc comment
 	// (bootstrap.go) has the completeness rule; an empty S3BucketLookup
 	// reads as the store's endpoint-derived auto default.
-	// Empty S3Endpoint (the default) leaves "objectstore" on the Preset's
+	// Empty S3Endpoint (the default) leaves "objectstore" on the builtin composition's
 	// local-directory default.
 	S3Endpoint     string
 	S3Bucket       string
@@ -168,7 +168,7 @@ type ServerConfig struct {
 	S3BucketLookup string
 
 	// ObjectStoreRoot, when non-empty, replaces the "objectstore" seam's
-	// Preset default with pkgcore.NewLocalObjectStore over this fixed
+	// builtin default with pkgcore.NewLocalObjectStore over this fixed
 	// directory -- the local twin of the S3 fields above, and an
 	// alternative to them (ConfigFromEnv refuses both a complete S3
 	// composition and APP_OBJECT_STORE_ROOT, per the ObjectStoreRoot field's
@@ -177,7 +177,7 @@ type ServerConfig struct {
 	// capability alone, never MultiReplicaSafe: the directory survives a
 	// process restart, but nothing about a single-process local store is
 	// replica-safe. The field exists because a host that needs its objects
-	// to outlive one process must name the directory itself -- the Preset
+	// to outlive one process must name the directory itself -- the builtin
 	// default is a throwaway MkdirTemp -- which is exactly what the
 	// two-boot expiry-sweep flow test (flowtests/periodic_scheduler_flow_test.go)
 	// needs: boot 2's sweep must find the bytes boot 1 wrote.
@@ -185,13 +185,13 @@ type ServerConfig struct {
 
 	// SMTPHost, SMTPPort, SMTPUsername, SMTPPassword and SMTPReplyTo name the
 	// registered "mailer.smtp" implementation for the "mailer" seam through
-	// the Preset's
+	// the builtin composition's
 	// config channel when SMTPHost is non-empty: BuildServer overrides that
-	// one entry of the standalone Preset with these values, and the
+	// one entry of the builtin standalone composition with these values, and the
 	// registration builds the SMTP Mailer from them -- the host pre-builds
 	// nothing. The SMTP fields' own doc comment (bootstrap.go) has the
 	// completeness rule.
-	// Empty SMTPHost (the default) leaves "mailer" on the Preset's
+	// Empty SMTPHost (the default) leaves "mailer" on the builtin composition's
 	// console default, exactly like an unset Mailer field below.
 	SMTPHost     string
 	SMTPPort     int
@@ -325,7 +325,7 @@ type ServerConfig struct {
 	PKIExpiryScanWindow  time.Duration
 
 	// Mailer overrides the "mailer" seam with the host's own value when set
-	// -- nil in production, where the seam is composed through the Preset's
+	// -- nil in production, where the seam is composed through the builtin composition's
 	// config channel instead (the SMTPHost group above), so this field
 	// exists for the org invitation-accept flows
 	// (flowtests/org_flow_test.go, flowtests/org_clinic_invitation_test.go,

@@ -18,7 +18,7 @@ import (
 // through the real TreeService.Restore -- delivered to rbac's own real
 // Service through the actual event bus. No mock, no fake payload, no direct
 // call into either module's internals: these tests reuse
-// newOrgRBACReapHarness, the same two-module kernel (org + rbac over one
+// newOrgRBACReapHarness, the same two-module assembly (org + rbac over one
 // real bus and one SQLite file) rbac_node_deleted_reap_test.go builds, and
 // belong in the reference app for the identical reason that file documents:
 // this app is the one place that can import both go/org and go/rbac without

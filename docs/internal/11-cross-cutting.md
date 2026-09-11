@@ -20,7 +20,7 @@
 - 新增 `pkgcore/i18n` 子包，选 `nicksnyder/go-i18n`（支持复数形式与嵌套消息，生态成熟）。
 - **API 响应默认不返回翻译后的文案，而是返回结构化错误码 + 参数**（如 `{"code":"billing.quota_exceeded","params":{"limit":1000}}`），由前端翻译。这样同一个后端能同时服务不同语言的客户端，也便于业务方覆盖文案。
 - **后端自己生成的内容必须后端翻译**：邮件（邀请、密码重置、超额提醒）、导出的账单/发票、Webhook 通知文本、运营后台的审计日志描述。这类内容用收件人的 `locale` 而非请求方的语言渲染——给英文用户发的邀请邮件不能因为操作者是中文界面就变成中文。
-- 每个 Go module 在自己目录维护 `locales/{zh-CN,en-US}.toml` 并 `embed.FS` 暴露，由 Kernel 装配时合并注册（与 migrations 的聚合机制一致）。
+- 每个 Go module 在自己目录维护 `locales/{zh-CN,en-US}.toml` 并 `embed.FS` 暴露，由装配驱动在装载阶段合并注册（与 migrations 的聚合机制一致）。
 - 时区链：profile `users.timezone`（`GET/PATCH /api/v1/authn/me/preferences` 读写，空 = 未选）→ 设备时区 → **UTC 终值**（渲染器始终显式传 `timeZone`，不走 `Intl` 的进程本地隐式默认）；billing 发票固定 UTC（既有豁免，保留）。数据库统一存 UTC，展示层转换。后端今天没有按收件人时区渲染的内容（各模块 locales 目录不含任何日期格式化参数），tzdata 嵌入当前只服务偏好校验；默认语言 `en-US`、默认时区 `UTC`。**缺口**：第三方渲染点不携带请求者设备时区（本期不引入时区请求头）；将来服务端按请求者时区渲染的链 = 收件人 tz → 请求者档（仅前端请求存在时）→ UTC 兜底。
 
 **前端**
@@ -51,7 +51,7 @@
 - 环境变量统一 `SPEED_` 前缀，嵌套用双下划线（`SPEED_DB__DSN`）。
 - **强类型 + 启动时 fail-fast**：配置绑定到结构体，必填缺失或格式错误直接退出并打印清晰的错误（缺哪个键、从哪些来源找过），绝不允许带着空配置启动到一半才崩。
   > **实现落地更正**：`pkgcore/config` 没有引入 `go-playground/validator`，而是用 `config:"required"` 结构体标签 + 反射做必填校验——范围/格式/枚举这类更复杂的校验规则不受支持，理由是目前还没有任何 bootstrap 配置结构体需要这类校验，不引入这个依赖。
-- 每个模块声明自己的配置结构体片段，由 Kernel 聚合装配——与 migrations、i18n 资源的聚合机制保持一致。
+- 每个模块声明自己的配置结构体片段，由装配聚合驱动——与 migrations、i18n 资源的聚合机制保持一致。
 - `saasctl config print` 打印最终生效配置及**每个值的来源**（来自 flag / env / 文件 / 默认值），敏感值自动脱敏。这是排查"为什么我改了配置文件没生效"的关键工具。
 
   > **`saasctl config print` 的落地形态**：上面这条 bootstrap 侧的 `config print` 已落地为 `saasctl config print [go.mod]`（`go/saasctl` 的 config 命令组），针对脚手架生成项目的引导配置：整个引导面每个环境变量一行（统一 `APP_*` 前缀——生成项目与 reference-app 各自独立选择前缀，并非强制一致）——三个标量默认（`APP_DEPLOYMENT_MODE`、`PORT`、`APP_DB_PATH`）、六枚平台密钥（按声明键路径的 loader 派生拼写：`APP_CONFIG__CIPHER_KEY`、`APP_ORG__INVITATION_EMAIL_INDEX_KEY`、`APP_AUTHN__BLIND_INDEX_KEY`、`APP_AUTHN__PII_CIPHER_KEY`、`APP_PKI__LOCAL_KEY_CIPHER_KEY`、`APP_NOTIFICATION__CONTACT_INDEX_KEY`）、各接缝变量（`APP_REDIS_ADDR`、`APP_OTLP_ENDPOINT`、`APP_S3_*`、`APP_SMTP_*`、`APP_SMS_GATEWAY_URL`）——各显示生效值与来源——取到环境变量的标 `from <ENV>`，未设置的标"unset or empty"，回退到生成应用的内置默认值并标注默认来源，九个密钥与凭据行（六枚平台密钥加 `APP_S3_SECRET_KEY`、`APP_SMTP_PASSWORD`、`APP_SMS_GATEWAY_URL`）无论环境里是什么一律 `[redacted]`。两处边界：(1) 来源标注只区分"环境变量"与"默认值"两档——print 只解析环境变量；生成应用的引导来源在 env 之上还有 flag 层（loader 默认扫描 os.Args，flag 优先于 env），配置文件层未接入（引导来源为 flag > env > 内置默认值）；经 flag 覆盖的值不在 print 的标注范围内；(2) 动态配置（`configs` 表）的值打印与编辑、按注册 schema 驱动的脱敏未实现——print 覆盖的是引导配置面（`go/saasctl/AGENTS.md` 的 Known limitations）。print 与生成应用引导是同源的：它解析环境所用的 `internal/appconfig` 是模板内 `cmd/server/config.go` 的孪生，孪生关系由测试钉死，所以 print 打印或拒绝的正是应用会启动或不启动的。
@@ -75,7 +75,7 @@
 - **前端运行时配置**：提供 `/api/v1/config/public` 下发前端可见的公开配置（品牌信息、功能开关、可用支付渠道、可选语言），前端在启动时拉取。这样改品牌色、开关功能不需要重新构建前端。`@speed/api-client` 提供 `usePublicConfig()` hook。
 
   > **实现落地更正**（实现 `config` 模块时确认）：本节动态配置部分已按下列实际形态落地，个别表述与设计不同：
-  > - **声明与冻结分离**：各模块在 `Register` 阶段只通过 `pkgcore` 的 `ConfigSchemaRegistrar`/`FeatureRegistrar` **声明**自己的配置项与功能开关；运行期 schema 要到 `Bootstrap` 走完、所有模块注册完毕才完整，因此宿主在 `Bootstrap` 返回后调用一次 `config.NewModule(...)` 的 `Attach(reg)` 冻结 schema 并取回 `Service`。声明与冻结之间的请求窗口返回 `ErrServiceNotAttached` 而不是带病服务；含 `Sensitive` 项却未注入 cipher 时拒绝启动（`ErrCipherRequired`）；重复 `Attach` 报 `ErrAlreadyAttached`。
+  > - **声明与冻结分离**：各模块在 `Register` 阶段只通过 `pkgcore` 的 `ConfigSchemaRegistrar`/`FeatureRegistrar` **声明**自己的配置项与功能开关；运行期 schema 要到装配的 Init 阶段走完、所有模块注册完毕才完整，因此宿主在装配 返回后调用一次 `config.NewModule(...)` 的 `Attach(reg)` 冻结 schema 并取回 `Service`。声明与冻结之间的请求窗口返回 `ErrServiceNotAttached` 而不是带病服务；含 `Sensitive` 项却未注入 cipher 时拒绝启动（`ErrCipherRequired`）；重复 `Attach` 报 `ErrAlreadyAttached`。
   > - **事件名与防丢**：变更事件名实现为 `config.item.changed`（本节写的是 `config.changed`），经共享总线广播让各实例失效本地缓存；防丢兜底是后台轮询器定期重读近期更新的行（不是 TTL）。
   > - **敏感项**：加密存储、读取时解密、日志与响应脱敏均按设计落地；变更事件同样不携带明文——payload 的两个取值槽位都放 `[redacted]` 标记，明文不跨出模块。
   > - **作用域**：`system` 与 `tenant` 两层已落地（system 行以空字符串 `tenant_id` 为哨兵），读取从租户覆盖回退到 system 行再到 schema 默认值；`user` 层按"未来可扩展"预留但刻意未实现，任何写入返回 `ErrUserScopeUnavailable`。

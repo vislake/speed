@@ -157,7 +157,7 @@ pki.NewModule(db, pki.WithSigner("kms.aws", cfg))
 
 `local` 不具备该能力；`vault`/`aws-kms` 在**直签模式**下具备，在信封模式下不具备。
 
-**尚未落地：这项声明目前不被任何地方校验。** `Kernel.Bootstrap` 对能力的解析与校验（`resolveKernelSeam`/`validateSeamCapability`）只覆盖四个固定的内建 seam（`EventBus`/`KVStore`/`Mailer`/`ObjectStore`），完全不知道 `pki.SignerRegistry` 或 `pki.Signer` 的存在；`go/pki` 一侧也没有等价的校验——`pki.Module.WithSigner` 不接收 `Capability`/需求参数，`SignerRegistry.Build` 只是把注册时声明的 `Capability` 原样返回，不与任何期望值比较。也就是说，宿主即便装配了一个不具备 `KeyNeverLeavesBoundary` 的实现，即便本意是要求它，也不会得到任何错误——高安全部署的"声明即校验"仍是意图，不是实现。这项差距记录在 `go/pki/AGENTS.md` 的 Known limitations 中。
+**尚未落地：这项声明目前不被任何地方校验。** 装配的能力校验只跑在被选中组件描述符声明的能力位上，不认识 `pki.SignerRegistry` 或 `pki.Signer`；`go/pki` 一侧也没有等价的校验——`pki.Module.WithSigner` 不接收 `Capability`/需求参数，`SignerRegistry.Build` 只是把注册时声明的 `Capability` 原样返回，不与任何期望值比较。也就是说，宿主即便装配了一个不具备 `KeyNeverLeavesBoundary` 的实现，即便本意是要求它，也不会得到任何错误——高安全部署的"声明即校验"仍是意图，不是实现。这项差距记录在 `go/pki/AGENTS.md` 的 Known limitations 中。
 
 ### Ed25519 在三套实现上都能直签
 
@@ -450,7 +450,7 @@ type KeySource interface {
 
 ## 模块契约
 
-按 [01 整体架构](01-architecture.md) 的模块接入契约，`Register(reg Registrar)` 注册：
+按 [01 整体架构](01-architecture.md) 的模块接入契约，`Register(reg *pkgcore.ComponentRegistry) error` 注册：
 
 **配置项**（`config` 模块）：CA 与证书的默认/最长有效期、提前续期天数、传播窗口长度、CRL 分发点 URL。**没有 Sensitive 项**——私钥不经过配置系统。
 

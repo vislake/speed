@@ -914,7 +914,7 @@ func TestAggregator_Restart_ReconstructsOverageLatch_NoDoubleFire(t *testing.T) 
 // bucket's threshold, the crossing has happened" holds ONLY while the
 // threshold is unchanged. The thresholds are a construction-time field
 // (module.go's WithOverageThresholds option mutates the Aggregator before
-// Bootstrap returns), so changing one -- an operator lowering a limit is
+// the assembly returns), so changing one -- an operator lowering a limit is
 // the routine shape -- requires a restart. After that restart, quantity
 // >= threshold is true not because a crossing was ever published but
 // because the threshold moved below an already-existing quantity: the

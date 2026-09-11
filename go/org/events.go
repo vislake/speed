@@ -214,14 +214,14 @@ var memberEventDecls = []pkgcore.EventDecl{
 //
 // *pkgcore.ComponentRegistry satisfies this interface structurally; org declares it
 // rather than taking the concrete type so that a test can substitute a host
-// without building a kernel.
+// without driving an assembly.
 type hostSeams interface {
 	// KVStore is the store the rate limiter counts in.
 	KVStore() pkgcore.KVStore
 	// Mailer is the outbound-email transport. org never holds an SMTP
 	// client, a provider SDK or a template engine of its own.
 	Mailer() pkgcore.Mailer
-	// Locales is the merged message catalog. Nil until Bootstrap installs
+	// Locales is the merged message catalog. Nil until the assembly installs
 	// it, which is exactly why this is a method call and not a field.
 	Locales() *i18n.Catalog
 	// EventBus is the bus subscriptions were installed on, so a publisher

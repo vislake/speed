@@ -6,7 +6,7 @@ package billing
 // construct and declare it. Its Init runs the module's one declaration entry
 // point, Register, inside the assembly's Init stage -- the one stage whose
 // seats accept writes -- so the module's declarations reach the assembly's
-// seats exactly as they reach the kernel bootstrap's registry.
+// seats exactly as they reach the assembly's registry.
 
 import (
 	"context"

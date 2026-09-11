@@ -68,7 +68,7 @@ func AuthenticatedAPIKeyFromContext(ctx context.Context) (*AuthenticatedAPIKey, 
 // It holds a *Module, not a *Service, for the identical reason Handler does
 // (handler.go's own doc comment):
 // go/integration's own Service is built in Module.Attach, strictly after
-// Bootstrap's Register phase -- too late for a middleware a host may want to
+// the assembly's Register phase -- too late for a middleware a host may want to
 // construct and wire during Register, alongside every other module's own
 // route mounting. Reading m.service AT CALL TIME bridges that gap, the
 // identical forwarding-wrapper technique Handler, handleDomainEvent and

@@ -17,7 +17,7 @@
 // template file internal/template/project/cmd/server/config.go -- the same
 // variable names, the same defaults, the same completeness rules (an S3
 // group or an SMTP pair that is only partially set is refused, never
-// silently dropped to the Preset default), the same development key bytes
+// silently dropped to the builtin default), the same development key bytes
 // and the same malformed-value error texts for the host's own text-typed
 // variables, with the template's __APP_NAME__ token replaced by the real
 // app name the caller derives from the project's go.mod. One default is
@@ -130,7 +130,7 @@ const (
 	// RedisAddrEnv names the environment variable holding the Redis server
 	// address that composes a real, MultiReplicaSafe implementation for
 	// both the "eventbus" and "kv" seams. Empty -- the default -- leaves
-	// both seams on the Preset's in-process implementation.
+	// both seams on the builtin composition's in-process implementation.
 	RedisAddrEnv = "APP_REDIS_ADDR"
 
 	// OTLPEndpointEnv names the environment variable holding the OTLP/gRPC
@@ -314,7 +314,7 @@ type Config struct {
 	// and S3BucketLookup compose a real S3-compatible ObjectStore for the
 	// "objectstore" seam when S3Endpoint is non-empty -- see
 	// S3EndpointEnv's own doc comment above for the completeness rule.
-	// Empty S3Endpoint (the default) leaves "objectstore" on the Preset's
+	// Empty S3Endpoint (the default) leaves "objectstore" on the builtin composition's
 	// local-directory default. S3BucketLookup carries the parsed spelling
 	// ("auto" when unset), never the raw text.
 	S3Endpoint     string
@@ -328,7 +328,7 @@ type Config struct {
 	// SMTPHost, SMTPPort, SMTPUsername and SMTPPassword compose a real SMTP
 	// Mailer for the "mailer" seam when SMTPHost is non-empty -- see
 	// SMTPHostEnv's own doc comment above for the completeness rule. Empty
-	// SMTPHost (the default) leaves "mailer" on the Preset's console
+	// SMTPHost (the default) leaves "mailer" on the builtin composition's console
 	// default.
 	SMTPHost     string
 	SMTPPort     int
@@ -388,7 +388,7 @@ type Config struct {
 // prefix), a malformed infrastructure-group value reports the app name
 // prefixed in the template's exact wording, and an incomplete S3 group or
 // SMTP pair is refused exactly as configFromEnv refuses it -- never
-// silently dropped to the Preset default. The six key materials resolve the
+// silently dropped to the builtin default. The six key materials resolve the
 // same way the loader resolves them for the app -- the variable when set
 // (length- and hex-validated), the documented development bytes when
 // unset -- with this package's own messages rather than the loader's
@@ -471,7 +471,7 @@ func Load(appName string, lookup LookupEnv) (Config, error) {
 	cfg.NotificationIndexKey = notificationIndexKey
 
 	// redisAddr stays empty when unset, leaving the "eventbus" and "kv"
-	// seams on the Preset's in-process defaults -- see RedisAddrEnv's own
+	// seams on the builtin composition's in-process defaults -- see RedisAddrEnv's own
 	// doc comment above.
 	redisAddr, _ := lookup(RedisAddrEnv)
 	cfg.RedisAddr = redisAddr
@@ -485,7 +485,7 @@ func Load(appName string, lookup LookupEnv) (Config, error) {
 	cfg.OTLPEndpointFromEnv = otlpEndpoint != ""
 
 	// s3Endpoint/s3Bucket/s3AccessKey/s3SecretKey stay empty when unset,
-	// leaving the "objectstore" seam on the Preset's local-directory
+	// leaving the "objectstore" seam on the builtin composition's local-directory
 	// default; when any one of them is set, all four are required -- see
 	// S3EndpointEnv's own doc comment above.
 	s3Endpoint, _ := lookup(S3EndpointEnv)
@@ -546,14 +546,14 @@ func Load(appName string, lookup LookupEnv) (Config, error) {
 	cfg.S3BucketLookupFromEnv = s3BucketLookupRaw != ""
 
 	// smtpHost/smtpPortRaw mirror s3Endpoint/... above: both unset leaves
-	// the "mailer" seam on its Preset default, and a partial APP_SMTP_* set
+	// the "mailer" seam on its builtin default, and a partial APP_SMTP_* set
 	// is refused rather than silently ignored.
 	smtpHost, _ := lookup(SMTPHostEnv)
 	smtpPortRaw, _ := lookup(SMTPPortEnv)
 	var smtpPort int
 	switch {
 	case smtpHost == "" && smtpPortRaw == "":
-		// Both unset: the "mailer" seam stays on its Preset default.
+		// Both unset: the "mailer" seam stays on its builtin default.
 	case smtpHost == "" || smtpPortRaw == "":
 		return Config{}, fmt.Errorf(
 			"%s: an SMTP Mailer composition needs both %s and %s set", appName, SMTPHostEnv, SMTPPortEnv)

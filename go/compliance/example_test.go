@@ -247,7 +247,7 @@ var _ jobs.Queue = exampleNoopQueue{}
 // ExampleNewConfigReader wires the config module's lazy Handle into
 // compliance's export-delivery-expiry seam: the reader is constructed while
 // assembling -- before Attach has produced the *config.Service, which the
-// config module's own Attach contract only allows after Bootstrap returns --
+// config module's own Attach contract only allows after the assembly returns --
 // and its first read, in that window, fails closed with the config module's
 // coded not-attached error. Once Attach has run and an operator has written
 // the tenant's own compliance.export_delivery_expiry row, the same reader

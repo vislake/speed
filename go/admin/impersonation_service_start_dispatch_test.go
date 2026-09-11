@@ -245,13 +245,13 @@ func TestImpersonationService_Start_TargetNotAMember_RefusedWithNoGrant(t *testi
 // administrator could keep impersonating for the rest of the grant's
 // 30-minute TTL.
 //
-// Driven entirely against real, Attach()-ed rbac.Service and Bootstrap-
+// Driven entirely against real, Attach()-ed rbac.Service and assembly-
 // wired admin modules (buildTestAdminModule, mirroring role_test.go's own
 // pattern): a real DefineRole/AssignRole grants admin-impersonate-flow the
 // admin:impersonate permission under rbac.SystemDomain, Start opens a real
 // grant, RevokeRole withdraws it through rbac's own real revoke path (never
 // a bypass), and rbac's own EventRoleBindingRevoked -- published
-// synchronously on the in-process bus this test's Bootstrap wires
+// synchronously on the in-process bus this test's the assembly wires
 // everything onto -- reaches admin's subscriber before RevokeRole even
 // returns, with no polling needed.
 func TestImpersonationService_Start_AdminRoleRevoked_LiveGrantAutomaticallyEnded(t *testing.T) {

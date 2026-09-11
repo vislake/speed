@@ -38,7 +38,7 @@ func TestModule_OnConfigItemChanged_PersistsAnAuditRow(t *testing.T) {
 	m := NewModule(auditRepo, WithQueue(&recordingQueue{}))
 	reg, err := componenttest.DeclareModules(m)
 	if err != nil {
-		t.Fatalf("Bootstrap: %v", err)
+		t.Fatalf("assembly: %v", err)
 	}
 
 	payload := testItemChangedEvent()
@@ -97,7 +97,7 @@ func TestModule_OnConfigItemChanged_IsIdempotentAcrossRedelivery(t *testing.T) {
 	m := NewModule(auditRepo, WithQueue(&recordingQueue{}))
 	reg, err := componenttest.DeclareModules(m)
 	if err != nil {
-		t.Fatalf("Bootstrap: %v", err)
+		t.Fatalf("assembly: %v", err)
 	}
 
 	payload := testItemChangedEvent()

@@ -32,7 +32,7 @@ type TenantService struct {
 	// records at record time (see recordAudit and resolveActorName). Nil
 	// until Module.Register calls attachAudit; WithAuthn is a mandatory
 	// production option, so this is never nil in a correctly wired
-	// Bootstrap, and a nil-seam unit fixture records id-only actors.
+	// the assembly, and a nil-seam unit fixture records id-only actors.
 	authnSvc *authn.Service
 }
 

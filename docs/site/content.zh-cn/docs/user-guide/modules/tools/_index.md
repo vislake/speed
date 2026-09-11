@@ -8,7 +8,7 @@ bookCollapseSection: true
 # 工具组
 
 本模块参考里的其它分组,文档化的是你组装进二进制的模块:`go get`
-它、经 `pkgcore` 注册、在 `Kernel` 里启动它。本组文档化的是唯一
+它、经 `pkgcore` 注册、在装配里启动它。本组文档化的是唯一
 一个不是模块的条目:**saasctl**,speed 面向业务方的 CLI——塑造业务方
 实际运行的那个应用的工具。业务方拥有自己的代码;saasctl 管理的是
 项目与它拉入的 speed 模块之间的边界:
@@ -22,7 +22,7 @@ bookCollapseSection: true
   `[redacted]`。
 
 没有任何东西会把 saasctl 组装进运行中的服务。它不实现
-`the module contract`,从不注册进 `Registry`,业务方代码从不 import 它;
+`the module contract`,从不注册进 `ComponentRegistry`,业务方代码从不 import 它;
 参考应用也刻意不接它——它的消费方是那些生成项目本身。模块各页
 回答「我要把模块 X 集成进我的二进制」,本页回答「我要开始或维护
 一个基于 speed 的项目」:工具在开发期作用于项目边界——创建目录、

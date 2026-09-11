@@ -184,8 +184,8 @@ func main() {
 	}
 	must(migrations.Apply(ctx, db, dbkit.DialectSQLite))
 
-	reg, err := pkgcore.app.Assemble().Bootstrap(ctx, pkiModule, authnModule, rbacModule, notesLikeModule{})
-	must(err)
+	reg := pkgcore.NewComponentRegistry()
+	must(app.Assemble(ctx, reg, app.LoadSpec{Host: &hostConfig, Options: loaderOpts}))
 	az, err := rbacModule.Attach(reg) // freezes the permission catalog
 	must(err)
 	svc := authnModule.Service()

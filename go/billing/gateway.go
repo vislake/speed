@@ -21,7 +21,7 @@ import (
 // directly wherever one is needed -- PollingService's gateways map, or a
 // live webhook handler -- while PaymentGatewayRegistry
 // is for a host that wants to build one by name plus a flat pkgcore.Config,
-// the shape a Preset or an environment-driven bootstrap naturally produces).
+// the shape a builtin composition or an environment-driven bootstrap naturally produces).
 //
 // Getting this backwards leaks a
 // provider-specific type (a stripe.Subscription-shaped field, an Alipay

@@ -150,7 +150,7 @@ func TestModule_Locales_ShipsBothLanguages(t *testing.T) {
 }
 
 // TestModule_Register_DeclaresItsSurface bootstraps billing through the
-// real kernel -- the same path a host takes -- and asserts every
+// real assembly -- the same path a host takes -- and asserts every
 // declaration arrives on the registry. Bootstrapping rather than calling
 // Register against a hand-built Registry is deliberate: it also proves
 // billing's locale files survive i18n.Builder.AddModule's parity
@@ -159,7 +159,7 @@ func TestModule_Register_DeclaresItsSurface(t *testing.T) {
 	m := NewModule(newTestDB(t), stubUsage{})
 	reg, err := componenttest.DeclareModules(m)
 	if err != nil {
-		t.Fatalf("Bootstrap: %v", err)
+		t.Fatalf("assembly: %v", err)
 	}
 
 	t.Run("permissions", func(t *testing.T) {
@@ -246,7 +246,7 @@ func TestModule_Register_WithQueue_ClaimsThePollHandler(t *testing.T) {
 	m := NewModule(newTestDB(t), stubUsage{}, WithQueue(stubQueue{}))
 	reg, err := componenttest.DeclareModules(m)
 	if err != nil {
-		t.Fatalf("Bootstrap: %v", err)
+		t.Fatalf("assembly: %v", err)
 	}
 	if _, ok := reg.JobsSeat().Handlers()[taskTypePoll]; !ok {
 		t.Errorf("Register did not claim taskTypePoll despite WithQueue")
@@ -272,7 +272,7 @@ var _ jobs.Queue = stubQueue{}
 func TestModule_Register_CoexistsWithAnotherModule(t *testing.T) {
 	reg, err := componenttest.DeclareModules(NewModule(newTestDB(t), stubUsage{}), neighbourModule{})
 	if err != nil {
-		t.Fatalf("Bootstrap: %v", err)
+		t.Fatalf("assembly: %v", err)
 	}
 	assertContainsAll(t, reg.PermissionsSeat().Permissions(), []string{PermissionPlanManage, "neighbour:read"})
 }

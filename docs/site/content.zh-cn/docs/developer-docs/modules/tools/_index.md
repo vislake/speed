@@ -8,8 +8,8 @@ bookCollapseSection: true
 # 工具组
 
 本模块设计区里的其它各组,文档化的都是会被你组装进二进制的 Go
-模块或 npm 包:它们实现 `the module contract`、注册进内核的 `Registry`、
-在 `Kernel` 里启动。本组文档化的是唯一一个都不做的交付物——
+模块或 npm 包:它们实现 `the module contract`、注册进装配的 `ComponentRegistry`、
+在装配里启动。本组文档化的是唯一一个都不做的交付物——
 **saasctl**,面向业务方的 CLI。它不实现 `the module contract`,不带任何
 表、迁移、HTTP fragment 或权限,运行中的产品永远不会从它这里服务
 出任何路由。它根本不在模块依赖图里——不在任何东西之上,也不在任

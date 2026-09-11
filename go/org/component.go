@@ -6,7 +6,7 @@ package org
 // constructs it. Its Init runs the module's one declaration entry point,
 // Register, inside the assembly's Init stage -- the one stage whose seats
 // accept writes -- so the module's declarations reach the assembly's seats
-// exactly as they reach the kernel bootstrap's registry.
+// exactly as they reach the assembly's registry.
 //
 // The descriptor declares no Prepare callback. RegisterEmailSerializer --
 // the registration GORM resolves the invitation address column through --

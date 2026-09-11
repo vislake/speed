@@ -28,7 +28,7 @@ var configItemTypes = map[string]struct{}{
 // This guarantee is load-bearing for a CodeQL go/clear-text-logging alert
 // traced through this function (go/authn's socialCredentialItems ->
 // ConfigItem{Key: channel.secretKey, Sensitive: true} -> here -> up through
-// Register/Bootstrap to a log call in the reference app's main.go, reviewed
+// the declaration turn to a log call in the reference app's main.go, reviewed
 // and confirmed a false positive): every error this function returns names
 // only item.Key, a schema identifier, never item.Default or any other
 // value-bearing field. Do not add a value to any error message here without

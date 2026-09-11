@@ -56,11 +56,11 @@ logs, its two legitimate homes.
 ## The registrar: a cross-cutting mechanism that changes no Module
 
 The one change compliance makes to a module below it is a new
-registrar on `pkgcore` itself: `Registry.Retention`, with
+registrar on `pkgcore` itself: the `Retention` seat, with
 `RetentionParticipant` (a name plus three callbacks — `Sweep`, `Erase`,
 `Export`, each optional except that a participant with neither Sweep
 nor Erase is useless) and the `SubjectRef` type erasure takes. The
-`Registry` struct exists so a new cross-cutting mechanism does not
+`ComponentRegistry` struct exists so a new cross-cutting mechanism does not
 change the `Module` interface — under lockstep versioning, touching
 that contract would break every module at once. Participants are
 registered by their owning business modules (the reference app's notes

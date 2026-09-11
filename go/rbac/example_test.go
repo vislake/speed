@@ -14,11 +14,11 @@ import (
 )
 
 // Example shows the whole wiring sequence a host performs for rbac: open
-// and migrate the database, bootstrap the kernel over every module, then
-// Attach rbac to the registry Bootstrap returned.
+// and migrate the database, drive the assembly over every module, then
+// Attach rbac to the registry the assembly returned.
 //
 // The ordering is the point. Attach freezes the snapshot of every
-// permission the host's modules declared, so it must run AFTER Bootstrap
+// permission the host's modules declared, so it must run AFTER the assembly
 // has given every module its turn to register -- which is why it is a
 // method on the Module rather than something Register could have done.
 func Example() {

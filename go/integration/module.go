@@ -417,7 +417,7 @@ func WithWebhookHTTPClient(client *http.Client) Option {
 
 // NewModule returns a Module whose table lives in db. Constructing a Module
 // performs no I/O -- opening and migrating db is the caller's
-// responsibility, done once at startup before Bootstrap ever calls
+// responsibility, done once at startup before the assembly ever calls
 // Register.
 func NewModule(db *gorm.DB, opts ...Option) *Module {
 	m := &Module{db: db}
@@ -479,7 +479,7 @@ func (m *Module) OpenAPISpec() []byte { return openAPISpecYAML }
 // builds its Handler here from services that already exist -- those
 // modules build their Service in NewModule, not Attach. go/integration's own
 // Service is built in Attach instead (this module's own established
-// shape), which runs strictly after Bootstrap returns --
+// shape), which runs strictly after the assembly returns --
 // too late to build a route reg.Routes.Mount needs NOW, during Register.
 // Handler is therefore built here holding a reference to m itself (never to
 // m.service, which does not exist yet) and reads m.service AT CALL TIME,
@@ -579,9 +579,9 @@ var (
 )
 
 // Attach builds and returns the runtime Service. It must be called exactly
-// once, after the assembly's declaration turn has finished, with the registry Bootstrap
+// once, after the assembly's declaration turn has finished, with the registry the assembly
 // produced -- the same convention go/rbac's Attach documents, for the same
-// reason: only after Bootstrap has every module registered is
+// reason: only after the assembly has every module registered is
 // reg.Events.Bus() and reg.AuditActions wired to the real, final set every
 // other module contributed.
 //

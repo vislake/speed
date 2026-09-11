@@ -19,7 +19,7 @@ frontend. It is among the always-on modules with no off switch.
 
 ## Responsibility and boundary
 
-- **Bootstrap resolution is not this module's business.** How to
+- **Assembly resolution is not this module's business.** How to
   reach infrastructure — DSNs, addresses, the deployment mode, the
   composition preset, the master key — is decided once at process
   startup: the keys are declared on `pkgcore`'s bootstrap seat,

@@ -76,7 +76,7 @@ func TestModule_Locales_ShipsBothLanguages(t *testing.T) {
 }
 
 // TestModule_Register_DeclaresItsSurface bootstraps sharing through the
-// real kernel -- the same path a host takes -- and asserts every
+// real assembly -- the same path a host takes -- and asserts every
 // declaration arrives on the registry. Bootstrapping rather than calling
 // Register against a hand-built Registry is deliberate: it also proves
 // sharing's locale files survive i18n.Builder.AddModule's parity
@@ -85,7 +85,7 @@ func TestModule_Register_DeclaresItsSurface(t *testing.T) {
 	db := newTestDB(t)
 	reg, err := componenttest.DeclareModules(NewModule(db))
 	if err != nil {
-		t.Fatalf("Bootstrap: %v", err)
+		t.Fatalf("assembly: %v", err)
 	}
 
 	t.Run("permissions", func(t *testing.T) {
@@ -165,7 +165,7 @@ func TestModule_Register_MountsHandlerBuiltAfterOptions(t *testing.T) {
 	resolver := fakeResourceResolver{mime: "text/plain", body: "hello"}
 	m := NewModule(db, WithResourceResolver(resolver))
 	if _, err := componenttest.DeclareModules(m); err != nil {
-		t.Fatalf("Bootstrap: %v", err)
+		t.Fatalf("assembly: %v", err)
 	}
 	if m.Handler() == nil {
 		t.Fatalf("Handler() = nil after Register")
@@ -193,7 +193,7 @@ func TestModule_Register_MountsHandlerBuiltAfterOptions(t *testing.T) {
 func TestModule_Register_CoexistsWithAnotherModule(t *testing.T) {
 	reg, err := componenttest.DeclareModules(NewModule(newTestDB(t)), neighbourModule{})
 	if err != nil {
-		t.Fatalf("Bootstrap: %v", err)
+		t.Fatalf("assembly: %v", err)
 	}
 	assertContainsAll(t, reg.PermissionsSeat().Permissions(), []string{PermissionCreate, "neighbour:read"})
 }

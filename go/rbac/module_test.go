@@ -163,7 +163,7 @@ func TestModule_Register_PerformsNoIO(t *testing.T) {
 func TestModule_Attach_FreezesEveryModulesPermissions(t *testing.T) {
 	// The catalog must be the WHOLE host's declaration, not rbac's own:
 	// a grant of "notes:read" is legal exactly because the notes module
-	// declared it. Bootstrap is what guarantees every module has
+	// declared it. the assembly is what guarantees every module has
 	// registered by the time Attach reads the registrar.
 	m := NewModule(newRBACTestDB(t))
 	host := &declaringModule{name: "notes", perms: []string{"notes:read", "notes:write"}}

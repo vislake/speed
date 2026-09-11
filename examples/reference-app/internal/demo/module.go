@@ -10,7 +10,7 @@
 // smilesim_flow_test suites).
 //
 // The package exists because both types' template copy must live inside
-// the app's Bootstrap module set: the assembly assembles the merged
+// the app's module set: the assembly assembles the merged
 // message catalog from the Locales() of the modules it is given, freezing it
 // once before the registry is returned, and the notification module renders
 // every dispatch from that frozen catalog. A notification type whose copy

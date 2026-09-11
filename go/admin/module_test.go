@@ -250,7 +250,7 @@ func buildTestAdminModule(t *testing.T, extra ...func(*pkgcore.ComponentRegistry
 	reg.Put(builder.Build())
 
 	if err := componenttest.DeclareAll(reg, append(declares, extra...)...); err != nil {
-		t.Fatalf("Bootstrap() error = %v", err)
+		t.Fatalf("assembly error = %v", err)
 	}
 	t.Cleanup(func() { _ = rbacService.Close() })
 
@@ -271,7 +271,7 @@ func buildTestAdminModule(t *testing.T, extra ...func(*pkgcore.ComponentRegistry
 }
 
 // TestModule_Register_DeclaresPermissionsAuditActionsAndNotificationType
-// is the end-to-end wiring proof: a full Bootstrap over real authn, org,
+// is the end-to-end wiring proof: a full assembly over real authn, org,
 // compliance and notification modules succeeds, and every declaration
 // admin's Register makes actually lands on the shared registry.
 func TestModule_Register_DeclaresPermissionsAuditActionsAndNotificationType(t *testing.T) {
@@ -359,7 +359,7 @@ func TestModule_Register_ImpersonationNotification_CannotBeOptedOutOf(t *testing
 
 // TestModule_Register_OrgNodeCreatedSubscriptionFires proves the full
 // wiring, not just the declaration: a real org.Module creating a real
-// root node -- through the SAME registry Bootstrap gave every module --
+// root node -- through the SAME registry the assembly gave every module --
 // reaches admin's subscriber and lazily registers the tenant, end to end.
 func TestModule_Register_OrgNodeCreatedSubscriptionFires(t *testing.T) {
 	env := buildTestAdminModule(t)
@@ -463,7 +463,7 @@ func TestModule_Register_MissingMandatoryOption_RefusesByName(t *testing.T) {
 // double-declaration refusal: Register's contract is "called exactly once"
 // (module.go), and a second call must fail at the duplicate-permission
 // gate rather than silently re-declaring admin's whole catalog -- the
-// host error of wiring the same module instance into one Bootstrap set
+// host error of wiring the same module instance into one assembly
 // twice must not be able to go unnoticed.
 func TestModule_Register_TwiceOnOneRegistry_FailsClosed(t *testing.T) {
 	env := buildTestAdminModule(t)
@@ -488,7 +488,7 @@ func TestModule_Register_TwiceOnOneRegistry_FailsClosed(t *testing.T) {
 }
 
 // TestModule_SelfDescription_UsageMigrationsAndSpecArePresent pins the
-// module-level packaging contract a Bootstrap host relies on without ever
+// module-level packaging contract a host relies on without ever
 // calling itself: WithMetering/WithBilling wiring leaves Usage() a real,
 // fully wired UsageService (never nil, unlike Search() before Register);
 // Migrations() ships a non-empty migration tree; and OpenAPISpec()
@@ -499,7 +499,7 @@ func TestModule_SelfDescription_UsageMigrationsAndSpecArePresent(t *testing.T) {
 	env := buildTestAdminModule(t)
 
 	if env.Admin.Usage() == nil {
-		t.Fatal("Usage() is nil after a Bootstrap wired WithMetering/WithBilling, want the composed UsageService")
+		t.Fatal("Usage() is nil after an assembly wired WithMetering/WithBilling, want the composed UsageService")
 	}
 
 	migrationEntries, err := fs.ReadDir(env.Admin.Migrations(), ".")

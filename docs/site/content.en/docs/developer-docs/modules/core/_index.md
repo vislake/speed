@@ -10,7 +10,7 @@ bookCollapseSection: true
 The seven modules of the core group are the dependency floor of every
 speed-based binary. The division of labour, in one sentence each:
 
-- **pkgcore** — the assembly contract (`Module`/`Registry`/`Kernel`),
+- **pkgcore** — the assembly contract (`Module`/`ComponentRegistry`/`Component`),
   the infrastructure seam interfaces with their N implementations and
   capability declarations, the tenant-context primitives, structured
   errors and the message catalog. It imports no other speed module.
@@ -54,7 +54,7 @@ flowchart TB
 The seven split into two shapes, and knowing which shape a module has
 tells you how you use it:
 
-- **Kernel-assembled modules** — `config` and `jobs` (and every module
+- **Assembly-composed modules** — `config` and `jobs` (and every module
   above the core group) implement `the module contract` and contribute
   routes, config schema, permissions, events and job handlers through
   one `Register` call; the kernel assembles them. `config` additionally

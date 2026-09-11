@@ -199,7 +199,7 @@ func WithResourceResolver(resolver ResourceResolver) Option {
 
 // NewModule returns a Module whose tables live in db. Constructing a Module
 // performs no I/O: opening and migrating db is the host's responsibility,
-// done once at startup before Bootstrap ever calls Register.
+// done once at startup before the assembly ever calls Register.
 func NewModule(db *gorm.DB, opts ...Option) *Module {
 	m := &Module{db: db}
 	for _, opt := range opts {
@@ -376,7 +376,7 @@ func (m *Module) Register(reg *pkgcore.ComponentRegistry) error {
 	// this tenant's access-log entries whose recorded access time has
 	// fallen past the tenant's retention window (retention_participant.go's
 	// file comment has the mechanism in full). Register runs before any
-	// host-populated post-Bootstrap Add, so the reserved
+	// host-populated post-assembly Add, so the reserved
 	// sharing.access_log name can never collide with a host's participant,
 	// exactly as compliance's own export-manifests reservation works.
 	if err := reg.RetentionSeat().Add(NewAccessLogRetentionParticipant(m.svc.AccessLogs())); err != nil {

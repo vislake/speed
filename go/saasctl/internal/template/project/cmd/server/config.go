@@ -202,12 +202,12 @@ type hostConfig struct {
 	// RedisAddr names APP_REDIS_ADDR: the Redis server address ("host:port")
 	// that composes a REAL, MultiReplicaSafe implementation for both the
 	// "eventbus" and "kv" seams -- one Redis instance backs both, sharing
-	// one client. Empty -- the default -- leaves both seams on the Preset's
+	// one client. Empty -- the default -- leaves both seams on the builtin composition's
 	// in-process implementation, so `go run ./cmd/server` keeps working
 	// with zero external dependencies; the distributed deployment mode
 	// requires MultiReplicaSafe of every resolved seam
 	// (pkgcore.DeploymentMode.RequiredCapabilities), so a distributed boot
-	// with this unset fails Bootstrap's capability validation naming
+	// with this unset fails the assembly's capability validation naming
 	// "eventbus" (or "kv") rather than starting on an implementation that
 	// cannot actually share state across replicas.
 	RedisAddr string `config:"env=APP_REDIS_ADDR"`
@@ -230,7 +230,7 @@ type hostConfig struct {
 	// the four variables that together compose a real S3-compatible
 	// ObjectStore for the "objectstore" seam. All four are required
 	// together; a partially set group is refused by serverConfigFrom rather
-	// than silently falling back to the Preset's local-directory default,
+	// than silently falling back to the builtin composition's local-directory default,
 	// since a partial S3 target is far more likely a typo than a deliberate
 	// choice. S3Region, S3UseSSL and S3BucketLookup below refine the same
 	// composition.
@@ -272,7 +272,7 @@ type hostConfig struct {
 	// group above gives. SMTPUsername and SMTPPassword are optional --
 	// SMTP AUTH activates only when a username is set
 	// (pkgcore.SMTPConfig.Username's own doc comment). Unset -- the default
-	// -- leaves the "mailer" seam on the Preset's console default, exactly
+	// -- leaves the "mailer" seam on the builtin composition's console default, exactly
 	// like every other seam here. APP_SMTP_PORT is text rather than int
 	// for hostConfig's own reason (an emptied variable keeps meaning
 	// "unset"); serverConfigFrom parses it, refusing a value strconv.Atoi
@@ -305,7 +305,7 @@ type hostConfig struct {
 // flag, environment variable or config file (none is wired here) supplied a
 // value. Every other field's
 // empty value is its documented unset behavior: the seam variables' "leave
-// the Preset default" and the cross-variable rules all live in
+// the builtin default" and the cross-variable rules all live in
 // serverConfigFrom, which is also what treats an explicitly emptied
 // variable as unset (a string field arrives as "" either way, and the
 // empty string is a source's value, so the loader does not restore these
@@ -408,7 +408,7 @@ type serverConfig struct {
 	// and S3BucketLookup compose a real S3-compatible ObjectStore for the
 	// "objectstore" seam when S3Endpoint is non-empty -- see the APP_S3_*
 	// fields' own doc comment above for the completeness rule. Empty
-	// S3Endpoint (the default) leaves "objectstore" on the Preset's
+	// S3Endpoint (the default) leaves "objectstore" on the builtin composition's
 	// local-directory default.
 	S3Endpoint     string
 	S3Bucket       string
@@ -421,7 +421,7 @@ type serverConfig struct {
 	// SMTPHost, SMTPPort, SMTPUsername and SMTPPassword compose a real SMTP
 	// Mailer for the "mailer" seam when SMTPHost is non-empty -- see the
 	// APP_SMTP_* fields' own doc comment above for the completeness rule.
-	// Empty SMTPHost (the default) leaves "mailer" on the Preset's console
+	// Empty SMTPHost (the default) leaves "mailer" on the builtin composition's console
 	// default.
 	SMTPHost     string
 	SMTPPort     int
@@ -474,7 +474,7 @@ func serverConfigFrom(hc hostConfig) (serverConfig, error) {
 	}
 
 	// redisAddr stays empty when unset, leaving the "eventbus" and "kv"
-	// seams on the Preset's in-process defaults -- see the APP_REDIS_ADDR
+	// seams on the builtin composition's in-process defaults -- see the APP_REDIS_ADDR
 	// field's own doc comment above.
 	redisAddr := hc.RedisAddr
 
@@ -484,7 +484,7 @@ func serverConfigFrom(hc hostConfig) (serverConfig, error) {
 	otlpEndpoint := hc.OTLPEndpoint
 
 	// s3Endpoint/s3Bucket/s3AccessKey/s3SecretKey stay empty when unset,
-	// leaving the "objectstore" seam on the Preset's local-directory
+	// leaving the "objectstore" seam on the builtin composition's local-directory
 	// default; when any one of them is set, all four are required -- see
 	// the S3 group's own doc comment above.
 	s3Endpoint := hc.S3Endpoint
@@ -538,14 +538,14 @@ func serverConfigFrom(hc hostConfig) (serverConfig, error) {
 	}
 
 	// smtpHost/smtpPortRaw mirror the S3 group above: both unset leaves
-	// the "mailer" seam on its Preset default, and a partial APP_SMTP_*
+	// the "mailer" seam on its builtin default, and a partial APP_SMTP_*
 	// set is refused rather than silently ignored.
 	smtpHost := hc.SMTPHost
 	smtpPortRaw := hc.SMTPPort
 	var smtpPort int
 	switch {
 	case smtpHost == "" && smtpPortRaw == "":
-		// Both unset: the "mailer" seam stays on its Preset default.
+		// Both unset: the "mailer" seam stays on its builtin default.
 	case smtpHost == "" || smtpPortRaw == "":
 		return serverConfig{}, fmt.Errorf(
 			"__APP_NAME__: an SMTP Mailer composition needs both APP_SMTP_HOST and APP_SMTP_PORT set")

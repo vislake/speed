@@ -303,7 +303,7 @@ type Module struct {
 	scope   *ScopeService
 
 	// host is the registry Register attached, read by the runtime at call
-	// time. Nil before Bootstrap.
+	// time. Nil before the assembly.
 	host hostSeams
 
 	// emailIndexer is the blind indexer for invitation addresses
@@ -448,7 +448,7 @@ func WithInvitationEmailDisabled() Option {
 
 // NewModule returns a Module whose tables live in db. Constructing a Module
 // performs no I/O: opening and migrating db is the host's responsibility,
-// done once at startup before Bootstrap ever calls Register.
+// done once at startup before the assembly ever calls Register.
 func NewModule(db *gorm.DB, opts ...Option) *Module {
 	tree := NewTreeService(db)
 	members := NewMemberService(db, tree)
@@ -576,7 +576,7 @@ func (m *Module) Register(reg *pkgcore.ComponentRegistry) error {
 
 	// Handler is built here, not in NewModule, deliberately: every Option a
 	// caller passed to NewModule -- WithSubjectResolver above all -- has
-	// already run by the time Register is called (Bootstrap calls Register
+	// already run by the time Register is called (the assembly calls Register
 	// only after NewModule has returned), so the resolver Handler is given
 	// is whichever one the host actually configured, never a nil one
 	// captured before the option ran.

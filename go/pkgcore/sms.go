@@ -90,15 +90,15 @@ type SMS struct {
 // attempt as failed and marks the contact bounced on a permanent transport
 // error).
 //
-// Unlike the four kernel-resolved seams (EventBus, KVStore, Mailer and
+// Unlike the four assembly-resolved seams (EventBus, KVStore, Mailer and
 // ObjectStore), SMSSender deliberately has no registry, preset or capability
-// declarations, and a Kernel never resolves one: no consumer takes its SMS
+// declarations, and the assembly never resolves one: no consumer takes its SMS
 // transport from the registry -- go/authn and go/notification both receive
 // the sender through their own module-wiring options, and each enforces its
 // own wiring-time requirement on it (a distributed-mode authn refuses to
 // boot without an explicitly wired sender rather than defaulting to one that
 // prints to a writer nobody reads). The promotion makes the seam a shared
-// contract and shared implementations; it does not move SMS onto the kernel.
+// contract and shared implementations; it does not move SMS onto the assembly.
 // The console implementation (sms_console.go) is the
 // zero-external-dependency one; NewHTTPSMSSender (sms_http.go) is the
 // operator-gateway

@@ -37,7 +37,7 @@ type hostSeams interface {
 	// Reading it here, rather than caching a Limiter at construction, keeps
 	// rate limiting bound to whichever KVStore the deployment mode actually
 	// resolved (in-memory standalone, Redis distributed) instead of one
-	// captured before Bootstrap ever ran.
+	// captured before the assembly ever ran.
 	KVStore() pkgcore.KVStore
 }
 

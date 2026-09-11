@@ -70,7 +70,7 @@ permission snapshot taken during `Register` would be partial.
 
 ```go
 rbacMod := rbac.NewModule(db) // options: WithSubtreeResolver, WithCacheTTL, WithQueue
-// rbacMod joins the the assembly module set; after Bootstrap
+// rbacMod joins the assembly's module set; after the assembly
 // returns, exactly once:
 az, err := rbacMod.Attach(reg) // freezes every module's declared permissions
 if err != nil {

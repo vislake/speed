@@ -9,7 +9,7 @@ bookCollapseSection: true
 
 Every other group in this module reference documents a module your
 binary composes: you `go get` it, register it through `pkgcore` and
-boot it inside a `Kernel`. This group documents the one entry that is
+boot it inside the assembly. This group documents the one entry that is
 not a module: **saasctl**, speed's consumer-facing CLI — the tool that
 shapes the application a consumer actually runs. Consumers own their
 code; saasctl manages the boundary where a project meets the speed
@@ -25,7 +25,7 @@ modules it pulls in:
   configuration resolves, secret rows `[redacted]`.
 
 Nothing assembles saasctl into a running service. It implements no
-`the module contract`, never registers into a `Registry`, and consumer code
+`the module contract`, never registers into a `ComponentRegistry`, and consumer code
 never imports it; the reference app deliberately does not wire it —
 its consumers are the generated projects themselves. Where the module
 pages answer "I am integrating module X into my binary", this page

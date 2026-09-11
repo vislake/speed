@@ -22,10 +22,10 @@
 // # How a catalog is built
 //
 // the assembly reads every registered module's Locales() embed.FS and
-// feeds it to a Builder -- one Builder per bootstrap, mirroring how dbkit's
+// feeds it to a Builder -- one Builder per assembly, mirroring how dbkit's
 // MigrationRegistry aggregates every module's Migrations() FS. Once every
 // module has been added, Build freezes the merge into an immutable
-// *Catalog and Bootstrap installs it on the Registry, reachable through
+// *Catalog and the assembly installs it on the Registry, reachable through
 // Registry.Locales(). A Catalog is therefore read-only by construction and
 // safe for concurrent use; only a bootstrapped Registry carries one (a
 // Registry built directly with NewRegistry has no catalog, exactly like it

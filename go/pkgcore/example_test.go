@@ -487,8 +487,8 @@ func ExampleObjectStore() {
 // ExampleCapability shows the bitmask deployment mode and implementation
 // composition compare: an implementation declares what it Has, a deployment
 // mode declares what it requires, and the assembly checks the two
-// against each other. See Examplethe sibling injection options for that
-// check running for real, inside Bootstrap.
+// against each other. See the sibling Example functions for that check
+// running for real, inside the assembly.
 func ExampleCapability() {
 	redisLike := pkgcore.MultiReplicaSafe | pkgcore.SurvivesRestart
 	inProcess := pkgcore.Capability(0)

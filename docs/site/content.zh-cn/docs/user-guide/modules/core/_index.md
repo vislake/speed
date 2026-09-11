@@ -10,7 +10,7 @@ bookCollapseSection: true
 每个 speed 二进制——以及平台上每个其他 Go 模块——都踩在这七个模块
 上。它们之上的东西离开它们就不存在,而消费方是直接 `go get` 它们的:
 它们不是你继承的应用框架,而是你调用的库,外加让业务模块把自己注册
-进一个二进制的组装契约(`pkgcore` 的 `Module`/`Registry`/`Kernel`)。
+进一个二进制的组装契约(`pkgcore` 的 `Module`/`ComponentRegistry`/`Component`)。
 
 ```mermaid
 flowchart TB

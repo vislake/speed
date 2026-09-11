@@ -108,7 +108,7 @@ name: docs-check
 #     plus go/config, on a throwaway in-memory database), freezes the
 #     schema with
 #     config.Module.Attach, and renders `config.Service.Describe`'s
-#     snapshot and the `reg.Bootstrap` declarations. The reference
+#     snapshot and the components' `BootstrapKeys` declarations. The reference
 #     documents that platform surface only: a host's own bootstrap
 #     variables belong to the host and are documented where it lives.
 #     A stale

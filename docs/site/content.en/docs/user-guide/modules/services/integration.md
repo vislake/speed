@@ -88,7 +88,7 @@ The HTTP surface — ten operations under `/api/v1/integration`
 list/create/update/delete/restore plus the deliveries log) — is a thin
 translation of the `Service` methods above. Timing: `Register`
 subscribes the mappings and claims the delivery handler; the `Service`
-is built later, in `Attach`, after `Bootstrap` returns.
+is built later, in `Attach`, after the assembly returns.
 
 ## Core concepts and API surface
 

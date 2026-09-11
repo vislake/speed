@@ -298,7 +298,7 @@ does.
 See it in the reference app:
 
 - [examples/reference-app/internal/app/server.go](https://github.com/vislake/speed/blob/main/examples/reference-app/internal/app/server.go)
-  — after `Bootstrap`, one `jobs.Wire` call hands its standalone queue
+  — after the assembly, one `jobs.Wire` call hands its standalone queue
   every handler the modules declared on `reg.Jobs`, and then it starts
   the queue; every module's handlers (storage derivation, notification
   delivery, this pattern's shape) ride the same queue.

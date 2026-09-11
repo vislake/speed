@@ -317,7 +317,7 @@ func TestMetricsAllowlist_GETOnlyAllowlist_LeavesHEADExposed(t *testing.T) {
 
 // fakeSMSGatewayURL is a never-dialed HTTP endpoint used by every
 // distributed-mode test below that needs authn's own wiring-time "SMS
-// sender" validation to pass (so the Kernel-level assertion the test
+// sender" validation to pass (so the assembly-level assertion the test
 // actually pins is what runs) without touching a network:
 // pkgcore.NewHTTPSMSSender's own construction never dials anything, and
 // none of these tests exercises the phone-login flow that would actually

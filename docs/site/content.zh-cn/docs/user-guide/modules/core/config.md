@@ -45,7 +45,8 @@ migrations := dbkit.NewMigrationRegistry()
 if err := migrations.Register(configModule); err != nil { /* handle err */ }
 if err := migrations.Apply(ctx, db, dbkit.DialectSQLite); err != nil { /* handle err */ }
 
-reg, err := pkgcore.app.Assemble().Bootstrap(ctx, &myModule{}, configModule)
+reg := pkgcore.NewComponentRegistry()
+if err := app.Assemble(ctx, reg, app.LoadSpec{Host: &hostConfig, Options: loaderOpts}); err != nil { /* handle err */ }
 // handle err
 
 svc, err := configModule.Attach(reg)

@@ -49,7 +49,7 @@ sequenceDiagram
 
 跨租户读取——用户检索、成员关系拼装、审计查询、发送记录、用量看板——共用同一机制:以申报目的、点名运营者的 `tenancy.WithSystemContext` 进入,然后调用下游模块**既有的按租户方法,在应用层跨相关租户循环**。审计包装在每次进入时发布 system-context-entered 事件,"运营者操作全量记录、不做读豁免"因此被焊进机制而非逐端点重写——连技术上不需要隔离逃生舱的检索也留下轨迹,因为它返回明文邮箱与电话。被否决的替代方案划出边界:给每个业务仓库加 `ListAcrossTenants` 旁路,成本随模块数线性上涨,每个旁路都是一处需要单独审查的新隔离绕过点;给 admin 单独开一条不受限的数据库连接,则正是本代码库明令禁止的裸 SQL 旁路。
 
-同一条薄包装姿态贯穿整个面:审计壳把查询参数翻译到 `compliance.AuditQuery`,导出腿入队 jobs 任务而非在请求里同步收集;角色管理包住 `rbac.Service`(系统域作为角色管理目标被拒绝,只持 `admin:roles_manage` 的调用方无法把平台运营权委托给自己);用量看板把 `go/metering` 与 `go/billing` 的按租户读拼成一视图,自己没有任何聚合表。接线对必要性诚实:五个 `With*` 选项(`WithAuthn`、`WithOrg`、`WithCompliance`、`WithNotification`、`WithQueue`)是强制的,缺失即 `Bootstrap` 以点名错误失败,因为这些面少了它们一个都跑不起来——`WithMetering`/`WithBilling` 可选,没有计量维度的宿主不该为启动而竖两个模块——rbac 接缝经 `Bootstrap` 之后单独的 `AttachRBAC` 调用抵达,因为 rbac 的权限目录只许在每个模块都注册完之后冻结。那次 attach 之前,模拟授权一个都生不出来;失败关闭的契约是响亮的,绝不静默降级。
+同一条薄包装姿态贯穿整个面:审计壳把查询参数翻译到 `compliance.AuditQuery`,导出腿入队 jobs 任务而非在请求里同步收集;角色管理包住 `rbac.Service`(系统域作为角色管理目标被拒绝,只持 `admin:roles_manage` 的调用方无法把平台运营权委托给自己);用量看板把 `go/metering` 与 `go/billing` 的按租户读拼成一视图,自己没有任何聚合表。接线对必要性诚实:五个 `With*` 选项(`WithAuthn`、`WithOrg`、`WithCompliance`、`WithNotification`、`WithQueue`)是强制的,缺失即 装配以点名错误失败,因为这些面少了它们一个都跑不起来——`WithMetering`/`WithBilling` 可选,没有计量维度的宿主不该为启动而竖两个模块——rbac 接缝经 装配返回之后单独的 `AttachRBAC` 调用抵达,因为 rbac 的权限目录只许在每个模块都注册完之后冻结。那次 attach 之前,模拟授权一个都生不出来;失败关闭的契约是响亮的,绝不静默降级。
 
 ## 对外稳定面
 

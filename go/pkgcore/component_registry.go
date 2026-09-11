@@ -1017,9 +1017,9 @@ func (r *ComponentRegistry) MountedRoutes() []MountedRoute {
 	return r.Routes.Routes()
 }
 
-// The ten seat accessors below answer the Registrar view over this registry:
-// each returns the seat stored in the struct's own field, so a declaration
-// body written against Registrar declares into exactly these seats -- the
+// The ten seat accessors below are the declaration face of this registry:
+// each returns the seat stored in the struct's own field, so a module's
+// declaration body declares into exactly these seats -- the
 // write gate (writes only while the Init stage runs) inside each seat, and
 // nothing else. The accessors open no path the seats themselves do not
 // already answer: reads go through the same seat read methods, writes

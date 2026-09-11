@@ -209,7 +209,7 @@ func Example_membershipAndScope() {
 		return
 	}
 
-	// Bootstrap is what hands the module its host seams -- the event bus,
+	// the assembly is what hands the module its host seams -- the event bus,
 	// the mailer, the key-value store the rate limiter counts in, and the
 	// merged message catalog. Nothing in org reads them before this point.
 	if _, bootErr := componenttest.DeclareModules(module); bootErr != nil {

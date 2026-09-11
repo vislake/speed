@@ -219,7 +219,7 @@ registers everything it contributes — routes, config schema, feature
 flags, permissions, job handlers, notification types, events, audit
 actions — through a **single `Register(reg *pkgcore.ComponentRegistry)` call**. The
 declaration face is the `*pkgcore.ComponentRegistry` view: one registration seat per
-mechanism, answered by both the kernel's module `Registry` and the
+mechanism, answered by both the assembly's `ComponentRegistry` and the
 component assembly's `ComponentRegistry`.
 
 **Why one `Register` call instead of eight interface methods?**
@@ -240,7 +240,7 @@ version and assets never drift apart.
 
 The kernel is assembled from options, not a mode argument —
 `app.Assemble(opts...)` with `the composition's deployment field`, `the composition configuration`, and the
-per-seam injectors. `Bootstrap` walks the module graph, resolves and
+per-seam injectors. The engine's `Assemble` drives the component graph, resolves and
 validates every seam, and installs the merged message catalog; a
 module declares during `Register` and reads resolved state
 afterwards.

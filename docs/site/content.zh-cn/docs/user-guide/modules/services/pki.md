@@ -62,7 +62,7 @@ ca := pkiModule.CA()
 err := ca.CreateRootCA(ctx, pki.RootCAParams{ /* subject、有效期 */ })
 ```
 
-生命周期管道:在 `Bootstrap` 之后为你产品签名的每个 purpose 调
+生命周期管道:在 装配返回之后为你产品签名的每个 purpose 调
 `EnsurePurpose`;过期扫描已声明在注册表的 `Schedules` 座席上,宿主
 起一个 `jobs.Scheduler` 即驱动它(也可自己在周期任务循环里调
 `EnqueueExpiryScan`)。扫描负责分阶段准备并提升继任者。宿主选项:`WithSigner(name, signer)`、

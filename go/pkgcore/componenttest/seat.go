@@ -77,9 +77,8 @@ func NewRegistry() *pkgcore.ComponentRegistry {
 // DeclareModules drives each module's Register in order inside a real Init
 // stage over a fresh registry (NewRegistry), returning that registry --
 // readable afterwards for everything declared -- and the first declaration
-// or closing-validation error. It is the successor of the retired kernel
-// Bootstrap in test code: the same declaration window, the same visible
-// seats, the same failure surface, minus the kernel.
+// or closing-validation error. It is the assembly's declaration window in
+// test code: the same visible seats and the same failure surface.
 func DeclareModules(modules ...Declarer) (*pkgcore.ComponentRegistry, error) {
 	reg := NewRegistry()
 	return reg, DeclareInto(reg, modules...)

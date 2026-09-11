@@ -154,7 +154,8 @@ func main() {
 	if err = migrations.Apply(ctx, db, dbkit.DialectSQLite); err != nil {
 		panic(err)
 	}
-	if _, err = pkgcore.app.Assemble().Bootstrap(ctx, module); err != nil {
+	reg := pkgcore.NewComponentRegistry()
+	if err = app.Assemble(ctx, reg, app.LoadSpec{Host: &hostConfig, Options: loaderOpts}); err != nil {
 		panic(err)
 	}
 

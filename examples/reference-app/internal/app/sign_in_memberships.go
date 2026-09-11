@@ -89,7 +89,7 @@ func NewSignInMemberships() *signInMemberships {
 
 // attach binds the org-backed half of the store: the MemberService whose
 // rows answer customer-tenant questions. BuildServer calls attach once,
-// after Bootstrap has composed the module set, and before any request -- or
+// after the assembly has composed the module set, and before any request -- or
 // demo seed sign-in -- can reach authn; until then the store answers from
 // granted alone.
 func (m *signInMemberships) attach(orgMembers *org.MemberService) {

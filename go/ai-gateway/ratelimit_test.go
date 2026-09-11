@@ -177,20 +177,20 @@ func TestGateway_RateLimiter_UnderlyingStoreError_WrapsAsInternal(t *testing.T) 
 }
 
 // TestModule_Register_AttachesGatewayHost proves Module.Register wires the
-// registry onto Gateway.host, so a real Bootstrap gives Chat/ChatStream/
+// registry onto Gateway.host, so a real assembly gives Chat/ChatStream/
 // GenerateImage a working per-tenant rate limiter with no extra option a
 // host could forget -- mirroring go/sharing's own Module.Register wiring
 // proof for its identical hostSeams field.
 func TestModule_Register_AttachesGatewayHost(t *testing.T) {
 	m := NewModule(newTestDB(t))
 	if _, err := componenttest.DeclareModules(m); err != nil {
-		t.Fatalf("Bootstrap: %v", err)
+		t.Fatalf("assembly: %v", err)
 	}
 	if m.Gateway().host == nil {
-		t.Error("Gateway.host is nil after Bootstrap, want the registry attached")
+		t.Error("Gateway.host is nil after the assembly, want the registry attached")
 	}
 	if _, ok := m.Gateway().rateLimiter(); !ok {
-		t.Error("rateLimiter() ok = false after Bootstrap, want a real Limiter over the resolved KVStore")
+		t.Error("rateLimiter() ok = false after the assembly, want a real Limiter over the resolved KVStore")
 	}
 }
 

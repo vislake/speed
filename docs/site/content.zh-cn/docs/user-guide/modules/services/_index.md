@@ -25,7 +25,7 @@ handler;除 metering 外,每个模块还挂载 `/api/v1/*` 的 OpenAPI 片段
 本组按依赖排序,正如左侧导航所示:`storage`、`notification` 与
 `pki` 直接坐在 core 组 `jobs`/`tenancy` 层之上;`integration` 与
 `metering` 建在其上。五个模块都期望下层 core 组可用——一个已解析
-基础设施接缝的 `Registry`、一个供异步工作使用的 `jobs.Queue`——
+基础设施接缝的 `ComponentRegistry`、一个供异步工作使用的 `jobs.Queue`——
 所以如果你从零组装宿主,先读 core 组的页面,再读
 [快速开始](/zh-cn/docs/user-guide/quickstart/),它生成的起步项目已经把地板
 的大部分接好了。

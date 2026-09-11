@@ -26,7 +26,7 @@
 | 模板（可 fork 部分）与模块版本脱节 | 模板保持极薄（每文件 <50 行，只做组装）；CI 定时跑生成+构建验证 |
 | tenant_id 误入 Prometheus label | CI 断言 + code review checklist；已落地：semgrep 规则 `tools/semgrep_rules/tenant-id-metric-label.yml` 随每个 PR 在 fast-check 的 repo-checks job 运行（命中形状与残余缺口见规则文件头，间接引用等文本匹配不到的形态仍靠 observability 的既有断言测试与 review 兜底） |
 | 同一 seam 的多套实现语义漂移（一套实现下测试全绿，换一套才炸；漂移面随实现数呈 N² 增长） | 每个 seam 一套契约测试，所有实现——内置的与宿主自带的——一律必须通过；接口设计以该 seam 所有已注册实现中最弱的那个为准，不暴露 Redis 特有语义 |
-| 有人在业务逻辑里写 `if mode == "standalone"` 分支 | 部署模式分支只允许存在于 Kernel 装配代码。已落地：semgrep 规则 `tools/semgrep_rules/deployment-mode-branch.yml` 按值匹配模式常量比较、`APP_DEPLOYMENT_MODE` 读取与 case 分支，kernel 装配文件与 reference-app 入口在 path allowlist；「不得引用 DeploymentMode 常量」的标识符粒度检查（常量经别名跨包流传的形态）是规则文件头里如实记录的残余缺口，由 review 兜底。本规则依赖部署模式以全局模式开关形态存在，模式机制变化时需随之改写，见 [03 部署模式与实现组装](03-deployment-modes.md) 的"当前实现状态" |
+| 有人在业务逻辑里写 `if mode == "standalone"` 分支 | 部署模式分支只允许存在于装配的组件实现中。已落地：semgrep 规则 `tools/semgrep_rules/deployment-mode-branch.yml` 按值匹配模式常量比较、`APP_DEPLOYMENT_MODE` 读取与 case 分支，kernel 装配文件与 reference-app 入口在 path allowlist；「不得引用 DeploymentMode 常量」的标识符粒度检查（常量经别名跨包流传的形态）是规则文件头里如实记录的残余缺口，由 review 兜底。本规则依赖部署模式以全局模式开关形态存在，模式机制变化时需随之改写，见 [03 部署模式与实现组装](03-deployment-modes.md) 的"当前实现状态" |
 | 组装与部署模式不匹配（例如多副本部署却装了进程内总线，事件与配额各算各的） | 实现声明能力、部署模式声明所需能力，装配时校验，不满足即启动失败并点名 seam 与实现；单副本另有 SQLite 独占文件锁兜底 |
 | 不满足 `SurvivesRestart` 的实现被用在需要持久性的路径上 | 启动横幅显式声明哪些数据不跨重启存活；计费级计量强制走 outbox（与业务写同一事务落库），不依赖事件总线的持久性 |
 | CI 时长失控，全量矩阵随模块增多拖慢每个 PR | 路径过滤只跑受影响模块及下游；PR 阶段只跑单进程部署模式快检、合入前才跑全量；缓存与并发取消 |

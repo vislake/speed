@@ -118,7 +118,7 @@ func newTestStorageObjectService(t *testing.T) *storage.ObjectService {
 // newTestStorageObjectServiceWithStore is newTestStorageObjectService's own
 // generalization: store backs the storage.ObjectService the job handler's
 // readImageObject/writeImageObject actually exercises, instead of the
-// kernel's own default local store -- letting a test inject an
+// builtin composition's own default local store -- letting a test inject an
 // pkgcore.ObjectStore double (failNPutObjectStore below) for the
 // after-vendor-success failure path RetryAfterVendorSuccess tests need,
 // which a real, unconditionally-succeeding local store cannot express.

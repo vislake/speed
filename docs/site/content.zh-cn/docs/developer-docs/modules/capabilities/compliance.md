@@ -16,9 +16,9 @@ compliance **不发明任何机制**——它编排已经存在的机制。它�
 
 模块的 `Migrations()` 返回空 `embed.FS` 是按设计的,而且值得讲清理由,因为它看起来像疏漏。每次编排运行的持久记录已经存在:每次 `SweepTenant`/`Erase`/`Export` 都以恰好一次 `dbkit/audit.Emit` 收尾,携带逐参与者的明细——一条只追加、可查询、带租户归属的记录。第二张 compliance 自有的表只会重复它。重试状态也不需要自己的行:参与者的回调契约性地幂等,重跑一次被打断的操作即收敛到完成——没有多步状态机需要持久化。`dbkit.MigrationRegistry` 也把空集明文记为合法而非降级。持久记录绝不可以携带的是失败参与者的原始错误文本——那段文本可能点名擦除行动要消灭的主体本身,而 `audit_events` 是唯一删不掉任何东西的表——所以审计记录与投递的清单只记分类(参与者名对 "failed" 标记),绝不记错误文本;文本住在返回的进程内结果 map 与被脱敏的失败点日志里,那是它的两个合法归宿。
 
-## Registrar:不改变任何 Module 的横切机制
+## 组装座席:不改变模块契约的横切机制
 
-compliance 对下层模块做的唯一改动,是在 `pkgcore` 上新增一个 registrar:`Registry.Retention`,连同 `RetentionParticipant`(一个名字加三个回调——`Sweep`、`Erase`、`Export`,各自可选,只是既无 Sweep 也无 Erase 的参与者没有意义)与擦除所取的 `SubjectRef` 类型。`Registry` 结构存在的意义,就是新增横切机制不必改动 `Module` 接口——在 lockstep 版本化下动那个契约会一次打破所有模块。参与者由拥有它们的业务模块注册(reference-app 的 notes 模块是真实那一个),compliance 自己的代码从不 import、也从不直接查询业务模块的表:每个回调调用自己的 `dbkit.Repository[T]` 方法。只注册保留与擦除、不注册导出的参与者,声明 `Export` 为 nil 即可——只想要清扫与擦除、永不做导出投递的宿主,连 `SharingCreator` 都不用接。
+compliance 对下层模块做的唯一改动,是在 `pkgcore` 上新增一个 registrar:`Retention` 席位,连同 `RetentionParticipant`(一个名字加三个回调——`Sweep`、`Erase`、`Export`,各自可选,只是既无 Sweep 也无 Erase 的参与者没有意义)与擦除所取的 `SubjectRef` 类型。`ComponentRegistry` 结构存在的意义,就是新增横切机制不必改动模块契约——在 lockstep 版本化下动那个契约会一次打破所有模块。参与者由拥有它们的业务模块注册(reference-app 的 notes 模块是真实那一个),compliance 自己的代码从不 import、也从不直接查询业务模块的表:每个回调调用自己的 `dbkit.Repository[T]` 方法。只注册保留与擦除、不注册导出的参与者,声明 `Export` 为 nil 即可——只想要清扫与擦除、永不做导出投递的宿主,连 `SharingCreator` 都不用接。
 
 ```mermaid
 flowchart LR
@@ -26,7 +26,7 @@ flowchart LR
         E["EnqueueRetentionSweep<br/>窗口作用域的幂等键"]
     end
     R["RetentionService.SweepTenant"]
-    subgraph reg["Registry.Retention 参与者"]
+    subgraph reg["Retention 席位参与者"]
         P1["notes.note<br/>Sweep:彻底删除过期的<br/>已标记删除行"]
         P2["compliance.export_manifests<br/>Sweep:收割过期的<br/>投递对象"]
         P3["sharing.access_log<br/>Sweep:收割保留窗口<br/>之外的日志行"]

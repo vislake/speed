@@ -92,7 +92,7 @@ defer q.Close(ctx)
 前置条件:你的消费模块在 `go.mod` 里用 `replace` 把各 speed 模块指
 到本地 checkout(`go mod tidy` 之后即可);把代码粘进你自己 `main`
 包的文件里运行。第二个代码块展示通知那一半——它需要 notification
-模块接线并 Bootstrap(下方六个必选选项),且类型文案在你的双语
+模块接线由装载器驱动(下方六个必选选项),且类型文案在你的双语
 locale 包里——所以以宿主代码形式给出,不在这段演练里运行。
 
 ```go
@@ -265,7 +265,7 @@ enqueued <job id> (the HTTP response returns this JobID immediately)
 在参考应用中看到它:
 
 - [examples/reference-app/internal/app/server.go](https://github.com/vislake/speed/blob/main/examples/reference-app/internal/app/server.go)
-  ——`Bootstrap` 之后,应用以一次 `jobs.Wire` 调用把 `reg.Jobs` 上声
+  ——装配返回之后,应用以一次 `jobs.Wire` 调用把 `reg.Jobs` 上声
   明的每个 handler 交给它的独立队列并启动;每个模块的 handler(storage
   派生、notification 投递,以及本模式的各种变体)都骑在同一个队列上。
 - [examples/reference-app/internal/app/demo/demo_notification.go](https://github.com/vislake/speed/blob/main/examples/reference-app/internal/app/demo/demo_notification.go)

@@ -87,7 +87,7 @@ func TestModule_Locales_ShipsBothLanguages(t *testing.T) {
 }
 
 // TestModule_Register_DeclaresItsSurface bootstraps org through the real
-// kernel -- the same path a host takes -- and asserts every declaration
+// assembly -- the same path a host takes -- and asserts every declaration
 // arrives on the registry. Bootstrapping rather than calling Register against
 // a hand-built Registry is deliberate: it also proves org's locale files
 // survive i18n.Builder.AddModule's parity validation, which only runs there.
@@ -390,7 +390,7 @@ func TestModule_Register_DoesNotDeclareAuthnsEvent(t *testing.T) {
 func TestModule_Register_CoexistsWithAnotherModule(t *testing.T) {
 	reg, err := componenttest.DeclareModules(newWiredModule(t, nil), neighbourModule{})
 	if err != nil {
-		t.Fatalf("Bootstrap: %v", err)
+		t.Fatalf("assembly: %v", err)
 	}
 	assertContainsAll(t, reg.PermissionsSeat().Permissions(), []string{PermissionRead, "neighbour:read"})
 }
@@ -470,16 +470,16 @@ func newWiredModule(t *testing.T, db *gorm.DB, opts ...Option) *Module {
 	return NewModule(db, wired...)
 }
 
-// bootstrapTestModule bootstraps a fully wired org module through the real
-// kernel and returns the registry it registered against. Going through
-// Bootstrap rather than calling Register on a hand-built Registry is
+// bootstrapTestModule drives a fully wired org module through a real Init
+// window and returns the registry it registered against. Going through
+// declaration window rather than calling Register on a hand-built Registry is
 // deliberate: it is the only path that also merges the locale files and so
 // proves they survive i18n.Builder.AddModule's parity validation.
 func bootstrapTestModule(t *testing.T, opts ...Option) *pkgcore.ComponentRegistry {
 	t.Helper()
 	reg, err := componenttest.DeclareModules(newWiredModule(t, nil, opts...))
 	if err != nil {
-		t.Fatalf("Bootstrap: %v", err)
+		t.Fatalf("assembly: %v", err)
 	}
 	return reg
 }
@@ -491,7 +491,7 @@ func bootstrapTestModule(t *testing.T, opts ...Option) *pkgcore.ComponentRegistr
 func TestModule_Register_RefusesAnIndexerlessBoot(t *testing.T) {
 	_, err := componenttest.DeclareModules(NewModule(nil))
 	if !apperr.HasCode(err, ErrEmailIndexerRequired.Code) {
-		t.Fatalf("Bootstrap without an email indexer error = %v, want org.email_indexer_required", err)
+		t.Fatalf("assembly without an email indexer error = %v, want org.email_indexer_required", err)
 	}
 }
 
@@ -513,7 +513,7 @@ func TestModule_Register_RefusesAMailerlessBootWhileTheEmailIsOn(t *testing.T) {
 			opts := append([]Option{WithEmailIndexer(newTestEmailIndexer(t))}, tc.opts...)
 			_, err := componenttest.DeclareModules(NewModule(nil, opts...))
 			if !apperr.HasCode(err, ErrInvitationMailRequired.Code) {
-				t.Fatalf("Bootstrap error = %v, want org.invitation_mail_required", err)
+				t.Fatalf("assembly error = %v, want org.invitation_mail_required", err)
 			}
 		})
 	}
@@ -528,7 +528,7 @@ func TestModule_Register_EmailDisabled_NeedsNoMailWiring(t *testing.T) {
 		WithInvitationEmailDisabled(),
 	))
 	if err != nil {
-		t.Fatalf("Bootstrap with the invitation email disabled: %v", err)
+		t.Fatalf("assembly with the invitation email disabled: %v", err)
 	}
 }
 
@@ -585,7 +585,7 @@ func TestModule_Register_SubscribesToTheAuthnEvent(t *testing.T) {
 	m := newWiredModule(t, newInvitationTestDB(t))
 	reg, err := componenttest.DeclareModules(m)
 	if err != nil {
-		t.Fatalf("Bootstrap: %v", err)
+		t.Fatalf("assembly: %v", err)
 	}
 
 	if err := reg.EventBus().Publish(context.Background(), pkgcore.Event{

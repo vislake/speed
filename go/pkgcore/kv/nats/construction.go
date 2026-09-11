@@ -12,7 +12,7 @@ import (
 	"github.com/vislake/speed/go/pkgcore"
 )
 
-// defaultBucket is the JetStream KV bucket name a zero-configuration Preset
+// defaultBucket is the JetStream KV bucket name a zero-configuration composition
 // falls back to -- the "kv.nats" twin of kv/redis's "localhost:6379" default
 // address.
 const defaultBucket = "speed-kv"

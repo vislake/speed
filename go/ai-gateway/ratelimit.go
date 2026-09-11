@@ -18,7 +18,7 @@ import (
 // per-tenant dimension, with the underlying Limiter built lazily over the
 // host's KVStore (rateLimiter, below) so it always reads whichever
 // implementation the running deployment mode actually resolved, never one
-// captured before Bootstrap ran.
+// captured before the assembly ran.
 //
 // A call whose context carries no tenant never reaches this limiter: the
 // three call sites gate on pkgcore.TenantFromContext's ok themselves --
@@ -77,7 +77,7 @@ type hostSeams interface {
 	// rather than caching a Limiter at construction, keeps rate limiting
 	// bound to whichever KVStore the deployment mode actually resolved
 	// (in-memory standalone, Redis distributed) instead of one captured
-	// before Bootstrap ever ran.
+	// before the assembly ever ran.
 	KVStore() pkgcore.KVStore
 }
 
@@ -93,7 +93,7 @@ var _ hostSeams = (*pkgcore.ComponentRegistry)(nil)
 // zero value NewGateway leaves it at) enforces NO rate limit at all, the
 // same "no gating without wiring" default Entitlements and UsageRecorder
 // already document: a Gateway is usable standalone in tests and examples
-// without a full Bootstrap.
+// without a full assembly.
 func (g *Gateway) rateLimiter() (ratelimit.Limiter, bool) {
 	if g.limiter != nil {
 		return g.limiter, true

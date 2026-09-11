@@ -69,7 +69,7 @@ c := compliance.NewModule(auditRepo, // the same *audit.Repository your audit wi
     compliance.WithSharing(sharingModule.Service()), // arms export delivery
     // optional: compliance.WithTenantLister(lister), WithConfigService(cfg)
 )
-// in your the assembly set. After Bootstrap, register the business
+// in your assembly's module set. After the assembly returns, register the business
 // modules whose rows the orchestrations may touch — the reference app's
 // notes module registers exactly this participant shape, its callbacks
 // backed by its own repository's HardDelete and read methods:
@@ -87,7 +87,7 @@ _, err := c.Erasure().Erase(ctx, pkgcore.SubjectRef{
 ```
 
 `RetentionParticipant` (declared in `pkgcore`, registered through
-`Registry.Retention`) is a `Name` plus `Sweep`/`Erase`/`Export`
+the `Retention` seat) is a `Name` plus `Sweep`/`Erase`/`Export`
 callbacks; `Sweep` and `Erase` are mandatory at registration, `Export`
 optional, and every callback is expected to call the participant's own
 `dbkit.Repository[T]` methods — compliance never imports or queries a

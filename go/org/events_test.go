@@ -110,7 +110,7 @@ func (h *testHost) EventBus() pkgcore.EventBus { return h.bus }
 var _ hostSeams = (*testHost)(nil)
 
 // newTestHost builds a host whose catalog is org's REAL locale bundle, merged
-// through the same i18n.Builder the kernel uses. Rendering against the real
+// through the same i18n.Builder the assembly uses. Rendering against the real
 // files is the point: a message id this module looks up but never shipped
 // fails here rather than in production.
 func newTestHost(t *testing.T) *testHost {
@@ -450,7 +450,7 @@ func TestPublishEvent_NoTenant_IsNotPublished(t *testing.T) {
 	}
 }
 
-// TestPublishEvent_NoHost_IsSafe pins that a service used before Bootstrap
+// TestPublishEvent_NoHost_IsSafe pins that a service used before the assembly
 // (or in a test that never attached a host) does not panic on publish.
 func TestPublishEvent_NoHost_IsSafe(t *testing.T) {
 	publishEvent(tenantCtx("tenant-a"), nil, EventNodeCreated, NodeCreated{NodeID: "n-1"})

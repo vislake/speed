@@ -22,7 +22,7 @@ import (
 
 // TestSMTPMailer_ConformsToMailerContract proves pkgcore.NewSMTPMailer still
 // satisfies the shared contract mailertest.AssertConforms checks, after the
-// deployment-composition retrofit (Phase 1) generalized how a Kernel
+// deployment-composition retrofit (Phase 1) generalized how the assembly
 // resolves and validates its Mailer seam — this is what proves the retrofit
 // did not silently change NewSMTPMailer's own behavior for its existing
 // callers. It needs no Docker: the fake relay is an in-process

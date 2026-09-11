@@ -11,7 +11,7 @@ Every speed-based binary — and every other Go module in the platform —
 sits on these seven modules. Nothing above them can exist without them,
 and a consumer `go get`s them directly: they are not an application
 framework you inherit but libraries you call, with the assembly
-contract (`pkgcore`'s `Module`/`Registry`/`Kernel`) that lets business
+contract (`pkgcore`'s `Module`/`ComponentRegistry`/`Component`) that lets business
 modules register themselves into one binary.
 
 ```mermaid

@@ -12,8 +12,8 @@
 // validated and merged before the module itself registers"), and pkgcore is
 // not a Module: it is the dependency floor the Module contract lives on,
 // with no Locales() of its own, so its files have no seat in the feeding
-// loop and never join a bootstrapped catalog. If pkgcore's seed messages
-// are ever missing from a catalog, the cause is not Bootstrap's feeding
+// loop and never join the merged catalog. If pkgcore's seed messages
+// are ever missing from a catalog, the cause is not the assembly's feeding
 // loop (which feeds every registered module correctly) but this directory
 // having no wiring into any module's Locales() -- do not look in
 // the assembly for it.
@@ -24,7 +24,7 @@
 // pkgcore's suites feed them through exactly the seams a real module's
 // bundle travels: i18n's catalog tests call Builder.AddModule("pkgcore",
 // locales.FS), and registry_test.go's localeBundleModule ships them through
-// a bootstrapped kernel's module loop, so the machinery is exercised by
+// the assembly's module loop, so the machinery is exercised by
 // real embedded files and the seed messages double as the shape every
 // module's own bundle follows. That exercise happens in pkgcore's tests,
 // not in production -- a production catalog is exercised by the modules

@@ -19,7 +19,7 @@ import (
 // TestMemoryEventBus_ConformsToEventBusContract proves the in-memory
 // EventBus this package builds still satisfies the shared contract
 // eventbustest.AssertConforms checks, after the deployment-composition
-// retrofit (Phase 1) generalized how a Kernel resolves and validates its
+// retrofit (Phase 1) generalized how the assembly resolves and validates its
 // EventBus seam — this is what proves the retrofit did not silently change
 // NewMemoryEventBus's own behavior for its existing callers.
 //

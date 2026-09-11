@@ -149,7 +149,7 @@ type counterEntry struct {
 // identity: the equivalence "quantity >= threshold means the crossing
 // happened" holds only while the threshold is unchanged, and thresholds
 // ARE changeable -- they are construction-time values
-// (WithOverageThresholds mutates the Aggregator before Bootstrap
+// (WithOverageThresholds mutates the Aggregator before the assembly
 // returns), so changing one, an operator lowering a limit being the
 // routine shape, happens exactly across a restart. A post-restart seed
 // that latched on the quantity comparison alone would then treat "the

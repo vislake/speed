@@ -39,7 +39,7 @@ admin 是运营控制台后端:面向平台员工的操作面,搭在其它每个
   `go/sharing` 单次分享链接投递——其一次性 token 刻意绝不落进持久
   的 job 记录。
 - **角色管理。** 包在 `rbac.Service` 上的薄壳(`DefineRole`/
-  `AssignRole`/`RevokeRole`/`RestoreRole`),经 Bootstrap 后的
+  `AssignRole`/`RevokeRole`/`RestoreRole`),经装配后的
   `AttachRBAC` 接线;凡是命名租户的写都直接拒 `rbac.SystemDomain`
   伪租户,只握 `admin:roles_manage` 的调用方无法把平台运营权委托给
   自己。
@@ -57,7 +57,7 @@ HTTP 面是模块自己的片段,挂在 `/api/v1/admin` 下;每条路由由宿�
 你运营平台,不止运营一个租户:员工需要租户账本、停用某个租户的权
 力、在完整审计下查看并扮演某个用户、跨租户搜索、读取并导出审计
 轨迹、管理角色、瞄一眼跨租户用量。每个面都是可选接线——admin 组
-合你给它的东西,对它声明表面所必需的部分缺失时,Bootstrap 大声拒
+合你给它的东西,对它声明表面所必需的部分缺失时,装配直接拒绝
 绝。
 
 ## 怎么接线
@@ -65,15 +65,15 @@ HTTP 面是模块自己的片段,挂在 `/api/v1/admin` 下;每条路由由宿�
 ```go
 a := admin.NewModule(db,
     admin.WithAuthn(authnModule),           // 必填:每缺一个 Option,
-    admin.WithOrg(orgModule),               //   Bootstrap 都以各自
+    admin.WithOrg(orgModule),               //   装配都以各自
     admin.WithCompliance(complianceModule), //   的命名错误失败
     admin.WithNotification(notificationModule),
     admin.WithQueue(queue),                 // 审计导出绝不能在请求内同步跑
     admin.WithMetering(meteringModule),     // 可选:用量汇总维度
     admin.WithBilling(billingModule),       // 可选,与 metering 相互独立
 )
-// 放进你的 the assembly 模块集。然后,Bootstrap 之后——
-// rbac.Service 要等 rbac 自己的 post-Bootstrap Attach 冻结目录才存在:
+// 放进你的 the assembly 模块集。然后,装配返回之后——
+// rbac.Service 要等 rbac 自己的 post-assembly Attach 冻结目录才存在:
 if err := a.AttachRBAC(rbacService); err != nil { /* 处理 */ }
 ```
 
@@ -96,7 +96,7 @@ handler := authn.Middleware(verifier)(
 ## 核心概念与 API 面
 
 - **模块访问器:** `Tenants()`、`Impersonation()`、`Search()`、
-  `Roles()`、`Usage()`、`Export()`——加 post-Bootstrap 的
+  `Roles()`、`Usage()`、`Export()`——加 post-assembly 的
   `AttachRBAC(svc)`。`Roles()` 与 `Impersonation()` 在 `AttachRBAC`
   跑之前以 `ErrRBACServiceRequired` 失败关闭——必须能切断授权的机
   器还没就位时,授权绝不诞生。

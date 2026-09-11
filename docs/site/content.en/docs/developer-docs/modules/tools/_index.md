@@ -9,7 +9,7 @@ bookCollapseSection: true
 
 Every other group in this module-design section documents a Go module
 or npm package your binary composes: it implements `the module contract`,
-registers on the kernel's `Registry` and boots inside a `Kernel`. This
+registers on the registry's `ComponentRegistry` and boots inside the assembly. This
 group documents the one deliverable that does none of that — **saasctl**,
 the consumer-facing CLI. It implements no `the module contract`, ships no
 tables, migrations, HTTP fragment or permissions, and a running product

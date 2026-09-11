@@ -43,7 +43,7 @@
 #     composition that wired no explicit WithSMSSender
 #     (ErrMissingDistributedSMSSender) instead of silently defaulting to
 #     the console sender nobody in that deployment mode reads. It is
-#     authn's construction-time counterpart of pkgcore Kernel's own
+#     authn's construction-time counterpart of the assembly's own
 #     resolveMailer/resolveObjectStore: authn owns its SMSSender seam and
 #     does not register it on the pkgcore registry, so the assembly-time
 #     constraint lives in the module's own constructor -- wiring-time only,
@@ -198,7 +198,7 @@ rules:
       exclude:
         - "**/*_test.go"
         - "**/integration_test/**"
-        # Kernel-wiring allowlist (see header).
+        # assembly-wiring allowlist (see header).
         - "**/go/pkgcore/deployment_mode.go"
         - "**/examples/reference-app/internal/app/bootstrap.go"
         - "**/examples/reference-app/internal/app/host_wiring.go"

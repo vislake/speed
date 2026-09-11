@@ -94,7 +94,7 @@ func fixture(t *testing.T, name string) string {
 // environment at all -- the standalone deployment mode, port 8080, the
 // fixed app.db path, the six development key byte sequences (the two
 // original key materials plus the four authn/pki/notification ones), and
-// every infrastructure seam left on its Preset default -- one line per
+// every infrastructure seam left on its builtin default -- one line per
 // value, each sourced line naming the default (or the seam) it fell back
 // to. The six key rows and the S3 secret key / SMTP password / SMS
 // gateway URL rows show only the [redacted] marker in the value column.

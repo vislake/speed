@@ -34,13 +34,13 @@ func (m *routesModule) Register(reg *pkgcore.ComponentRegistry) error {
 	return nil
 }
 
-// testRegistry bootstraps a kernel over the modules, returning the registry
+// testRegistry drives the assembly over the modules, returning the registry
 // Standard derives its partition from.
 func testRegistry(t *testing.T, modules ...componenttest.Declarer) *pkgcore.ComponentRegistry {
 	t.Helper()
 	reg, err := componenttest.DeclareModules(modules...)
 	if err != nil {
-		t.Fatalf("Bootstrap: %v", err)
+		t.Fatalf("assembly: %v", err)
 	}
 	return reg
 }

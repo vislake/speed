@@ -12,9 +12,9 @@ package admin_test
 // mandatory validate-and-notify pass, so the refusal fires before
 // anything is written.
 //
-// Behind that gate sits the post-Bootstrap one, guarding what the
+// Behind that gate sits the post-assembly one, guarding what the
 // Register-time seams cannot: Module.AttachRBAC is host-performed and
-// strictly post-Bootstrap (its own doc comment, and rbacSvc's field doc,
+// strictly post-assembly (its own doc comment, and rbacSvc's field doc,
 // give the full reasoning), and until it has attached a real
 // *rbac.Service, Start refuses with ErrRBACServiceRequired -- no grant
 // can be born while the automatic permission-revocation end
@@ -29,7 +29,7 @@ package admin_test
 // impersonation_service_start_dispatch_test.go and module_test.go lifecycles)
 // rather than reconstructed here, exactly as ExampleNewExportService
 // defers its real path to export_test.go. ExampleModule_AttachRBAC below
-// demonstrates the same post-Bootstrap AttachRBAC seam from the role
+// demonstrates the same post-assembly AttachRBAC seam from the role
 // surface's side, where the exported surface can reach it.
 
 import (
@@ -47,7 +47,7 @@ import (
 func Example() {
 	ctx := context.Background()
 
-	// A real host opens (and migrates) its database before Bootstrap; this
+	// A real host opens (and migrates) its database before the assembly; this
 	// example opens one so NewModule is constructed exactly as in a real
 	// host. Constructing a Module performs no I/O, and the refusal below
 	// fires before the database is ever touched.
@@ -63,11 +63,11 @@ func Example() {
 	module := admin.NewModule(db)
 
 	// Before Module.Register has attached the service's mandatory host
-	// seams -- the state every consumer sees until Bootstrap runs -- Start
+	// seams -- the state every consumer sees until the assembly runs -- Start
 	// fails closed with a named error instead of starting a grant whose
 	// target was never validated and who was never notified. The
 	// ErrRBACServiceRequired gate sits behind this one, guarding the
-	// post-Bootstrap AttachRBAC seam that no Register-time attach can
+	// post-assembly AttachRBAC seam that no Register-time attach can
 	// carry (Start's own doc comment; the header above explains why only
 	// the in-package suites can reach that second refusal).
 	_, err = module.Impersonation().Start(ctx, admin.StartInput{
@@ -85,7 +85,7 @@ func Example() {
 // ExampleModule_AttachRBAC demonstrates the role-management surface
 // (RoleService): a real rbac.Service, bootstrapped and Attach-ed
 // independently, then wired onto an admin.Module through AttachRBAC --
-// the distinct, post-Bootstrap call this file's own Module.AttachRBAC doc
+// the distinct, post-assembly call this file's own Module.AttachRBAC doc
 // comment explains is required because rbac.Module.Attach must run after
 // every module's own Register, a moment admin's own Register runs before.
 func ExampleModule_AttachRBAC() {

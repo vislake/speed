@@ -336,7 +336,7 @@ func TestLoadReadsInfrastructureVariables(t *testing.T) {
 // TestLoadInfrastructureVariablesDefaultToUnwired: with an empty
 // environment, every infrastructure field resolves to its documented
 // default -- empty strings, S3UseSSL false, S3BucketLookup "auto",
-// SMTPPort 0 -- leaving every seam on its Preset default, and no field is
+// SMTPPort 0 -- leaving every seam on its builtin default, and no field is
 // recorded as from-env: the same "empty counts as unset" contract the
 // non-infrastructure variables already carry.
 // TestLoadReadsInfrastructureVariables above is what proves the wired
