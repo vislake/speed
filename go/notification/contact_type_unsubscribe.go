@@ -5,7 +5,7 @@ package notification
 // whole-contact unsubscribe (verified_contacts.status = unsubscribed) is
 // permanent for the contact as a whole -- one address on one channel stops
 // receiving everything, whatever the type (AGENTS.md's "Unsubscribe is
-// permanent for the contact as a whole" adjudication). The type-scoped
+// permanent for the contact as a whole" section). The type-scoped
 // opt-out is the ledger's answer to "this type, not that one": a verified
 // contact narrows itself out of one notification type while staying
 // reachable for every other, and delivery honours the narrowing at send

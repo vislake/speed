@@ -61,8 +61,8 @@ var (
 	// (Unsubscribable false -- transactional notifications such as
 	// verification codes above all). The recipient may narrow such a type
 	// to one channel but never to none: at least one must keep arriving.
-	// The UI equivalent is a disabled "turn all off" switch, and the M2
-	// flow's refusal behaviour is pinned by this code's tests.
+	// The UI equivalent is a disabled "turn all off" switch, and this
+	// code's refusal behaviour is pinned by its tests.
 	ErrPreferenceOptoutNotAllowed = apperr.Invalid("notification.preference_optout_not_allowed")
 
 	// ErrInternal reports a failure inside the module itself: a store the

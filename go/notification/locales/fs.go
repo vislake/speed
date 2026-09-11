@@ -6,8 +6,7 @@
 // What this bundle carries is the human description of every error code
 // go/notification/errors.go declares, one flat entry per code, with the id
 // equal to the code itself: today the preference matrix's codes and the
-// module's internal_error, each shipped with the producer that raises it,
-// and the codes the round's later blocks raise will land here with them.
+// module's internal_error, each shipped with the producer that raises it.
 // A locale entry without a producer is dead text, exactly as a code without
 // an entry is a blank message.
 //

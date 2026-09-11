@@ -31,7 +31,7 @@ const tableVerifiedContacts = "verified_contacts"
 //
 // unsubscribed and bounced are terminal per contact: an unsubscribe is
 // permanent for the contact as a whole (see AGENTS.md's "Unsubscribe is
-// permanent for the contact as a whole" adjudication), and a bounced
+// permanent for the contact as a whole" section), and a bounced
 // contact has proven its address cannot receive messages at all. The
 // type-scoped opt-out is the finer, orthogonal shape the ledger also
 // carries -- a verified contact may additionally opt out of ONE type
@@ -1015,7 +1015,7 @@ type UnsubscribeInput struct {
 // idempotent repeat.
 //
 // The permanence rule (AGENTS.md's "Unsubscribe is permanent for the
-// contact as a whole" adjudication): an unsubscribe is for the contact as
+// contact as a whole" section): an unsubscribe is for the contact as
 // a whole, on every channel it might later be registered on, and it is
 // not reversible through this API. The type-scoped opt-out
 // (UnsubscribeType, contact_type_unsubscribe.go) is the finer shape a
@@ -1140,8 +1140,8 @@ func (s *ContactService) markBounced(ctx context.Context, id string) (bool, erro
 
 // EnsureDeliverable is the consent gate delivery re-checks before every
 // send to an external contact -- the send-time status recheck AGENTS.md's
-// "Every consent and address decision is re-checked at send time"
-// adjudication describes, and the seam the notification.deliver job's
+// "Every consent and address decision is re-checked at send time" section
+// describes, and the seam the notification.deliver job's
 // type-agnostic callers use. Only a verified contact passes; every
 // other status refuses with its own error, so a message can never ride to a
 // transport on consent that lapsed between enqueue and delivery:

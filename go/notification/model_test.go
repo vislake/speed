@@ -10,9 +10,9 @@ import (
 // TestInboxMessage_GetTenantID_ReturnsEmbeddedTenantModelValue pins the
 // tenant-context mechanism the whole isolation story stands on: the value
 // comes from the embedded dbkit.TenantModel field, and InboxMessage needs no
-// GetTenantID of its own. A refactor that replaced the embed with a
-// hand-declared TenantID field -- and forgot the method -- fails here first,
-// before any repository test.
+// GetTenantID of its own. A refactor that replaces the embed with a
+// hand-declared TenantID field -- and forgets the method -- fails here
+// first, before any repository test.
 func TestInboxMessage_GetTenantID_ReturnsEmbeddedTenantModelValue(t *testing.T) {
 	m := InboxMessage{TenantModel: dbkit.TenantModel{TenantID: "tenant-acme"}}
 	if got, want := m.GetTenantID(), pkgcore.TenantID("tenant-acme"); got != want {

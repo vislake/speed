@@ -1018,10 +1018,10 @@ func (s *DeliveryService) deliverUserSMS(ctx context.Context, tenantID string, d
 // deliverToContact is the external-contact delivery path, standing behind
 // the module's own consent ledger: ContactService.EnsureDeliverableForType
 // is the send-time recheck that refuses a delivery whose consent lapsed
-// between enqueue and delivery (AGENTS.md's "Every consent and address
-// decision is re-checked at send time" adjudication -- the module never
+// between enqueue and delivery -- the rule that every consent and address
+// decision is re-checked at send time (AGENTS.md), so the module never
 // sends to an unverified address, the verification message itself being
-// the only exception, and delivery is not it). The type-aware gate answers
+// the only exception, and delivery is not it. The type-aware gate answers
 // the whole-contact statuses AND the type-scoped opt-outs
 // (contact_type_unsubscribe.go): a verified contact that narrowed the
 // type being delivered out of its consent is refused exactly like a
