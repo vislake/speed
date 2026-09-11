@@ -47,7 +47,11 @@ var notesComponent = pkgcore.Component{
 			return nil, err
 		}
 		var opts []Option
-		if subject, err := pkgcore.Get[SubjectResolver](reg); err == nil {
+		subject, ok, err := pkgcore.GetOptional[SubjectResolver](reg)
+		if err != nil {
+			return nil, err
+		}
+		if ok {
 			opts = append(opts, WithSubjectResolver(subject))
 		}
 		return NewModule(db, opts...), nil

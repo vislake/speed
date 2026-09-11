@@ -303,7 +303,11 @@ func (b *serverBuild) authnComponent(reg *pkgcore.ComponentRegistry) (pkgcore.Co
 		// keeping a transport nobody in a distributed replica pool is
 		// reading.
 		wireSender := b.cfg.SMSGatewayURL != "" || b.cfg.DeploymentMode != pkgcore.DeploymentModeDistributed
-		if sender, err := pkgcore.Get[pkgcore.SMSSender](reg); wireSender && err == nil {
+		sender, hasSender, err := pkgcore.GetOptional[pkgcore.SMSSender](reg)
+		if err != nil {
+			return nil, err
+		}
+		if wireSender && hasSender {
 			opts = append(opts, authn.WithSMSSender(sender))
 		}
 		return authn.NewModule(db, opts...)
@@ -371,7 +375,11 @@ func (b *serverBuild) integrationComponent(reg *pkgcore.ComponentRegistry) (pkgc
 			integration.WithEventMapping(orgMemberJoinedWebhookMapping),
 			integration.WithSubjectResolver(integration.SubjectResolverFunc(demo.DemoOrgSubjectResolverFor(b.cfg.DisableDemoUserHeader, false))),
 		}
-		if queue, err := pkgcore.Get[jobs.Queue](reg); err == nil {
+		queue, hasQueue, err := pkgcore.GetOptional[jobs.Queue](reg)
+		if err != nil {
+			return nil, err
+		}
+		if hasQueue {
 			opts = append(opts, integration.WithWebhookQueue(queue))
 		}
 		if b.cfg.WebhookURLValidator != nil {
@@ -401,15 +409,29 @@ func (b *serverBuild) aiGatewayComponent(reg *pkgcore.ComponentRegistry) (pkgcor
 		// Image generation is wired exactly when both products it runs on
 		// are selected: the queue its job handler drains and the storage
 		// service whose bytes it reads and writes.
-		queue, queueErr := pkgcore.Get[jobs.Queue](reg)
-		storageModule, storageErr := pkgcore.Get[*storage.Module](reg)
-		if queueErr == nil && storageErr == nil {
+		queue, hasQueue, err := pkgcore.GetOptional[jobs.Queue](reg)
+		if err != nil {
+			return nil, err
+		}
+		storageModule, hasStorage, err := pkgcore.GetOptional[*storage.Module](reg)
+		if err != nil {
+			return nil, err
+		}
+		if hasQueue && hasStorage {
 			opts = append(opts, aigateway.WithImageGeneration(queue, storageModule.ObjectService()))
 		}
-		if entitlements, err := pkgcore.Get[aigateway.Entitlements](reg); err == nil {
+		entitlements, hasEntitlements, err := pkgcore.GetOptional[aigateway.Entitlements](reg)
+		if err != nil {
+			return nil, err
+		}
+		if hasEntitlements {
 			opts = append(opts, aigateway.WithEntitlements(entitlements))
 		}
-		if recorder, err := pkgcore.Get[aigateway.UsageRecorder](reg); err == nil {
+		recorder, hasRecorder, err := pkgcore.GetOptional[aigateway.UsageRecorder](reg)
+		if err != nil {
+			return nil, err
+		}
+		if hasRecorder {
 			opts = append(opts, aigateway.WithUsageRecorder(recorder))
 		}
 		return aigateway.NewModule(db, opts...), nil
@@ -957,10 +979,18 @@ func (b *serverBuild) workerComponent() pkgcore.Component {
 			if b.smileSimReconcilerStop != nil {
 				b.smileSimReconcilerStop()
 			}
-			if configService, err := pkgcore.Get[*config.Service](reg); err == nil {
+			configService, hasConfig, err := pkgcore.GetOptional[*config.Service](reg)
+			if err != nil {
+				keepErr(err)
+			}
+			if hasConfig {
 				keepErr(configService.Close())
 			}
-			if rbacService, err := pkgcore.Get[*rbac.Service](reg); err == nil {
+			rbacService, hasRBAC, err := pkgcore.GetOptional[*rbac.Service](reg)
+			if err != nil {
+				keepErr(err)
+			}
+			if hasRBAC {
 				keepErr(rbacService.Close())
 			}
 			return firstErr
