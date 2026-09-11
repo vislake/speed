@@ -1,0 +1,89 @@
+package billing
+
+// component.go carries billing's descriptor for the config-driven component
+// assembly: the selection key a composition configuration names, the assets
+// the module brings, the contracts it consumes, and the callback that
+// constructs it. The descriptor is additive: pkgcore.Module.Register, driven
+// by the host's bootstrap, remains billing's declaration path, and the
+// descriptor states the same surface in the assembly's terms.
+
+import (
+	"context"
+	"errors"
+
+	"gorm.io/gorm"
+
+	"github.com/vislake/speed/go/jobs"
+	"github.com/vislake/speed/go/pkgcore"
+
+	"github.com/vislake/speed/go/billing/locales"
+	"github.com/vislake/speed/go/billing/migrations"
+)
+
+// component returns billing's component descriptor: the value init registers,
+// so a composition configuration can select the module and the assembly can
+// construct it from the database product in the by-type context.
+func component() pkgcore.Component {
+	return pkgcore.Component{
+		Name:   moduleName,
+		Module: moduleName,
+		Requires: []pkgcore.Requirement{
+			// The database connection the module's tables live in, the
+			// selected db component's product.
+			{Token: (*gorm.DB)(nil)},
+			// The real-time usage reading the entitlements service answers
+			// quota questions with, taken as billing's own structural
+			// interface. Optional: without one, quota reads answer without
+			// live usage, the shape UsageReader's nil contract documents.
+			{Token: (*UsageReader)(nil), Optional: true},
+			// The queue the active-polling fallback is scheduled on.
+			// Optional: without one only the periodic re-query of stuck
+			// payment events is unavailable, the shape WithQueue documents.
+			{Token: (*jobs.Queue)(nil), Optional: true},
+		},
+		// The construction product is the *Module; the Entitlements it
+		// exposes is the judgment entry point business code calls.
+		Provides: []any{(*Module)(nil)},
+		// The module takes no configuration: every construction input
+		// besides the database is a dependency (the usage reader, the
+		// queue) or host-wired implementation (the payment gateway map,
+		// whose channel collection is not configuration). A composition
+		// block for billing therefore accepts no keys.
+		Migrations:  migrations.FS,
+		Locales:     locales.FS,
+		OpenAPISpec: openAPISpecYAML,
+		New: func(_ context.Context, reg *pkgcore.ComponentRegistry, _ pkgcore.ComponentConfig) (any, error) {
+			db, err := pkgcore.Get[*gorm.DB](reg)
+			if err != nil {
+				return nil, err
+			}
+			var usage UsageReader
+			reader, err := pkgcore.Get[UsageReader](reg)
+			switch {
+			case err == nil:
+				usage = reader
+			case errors.Is(err, pkgcore.ErrMissingRequirement):
+				// The optional reader is absent: quota reads answer without
+				// live usage, the shape NewModule's nil usage documents.
+			default:
+				return nil, err
+			}
+			var opts []Option
+			queue, err := pkgcore.Get[jobs.Queue](reg)
+			switch {
+			case err == nil:
+				opts = append(opts, WithQueue(queue))
+			case errors.Is(err, pkgcore.ErrMissingRequirement):
+				// The optional queue is absent: the polling fallback is
+				// unavailable, the shape WithQueue documents.
+			default:
+				return nil, err
+			}
+			return NewModule(db, usage, opts...), nil
+		},
+	}
+}
+
+func init() {
+	pkgcore.MustRegister(component())
+}
