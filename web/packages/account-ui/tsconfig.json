@@ -34,7 +34,11 @@
       "@speed/i18n/mui-locale": ["../i18n/src/mui-locale.ts"],
       "@speed/i18n": ["../i18n/src/index.ts"],
       "@speed/tokens": ["../tokens/src/index.ts"],
-      "@speed/ui-kit": ["../ui-kit/src/index.ts"]
+      "@speed/ui-kit": ["../ui-kit/src/index.ts"],
+      "@speed/test-utils/axe": ["../../test-utils/src/axe.ts"],
+      "@speed/test-utils/real-client": ["../../test-utils/src/real-client.ts"],
+      "@speed/test-utils/render": ["../../test-utils/src/render.tsx"],
+      "@speed/test-utils/setup": ["../../test-utils/src/setup.ts"]
     }
   }
 }

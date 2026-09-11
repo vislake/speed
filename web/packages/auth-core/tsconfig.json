@@ -26,7 +26,9 @@
     "paths": {
       "@speed/api-sdk/runtime": ["../api-sdk/src/runtime.ts"],
       "@speed/api-sdk": ["../api-sdk/src/index.ts"],
-      "@speed/api-client": ["../api-client/src/index.ts"]
+      "@speed/api-client": ["../api-client/src/index.ts"],
+      "@speed/auth-core": ["./src/index.ts"],
+      "@speed/test-utils/session-harness": ["../../test-utils/src/session-harness.ts"]
     }
   }
 }

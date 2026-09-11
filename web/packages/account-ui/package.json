@@ -37,6 +37,7 @@
     "@emotion/styled": "^11.14.1",
     "@mui/material": "^9.4.0",
     "@speed/api-client": "workspace:*",
+    "@speed/test-utils": "workspace:*",
     "@tanstack/react-query": "^5.62.0",
     "@testing-library/jest-dom": "^7.0.1",
     "@testing-library/react": "^16.3.3",

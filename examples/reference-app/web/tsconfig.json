@@ -55,7 +55,14 @@
       "@speed/i18n/platform-errors": ["../../../web/packages/i18n/src/platform-errors.ts"],
       "@speed/i18n": ["../../../web/packages/i18n/src/index.ts"],
       "@speed/tokens": ["../../../web/packages/tokens/src/index.ts"],
-      "@speed/ui-kit": ["../../../web/packages/ui-kit/src/index.ts"]
+      "@speed/ui-kit": ["../../../web/packages/ui-kit/src/index.ts"],
+      "@speed/test-utils/axe": ["../../../web/test-utils/src/axe.ts"],
+      "@speed/test-utils/emitted-css": ["../../../web/test-utils/src/emitted-css.ts"],
+      "@speed/test-utils/matchMedia": ["../../../web/test-utils/src/matchMedia.ts"],
+      "@speed/test-utils/real-client": ["../../../web/test-utils/src/real-client.ts"],
+      "@speed/test-utils/render": ["../../../web/test-utils/src/render.tsx"],
+      "@speed/test-utils/session-harness": ["../../../web/test-utils/src/session-harness.ts"],
+      "@speed/test-utils/setup": ["../../../web/test-utils/src/setup.ts"]
     }
   }
 }

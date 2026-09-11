@@ -22,9 +22,10 @@
  * Never reorder this list; append new subpaths directly above their
  * bare package entry.
  *
- * Entry paths are workspace-root-relative (`packages/<name>/src/...`)
- * so one manifest serves every consumer depth: the packages under
- * web/packages/ and the reference app, which lives outside web/
+ * Entry paths are workspace-root-relative (`packages/<name>/src/...`,
+ * `test-utils/src/...`) so one manifest serves every consumer depth:
+ * the packages under web/packages/, the shared test-support package
+ * beside packages/, and the reference app, which lives outside web/
  * exactly where a delivered consumer project lives.
  */
 import { dirname, join, relative, sep } from 'node:path'
@@ -79,6 +80,33 @@ export const SPEED_PACKAGE_MAP = Object.freeze([
   { specifier: '@speed/i18n', entry: 'packages/i18n/src/index.ts' },
   { specifier: '@speed/tokens', entry: 'packages/tokens/src/index.ts' },
   { specifier: '@speed/ui-kit', entry: 'packages/ui-kit/src/index.ts' },
+  // The shared test-support package (web/test-utils, a private member
+  // beside packages/). One entry per module its consumers import; no
+  // bare entry exists because the package has no barrel -- every import
+  // names the module it needs. The entries carry no common prefix
+  // among themselves, so their position in this list is free.
+  { specifier: '@speed/test-utils/axe', entry: 'test-utils/src/axe.ts' },
+  {
+    specifier: '@speed/test-utils/emitted-css',
+    entry: 'test-utils/src/emitted-css.ts',
+  },
+  {
+    specifier: '@speed/test-utils/matchMedia',
+    entry: 'test-utils/src/matchMedia.ts',
+  },
+  {
+    specifier: '@speed/test-utils/real-client',
+    entry: 'test-utils/src/real-client.ts',
+  },
+  {
+    specifier: '@speed/test-utils/render',
+    entry: 'test-utils/src/render.tsx',
+  },
+  {
+    specifier: '@speed/test-utils/session-harness',
+    entry: 'test-utils/src/session-harness.ts',
+  },
+  { specifier: '@speed/test-utils/setup', entry: 'test-utils/src/setup.ts' },
 ])
 
 /** Absolute path of one map entry's source file. */

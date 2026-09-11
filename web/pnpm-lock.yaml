@@ -84,6 +84,9 @@ importers:
       '@playwright/test':
         specifier: ^1.56.0
         version: 1.63.0
+      '@speed/test-utils':
+        specifier: workspace:*
+        version: link:../../../web/test-utils
       '@testing-library/jest-dom':
         specifier: ^7.0.1
         version: 7.0.1(@testing-library/dom@10.4.1)(vitest@4.1.11)
@@ -145,6 +148,9 @@ importers:
       '@speed/api-client':
         specifier: workspace:*
         version: link:../api-client
+      '@speed/test-utils':
+        specifier: workspace:*
+        version: link:../../test-utils
       '@tanstack/react-query':
         specifier: ^5.62.0
         version: 5.102.8(react@19.2.8)
@@ -237,6 +243,9 @@ importers:
         specifier: workspace:*
         version: link:../api-sdk
     devDependencies:
+      '@speed/test-utils':
+        specifier: workspace:*
+        version: link:../../test-utils
       '@testing-library/react':
         specifier: ^16.3.3
         version: 16.3.3(@testing-library/dom@10.4.1)(@types/react-dom@19.2.5(@types/react@19.2.18))(@types/react@19.2.18)(react-dom@19.2.8(react@19.2.8))(react@19.2.8)
@@ -283,6 +292,9 @@ importers:
       '@speed/api-client':
         specifier: workspace:*
         version: link:../api-client
+      '@speed/test-utils':
+        specifier: workspace:*
+        version: link:../../test-utils
       '@testing-library/jest-dom':
         specifier: ^7.0.1
         version: 7.0.1(@testing-library/dom@10.4.1)(vitest@4.1.11)
@@ -338,6 +350,9 @@ importers:
       '@speed/api-client':
         specifier: workspace:*
         version: link:../api-client
+      '@speed/test-utils':
+        specifier: workspace:*
+        version: link:../../test-utils
       '@tanstack/react-query':
         specifier: ^5.62.0
         version: 5.102.8(react@19.2.8)
@@ -409,6 +424,9 @@ importers:
       '@mui/material':
         specifier: ^9.4.0
         version: 9.4.0(@emotion/react@11.14.0(@types/react@19.2.18)(react@19.2.8))(@emotion/styled@11.14.1(@emotion/react@11.14.0(@types/react@19.2.18)(react@19.2.8))(@types/react@19.2.18)(react@19.2.8))(@types/react@19.2.18)(react-dom@19.2.8(react@19.2.8))(react@19.2.8)
+      '@speed/test-utils':
+        specifier: workspace:*
+        version: link:../../test-utils
       '@testing-library/jest-dom':
         specifier: ^7.0.1
         version: 7.0.1(@testing-library/dom@10.4.1)(vitest@4.1.11)
@@ -473,6 +491,9 @@ importers:
       '@speed/tenancy-ui':
         specifier: workspace:*
         version: link:../tenancy-ui
+      '@speed/test-utils':
+        specifier: workspace:*
+        version: link:../../test-utils
       '@tanstack/react-query':
         specifier: ^5.62.0
         version: 5.102.8(react@19.2.8)
@@ -537,6 +558,9 @@ importers:
       '@speed/api-sdk':
         specifier: workspace:*
         version: link:../api-sdk
+      '@speed/test-utils':
+        specifier: workspace:*
+        version: link:../../test-utils
       '@testing-library/jest-dom':
         specifier: ^7.0.1
         version: 7.0.1(@testing-library/dom@10.4.1)(vitest@4.1.11)
@@ -589,6 +613,9 @@ importers:
       '@mui/material':
         specifier: ^9.4.0
         version: 9.4.0(@emotion/react@11.14.0(@types/react@19.2.18)(react@19.2.8))(@emotion/styled@11.14.1(@emotion/react@11.14.0(@types/react@19.2.18)(react@19.2.8))(@types/react@19.2.18)(react@19.2.8))(@types/react@19.2.18)(react-dom@19.2.8(react@19.2.8))(react@19.2.8)
+      '@speed/test-utils':
+        specifier: workspace:*
+        version: link:../../test-utils
       '@testing-library/jest-dom':
         specifier: ^7.0.1
         version: 7.0.1(@testing-library/dom@10.4.1)(vitest@4.1.11)
@@ -622,6 +649,36 @@ importers:
       react-hook-form:
         specifier: 7.87.0
         version: 7.87.0(react@19.2.8)
+      typescript:
+        specifier: ^5.9.3
+        version: 5.9.3
+
+  test-utils:
+    devDependencies:
+      '@tanstack/react-query':
+        specifier: ^5.62.0
+        version: 5.102.8(react@19.2.8)
+      '@testing-library/jest-dom':
+        specifier: ^7.0.1
+        version: 7.0.1(@testing-library/dom@10.4.1)(vitest@4.1.11)
+      '@testing-library/react':
+        specifier: ^16.3.3
+        version: 16.3.3(@testing-library/dom@10.4.1)(@types/react-dom@19.2.5(@types/react@19.2.18))(@types/react@19.2.18)(react-dom@19.2.8(react@19.2.8))(react@19.2.8)
+      '@types/react':
+        specifier: ^19.2.18
+        version: 19.2.18
+      '@types/react-dom':
+        specifier: ^19.2.5
+        version: 19.2.5(@types/react@19.2.18)
+      axe-core:
+        specifier: ^4.13.0
+        version: 4.13.0
+      react:
+        specifier: ^19.2.8
+        version: 19.2.8
+      react-dom:
+        specifier: ^19.2.8
+        version: 19.2.8(react@19.2.8)
       typescript:
         specifier: ^5.9.3
         version: 5.9.3

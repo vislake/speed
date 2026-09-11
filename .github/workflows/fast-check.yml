@@ -282,6 +282,11 @@ jobs:
           - web/packages/product-shell
           - web/packages/account-ui
           - web/packages/billing-ui
+          # The shared test-support package: a private workspace member
+          # beside packages/ whose build leg is its standalone compile
+          # check (it is consumed as source through the alias map, so it
+          # emits no dist; web/test-utils/README.md).
+          - web/test-utils
           # The reference-app web host: an external workspace member under
           # examples/reference-app/web, running the same lint/typecheck/
           # test/build matrix through the same reusable.

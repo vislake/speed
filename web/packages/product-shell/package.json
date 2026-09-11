@@ -47,6 +47,7 @@
     "@speed/api-client": "workspace:*",
     "@speed/api-sdk": "workspace:*",
     "@speed/tenancy-ui": "workspace:*",
+    "@speed/test-utils": "workspace:*",
     "@speed/ui-kit": "workspace:*",
     "@tanstack/react-query": "^5.62.0",
     "@testing-library/jest-dom": "^7.0.1",
