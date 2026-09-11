@@ -273,8 +273,8 @@ func TestQueue_JobMetrics_UnwrappedFailure_RecordsAttemptWithoutDuration(t *test
 // the real failure path end to end at the unit level: processTaskUncancelled
 // refuses an unregistered handler type with the wrapped
 // jobs.ErrHandlerNotRegistered (the wrapper must be transparent to
-// apperr.As -- the pre-existing test TestQueue_ProcessTask_HandlerNotRegistered
-// pins the same property through the same call), and handing that same
+// apperr.As -- TestQueue_ProcessTask_HandlerNotRegistered pins the same
+// property through the same call), and handing that same
 // error to handleErrorAttempt records the retrying outcome exactly like
 // any other genuine failure -- mirroring StandaloneQueue's own counting of
 // ErrHandlerNotRegistered attempts (jobs' worker.go's execute treats them

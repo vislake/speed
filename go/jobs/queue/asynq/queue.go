@@ -651,8 +651,10 @@ func (q *Queue) enqueueNew(ctx context.Context, task jobs.Task, resolved jobs.Re
 	); err != nil {
 		if errors.Is(err, asynqlib.ErrTaskIDConflict) {
 			// Defensive: a random uuid collision is astronomically
-			// unlikely, but the pre-existing code resolved the conflict
-			// by returning the colliding task's id, so keep that answer.
+			// unlikely; asynq reports it as ErrTaskIDConflict, and the
+			// resolution is to return the colliding task's id --
+			// deduping onto the job already held under this id rather
+			// than failing the call.
 			existing, ferr := q.findTaskInfo(taskID)
 			if ferr != nil {
 				// This Enqueue carries NO idempotency key -- taskID is this
