@@ -93,20 +93,26 @@ type SMS struct {
 // blacklisted one) -- must be wrapped with ErrTransportPermanent; every
 // other failure travels unwrapped, per that sentinel's own boundary.
 //
-// Unlike the four assembly-resolved seams (EventBus, KVStore, Mailer and
-// ObjectStore), SMSSender deliberately has no component descriptor and no
-// capability declaration, and the assembly never resolves one: no consumer
-// takes its SMS transport from the assembly -- go/authn and go/notification both receive
-// the sender through their own module-wiring options, and each enforces its
-// own wiring-time requirement on it (a distributed-mode authn refuses to
-// boot without an explicitly wired sender rather than defaulting to one that
-// prints to a writer nobody reads). The promotion makes the seam a shared
-// contract and shared implementations; it does not move SMS onto the assembly.
-// The console implementation (sms_console.go) is the
-// zero-external-dependency one; NewHTTPSMSSender (sms_http.go) is the
-// operator-gateway
-// transport, and the sms/aliyun, sms/tencent and sms/twilio subpackages
-// carry the three real carrier adapters.
+// SMSSender is a component-resolved seam like EventBus, KVStore, Mailer and
+// ObjectStore: "sms.console" and "sms.http" are its two built-in component
+// descriptors (sms_console.go, sms_http.go), each declaring its capability
+// bits (Stateless for the console sender, MultiReplicaSafe|Stateless for the
+// gateway one), and a composition that selects one resolves the sender like
+// any other built-in. go/authn's and go/notification's own component
+// descriptors both read it with pkgcore.Get and hand it to their module's
+// WithSMSSender option (authn's requirement is optional, notification's is
+// not), and each module keeps its own wiring-time requirement on it (a
+// distributed-mode authn refuses to boot without an explicitly wired sender
+// rather than defaulting to one that prints to a writer nobody reads). What
+// the seam lacks is not resolution but the surface the other four carry: no
+// ComponentRegistry accessor returns it and no SeamRegistry directory lists
+// it, so a host building a module outside the assembly still wires the
+// sender through that module's own option. The promotion makes the seam a
+// shared contract and shared implementations.
+// The console implementation (sms_console.go) is the zero-external-dependency
+// one; NewHTTPSMSSender (sms_http.go) is the operator-gateway transport, and
+// the sms/aliyun, sms/tencent and sms/twilio subpackages carry the three
+// real carrier adapters.
 type SMSSender interface {
 	// Send delivers sms. An error means the message was not delivered.
 	Send(ctx context.Context, sms SMS) error
