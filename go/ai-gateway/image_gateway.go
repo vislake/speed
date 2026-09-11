@@ -176,7 +176,7 @@ func (g *Gateway) resolveImage(ctx context.Context, logicalModel string) (ImageP
 		return nil, route, fmt.Errorf("aigateway: resolve image provider %q for model %q: %w", route.Provider, logicalModel, err)
 	}
 	// The identical tenant-tier dial guard Gateway.resolve applies to chat
-	// providers applies here -- see that call site's comment and ssrf.go's
+	// providers applies here -- see that call site's comment and provider_guard.go's
 	// file header. It runs in the job worker too (callProvider re-resolves
 	// fresh at execution time), so a tenant BYOK image credential is
 	// dial-guarded wherever the job executes, on whichever replica -- and an

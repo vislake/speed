@@ -103,7 +103,7 @@ func NewOpenAICompatibleProvider(baseURL, apiKey string, opts ...OpenAICompatibl
 	return p
 }
 
-// setHTTPClient implements httpClientSettable (ssrf.go): Gateway.resolve
+// setHTTPClient implements httpClientSettable (provider_guard.go): Gateway.resolve
 // swaps a freshly built provider's client for guardedProviderHTTPClient
 // when the credential that built it resolved at the tenant tier. Not part
 // of the public construction API -- hosts configure a client through
@@ -175,7 +175,7 @@ func (p *OpenAICompatibleProvider) newHTTPRequest(ctx context.Context, body []by
 // answer the dialed endpoint gave stays out of what is handed back to the
 // caller who steered the dial -- the response-reflux half of this
 // module's SSRF posture, the body twin of the no-IP-echo rule
-// ErrBaseURLBlocked pins for refusal answers (ssrf.go). And unlike the
+// ErrBaseURLBlocked pins for refusal answers (provider_guard.go). And unlike the
 // refusal rule it is not confined to blocked destinations: this echo
 // channel is the common error path of every provider call, so it would
 // survive the SSRF guards for any ALLOWED endpoint that answers with an

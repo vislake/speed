@@ -68,28 +68,28 @@ var (
 	// is malformed, names no host, or uses a scheme other than http/https.
 	// WithParam("reason", ...) names which -- "unparseable", "missing_host"
 	// or "scheme" (the latter carrying the offending scheme in its own
-	// WithParam("scheme", ...)). See ssrf.go's ValidateBaseURL.
+	// WithParam("scheme", ...)). See provider_guard.go's ValidateBaseURL.
 	ErrBaseURLInvalid = apperr.Invalid("aigateway.base_url_invalid")
 
 	// ErrBaseURLUnresolvable reports a tenant BYOK credential write whose
 	// baseURL host could not be resolved to any address at all --
-	// WithParam("host", ...) names the host. See ssrf.go's ValidateBaseURL.
+	// WithParam("host", ...) names the host. See provider_guard.go's ValidateBaseURL.
 	ErrBaseURLUnresolvable = apperr.Invalid("aigateway.base_url_unresolvable")
 
 	// ErrBaseURLBlocked reports a tenant BYOK credential write whose baseURL
 	// names a private, loopback, link-local, multicast or otherwise
 	// never-a-legitimate-vendor-destination address -- the SSRF refusal
 	// that keeps one tenant from turning the platform's own network into a
-	// request source pointed at the platform's intranet. See ssrf.go's
-	// isBlockedIP and the file header there for why this is the tenant-
-	// scope write's check and why the platform-scope write deliberately
-	// skips it.
+	// request source pointed at the platform's intranet. See
+	// provider_guard.go's ValidateBaseURL and the file header there for why
+	// this is the tenant-scope write's check and why the platform-scope
+	// write deliberately skips it.
 	//
 	// WithParam("ip", ...) is deliberately asymmetric between the two paths
 	// that raise this code, and the asymmetry is a load-bearing invariant a
 	// refactor must not flatten:
 	//
-	//   - The literal-IP path (ssrf.go, ValidateBaseURL) carries the blocked
+	//   - The literal-IP path (provider_guard.go, ValidateBaseURL) carries the blocked
 	//     address: the caller typed it into the URL, so the param is an
 	//     echo of what the caller already knows -- zero disclosure -- and
 	//     genuinely useful diagnostics naming exactly which address was
@@ -140,12 +140,12 @@ var (
 	// httpClientSettable, which today means a third-party registration into
 	// ChatProviderRegistry/ImageProviderRegistry rather than one of the two
 	// module-native OpenAI-compatible built-ins. A tenant-scope credential
-	// is the caller's own influence over where the platform dials (ssrf.go's
+	// is the caller's own influence over where the platform dials (provider_guard.go's
 	// file header), and only a provider carrying the guarded client has the
 	// dial-time re-check that defeats DNS rebinding; the alternative --
 	// silently letting the tenant-influenced dial go out on the provider's
 	// own unguarded client -- is exactly the write-time-validation-only
-	// state ssrf.go exists to close. guardTenantScopeDial therefore refuses
+	// state provider_guard.go exists to close. guardTenantScopeDial therefore refuses
 	// the combination at resolve time with this coded error, and the host's
 	// fix is a composition decision: route the logical model to a guardable
 	// provider, or let this provider resolve at the platform tier (the

@@ -3,19 +3,24 @@ package aigateway
 import (
 	"context"
 	"errors"
-	"net"
 	"net/http"
 	"net/http/httptest"
-	"strings"
 	"testing"
 
 	"github.com/vislake/speed/go/pkgcore"
 	"github.com/vislake/speed/go/pkgcore/apperr"
+	"github.com/vislake/speed/go/pkgcore/safehttp"
 )
 
-// The unit tests below mirror go/integration/ssrf_test.go's own suite case
-// for case, per ssrf.go's file header: the two modules' SSRF defenses must
-// keep agreeing, and a mirrored table is how a divergence would surface.
+// The unit tests below pin this module's caller-side layer over the shared
+// go/pkgcore/safehttp guard: the coded error vocabulary each refusal maps
+// to (case for case with go/integration's webhook_guard_test.go, since
+// ErrBaseURLBlocked's own comment demands the two modules' refusals keep
+// agreeing), and the two properties this layer adds or preserves on top of
+// the guard -- the no-IP-echo asymmetry of the write-time answer, and the
+// guarded client's no-overall-timeout posture. The per-address predicate
+// table these tests used to carry now lives with the guard itself
+// (safehttp's TestCheckAddr_RefusesEverythingNotPubliclyRoutable).
 
 func TestValidateBaseURL_PrivateIPLiteral_Blocked(t *testing.T) {
 	// The creation-time half of the defense: a private-IP base URL is
@@ -29,9 +34,9 @@ func TestValidateBaseURL_PrivateIPLiteral_Blocked(t *testing.T) {
 		"http://169.254.169.254/latest/meta-data/", // cloud metadata endpoint
 		"http://100.64.0.5/v1",                     // CGNAT
 		"http://0.0.0.0/v1",
-		// IPv6 ranges the stdlib classification misses, refused only through
-		// blockedIPv6CIDRs: NAT64 forms of the metadata endpoint and of
-		// loopback, plus a site-local address.
+		// IPv6 special-purpose ranges the stdlib classification misses,
+		// refused by the shared guard's blocked set: NAT64 forms of the
+		// metadata endpoint and of loopback, plus a site-local address.
 		"http://[64:ff9b::169.254.169.254]/v1",
 		"http://[64:ff9b::127.0.0.1]/v1",
 		"http://[fec0::1]/v1",
@@ -148,70 +153,16 @@ func TestValidateBaseURL_UnresolvableHost_Refused(t *testing.T) {
 	}
 }
 
-func TestIsBlockedIP(t *testing.T) {
-	tests := []struct {
-		ip      string
-		blocked bool
-	}{
-		{"127.0.0.1", true},
-		{"::1", true},
-		{"10.1.2.3", true},
-		{"172.31.255.255", true},
-		{"192.168.0.1", true},
-		{"169.254.1.1", true},
-		{"fe80::1", true},
-		{"224.0.0.1", true}, // multicast
-		{"100.64.0.1", true},
-		{"0.0.0.0", true},
-		// Covered forms that must stay refused, whatever the supplementary
-		// list mechanism grows into: v4-mapped addresses are refused through
-		// the embedded IPv4 net.IP.To4 exposes (the loopback and link-local
-		// tests both reach into it), 169.254.169.254 through
-		// IsLinkLocalUnicast directly, and the CGNAT range through
-		// blockedIPv4CIDRs -- none of them belongs in an IPv6 list.
-		{"::ffff:127.0.0.1", true},
-		{"::ffff:169.254.169.254", true},
-		{"169.254.169.254", true},
-		{"100.64.255.255", true},
-		// IPv6 ranges net.IP's own classification leaves unclassified (they
-		// read as ordinary global unicast) that isBlockedIP must refuse
-		// through blockedIPv6CIDRs: NAT64 (RFC 6052), IPv4-compatible
-		// (RFC 4291) and site-local (RFC 3879). The NAT64 rows use the
-		// dotted-quad form a DNS answer would actually carry.
-		{"64:ff9b::1", true},
-		{"64:ff9b::169.254.169.254", true},
-		{"64:ff9b::127.0.0.1", true},
-		{"::127.0.0.1", true},
-		{"fec0::1", true},
-		{"feff::1", true},
-		{"8.8.8.8", false},
-		{"1.1.1.1", false},
-		{"2001:4860:4860::8888", false},
-		{"2606:4700:4700::1111", false},
-	}
-	for _, tt := range tests {
-		ip := net.ParseIP(tt.ip)
-		if ip == nil {
-			t.Fatalf("net.ParseIP(%q) failed", tt.ip)
-		}
-		if got := isBlockedIP(ip); got != tt.blocked {
-			t.Errorf("isBlockedIP(%q) = %v, want %v", tt.ip, got, tt.blocked)
-		}
-	}
-}
-
-// TestGuardedProviderHTTPClient_RefusesLoopbackAtDialTime proves the
-// CHECK half of the dial-time defense: a dial whose address -- literal or
-// resolved -- is a blocked range is refused at the point of actually
-// connecting, never dialed. The dial address here is the httptest server's
-// literal loopback IP, so this test exercises the literal-IP branch with no
-// DNS at all: it proves isBlockedIP runs inside DialContext and refuses a
-// blocked literal. It does NOT prove the rebinding property -- that the
-// address actually handed to the dialer is the validated IP literal, never
-// a re-resolved hostname -- which is a tenant-tier credential's provider
-// always carrying this client plus the dial landing on the validated IP;
-// the wiring half is pinned by the resolve-level tests below, and the dial
-// half by TestGuardedProviderHTTPClient_DialsTheValidatedIPLiteral.
+// TestGuardedProviderHTTPClient_RefusesLoopbackAtDialTime proves the CHECK
+// half of the dial-time defense: a dial whose address is a blocked range is
+// refused at the point of actually connecting, never dialed. The dial
+// address here is the httptest server's literal loopback IP, so the test
+// exercises the literal-IP branch with no DNS at all, and the refusal is
+// the guard's own sentinel -- errors.Is(err, safehttp.ErrBlockedAddress) --
+// which a caller can match through the provider layer's wrapping. The
+// rebinding property itself (the address checked is the very address about
+// to be dialled, never a re-resolution) belongs to the shared guard and is
+// pinned by safehttp's TestGuard_DNSRebindingCannotGetPastTheConnectTimeCheck.
 func TestGuardedProviderHTTPClient_RefusesLoopbackAtDialTime(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
@@ -222,16 +173,16 @@ func TestGuardedProviderHTTPClient_RefusesLoopbackAtDialTime(t *testing.T) {
 	if err == nil {
 		t.Fatal("guarded HTTP client dialed a loopback address, want a refusal")
 	}
-	if !strings.Contains(err.Error(), "blocked") {
-		t.Fatalf("error = %v, want it to mention the dial was blocked", err)
+	if !errors.Is(err, safehttp.ErrBlockedAddress) {
+		t.Fatalf("error = %v, want it to wrap safehttp.ErrBlockedAddress", err)
 	}
 }
 
 // TestGuardedProviderHTTPClient_AllowsPublicAddress proves the guard does
 // not refuse everything -- only blocked ranges. It cannot reach the real
-// network in a sandboxed test environment, so it only asserts that
-// whatever the outcome (reachable or not), the failure -- if any -- is
-// never the "blocked" refusal this test is not exercising.
+// network in a sandboxed test environment, so it only asserts that whatever
+// the outcome (reachable or not), the failure -- if any -- is never the
+// blocked-address refusal this test is not exercising.
 func TestGuardedProviderHTTPClient_AllowsPublicAddress(t *testing.T) {
 	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, "http://93.184.216.34:1/v1", nil)
 	if err != nil {
@@ -241,83 +192,20 @@ func TestGuardedProviderHTTPClient_AllowsPublicAddress(t *testing.T) {
 	if err == nil {
 		return // unexpectedly reachable; still not a blocked-address refusal, so this passes.
 	}
-	if strings.Contains(err.Error(), "blocked") {
+	if errors.Is(err, safehttp.ErrBlockedAddress) {
 		t.Fatalf("a public address was refused as blocked: %v", err)
 	}
 }
 
-// TestGuardedProviderHTTPClient_DialsTheValidatedIPLiteral pins the
-// rebinding-defeating property this file's own header comment names as the
-// whole reason the dial-time guard exists: the address handed to the
-// dialer for a HOSTNAME input is the IP LITERAL that the dial-time
-// resolution itself validated, never the hostname -- so nothing between
-// the check and the connection performs a second, independent DNS lookup
-// a rebinding attacker could answer differently. This is the property the
-// two literal-
-// address dial tests above do not exercise (a literal loopback input needs
-// no resolution and a literal public input needs no pin), and it cannot be
-// built against the real resolver offline, which is exactly why the two
-// seams below exist: resolveProviderHost scripts the DNS answers (a
-// first-public-then-private sequence), and providerDialFunc records the
-// address an actual dial would connect to instead of opening a real
-// connection.
-//
-// Walk: the first guarded dial's resolution answers a public address; the
-// dial seam must receive exactly that address as an IP literal
-// ("93.184.216.34:443") and exactly ONE resolution may have happened -- a
-// second lookup between the check and the dial is precisely the window the
-// pin closes. A second guarded dial, answered by the rebinding attacker's
-// next (private) answer, is refused as blocked with the dial seam never
-// called. A regression that dials the raw hostname instead of the
-// validated IP fails the first assertion.
-func TestGuardedProviderHTTPClient_DialsTheValidatedIPLiteral(t *testing.T) {
-	answers := []net.IPAddr{
-		{IP: net.ParseIP("93.184.216.34")}, // public: the first resolution's answer
-		{IP: net.ParseIP("10.0.0.5")},      // private: a rebinding answer to a later resolution
-	}
-	resolutions := 0
-	origResolve := resolveProviderHost
-	resolveProviderHost = func(ctx context.Context, host string) ([]net.IPAddr, error) {
-		resolutions++
-		if resolutions > len(answers) {
-			return nil, errors.New("test resolver: no more scripted answers")
-		}
-		return []net.IPAddr{answers[resolutions-1]}, nil
-	}
-	defer func() { resolveProviderHost = origResolve }()
-
-	var dialed []string
-	origDial := providerDialFunc
-	providerDialFunc = func(_ context.Context, _, addr string) (net.Conn, error) {
-		dialed = append(dialed, addr)
-		return nil, errors.New("test dial: connection deliberately not opened")
-	}
-	defer func() { providerDialFunc = origDial }()
-
-	transport := newGuardedProviderHTTPClient().Transport.(*http.Transport)
-	ctx := context.Background()
-
-	if _, err := transport.DialContext(ctx, "tcp", "vendor.example.test:443"); err == nil {
-		t.Fatal("the first guarded dial unexpectedly succeeded")
-	}
-	if resolutions != 1 {
-		t.Fatalf("resolutions = %d, want exactly 1 -- a second lookup between the check and the dial is the rebinding window this pin closes", resolutions)
-	}
-	if len(dialed) != 1 || dialed[0] != "93.184.216.34:443" {
-		t.Fatalf("address handed to the dialer = %v, want exactly the validated public IP literal %q -- never the input hostname and never a later resolution's answer", dialed, "93.184.216.34:443")
-	}
-
-	// The same guarded dial again, with the next resolution now answering a
-	// private address: refused as blocked, and nothing reaches the dialer.
-	_, err := transport.DialContext(ctx, "tcp", "vendor.example.test:443")
-	if err == nil || !strings.Contains(err.Error(), "blocked") {
-		t.Fatalf("the second guarded dial error = %v, want the blocked-address refusal", err)
-	}
-	if resolutions != 2 {
-		t.Fatalf("resolutions = %d, want 2", resolutions)
-	}
-	if len(dialed) != 1 {
-		t.Fatalf("dial seam called %d times, want exactly once -- a blocked answer must never reach the dialer", len(dialed))
+// TestGuardedProviderHTTPClient_CarriesNoOverallTimeout pins the streaming
+// posture guardedProviderHTTPClient must keep: no Timeout of its own, since
+// a chat stream can legitimately outlast any fixed bound and the call paths
+// (Chat, ChatStream, GenerateImage) bound their own requests through the
+// request context instead. A regression that added an overall timeout here
+// would silently cut off long streams.
+func TestGuardedProviderHTTPClient_CarriesNoOverallTimeout(t *testing.T) {
+	if got := guardedProviderHTTPClient.Timeout; got != 0 {
+		t.Errorf("guardedProviderHTTPClient.Timeout = %v, want 0 (no overall bound; calls bound themselves through ctx)", got)
 	}
 }
 
@@ -357,7 +245,8 @@ func TestGateway_Resolve_TenantScopeCredential_GetsGuardedHTTPClient(t *testing.
 
 	// A tenantless context resolves the platform-tier fallback, which stays
 	// on the provider's own ordinary client -- the operator-chosen default
-	// is outside the guard's scope boundary (ssrf.go's file header).
+	// is outside the guard's scope boundary (provider_guard.go's file
+	// header).
 	provider, _, err = g.resolve(context.Background(), "chat:default")
 	if err != nil {
 		t.Fatalf("resolve without a tenant: %v", err)

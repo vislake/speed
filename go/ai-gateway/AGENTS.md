@@ -368,40 +368,39 @@ tenantless calls explicitly.
 
 ## SSRF and dialing posture
 
-- **SSRF defense for the tenant BYOK base URL** (`ssrf.go`, `errors.go`,
-  `credential.go`, `gateway.go`, `image_gateway.go`): a tenant admin
-  writes the base URL of an OpenAI-compatible endpoint that the
+- **SSRF defense for the tenant BYOK base URL** (`provider_guard.go`,
+  `errors.go`, `credential.go`, `gateway.go`, `image_gateway.go`): a tenant
+  admin writes the base URL of an OpenAI-compatible endpoint that the
   platform's own network then dials presenting the credential's API key --
   the same outbound-dial primitive the codebase's SSRF rules protect for
   webhooks (SSRF protection is mandatory, including DNS-rebinding
-  protection). Two checks, mirroring `go/integration/ssrf.go`'s shape and
-  tests case for case (this module sits on integration's own tier, so the
-  small stdlib-only helpers are duplicated, not shared): creation-time
-  refusal through `ValidateBaseURL` (parse, http/https scheme whitelist,
-  literal-IP or real-DNS per-address check over the same blocked ranges
-  integration refuses -- loopback, private, link-local, CGNAT,
-  NAT64/IPv4-compatible/site-local IPv6, and the rest of the stdlib
-  classification), and a dial-time re-check that PINS the address
-  actually connected: a tenant-tier credential's provider is swapped onto
-  `guardedProviderHTTPClient`, whose transport resolves the host once,
-  refuses any blocked candidate, and dials the validated IP by address --
-  never a second re-resolution a rebinding DNS answer could steer. A
-  hostname that passed validation when stored but resolves to an internal
-  address by call time fails the call closed.
-- **The dialed address is the validated IP literal, never a re-resolved
-  hostname -- pinned** (`ssrf.go`): the actual dial routes through the
-  package-level `providerDialFunc` and the dial-time resolution through
-  `resolveProviderHost` (the default wraps `net.DefaultResolver`
-  unchanged). `TestGuardedProviderHTTPClient_DialsTheValidatedIPLiteral`
-  scripts a first-public-then-private answer sequence offline and asserts
-  the dial receives exactly the single resolution's validated public IP
-  literal -- and that a blocked answer never reaches the dialer.
-  `go/integration`'s ring is the identical shape, pinned in its own
-  `go/integration/ssrf_test.go` (`webhookDialFunc`/
-  `resolveWebhookHost`, `TestNewSafeHTTPClient_DialsTheValidatedIPLiteral`),
-  the two modules' SSRF defenses keeping in step as `ErrBaseURLBlocked`'s
+  protection), and now the same shared guard: both checks run over
+  `go/pkgcore/safehttp`, whose blocked set (loopback, private, link-local,
+  CGNAT, NAT64/IPv4-compatible/site-local IPv6, and the rest of the stdlib
+  classification) is the one authority for what counts as blocked.
+  Creation-time refusal through `ValidateBaseURL` (parse, http/https scheme
+  gate through the guard, literal-IP or real-DNS per-address check, this
+  module's coded error vocabulary and no-echo shaping around it), and a
+  dial-time re-check that PINS the address actually connected: a
+  tenant-tier credential's provider is swapped onto
+  `guardedProviderHTTPClient`, the guard's client, whose dialler refuses
+  any blocked address about to be connected -- never a second resolution a
+  rebinding DNS answer could steer. A hostname that passed validation when
+  stored but resolves to an internal address by call time fails the call
+  closed.
+- **The dialed address is the validated one -- the guard's own property**
+  (`provider_guard.go`, `go/pkgcore/safehttp`): the rebinding defense (the
+  check runs on the exact address about to be dialled, with no second
+  lookup in between) lives in the shared guard and is pinned there by
+  `TestGuard_DNSRebindingCannotGetPastTheConnectTimeCheck` and
+  `TestGuard_ClientCannotReachALoopbackServer`;
+  `TestGuardedProviderHTTPClient_RefusesLoopbackAtDialTime` pins this
+  module's client's dial-time refusal, matched by
+  `errors.Is(err, safehttp.ErrBlockedAddress)` through the provider
+  layer's wrapping. The two modules' refusals keep agreeing because there
+  is exactly one implementation of the predicate, as `ErrBaseURLBlocked`'s
   own doc comment requires.
-- **The scope boundary, stated in code** (`ssrf.go`'s file header,
+- **The scope boundary, stated in code** (`provider_guard.go`'s file header,
   `credential.go`'s both setter doc comments): only the TENANT-tier write
   is validated (and only the tenant-tier dial is guarded), because only
   that tier is tenant-influenceable. The platform-wide row is written by
@@ -457,12 +456,15 @@ tenantless calls explicitly.
   legitimate capability (a tenant pointing its BYOK credential at any
   PUBLIC OpenAI-compatible vendor) is deliberately preserved and
   test-pinned.
-- Tests: `ssrf_test.go` mirrors integration's suite (blocked literals,
-  the no-echo/echo asymmetry, public-IP allowed, scheme/malformed/
-  no-host/unresolvable refusals, the dial-time refusal of loopback and
-  the non-refusal of public addresses) plus resolve/resolveImage wiring
-  proofs that a tenant-tier credential's provider carries the guarded
-  client and a platform-tier one does not; `credential_test.go`,
+- Tests: `provider_guard_test.go` pins `ValidateBaseURL`'s refusal
+  surface case for case with integration's suite (blocked literals, the
+  no-echo/echo asymmetry, public-IP allowed, scheme/malformed/no-host/
+  unresolvable refusals), the guarded client's dial-time refusal of
+  loopback and non-refusal of public addresses (matched by
+  `safehttp.ErrBlockedAddress`) and its no-overall-timeout posture, plus
+  resolve/resolveImage wiring proofs that a tenant-tier credential's
+  provider carries the guarded client and a platform-tier one does not;
+  `credential_test.go`,
   `handler_test.go` and the reference app's `flowtests/ai_gateway_flow_test.go`
   pin the refusals through the service, the HTTP envelope and the
   composed stack; `ratelimit_test.go` pins that tenantless calls never
@@ -533,8 +535,8 @@ proof -- a write landing, then the next real call reaching the fake
 endpoint presenting the tenant key -- cannot survive a real dial guard (a
 fake vendor can only listen on loopback), so that shape is carried by the
 module's own unit suite: `credential_test.go`'s tenant-row-over-platform
-`Resolve` proof plus `ssrf_test.go`'s resolve-level guarded-client wiring
-proofs.
+`Resolve` proof plus `provider_guard_test.go`'s resolve-level
+guarded-client wiring proofs.
 
 ## Known limitations / deferred
 
@@ -590,8 +592,8 @@ proofs.
   code, and a host that ignores the Authorization header accepts any
   non-empty api_key. A non-public endpoint is a platform-tier credential
   by design: the SSRF guard validates and dial-guards only the
-  tenant-influenceable tier, and ssrf.go's own file header names "an
-  OpenAI-compatible LLM gateway on the operator's own intranet" as the
+  tenant-influenceable tier, and provider_guard.go's own file header names
+  "an OpenAI-compatible LLM gateway on the operator's own intranet" as the
   legitimate platform default the guard must not break. The day a
   self-hosted host diverges from the OpenAI protocol, or an operator
   wants a vendor SDK, it becomes one more registration in

@@ -124,7 +124,7 @@ func ExampleHandler() {
 	// in a real deployment, never PermissionWrite (module.go's own doc
 	// comment on the two constants). The platform row is the operator's
 	// own default, deliberately outside the tenant-baseUrl SSRF guard
-	// (ssrf.go's file header), so the hostname needs no resolvability.
+	// (provider_guard.go's file header), so the hostname needs no resolvability.
 	platformStatus, platformBody := do(ctx, http.MethodPut, credentialPath+"/platform",
 		`{"apiKey":"sk-platform-default","baseUrl":"https://api.example.com/v1"}`)
 	fmt.Println("set platform credential: status", platformStatus, "scope", platformBody["scope"])

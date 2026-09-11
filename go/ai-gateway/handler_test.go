@@ -170,7 +170,7 @@ func TestHandler_SetPlatformCredential_PrivateBaseURL_StillAccepted(t *testing.T
 
 	// The scope-boundary pin at the HTTP layer: the platform-wide write
 	// naming a private baseUrl is still accepted -- the operator's own
-	// default is outside the SSRF guard (ssrf.go's file header; the
+	// default is outside the SSRF guard (provider_guard.go's file header; the
 	// reference app's boot-time platform credential lives on the same
 	// trusted side).
 	status, body := doHandlerRequest(t, h, context.Background(), http.MethodPut,

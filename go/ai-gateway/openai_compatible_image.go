@@ -90,7 +90,7 @@ func NewOpenAICompatibleImageProvider(baseURL, apiKey string, opts ...OpenAIComp
 	return p
 }
 
-// setHTTPClient implements httpClientSettable (ssrf.go): Gateway's
+// setHTTPClient implements httpClientSettable (provider_guard.go): Gateway's
 // resolveImage swaps a freshly built provider's client for
 // guardedProviderHTTPClient when the credential that built it resolved at
 // the tenant tier -- the image-side twin of OpenAICompatibleProvider's own

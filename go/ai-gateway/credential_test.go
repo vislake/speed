@@ -162,7 +162,7 @@ func TestCredentialService_SetTenantCredential_Idempotent(t *testing.T) {
 	}
 }
 
-// --- tenant BYOK baseURL SSRF validation (credential.go, ssrf.go) ----------
+// --- tenant BYOK baseURL SSRF validation (credential.go, provider_guard.go) ----------
 
 // TestCredentialService_SetTenantCredential_BlockedBaseURL_Refused is the
 // SSRF regression: a tenant's own BYOK credential write naming a private,

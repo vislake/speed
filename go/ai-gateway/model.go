@@ -104,9 +104,9 @@ type credentialRow struct {
 	// default base URL (or that ignores this field entirely) simply never
 	// sees a value here. A non-empty value on a tenant-tier row was
 	// SSRF-validated at write time (credential.go's SetTenantCredential,
-	// ssrf.go's ValidateBaseURL); the system-tier row's value is the
+	// provider_guard.go's ValidateBaseURL); the system-tier row's value is the
 	// operator's own choice and deliberately skips that validation
-	// (ssrf.go's file header).
+	// (provider_guard.go's file header).
 	BaseURL string `gorm:"column:base_url;size:500;not null"`
 	// UpdatedAt is the moment of the last write.
 	UpdatedAt time.Time `gorm:"column:updated_at"`

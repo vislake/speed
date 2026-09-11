@@ -167,7 +167,7 @@ func (g *Gateway) resolve(ctx context.Context, logicalModel string) (ChatProvide
 	// influence over where this call dials, so its provider must dial
 	// through the SSRF-guarded client -- the dial-time re-check that closes
 	// the DNS-rebinding window between this credential's validated write
-	// and this call (ssrf.go's file header). A provider that cannot carry
+	// and this call (provider_guard.go's file header). A provider that cannot carry
 	// the guarded client (it does not implement httpClientSettable) is
 	// refused here rather than silently dialing unguarded -- the failure
 	// mode guardTenantScopeDial's own doc comment describes. A platform-

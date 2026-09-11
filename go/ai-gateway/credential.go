@@ -70,7 +70,7 @@ func (s *CredentialService) Resolve(ctx context.Context, provider string) (Crede
 // SSRF-validated: this is the operator's own default, written under an
 // audited system context, and an intranet OpenAI-compatible LLM gateway is
 // a legitimate platform-wide vendor for a deployment whose tenants all
-// share it -- see ssrf.go's own file header for the scope boundary.
+// share it -- see provider_guard.go's own file header for the scope boundary.
 func (s *CredentialService) SetPlatformCredential(ctx context.Context, provider, apiKey, baseURL string) error {
 	if provider == "" || apiKey == "" {
 		return ErrCredentialRequired.WithParam("provider", provider)
@@ -96,7 +96,7 @@ func (s *CredentialService) SetPlatformCredential(ctx context.Context, provider,
 // empty.
 //
 // A non-empty baseURL is SSRF-validated by ValidateBaseURL before anything
-// is stored (ssrf.go): this row is the tenant's own influence over where
+// is stored (provider_guard.go): this row is the tenant's own influence over where
 // the platform's network dials, so a baseURL naming a private, loopback,
 // link-local or otherwise blocked destination is refused with
 // ErrBaseURLInvalid / ErrBaseURLUnresolvable / ErrBaseURLBlocked -- never
@@ -105,7 +105,7 @@ func (s *CredentialService) SetPlatformCredential(ctx context.Context, provider,
 // platform-scope write (SetPlatformCredential) is deliberately NOT
 // validated: its row is operator-written under an audited system context,
 // and an intranet OpenAI-compatible gateway is a legitimate platform
-// default -- see ssrf.go's own file header for the full boundary.
+// default -- see provider_guard.go's own file header for the full boundary.
 func (s *CredentialService) SetTenantCredential(ctx context.Context, provider, apiKey, baseURL string) error {
 	if provider == "" || apiKey == "" {
 		return ErrCredentialRequired.WithParam("provider", provider)
