@@ -12,9 +12,7 @@ import (
 	"net/http"
 	"slices"
 	"strconv"
-	"strings"
 	"time"
-	"unicode/utf8"
 
 	"github.com/google/uuid"
 	"gorm.io/datatypes"
@@ -400,7 +398,7 @@ func (s *Service) handleDeliveryJob(ctx context.Context, job *jobs.Job) (jobs.Re
 	}
 
 	delivery.Status = DeliveryStatusFailed
-	delivery.LastError = truncateWebhookErrorText(sendErr.Error())
+	delivery.LastError, _ = dbkit.FitColumnValue(sendErr.Error(), webhookDeliveryErrorBudget)
 	if err := s.deliveryRepo.Update(ctx, delivery); err != nil {
 		return jobs.Result{}, errors.Join(sendErr, err)
 	}
@@ -467,38 +465,6 @@ func (s *Service) attemptDelivery(ctx context.Context, sub *WebhookSubscription,
 	return resp.StatusCode, fmt.Errorf("integration: webhook receiver answered %d: %s", resp.StatusCode, snippet)
 }
 
-// truncateWebhookErrorText cuts a failure text to webhookDeliveryErrorBudget
-// runes and guarantees valid UTF-8 -- the two properties the last_error
-// column (VARCHAR(4000) on both dialects, webhook_model.go) requires on
-// PostgreSQL: VARCHAR(n) counts CHARACTERS, so a cut by rune (not byte) is
-// what actually fits, and a UTF-8-encoded database refuses a value carrying
-// invalid byte sequences outright (SQL error 22021), which would make every
-// failure-path update of the delivery row fail -- permanently wedging the
-// record, since the retry horizon's dead-letter write fails the same way.
-// The failure text is exactly the kind of value that can carry either
-// hazard: attemptDelivery echoes a receiver's raw response-body bytes into
-// it, and a receiver may answer its body in any encoding, so both a
-// multi-byte text crossing byte 4000 mid-rune and invalid bytes within the
-// budget are ordinary inputs, never exotic ones. Invalid bytes are
-// therefore rendered as the Unicode replacement character -- never silently
-// dropped, since dropping them could concatenate two arbitrary byte runs
-// into a different valid value -- and the cut happens after that
-// sanitization, on the resulting runes, mirroring go/sharing's
-// truncateAccessLogValue (go/sharing/service.go, which handles the
-// identical hazard for a caller-controlled User-Agent or Referer) and
-// go/authn's truncateClientField (go/authn/model.go). Matches
-// notification's identical truncate-at-the-write-site convention.
-func truncateWebhookErrorText(text string) string {
-	if len(text) <= webhookDeliveryErrorBudget && utf8.ValidString(text) {
-		return text
-	}
-	runes := []rune(strings.ToValidUTF8(text, "\uFFFD"))
-	if len(runes) > webhookDeliveryErrorBudget {
-		runes = runes[:webhookDeliveryErrorBudget]
-	}
-	return string(runes)
-}
-
 // onWebhookDeliveryDeadLetter is the jobs.FailureHook business logic,
 // wrapped by module.go's webhookDeliveryHandler, called at most once per
 // Job strictly after jobs has already persisted it as StatusDeadLetter
@@ -530,7 +496,7 @@ func (s *Service) onWebhookDeliveryDeadLetter(ctx context.Context, job *jobs.Job
 	}
 
 	delivery.Status = DeliveryStatusDeadLetter
-	delivery.LastError = truncateWebhookErrorText(cause.Error())
+	delivery.LastError, _ = dbkit.FitColumnValue(cause.Error(), webhookDeliveryErrorBudget)
 	if err := s.deliveryRepo.Update(ctx, delivery); err != nil {
 		log.Warn("integration could not record a webhook delivery as dead-lettered",
 			"delivery_id", delivery.ID, "error", err)

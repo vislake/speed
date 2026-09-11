@@ -374,7 +374,13 @@ func (WebhookDelivery) TableName() string { return tableWebhookDeliveries }
 // compile-time check that WebhookDelivery satisfies dbkit.TenantScoped.
 var _ dbkit.TenantScoped = WebhookDelivery{}
 
-// webhookDeliveryErrorBudget mirrors notification's identical
-// sendRecordErrorBudget: the column's own 4000-char width, enforced at the
-// write site so no transport response body can overflow the schema.
+// webhookDeliveryErrorBudget is the fit bound for WebhookDelivery.LastError:
+// the column's own 4000-char width, enforced at the write site through
+// dbkit.FitColumnValue so no transport response body -- free-form bytes a
+// receiver may answer in any encoding -- can overflow the schema or carry
+// invalid UTF-8 into it. Either hazard failing the failure-path UPDATE
+// would wedge the delivery record permanently (every retry, the
+// dead-letter write included, would refuse the same way), so the fit is
+// mandatory, not best-effort. Mirrors notification's identical
+// sendRecordErrorBudget.
 const webhookDeliveryErrorBudget = 4000

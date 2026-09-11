@@ -395,70 +395,6 @@ func TestHandler_IntegrationListWebhookDeliveries_BlockedDial_LastErrorNamesNoRe
 	}
 }
 
-// TestTruncateWebhookErrorText_MultibyteText_StaysValidUTF8AndCutsByRune is
-// the regression test for the rune-safe truncation contract:
-// truncateWebhookErrorText cuts by RUNE after sanitizing, never by byte --
-// a byte cut lands wherever byte 4000 of the text happens to fall, inside
-// a multi-byte rune whenever the failure text carries one there, and the
-// stored result would hold a split rune: invalid UTF-8 bytes in the
-// last_error column (VARCHAR(4000) on both dialects). SQLite accepts and
-// stores them (dirty data every later reader of the row --
-// ListRecentWebhookDeliveries' JSON encoding included -- has to live with);
-// PostgreSQL refuses the write outright (SQLSTATE 22021), so on the second
-// dialect a receiver answering multi-byte text at the boundary would
-// permanently wedge the delivery record: every failure-path update of the
-// row would fail, and the retry horizon's dead-letter write would fail the
-// same way.
-//
-// The input below is 5000 three-byte runes: byte 4000 falls inside the
-// 1334th one, so a byte cut would deterministically produce invalid
-// UTF-8. The cut is by RUNE after sanitizing, mirroring go/sharing's
-// truncateAccessLogValue (go/sharing/service.go) and go/authn's
-// truncateClientField (go/authn/model.go): the result must be valid UTF-8
-// and no longer than the budget in RUNES -- 5000 > 4000 runes, so the cut
-// genuinely happens.
-func TestTruncateWebhookErrorText_MultibyteText_StaysValidUTF8AndCutsByRune(t *testing.T) {
-	text := strings.Repeat("界", 5000) // 5000 runes, 15000 bytes
-	if len(text) <= webhookDeliveryErrorBudget {
-		t.Fatal("test premise: the input must exceed the byte budget")
-	}
-
-	got := truncateWebhookErrorText(text)
-	if !utf8.ValidString(got) {
-		t.Fatalf("truncateWebhookErrorText returned invalid UTF-8: %q (first 80 bytes: %q) -- a byte cut that splits a multi-byte rune must never reach the last_error column", got, got[:min(len(got), 80)])
-	}
-	if n := utf8.RuneCountInString(got); n > webhookDeliveryErrorBudget {
-		t.Errorf("RuneCount = %d, want at most %d -- the cut must be by rune, not by byte", n, webhookDeliveryErrorBudget)
-	}
-}
-
-// TestTruncateWebhookErrorText_InvalidUTF8WithinBudget_IsSanitized is the
-// second half of the same guard: failure text WITHIN the budget but
-// carrying invalid UTF-8 bytes must not pass through untouched (a cut that
-// only ever fires past the byte budget would leave them verbatim).
-// A receiver's error text is untrusted free-form bytes -- a receiver may
-// answer its own body in any encoding, and attemptDelivery echoes the raw
-// snippet into the failure text -- so the sanitization must happen at the
-// write boundary for short values too, the same hazard go/sharing's
-// truncateAccessLogValue handles for a caller-controlled User-Agent or
-// Referer. Invalid bytes are rendered as the Unicode replacement character,
-// never silently dropped (mirroring sharing's documented policy), and the
-// result must be valid UTF-8.
-func TestTruncateWebhookErrorText_InvalidUTF8WithinBudget_IsSanitized(t *testing.T) {
-	dirty := "receiver said: \xff\xfe\x80 boom" + strings.Repeat("界", 10)
-	if utf8.ValidString(dirty) {
-		t.Fatal("test premise: the input must carry invalid UTF-8 bytes")
-	}
-
-	got := truncateWebhookErrorText(dirty)
-	if !utf8.ValidString(got) {
-		t.Fatalf("truncateWebhookErrorText returned invalid UTF-8 for an invalid input within the budget: %q -- invalid bytes must be sanitized even when no cut happens", got)
-	}
-	if !strings.Contains(got, "�") {
-		t.Errorf("result %q contains no replacement character -- invalid bytes must be rendered as U+FFFD, never silently dropped", got)
-	}
-}
-
 // TestService_handleDeliveryJob_ReceiverError_MultibyteBody_StoresValidLastError
 // is the end-to-end regression for the truncation contract: a receiver
 // answering a multi-byte body that crosses the error-text budget mid-rune
@@ -469,9 +405,9 @@ func TestTruncateWebhookErrorText_InvalidUTF8WithinBudget_IsSanitized(t *testing
 // receiver's body itself also ends mid-rune at the 4096-byte snippet
 // budget -- both places a byte-based cut could store a split rune. Invalid
 // bytes in LastError would be accepted silently by SQLite but refused with
-// SQLSTATE 22021 by PostgreSQL (see
-// TestTruncateWebhookErrorText_MultibyteText_StaysValidUTF8AndCutsByRune's
-// doc comment); the stored value must be clean on both dialects.
+// SQLSTATE 22021 by PostgreSQL (the write site fits the value through
+// dbkit.FitColumnValue, whose doc comment owns the contract); the stored
+// value must be clean on both dialects.
 func TestService_handleDeliveryJob_ReceiverError_MultibyteBody_StoresValidLastError(t *testing.T) {
 	// The failure text is "integration: webhook receiver answered 500: "
 	// followed by the body snippet. The padding puts byte 4000 of that text
