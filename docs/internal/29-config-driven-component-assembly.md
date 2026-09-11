@@ -413,7 +413,7 @@ components:
   kv.memory: {}
   mailer.console: {}
   objectstore.local:
-    root: /var/lib/app/objects
+    directory: /var/lib/app/objects
   queue.standalone: {}
   signer.local: {}
   sms.console: {}
