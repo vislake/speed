@@ -81,7 +81,20 @@ func holdWriteGate(t *testing.T, repo *ShareRepository, ctx context.Context) (re
 			return nil
 		})
 	}()
-	<-started
+	// Either the body is running (the gate is held), or the write finished
+	// without ever running it -- a broken test setup (a transaction that
+	// could not begin), never a gate failure -- which must fail the test
+	// rather than hang it waiting on a signal that will not come.
+	select {
+	case <-started:
+	case err := <-doneCh:
+		select {
+		case <-started:
+			t.Fatalf("occupying guarded write failed after taking the gate: %v", err)
+		default:
+			t.Fatalf("occupying guarded write did not reach its body (broken setup, not a gate failure): %v", err)
+		}
+	}
 	var once sync.Once
 	return func() { once.Do(func() { close(releaseCh) }) }, doneCh
 }
