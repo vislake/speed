@@ -199,12 +199,14 @@ const SystemPurposeSignInTenantEnumeration pkgcore.SystemPurpose = "speed.authn.
 // FeatureGate reports whether a feature flag is enabled for the tenant the
 // context carries (or platform-wide when it carries none).
 //
-// It is the same no-import technique the org module uses for its own flags
+// It is the same structural technique the org module uses for its own flags
 // (go/org/module.go's FeatureGate, identical shape): the signature is built
 // from stdlib types only, so *config.Service satisfies it structurally
-// through its own IsEnabled method. authn never imports config, and config
-// never learns that authn exists; the host passes one to the other, and the
-// host is the only place both names appear.
+// through its own IsEnabled method, with no config type in the seam and no
+// adapter to write. config never learns that authn exists; the host passes
+// one to the other. This module's direct go/config dependency belongs to
+// the settings seam -- component.go's descriptor wiring and settings.go's
+// compile-time assertion -- not to this gate.
 //
 // This seam is what makes this module's declared feature flags effective
 // at request time: without the gate, a flag is a declaration with no

@@ -56,9 +56,12 @@ import (
 //	authn.WithSettingsReader(configModule.Handle())
 //
 // and this module's component descriptor wires the same value when a config
-// component is part of the assembly. authn never imports go/config for this
-// seam; the Handle satisfies it structurally, and component.go holds the
-// compile-time proof.
+// component is part of the assembly: the descriptor declares the config
+// module as an optional requirement and passes its handle (component.go),
+// which is where this module's direct go/config dependency comes from. The
+// seam stays structural -- it names no config type -- and the assertion at
+// the bottom of this file pins that (*config.Handle) satisfies it at
+// compile time.
 //
 // A nil reader is legal and fully supported: every read falls back to the
 // value the construction options carried, which is the behavior this module

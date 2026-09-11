@@ -266,12 +266,14 @@ func NewSigner(keySource KeySource, opts ...TokenOption) (*Signer, error) {
 	return &Signer{keySource: keySource, purpose: AccessTokenKeyPurpose, cfg: newTokenConfig(opts)}, nil
 }
 
-// TTL reports how long tokens this Signer issues stay valid. Callers that
-// need to size a revocation-list TTL to the remaining life of outstanding
-// access tokens read it here rather than assuming the default. Before the
-// first Issue call the dynamic override may not have been resolved yet
-// (effectiveTTL); callers that need the frozen value after issuance read
-// effectiveTTL instead.
+// TTL reports the construction-time access-token lifetime this Signer was
+// built with -- the configured baseline (WithTokenTTL, else
+// DefaultAccessTokenTTL; a module host configures it through
+// WithAccessTokenTTL). It is a static accessor: when a settings reader is
+// wired and authn.access_token_ttl carries an explicit row, issuance mints
+// against the value resolved on the first Issue and frozen for the process
+// (effectiveTTL), while TTL() keeps answering the construction-time
+// baseline; no exported accessor reports the resolved value.
 func (s *Signer) TTL() time.Duration { return s.cfg.ttl }
 
 // effectiveTTL resolves the lifetime this Signer mints with and sizes its

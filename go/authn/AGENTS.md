@@ -68,9 +68,13 @@ pair stops starting or completing flows, and the enterprise relying party's
 login page, whose channel visibility comes from the same flag values served by
 the config module's pre-authentication features endpoint.
 
-The gate is structurally satisfied by `*config.Service` -- authn never imports
-config. **A host that has the config module in its deployment should wire its
-service here** (read lazily at call time: `FeatureGateFunc` over the config
+The gate is structurally satisfied by `*config.Service` -- the seam is built
+from stdlib types only, so the service satisfies it through its own
+`IsEnabled` method with no adapter to write. (This module's own `go/config`
+dependency belongs to the settings seam below: the component descriptor
+wires the config module's handle as `SettingsReader` when a config component
+is assembled.) **A host that has the config module in its deployment should
+wire its service here** (read lazily at call time: `FeatureGateFunc` over the config
 module's lazy `Handle`, `authn.FeatureGateFunc(configModule.Handle().IsEnabled)`,
 is the canonical shape, since `configModule.Attach` produces the service only
 after the assembly returns and the handle reports the config module's own
