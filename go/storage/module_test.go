@@ -13,8 +13,8 @@ import (
 
 	"github.com/vislake/speed/go/jobs"
 	"github.com/vislake/speed/go/pkgcore"
-	"github.com/vislake/speed/go/pkgcore/componenttest"
 	"github.com/vislake/speed/go/pkgcore/apperr"
+	"github.com/vislake/speed/go/pkgcore/componenttest"
 
 	"github.com/vislake/speed/go/storage/internal/testutil"
 )
@@ -620,7 +620,6 @@ func (neighbourModule) Register(reg *pkgcore.ComponentRegistry) error {
 	}
 	return reg.AuditActionsSeat().Add("neighbour.thing.do")
 }
-
 
 // assertContainsAll fails t unless got holds every entry in want.
 func assertContainsAll(t *testing.T, got, want []string) {
