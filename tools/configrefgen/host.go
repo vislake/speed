@@ -48,11 +48,9 @@ package main
 
 import (
 	"context"
-	"crypto"
 	"embed"
 	"fmt"
 	"io"
-	"time"
 
 	"gorm.io/gorm"
 
@@ -108,39 +106,6 @@ var snapshotKey = []byte{
 	0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f,
 	0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17,
 	0x18, 0x19, 0x1a, 0x1b, 0x1c, 0x1d, 0x1e, 0x1f,
-}
-
-// dummyKeySource is an authn.KeySource that is never consulted: its methods
-// satisfy the interface structurally (stdlib types only, exactly as
-// go/authn/token.go's KeySource contract requires) and fail or no-op instead
-// of issuing. authn.NewModule validates the option's presence eagerly;
-// Register performs no I/O and never calls the source, so a source that
-// refuses every call is all a schema snapshot needs. It is a plain by-type
-// value the host puts, never a provider component: the selection's pki
-// component already answers authn's KeySource requirement at the plan level
-// (its *pki.Service product implements the interface), and a second selected
-// provider for the same token would make that requirement ambiguous, while
-// the value here is what authn's construction actually reads.
-type dummyKeySource struct{}
-
-// EnsurePurpose implements authn.KeySource.
-func (dummyKeySource) EnsurePurpose(context.Context, string, string, time.Duration) error { return nil }
-
-// ActiveSigner implements authn.KeySource.
-func (dummyKeySource) ActiveSigner(context.Context, string) (string, string, func(context.Context, []byte) ([]byte, error), error) {
-	return "", "", nil, nil
-}
-
-// VerificationKeys implements authn.KeySource, with the exact anonymous
-// struct element go/authn/token.go's interface declaration names (its
-// Public element is the stdlib crypto.PublicKey alias).
-func (dummyKeySource) VerificationKeys(context.Context, string) ([]struct {
-	KID       string
-	Algorithm string
-	Public    crypto.PublicKey
-}, error,
-) {
-	return nil, nil
 }
 
 // neverQueue is a jobs.Queue that is never called. The selected modules'
@@ -234,9 +199,10 @@ func schemaHost(ctx context.Context) (*hostSnapshot, error) {
 	if err = reg.Register(configComp); err != nil {
 		return nil, err
 	}
-	// The key source is a plain by-type value: see dummyKeySource's own doc
-	// comment for why it must not be a selected provider component.
-	reg.Put(dummyKeySource{})
+	// authn's KeySource requirement is answered by the composition itself:
+	// the selected pki component's New delivers its *pki.Service, the signer
+	// lifecycle authn's construction reads, so the by-type context already
+	// carries exactly one value for the token and this host adds none.
 
 	spec := speedapp.LoadSpec{
 		Host: &snapshotHostConfig{},
