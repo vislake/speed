@@ -323,11 +323,11 @@ func TestModule_OnConfigItemChanged_ScopeMissingWireMap_MatchesConfigsOwnDrop(t 
 		"Sensitive": false,
 		"ChangedAt": "2026-09-04T10:00:00Z",
 	}
-	if err := reg.EventBus().Publish(context.Background(), pkgcore.Event{
+	if pubErr := reg.EventBus().Publish(context.Background(), pkgcore.Event{
 		Type:     config.EventConfigItemChanged,
 		TenantID: "tenant-acme",
 		Payload:  scopeTenant,
-	}); err != nil {
+	}); pubErr != nil {
 		t.Fatalf("Publish(Scope-bearing event): %v", err)
 	}
 

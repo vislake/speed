@@ -299,7 +299,7 @@ func ExampleNewConfigReader() {
 	// Init window: the seats accept writes only during Init.
 	reg := componenttest.NewRegistry()
 	var svc *config.Service
-	if err := componenttest.DeclareAll(reg, m.Register, configModule.Register,
+	if declareErr := componenttest.DeclareAll(reg, m.Register, configModule.Register,
 		func(r *pkgcore.ComponentRegistry) error {
 			attached, attachErr := configModule.Attach(r)
 			if attachErr != nil {
@@ -308,7 +308,7 @@ func ExampleNewConfigReader() {
 			svc = attached
 			return nil
 		},
-	); err != nil {
+	); declareErr != nil {
 		fmt.Println("declare and attach config:", err)
 		return
 	}

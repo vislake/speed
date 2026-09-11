@@ -89,6 +89,7 @@ func (q *recordingImageQueue) Enqueue(_ context.Context, task jobs.Task, _ ...jo
 	q.lastTask = task
 	return q.jobID, q.err
 }
+
 func (q *recordingImageQueue) Get(context.Context, jobs.JobID) (*jobs.Job, error) { return nil, nil }
 func (q *recordingImageQueue) Cancel(context.Context, jobs.JobID) error           { return nil }
 

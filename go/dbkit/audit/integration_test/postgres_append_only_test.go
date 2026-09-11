@@ -31,13 +31,12 @@ import (
 // only Name and Migrations are ever read here.
 type fakeAuditModule struct{}
 
-func (fakeAuditModule) Name() string                     { return "audit" }
-func (fakeAuditModule) DependsOn() []string              { return nil }
-func (fakeAuditModule) Migrations() embed.FS             { return migrations.FS }
-func (fakeAuditModule) Locales() embed.FS                { return embed.FS{} }
-func (fakeAuditModule) OpenAPISpec() []byte              { return nil }
+func (fakeAuditModule) Name() string                              { return "audit" }
+func (fakeAuditModule) DependsOn() []string                       { return nil }
+func (fakeAuditModule) Migrations() embed.FS                      { return migrations.FS }
+func (fakeAuditModule) Locales() embed.FS                         { return embed.FS{} }
+func (fakeAuditModule) OpenAPISpec() []byte                       { return nil }
 func (fakeAuditModule) Register(*pkgcore.ComponentRegistry) error { return nil }
-
 
 // newMigratedPostgresAuditDB returns a *gorm.DB (via dbtest.NewPostgres,
 // which itself calls t.Skip when no Docker daemon is reachable) with

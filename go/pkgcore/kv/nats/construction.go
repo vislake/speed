@@ -69,10 +69,14 @@ func natsBucketOrDefault(bucket string) string {
 	return defaultBucket
 }
 
-// newConn dials the *nats.Conn for the "kv.nats" settings the "kv.nats"
-// component (component.go) resolves. The url fallback and the client name
-// live here; nats.Connect dials synchronously, so this is the one real
-// network round trip at construction.
+// newConn dials the *nats.Conn the "kv.nats" component (component.go)
+// adapts onto NewKVStore: its typed configuration carries the four fields
+// below. The url fallback and the client name live here; this is the one
+// real network round trip at construction, since nats.Connect dials
+// synchronously (unlike kv/redis's lazily-connecting client). A host that
+// needs a TLS config, a custom dial timeout or any other *nats.Option this
+// narrow configuration cannot express calls kvnats.NewKVStore directly and
+// puts the store into the assembly's by-type context.
 func newConn(url, user, password, token string) (*nats.Conn, error) {
 	url = natsURLOrDefault(url)
 

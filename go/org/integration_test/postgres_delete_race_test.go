@@ -16,8 +16,8 @@ import (
 
 	"github.com/vislake/speed/go/org"
 	"github.com/vislake/speed/go/pkgcore"
-	"github.com/vislake/speed/go/pkgcore/componenttest"
 	"github.com/vislake/speed/go/pkgcore/apperr"
+	"github.com/vislake/speed/go/pkgcore/componenttest"
 )
 
 // This file holds the deterministic PostgreSQL proofs behind

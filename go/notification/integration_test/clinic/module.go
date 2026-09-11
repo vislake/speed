@@ -55,4 +55,3 @@ func (m *Module) Register(reg *pkgcore.ComponentRegistry) error {
 		Unsubscribable:  true,
 	})
 }
-
