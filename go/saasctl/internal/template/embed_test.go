@@ -496,8 +496,9 @@ func firstLine(s string) string {
 // server side of the key-material contract: every authn-wiring selection's
 // server.go must build the blind index, the PII cipher and the pki
 // local-key cipher from the cfg fields config.go resolves
-// (APP_AUTHN_BLIND_INDEX_KEY / APP_AUTHN_PII_CIPHER_KEY /
-// APP_PKI_LOCAL_KEY_CIPHER_KEY, each with its dev fallback), never from
+// (APP_AUTHN__BLIND_INDEX_KEY / APP_AUTHN__PII_CIPHER_KEY /
+// APP_PKI__LOCAL_KEY_CIPHER_KEY, the loader's derived spellings of the
+// declared key paths, each with its dev fallback), never from
 // bare dev constants used unconditionally -- an operator who sets all the
 // APP_* key variables must not still be running on committed public key
 // bytes. No selection may carry the harm-amplifying claim that such a
@@ -838,7 +839,7 @@ func TestReadmeGoVersionMatchesGoModTxt(t *testing.T) {
 
 // envVarBacktickPattern matches a backtick-quoted, all-uppercase (with
 // digits and underscores) token in the README -- the exact shape every one
-// of the twenty-two bootstrap environment variable names takes when the
+// of the twenty-three bootstrap environment variable names takes when the
 // README refers to it (e.g. APP_S3_ENDPOINT or PORT, each wrapped in a
 // pair of backticks).
 var envVarBacktickPattern = regexp.MustCompile("`([A-Z][A-Z0-9_]*)`")
