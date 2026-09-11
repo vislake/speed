@@ -5,7 +5,7 @@
 ## 1 现状核对
 
 - `go/pkgcore/bootstrap_key.go` 的 `BootstrapKey` 字段集（`Key`/`Format`/`Default`/`Sensitive`/`Description`/`Group`/`Example`）本身已经完整、可渲染成文档（26 号文 §3.2）。`Format` 是闭集：`string`/`int`/`bool`/`hexkey`。`validateBootstrapKey`（同文件）校验 Format 闭集与 `Sensitive`+`Description` 配对，`BootstrapRegistrar.Add` 校验重复键——但这套校验只在旧 `Registry.Bootstrap` 席位路径（legacy module 世界）触发。
-- `go/app/legacy_bridge.go` 明确写"the component model has no bootstrap-key seat (components declare BootstrapKeys statically)"：29 号文的 `Component.BootstrapKeys` 是纯静态字段，从未经过 `validateBootstrapKey`——Format 闭集、`Sensitive`+`Description` 配对、跨组件重复键，在 Component 世界里今天完全没有校验。
+- `go/app/legacy_bridge.go`（写作当时；该文件后已随过渡面退役）明确写"the component model has no bootstrap-key seat (components declare BootstrapKeys statically)"：29 号文的 `Component.BootstrapKeys` 是纯静态字段，从未经过 `validateBootstrapKey`——Format 闭集、`Sensitive`+`Description` 配对、跨组件重复键，在 Component 世界里今天完全没有校验。
 - `go/app/loader.go` 的 `resolveBootstrapMaterial`/`lookupDeclaredKey`：遍历全部已注册组件的 `BootstrapKeys`，对每个 `key.Key` 只做两件事——校验路径形状（`pkgcore.BootstrapKeyPurpose`）、以及在宿主的 `LoadSpec.Host`/`LoadSpec.Platform` 结构体上用 `pkgconfig.Verify`+`pkgconfig.Lookup` 找到一个已经被同一个 `pkgconfig.Loader` 解析过的字段值。它不解析任何东西，只做绑定校验和取值。真正的 flag/env/file 解析，由 `go/pkgcore/config` 对 `LoadSpec.Host`/`Platform` 字面 struct 的反射（`describe()`/`walk()`）完成。
 - `go/app/config.go` 的 `PlatformConfig`：引擎手写的镜像结构体，5 个子结构体各带一个 `[]byte` 字段、打 `config:"derive"` tag，字段路径必须与 `authn`/`config`/`notification`/`org`/`pki` 五个模块各自声明的 `BootstrapKey.Key` 逐字对应；`platformKeyPaths` 是这六个路径的第二份硬编码清单；`verifyBinding` 用它们做绑定校验。这是本文要删除的对象。
 - `go/pkgcore/bootstrap_material.go` 的 `BootstrapMaterial`：已经是通用的、按键路径（或按 `BootstrapKeyPurpose` 推导的 purpose）寻址的解析结果容器，不关心值从哪来。本文改动的输出目标不变，改的只是"值从哪来"这一段。
