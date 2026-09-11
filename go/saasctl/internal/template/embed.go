@@ -31,9 +31,9 @@
 // as a nested module root -- so a go.mod named as such would silently
 // vanish from the embedded tree. new renames go.mod.txt to go.mod when it
 // materializes. config.go still resolves the full uniform env surface of a
-// generated project -- the six platform key materials the embedded
-// app.PlatformConfig declaration carries, each under the loader's derived
-// spelling of its declared key path (config.cipher_key reads
+// generated project -- the six platform key materials the importing module
+// components declare, each under the loader's derived spelling of its
+// declared key path (config.cipher_key reads
 // APP_CONFIG__CIPHER_KEY, and so on), plus APP_DB_PATH, APP_DEPLOYMENT_MODE,
 // PORT and the APP_REDIS_ADDR / APP_S3_* / APP_SMTP_* / APP_SMS_GATEWAY_URL
 // infrastructure groups -- so a consumer's bootstrap contract never

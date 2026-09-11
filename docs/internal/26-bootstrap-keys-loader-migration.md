@@ -46,7 +46,7 @@ curated 目录给每键注 kind(`string` 24 / `hexkey` 7 / `bool` 2 / `int` 2)�
 ### 1.3 运行时动态配置层现状(对比面)
 
 - 运行时层的注册席是 `pkgcore.Registry.Config`(`ConfigSchemaRegistrar`,registry.go 的 Config 席位),项类型 `ConfigItem`(registry.go):dotted Key、闭集 Type(string/int/bool/duration)、Default(Go 值)、Sensitive、Description、Group、Public、Min/Max。`Add` 全量校验后才入册,重复键报 `ErrDuplicateConfigKey`。Feature 旗标是独立席位 `Registry.Features`。
-- `Register(reg *pkgcore.Registry)`(如 authn 模块的 `Register`,module.go)内以 `reg.Config.Add(configItems()...)`、`reg.Features.Add(...)` 收口(configrefgen/host.go 头注所称 "census of reg.Config.Add and reg.Features.Add declaration sites")。现行 census:**authn、metering、compliance、sharing、pki 五模块声明 ConfigItem,org 不声明 items、只声明两枚 feature flag**(org 的模块测试显式断言 `reg.Config.Items()` 为空,org 的 module_test.go)。configrefgen 的 schema host 正是这五模块 + org + config 模块的冻结组合。
+- `Register(reg *pkgcore.Registry)`(写作当时的签名;29 号文之后模块实现 `pkgcore.Module`,入口为 `Register(reg Registrar) error`,如 authn 模块的 `Register`,module.go)内以 `reg.Config.Add(configItems()...)`、`reg.Features.Add(...)` 收口(configrefgen/host.go 头注所称 "census of reg.Config.Add and reg.Features.Add declaration sites")。现行 census:**authn、metering、compliance、sharing、pki 五模块声明 ConfigItem,org 不声明 items、只声明两枚 feature flag**(org 的模块测试显式断言 `reg.Config.Items()` 为空,org 的 module_test.go)。configrefgen 的 schema host 正是这五模块 + org + config 模块的冻结组合。
 - 运行时项最终进 configs 表、经 `config.Service` 的 Describe 枚举、可由运维在线编辑、经 `config.item.changed` 等事件传播——与启动层在生命周期、作用域、编辑面上完全正交(§2)。
 
 ### 1.4 configrefgen 与文档链现状
@@ -92,7 +92,7 @@ curated 目录给每键注 kind(`string` 24 / `hexkey` 7 / `bool` 2 / `int` 2)�
 
 ### 3.1 席位命名与位置
 
-- 新席位:`Registry.Bootstrap`,类型 `BootstrapRegistrar`,项类型 `pkgcore.BootstrapKey`。`NewRegistry`(registry.go)注入内存实现 `memoryBootstrapRegistrar`。`Register(reg *pkgcore.Registry)` 不变;新席位是 Registry 结构体的新字段——这正是 registry.go 中 `Registry` 结构体字段注释规定的跨切机制扩展方式("added as a field here rather than as a method on Module"),lockstep 下所有模块同版本发布,无需改 Module 接口。
+- 新席位:`Registry.Bootstrap`,类型 `BootstrapRegistrar`,项类型 `pkgcore.BootstrapKey`。`NewRegistry`(registry.go)注入内存实现 `memoryBootstrapRegistrar`。`Register`(写作当时为 `Register(reg *pkgcore.Registry)`;现行见上)不变;新席位是 Registry 结构体的新字段——这正是 registry.go 中 `Registry` 结构体字段注释规定的跨切机制扩展方式("added as a field here rather than as a method on Module"),lockstep 下所有模块同版本发布,无需改 Module 接口。
 - 不叫 `ConfigEnv`/`Env`/`EnvKeys`:bootstrap 面含旗标、文件、结构体默认,env 只是其中一源;叫 Env 会把机制窄化成"环境变量清单"。叫 `Bootstrap` 与 `pkgcore/config` 包内 "bootstrap configuration" 术语一致,并与运行时 `Config` 席位在字面上就分属两层。
 - Config 席位注释补一句指向 Bootstrap 席位("items editable at runtime——process-start keys belong to Bootstrap"),Bootstrap 席位注释写反向句,并把 §2 的互斥规则写进两边(或共享一段同一措辞)。
 
@@ -410,4 +410,6 @@ Q1 建议的独立后续轮已落地:生成骨架不再直读 env,`os.Getenv` �
 ### 9.9 后续轮:BootstrapKey.Format 升格为 schema 合成源
 
 §3.2"声明层不放 Go 类型信息(Default/Required/Min/Max),因为宿主结构体是唯一的类型/默认值真源"这一判断,对**宿主自己拥有、按部署环境定制**的键(reference-app 的 29 个宿主键)继续成立,机制不变。但对 `app.PlatformConfig` 覆盖的六枚平台密钥——一个由引擎(`go/app`)手写、与模块声明逐字对应的镜像结构体,本身不是独立于模块声明的"宿主定制层",只是模块声明的手抄副本——该判断不再成立:手抄副本不是第二个真源,是同一真源的复制品,复制品必然漂移(新模块要素每次都要去 `go/app/config.go` 手工加一段结构体)。此场景由 [30 号文](30-bootstrap-key-schema-synthesis.md) 取代旧结论:`BootstrapKey.Format` 直接驱动引擎的 flag/env/file 解析(`go/pkgcore/config` 新增声明驱动的解析入口),`PlatformConfig` 及其五个子结构体、`platformKeyPaths`、`verifyBinding` 删除;六枚平台键当前的环境变量拼写(`APP_AUTHN__PII_CIPHER_KEY` 等,无 pin、通用前缀派生)逐字不变。五个声明模块(authn/config/pki/org/notification)的既有 `BootstrapKey` 声明不需要任何改动。
+
+**落地纪要(实施轮补记)**:以上判断已按 30 号文落地——`go/pkgcore/config/declaration.go` 新增声明驱动的解析入口(`Declaration`/`Format` 闭集/`(*Loader).ResolveDeclarations`/`WithDevDefaults`),与字面 struct 反射路径共用同一条五源链、空值规则、文本转换与 hexkey 三段优先级,唯一行为差异是来源清单末项从"目标结构体默认值"改为"声明默认表";`go/app` 的 loader 改为读取已注册组件的声明并经新入口解析(格式闭集、Sensitive/Description 配对、跨组件重复键在 Prepare 前的装配错误里点名组件,wrapper 的声明拷贝按同内容合并),`PlatformConfig` 及其五个子结构体、`platformKeyPaths`、`platformCipherKeyPath`、`verifyBinding`、`ConfigSpec.Platform`/`LoadSpec.Platform` 删除;绑定校验消失后,未解析的声明键"缺席即可"(由消费方自行报缺失材料),不再是一次装配失败。开发期默认值按 §3.3 Option A 由装配方提供:reference-app 的 `BootstrapDevDefaults()` 与 saasctl 模板共享 `cmd/server/config.go` 的 `bootstrapDevDefaults()`(declared defaults 表,最低优先级),经 `ConfigDevDefaults` 选项进 loader;`WithPreDB` 改收 `PreDBDeps`(cipher + material),`ModuleDeps` 增 `Material` 字段。reference-app 的六枚材料消费点全部改读已发布的 `BootstrapMaterial`(声明路径字面量),`go/saasctl` 的五个 selection 变体与其 twin/embed 钉子同步改道;`tools/check_env_example_consistency.py` 的数据源从 `go/app/config.go` 的 `platformKeyPaths` 换为 `docs/config-reference.json` 的 `bootstrap_keys[].key`,触发条件改为无条件。等价性由三层证据钉住:reference-app 包内的材料优先级单测(六枚拼写、显式 > 根派生 > 表)、flowtests 的双面等价(宿主面 `ServerConfig` 等价与材料面逐枚对照、oracle 冻结为迁移前语义)、五个声明模块目录的 diff 为空。
 

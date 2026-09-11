@@ -61,20 +61,28 @@ surface lives beside them in the transition adapters below.
 It runs before the first stage, because what it resolves is what the
 assembly plans from and what components read. It does three things in order:
 
-1. loads the host's configuration target and the platform key-material
-   target through one `pkgcore/config` Loader (the same options, the same
-   sources, one pass each);
+1. loads the host's configuration target through a `pkgcore/config`
+   Loader (the same options and sources the declared keys resolve on);
 2. resolves the composition configuration from its five sources — builtin
    defaults, project file, environment, command line and the host's code
-   override — and publishes it, with the configuration targets, into the
+   override — and publishes it, with the configuration target, into the
    registry as a `pkgcore.ComponentConfig` (the code override via a
    `CompositionOverrides` Put, or `LoadSpec.Overrides` when the caller does
    not hold the registry);
 3. resolves every registered component's declared `BootstrapKeys` on the
-   same loader chain, verifies each declared key binds the configuration
-   targets, and publishes the results as the assembly's by-purpose
-   `pkgcore.BootstrapMaterial` source — a declared key that binds nothing
-   fails the load with the stage, component, cause and remedy named.
+   same loader chain — through `pkgcore/config`'s declaration-driven entry
+   (`ResolveDeclarations`), with no host struct field behind a declared key
+   — and publishes the results as the assembly's by-purpose
+   `pkgcore.BootstrapMaterial` source. A declared key whose value no source
+   supplies resolves to nothing, and the consumer that needs it reports the
+   missing material itself; a declaration that cannot be resolved as one
+   schema (a malformed path, a format outside the closed set, a Sensitive
+   key with no Description, two components declaring one path differently)
+   fails the load with the stage, component, cause and remedy named. The
+   declaring party's documented development defaults — a
+   `pkgcore/config` defaults table handed in as a loader option
+   (`ConfigDevDefaults`) — stand where a struct default used to: below the
+   root-key derivation and the explicit sources.
 
 Composition spelling (the loading implementation's convention; the design's
 §6.1 leaves the carrying format to the implementation): the whole tree
@@ -154,7 +162,7 @@ Contract notes for anyone touching the adapters:
 
 | Package | Concern | Dependency closure |
 |---|---|---|
-| `go/app` (root) | the engine: the loader, the driver and the `RunAssembly` sugar, the observability component, the transition adapters, `PlatformConfig` and the HTTP helpers the engine and hand-composing hosts share (`AuthnAPIPath`, `ReadHeaderTimeout`/`ShutdownTimeout`, `PreAuthAllowlist`, `RegisterMountedRoutes`) | pkgcore (+ its config subpackage), dbkit, observability, tenancy, spa — every composition carries the root |
+| `go/app` (root) | the engine: the loader, the driver and the `RunAssembly` sugar, the observability component, the transition adapters and the HTTP helpers the engine and hand-composing hosts share (`AuthnAPIPath`, `ReadHeaderTimeout`/`ShutdownTimeout`, `PreAuthAllowlist`, `RegisterMountedRoutes`) | pkgcore (+ its config subpackage), dbkit, observability, tenancy, spa — every composition carries the root |
 | `go/app/chain` | the fixed middleware chain: `chain.Standard` (the registry-derived derivation, over either registry shape's `RouteSource`: guard the mounted routes through the host's rbac rule table, split the authn and admin subtrees, mount the rest, delegate to `Chain`), `chain.Config`/`chain.Chain` (the direct path for a custom layout) — the order (authn outermost, then the optional impersonation decorator, then tenancy with the pre-auth allowlist), the authn/admin branches dispatched around it, validation (`chain.go`, `standard.go`) | root + authn + rbac + tenancy + pkgcore — bounded by the chain's own participants (the rule table is rbac's, the impersonation decorator stays a `func(http.Handler) http.Handler` the host builds, and no admin import is needed: the admin prefix arrives as `admin.APIPath` through an option) |
 | `go/app/bridges` | the no-import seam bridges: `Entitlements`, `UsageRecorder`, `OrgFeatureGate`, `AuthnFeatureGate`, `ShareExpiryReader` (`bridges.go`, `sharing.go`) | ai-gateway, billing, metering, org, sharing, authn, config — paid only by hosts that wire those modules |
 
@@ -237,7 +245,7 @@ shutdown order are pinned in the root package's `*_test.go` files beside
 their targets, over fixtures in `internal/testutil` (a module built from
 test-provided pieces, so no business module enters the test binary); the
 loader's five-source layering, its composition spellings, the bootstrap
-material resolution and the binding verification are pinned in
+material resolution and the declaration-set validations are pinned in
 `loader_test.go`; the bridge's conformance (an old-style module wrapped
 and run through the seven stages, `DependsOn` reordering and all) in
 `legacy_bridge_test.go`; the driver and the sugar in `driver_test.go`;

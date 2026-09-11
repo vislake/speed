@@ -849,9 +849,10 @@ var envVarBacktickPattern = regexp.MustCompile("`([A-Z][A-Z0-9_]*)`")
 // configGoEnvVarPattern matches one `config:"env=<NAME>"` struct-tag
 // option in the template's config.go -- the loader target's env tag is
 // where each PINNED bootstrap variable's name lives. The six key-material
-// names carry no tag: their declaration lives in go/app's PlatformConfig,
-// which the template embeds, and the loader derives each variable name
-// from the declared key path (see derivedPlatformKeyEnvs). Deliberately
+// names carry no tag: the importing module components declare them, the
+// template's bootstrapDevDefaults table keys the declared paths, and the
+// loader derives each variable name from the declared key path (see
+// derivedPlatformKeyEnvs). Deliberately
 // duplicated from the identical pattern in
 // internal/appconfig/appconfig_test.go's own drift-proof test rather than
 // shared, since the two packages check two different kinds of drift (that

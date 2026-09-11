@@ -6,78 +6,50 @@ examples/reference-app/.env.example is the reference app's committed
 carrier for the variables its host reads: its own header states that it
 documents ConfigFromEnv's loader-driven bootstrap surface, and readers
 copy it to .env or apply it through a shell / a process manager. The
-host side of that surface is declared in three forms inside
-examples/reference-app/internal/app/bootstrap.go:
+host side of that surface is declared in three forms:
 
-  * the loader target's env pins -- the hostConfig struct tags its own
-    variables with config:"env=NAME" (further loader options after the
-    name -- the key materials' derive among them -- do not change the
-    variable name), so the tag is each variable's declaration site;
+  * the loader target's env pins -- examples/reference-app/internal/app/
+    bootstrap.go's hostConfig struct tags the host's own variables with
+    config:"env=NAME" (further loader options after the name do not
+    change the variable name), so the tag is each variable's
+    declaration site;
   * APP_ROOT_KEY -- the one variable that is not a struct field at all:
     the loader reads it through the WithRootKeyEnv option loadHostConfig
     wires. The call's argument names the variable either as a string
     literal or as an identifier a same-file const declaration binds to
     one; an identifier with no such constant declares nothing;
-  * the embedded platform declaration -- hostConfig embeds the platform
-    module's key-material declaration (app.PlatformConfig) tagged
-    config:"-", so the loader's walk of the host target skips it and the
-    loader loads it as its own target instead: each of its fields reads
-    the variable the loader derives from the field's declared key path
-    under the host's prefix -- config.EnvName's rule: the prefix, then
-    the key uppercased with each level of nesting spelled as a double
+  * the declared key materials -- each declaring module's component
+    carries its BootstrapKeys declaration, the assembly's loader
+    resolves them, and each key path's environment variable is derived
+    under the host's prefix: config.EnvName's rule, the prefix then the
+    key uppercased with each level of nesting spelled as a double
     underscore, so config.cipher_key reads APP_CONFIG__CIPHER_KEY under
-    APP_. The declared key paths are read
-    from the platform module's own declaration list in
-    go/app/config.go, the one place they are spelled.
+    APP_. The declared key paths are read from
+    docs/config-reference.json's bootstrap_keys entries, the generated
+    reference of exactly the declarations the components carry.
 
 Nothing else in the app's executable code reads the environment (the
 app's own unit suite pins that surface, unittest/
 bootstrap_direct_reads_test.go), so the pins, that call and the
-declaration's derived names are the host's whole declared set.
+declarations' derived names are the host's whole declared set.
 
 The example side is read line by line in both spellings the file
 actually uses for keys: an active KEY= entry and a commented-out
 example (``# APP_X=...`` -- the indented ``#   APP_X=...`` variant
-included) both document a key; a prose line that merely names a
-variable (no ``=`` at the line's head after the comment marker) does
-not.
-
-The gate compares the two sets in both directions and fails on either
-difference:
-
-  * a host variable the example documents no entry for -- the drift
-    class the file's readers hit first, and the one this gate exists
-    for;
-  * a key the example documents that the host never declares -- the
-    file's declared scope is exactly the host's bootstrap surface, so
-    an entry outside it is either a stale line to remove or a variable
-    the loader target should pin. This direction is deliberately strict
-    with no in-file escape marker: the file carries no non-host key, so
-    a marker would be machinery nothing exercises, and a future
-    non-host entry that is genuinely wanted is a checker change
-    (git-visible, reviewable) rather than a per-line opt-out the gate
-    would stop seeing.
-
-Usage:
-    python3 tools/check_env_example_consistency.py [--root DIR]
-
-Exit codes: 0 = the host's declared variables and the example's
-documented keys are one set; 1 = drift in either direction; 2 =
-usage/infrastructure error (unreadable root).
-Standard library only, Python >= 3.11.
+included). A prose mention of a name is not an entry.
 """
 
 from __future__ import annotations
 
-import argparse
+import json
 import pathlib
 import re
 import sys
 
-# The host's declaration site, the platform declaration it embeds, and
-# the example it must agree with, relative to the repository root.
+# The host's declaration site, the declared-key reference, and the
+# example it must agree with, relative to the repository root.
 BOOTSTRAP_REL_PATH = "examples/reference-app/internal/app/bootstrap.go"
-PLATFORM_DECL_REL_PATH = "go/app/config.go"
+CONFIG_REFERENCE_REL_PATH = "docs/config-reference.json"
 ENV_EXAMPLE_REL_PATH = "examples/reference-app/.env.example"
 
 # One struct-tag literal: config:"env=NAME" with any further loader
@@ -94,25 +66,16 @@ ROOT_KEY_ENV = re.compile(
 )
 
 # One same-file const binding the root-key call may name through its
-# argument: const NAME = "STRING", the value an environment variable
-# name.
+# argument, and the environment-prefix constant the derived key names
+# carry: const NAME = "STRING", the value an environment variable name
+# or the prefix.
 ROOT_KEY_CONST = re.compile(
     r'\bconst\s+([A-Za-z_][A-Za-z0-9_]*)\s*=\s*"([A-Za-z_][A-Za-z0-9_]*)"'
 )
 
-# The embedded platform declaration: the host target embeds the
-# platform's key-material declaration tagged config:"-" (the skip
-# option), and the enclosing file spells the environment prefix the
-# derived variable names carry as a same-file literal const.
-EMBEDDED_PLATFORM = re.compile(r'PlatformConfig\s+`config:"-"`')
+# The name of the const the enclosing file spells the environment
+# prefix in.
 ENV_PREFIX_CONST = "envPrefix"
-
-# The platform module's declared key-path list, and one quoted path
-# inside it.
-PLATFORM_KEY_PATHS = re.compile(
-    r"var platformKeyPaths = \[\]string\{(.*?)\}", re.DOTALL
-)
-PLATFORM_KEY_PATH = re.compile(r'"([A-Za-z_][A-Za-z0-9_.]*)"')
 
 # A documented key: NAME= at the head of a line's content (the value
 # may be empty), once any leading whitespace and the comment marker of
@@ -120,7 +83,30 @@ PLATFORM_KEY_PATH = re.compile(r'"([A-Za-z_][A-Za-z0-9_.]*)"')
 EXAMPLE_KEY = re.compile(r"^([A-Za-z_][A-Za-z0-9_]*)=")
 
 
-def declared_host_keys(text: str, platform_text: str) -> dict[str, int]:
+def declared_key_paths(reference_text: str) -> list[str]:
+    """The declared bootstrap key paths the generated reference lists.
+
+    Every bootstrap_keys entry's "key" is a declared key path (the
+    declaring module component's BootstrapKey.Key, character for
+    character); an unreadable document contributes nothing, and the
+    example's entries then read as variables the host never declares,
+    which is the drift the gate is for.
+    """
+    try:
+        document = json.loads(reference_text)
+    except json.JSONDecodeError:
+        return []
+    entries = document.get("bootstrap_keys")
+    if not isinstance(entries, list):
+        return []
+    paths: list[str] = []
+    for entry in entries:
+        if isinstance(entry, dict) and isinstance(entry.get("key"), str):
+            paths.append(entry["key"])
+    return paths
+
+
+def declared_host_keys(text: str, key_paths: list[str]) -> dict[str, int]:
     """The variables bootstrap.go's host surface declares, name -> first
     declaration line.
 
@@ -131,12 +117,13 @@ def declared_host_keys(text: str, platform_text: str) -> dict[str, int]:
     the file's own const declaration binds to one (an identifier with
     no such constant in the file declares nothing, and the line
     reported for the resolved identifier form is the constant's
-    declaration line), and the embedded platform declaration, whose
-    derived names -- one per declared key path, read from
-    platform_text -- are reported at the embed's line. Full-line ``//``
-    comments are skipped -- a comment may state a variable's name, but
-    only the pins and the call site declare one, and the line numbers
-    reported for the findings point at code."""
+    declaration line), and the declared key paths' derived names --
+    one per path in key_paths, reported at the envPrefix const's
+    declaration line, where the prefix the derivation reads is
+    spelled. Full-line ``//`` comments are skipped -- a comment may
+    state a variable's name, but only the pins, the call site and the
+    declarations name one, and the line numbers reported for the
+    findings point at code."""
     lines = text.splitlines()
     consts: dict[str, tuple[str, int]] = {}
     for line_no, line in enumerate(lines, start=1):
@@ -168,31 +155,19 @@ def declared_host_keys(text: str, platform_text: str) -> dict[str, int]:
         if name not in keys:
             keys[name] = decl_line
 
-    # The embedded platform declaration's derived names: one per declared
-    # key path, reported at the embed's line. A declaration the gate cannot
-    # read end to end -- no embed, no prefix const, no key-path list --
-    # contributes nothing, and the example's entries then read as
-    # variables the host never declares, which is the drift the gate is
-    # for.
-    embed_line = next(
-        (
-            line_no
-            for line_no, line in enumerate(lines, start=1)
-            if not line.strip().startswith("//")
-            and EMBEDDED_PLATFORM.search(line)
-        ),
-        None,
-    )
+    # The declared key materials' derived names: one per declared key
+    # path, reported at the prefix const's line. A file without the
+    # prefix const derives nothing, and the example's entries then read
+    # as variables the host never declares.
     prefix = consts.get(ENV_PREFIX_CONST)
-    paths_block = PLATFORM_KEY_PATHS.search(platform_text)
-    if embed_line is None or prefix is None or paths_block is None:
+    if prefix is None:
         return keys
-    for path in PLATFORM_KEY_PATH.findall(paths_block.group(1)):
+    for path in key_paths:
         # config.EnvName(prefix, key): the prefix, then the key uppercased
         # with each nesting level (config.KeyDelimiter ".") spelled as the
         # environment separator (config.EnvSeparator, a double underscore).
         name = prefix[0] + path.upper().replace(".", "__")
-        keys.setdefault(name, embed_line)
+        keys.setdefault(name, prefix[1])
     return keys
 
 
@@ -216,38 +191,30 @@ def documented_example_keys(text: str) -> dict[str, int]:
 def scan(root: pathlib.Path) -> list[str]:
     findings: list[str] = []
     bootstrap = root / BOOTSTRAP_REL_PATH
+    reference = root / CONFIG_REFERENCE_REL_PATH
     example = root / ENV_EXAMPLE_REL_PATH
     for path, rel, what in (
         (bootstrap, BOOTSTRAP_REL_PATH, "the host's declaration site"),
+        (reference, CONFIG_REFERENCE_REL_PATH, "the declared-key reference"),
         (example, ENV_EXAMPLE_REL_PATH, "the committed example"),
     ):
         if not path.is_file():
             findings.append(
                 f"{rel}: {what} is missing -- the gate compares the "
                 "host's declared environment surface against the "
-                "committed example, and both sides are committed "
+                "committed example, and all of these are committed "
                 "artifacts"
             )
     if findings:
         return findings
 
-    bootstrap_text = bootstrap.read_text(encoding="utf-8")
-    # The platform declaration participates only when the host target
-    # embeds it; the file is read then, and its absence is a finding.
-    platform = root / PLATFORM_DECL_REL_PATH
-    platform_text = ""
-    if EMBEDDED_PLATFORM.search(bootstrap_text):
-        if not platform.is_file():
-            findings.append(
-                f"{PLATFORM_DECL_REL_PATH}: the platform declaration the "
-                f"host embeds ({BOOTSTRAP_REL_PATH} reads its key paths "
-                "from here) is missing"
-            )
-            return findings
-        platform_text = platform.read_text(encoding="utf-8")
-
-    host = declared_host_keys(bootstrap_text, platform_text)
-    documented = documented_example_keys(example.read_text(encoding="utf-8"))
+    host = declared_host_keys(
+        bootstrap.read_text(encoding="utf-8"),
+        declared_key_paths(reference.read_text(encoding="utf-8")),
+    )
+    documented = documented_example_keys(
+        example.read_text(encoding="utf-8")
+    )
 
     for name, line_no in sorted(host.items(), key=lambda item: item[1]):
         if name not in documented:
@@ -268,48 +235,18 @@ def scan(root: pathlib.Path) -> list[str]:
     return findings
 
 
-def main(argv: list[str]) -> int:
-    parser = argparse.ArgumentParser(
-        description=__doc__,
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-    )
-    parser.add_argument(
-        "--root",
-        default=None,
-        help="repository root (default: the tools/ directory's parent)",
-    )
-    args = parser.parse_args(argv)
-    root = (
-        pathlib.Path(args.root).resolve()
-        if args.root
-        else pathlib.Path(__file__).resolve().parent.parent
-    )
-    if not root.is_dir():
-        print(
-            f"check_env_example_consistency: --root is not a directory: "
-            f"{root}",
-            file=sys.stderr,
-        )
-        return 2
-    try:
-        findings = scan(root)
-    except OSError as exc:
-        print(f"check_env_example_consistency: {exc}", file=sys.stderr)
-        return 2
+def main() -> int:
+    root = pathlib.Path(__file__).resolve().parent.parent
+    findings = scan(root)
     for finding in findings:
-        print(finding)
+        print(f"check_env_example_consistency: {finding}")
     if findings:
         print(
-            "check_env_example_consistency: %d finding(s)" % len(findings),
-            file=sys.stderr,
+            f"check_env_example_consistency: {len(findings)} finding(s)"
         )
         return 1
-    print(
-        "check_env_example_consistency: the host's declared variables and "
-        f"{ENV_EXAMPLE_REL_PATH}'s documented keys are one set"
-    )
     return 0
 
 
 if __name__ == "__main__":
-    sys.exit(main(sys.argv[1:]))
+    sys.exit(main())
