@@ -175,15 +175,58 @@ func (m *Memberships) TenantsOf(_ context.Context, userID string) ([]pkgcore.Ten
 func NewDB(t *testing.T) *gorm.DB {
 	t.Helper()
 
+	registerCipher(t)
+	db := dbtest.NewSQLite(t)
+	dbtest.Migrate(t, db, dbkit.DialectSQLite, dbtest.Migration{Module: "authn", FS: migrations.FS})
+	return db
+}
+
+// NewDBAt is NewDB over a caller-chosen, on-disk file path instead of a
+// fresh t.TempDir() file. Everything else matches NewDB exactly: the same
+// serializer registration ordering, the same migration set from zero, the
+// same pool defaults and the same automatic cleanup.
+//
+// It exists for the conflict-retry tests, which need TWO connections to ONE
+// SQLite file: the module's own handle (the returned *gorm.DB, its pool
+// serving the request under test) and a second, independent connection that
+// takes the file's write lock for longer than the dialect's busy_timeout so
+// the request under test genuinely loses the lock race. A temp-file path the
+// caller knows is the whole point -- t.TempDir() inside NewDB is
+// deliberately not reachable from outside.
+func NewDBAt(t *testing.T, path string) *gorm.DB {
+	t.Helper()
+
+	registerCipher(t)
+	db, err := dbkit.Open(context.Background(), dbkit.Options{
+		Dialect: dbkit.DialectSQLite,
+		DSN:     path,
+	})
+	if err != nil {
+		t.Fatalf("open sqlite database at %s: %v", path, err)
+	}
+	t.Cleanup(func() {
+		sqlDB, dbErr := db.DB()
+		if dbErr != nil {
+			return
+		}
+		_ = sqlDB.Close()
+	})
+	dbtest.Migrate(t, db, dbkit.DialectSQLite, dbtest.Migration{Module: "authn", FS: migrations.FS})
+	return db
+}
+
+// registerCipher registers authn's PII serializer under the test cipher.
+// Every constructor here calls it BEFORE opening its handle, which is the
+// ordering the real host must follow too: GORM's serializer registry is
+// process-global and is consulted while a model's schema is parsed.
+func registerCipher(t *testing.T) {
+	t.Helper()
+
 	cipher, err := dbkit.NewCipher(CipherKey())
 	if err != nil {
 		t.Fatalf("build the test cipher: %v", err)
 	}
 	dbkit.RegisterEncryptedSerializer(serializerName, cipher)
-
-	db := dbtest.NewSQLite(t)
-	dbtest.Migrate(t, db, dbkit.DialectSQLite, dbtest.Migration{Module: "authn", FS: migrations.FS})
-	return db
 }
 
 // NewPostgresDB returns a fresh PostgreSQL database -- a disposable
@@ -201,12 +244,7 @@ func NewDB(t *testing.T) *gorm.DB {
 func NewPostgresDB(t *testing.T) *gorm.DB {
 	t.Helper()
 
-	cipher, err := dbkit.NewCipher(CipherKey())
-	if err != nil {
-		t.Fatalf("build the test cipher: %v", err)
-	}
-	dbkit.RegisterEncryptedSerializer(serializerName, cipher)
-
+	registerCipher(t)
 	db := dbtest.NewPostgres(t)
 	dbtest.Migrate(t, db, dbkit.DialectPostgres, dbtest.Migration{Module: "authn", FS: migrations.FS})
 	return db

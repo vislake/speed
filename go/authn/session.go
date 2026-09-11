@@ -170,6 +170,14 @@ func NewSessionManager(
 }
 
 // Start creates a session and the first refresh token of its family.
+//
+// Both inserts run under withInsertConflictRetry: each mints its row's
+// primary key (newID) before the insert, so a conflict that a retry turns
+// into a duplicate-key refusal is provably this call's own earlier
+// attempt, not another writer's row (see that helper's own doc comment for
+// the argument). Without the retry a single lost race on either insert --
+// under SQLite a busy window the file's holder outlasts -- surfaces as an
+// internal error on an otherwise valid sign-in.
 func (m *SessionManager) Start(ctx context.Context, in StartSessionInput) (*Session, IssuedRefreshToken, error) {
 	if in.UserID == "" {
 		return nil, IssuedRefreshToken{}, errors.New("authn: cannot start a session without a user id")
@@ -190,7 +198,10 @@ func (m *SessionManager) Start(ctx context.Context, in StartSessionInput) (*Sess
 	}
 	session.SetAMR(in.AMR)
 
-	if err := m.sessions.Create(ctx, session); err != nil {
+	if err := withInsertConflictRetry(
+		func() error { return m.sessions.Create(ctx, session) },
+		func() (bool, error) { return m.sessionRowExists(ctx, session.ID) },
+	); err != nil {
 		return nil, IssuedRefreshToken{}, err
 	}
 
@@ -201,6 +212,20 @@ func (m *SessionManager) Start(ctx context.Context, in StartSessionInput) (*Sess
 		return nil, IssuedRefreshToken{}, err
 	}
 	return session, issued, nil
+}
+
+// sessionRowExists reports whether a session row carrying id is present
+// now. It is withInsertConflictRetry's residue check for Start's insert: a
+// duplicate-key refusal raised by a retry means the earlier attempt's write
+// landed, and this read confirms it before the retry reports completion.
+func (m *SessionManager) sessionRowExists(ctx context.Context, id string) (bool, error) {
+	if _, err := m.sessions.FindByID(ctx, id); err != nil {
+		if errors.Is(err, ErrNotFound) {
+			return false, nil
+		}
+		return false, err
+	}
+	return true, nil
 }
 
 // issueRefreshToken mints one token in familyID, recording rotatedFrom as the
@@ -223,10 +248,31 @@ func (m *SessionManager) issueRefreshToken(ctx context.Context, session *Session
 		CreatedAt:   now,
 		ExpiresAt:   now.Add(m.refreshTTL),
 	}
-	if err := m.tokens.Create(ctx, record); err != nil {
+	if err := withInsertConflictRetry(
+		func() error { return m.tokens.Create(ctx, record) },
+		func() (bool, error) { return m.refreshTokenRowExists(ctx, record.ID, digest) },
+	); err != nil {
 		return IssuedRefreshToken{}, err
 	}
 	return IssuedRefreshToken{Secret: secret, Record: record}, nil
+}
+
+// refreshTokenRowExists reports whether the refresh-token row named by id
+// is present now, and that the row found by digest is that very row. It is
+// withInsertConflictRetry's residue check for issueRefreshToken's insert;
+// it looks the row up by digest rather than by id because the repository
+// deliberately reads tokens only through their digest (the plaintext never
+// needs to be recoverable, and the digest is the one column the insert and
+// every later lookup share).
+func (m *SessionManager) refreshTokenRowExists(ctx context.Context, id, digest string) (bool, error) {
+	found, err := m.tokens.FindByHash(ctx, digest)
+	if err != nil {
+		if errors.Is(err, ErrNotFound) {
+			return false, nil
+		}
+		return false, err
+	}
+	return found.ID == id, nil
 }
 
 // Rotate consumes the presented refresh token and issues its replacement,

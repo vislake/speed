@@ -1203,13 +1203,26 @@ func (s *Service) resolveTenant(ctx context.Context, userID string, requested pk
 // character an email address always has and an E.164 phone number never does.
 // A miss returns (nil, nil) rather than an error, because "no such account"
 // is an expected sign-in outcome rather than a failure.
+//
+// The lookup runs under withConflictRetry: it is the sign-in's first
+// statement and a bare read, so a transient contention conflict on it --
+// under SQLite a reader refused while another connection's write is
+// committing -- would otherwise surface as an internal error on a request
+// that should simply have waited a moment. Retrying a read is
+// unconditionally safe: it reads whatever the table holds at the retry's
+// own execution time, and a miss is still a miss.
 func (s *Service) findByIdentifier(ctx context.Context, identifier string) (*User, error) {
 	find := s.users.FindByPhone
 	if strings.Contains(identifier, "@") {
 		find = s.users.FindByEmail
 	}
 
-	user, err := find(ctx, identifier)
+	var user *User
+	err := withConflictRetry(func() error {
+		found, findErr := find(ctx, identifier)
+		user = found
+		return findErr
+	})
 	if err != nil {
 		if errors.Is(err, ErrNotFound) {
 			return nil, nil

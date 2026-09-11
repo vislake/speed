@@ -62,8 +62,19 @@ type PreferencesPatch struct {
 
 // Preferences returns the account's stored locale and timezone as the
 // preferences surface reports them.
+//
+// The read runs under withConflictRetry: a transient contention conflict on
+// it -- under SQLite a reader refused while another connection's write is
+// committing -- would otherwise surface as an internal error on a plain
+// read that a moment's wait resolves. Retrying a read is unconditionally
+// safe: it reads whatever the row holds at the retry's own execution time.
 func (s *Service) Preferences(ctx context.Context, userID string) (PreferencesInput, error) {
-	user, err := s.users.FindByID(ctx, userID)
+	var user *User
+	err := withConflictRetry(func() error {
+		found, findErr := s.users.FindByID(ctx, userID)
+		user = found
+		return findErr
+	})
 	if err != nil {
 		return PreferencesInput{}, err
 	}
@@ -96,7 +107,17 @@ func (s *Service) UpdatePreferences(ctx context.Context, userID string, patch Pr
 		}
 		patch.Timezone = &canonical
 	}
-	user, err := s.users.UpdatePreferences(ctx, userID, patch.Locale, patch.Timezone)
+	// The write runs under withConflictRetry: the update names only the
+	// patched columns and sets them to fixed values, so a retried attempt
+	// re-executes the identical statement against the row's current state
+	// -- a conflict that outlasts the retry budget surfaces as the same
+	// raw store failure this call returns for any other store-side error.
+	var user *User
+	err := withConflictRetry(func() error {
+		updated, updateErr := s.users.UpdatePreferences(ctx, userID, patch.Locale, patch.Timezone)
+		user = updated
+		return updateErr
+	})
 	if err != nil {
 		return PreferencesInput{}, err
 	}

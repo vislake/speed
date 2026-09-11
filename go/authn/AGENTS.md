@@ -195,6 +195,47 @@ plus two rules that apply to `repository.go` specifically:
 
 Keep every GORM call in `repository.go`. Nothing else in the module imports gorm.
 
+### Store calls on the sign-in and preferences surfaces retry a bounded number of times on database contention
+
+`concurrency.go` carries this module's one retry envelope: `withConflictRetry`
+runs a single store call up to `txRetryBudget` (5) times, retrying only when
+`dbkit.IsRetryableConflict` classifies the failure as transient contention --
+SQLite's `SQLITE_BUSY`, PostgreSQL's detected deadlock / serialization failure
+-- with a small fixed backoff between attempts (the same budget and shape
+`go/org`'s `withRetry` and `go/sharing`'s `withTxRetry` use). Any other error
+surfaces on the first attempt, unwrapped and unretried, so a real failure is
+never masked. Exhausting the budget returns the last conflict error raw: the
+caller's existing mapping still answers what a single un-retried attempt
+answers today -- `ErrInternal` (500, `authn.internal_error`) -- because this
+module deliberately adds no distinct contention code.
+
+`withInsertConflictRetry` is the envelope's insert-shaped sibling for the two
+writes that mint their row's primary key (`newID`): a duplicate-key refusal
+raised by a RETRY, with the row verifiably present
+(`sessionRowExists`/`refreshTokenRowExists`), is the earlier attempt's own
+write having landed -- completion, not a failure -- while a duplicate on the
+FIRST attempt, or one whose row is absent, surfaces unchanged.
+
+Which calls are wrapped is `concurrency.go`'s own doc comment's authority
+(`grep withConflictRetry(` is exact), not this paragraph's: the reads and
+writes of the client-visible sign-in and preferences surfaces --
+`findByIdentifier`, `SessionManager.Start` (the session and first
+refresh-token inserts), `Preferences` and `UpdatePreferences`. The envelope
+wraps ONE repository call per attempt, never a business step, which is what
+keeps a retry from duplicating the sign-in flow's other effects: the guard's
+rate-limit accounting (`ratelimit.go`, KVStore-backed, no SQLite), the
+login-history row, the audit emission and the domain events all run outside
+it, exactly once per request.
+
+Attempts are not free under contention: each failed SQLite attempt first
+waits through the dialect's bounded busy_timeout
+(`dbkit/dialect/sqlite`'s 5s default, which applies to readers and writers
+alike once another connection holds the file's write lock), so one wrapped
+call's worst case is `txRetryBudget` expired busy windows before it surfaces
+the same error it always did. The envelope exists so that a lock which frees
+within that span answers the request instead of a 500; it changes nothing on
+the uncontended path, where the first attempt succeeds.
+
 ### Do not reimplement the blind indexer
 
 Email and phone are encrypted at rest and therefore unqueryable. The exact-match
@@ -1089,6 +1130,21 @@ integration tier (`integration_test/postgres_refresh_rotation_test.go`) —
 SQLite's coarse table-level locking can pass the unit-tier version even with
 a broken CAS, which is exactly why the same property gets a second,
 real-database proof.
+
+The conflict envelope's contract is pinned deterministically by
+`concurrency_test.go` — retry only on `dbkit.IsRetryableConflict`, immediate
+unretried surface of any other error, the `txRetryBudget` attempt bound, the
+raw last-conflict exhaustion answer, and the insert residue rule (a duplicate
+on a retry with the row present is completion; without the row it surfaces) —
+and its end-to-end half runs a real cross-connection tournament on a
+file-backed SQLite unit-tier database:
+`TestLoginAndPreferences_SecondConnectionHoldingTheWriteLock` checks a second
+connection out of the pool, has it hold the file's write lock (`BEGIN
+EXCLUSIVE`) past the dialect's busy_timeout while the real `Handler` serves a
+password sign-in and a preferences read, and asserts both answer 200 once
+the holder commits. Without the envelope both answer 500
+(`authn.internal_error`) after the losing attempt's expired busy window —
+the exact behavior the tournament exists to keep closed.
 
 `handler_test.go` exercises every operation through the actual composed
 `Handler` (`httptest`, never calling `Service` methods directly), including
