@@ -158,20 +158,13 @@
 - **登记理由**：宿主可见的装配契约行为收紧（此前可启动的误装配组合现在拒绝启动），按"宿主可见面变更须带 `!BREAKING` footer 或登记本清单"的纪律**双轨**登记（四个收紧提交均带 `!BREAKING` footer，先例同 §5.2）。
 - **出处**：`453ba35e`（`fix(pkgcore)!: refuse a token delivered by two selected components`）+ `69651edb`（`refactor(sharing,ai-gateway,notification,integration,admin,compliance,jobs)!: propagate optional dependency read errors`）+ `760a73db`（`refactor(saasctl)!: propagate the optional SMS sender read in the templates`）+ `58ffd7e3`（`refactor(reference-app)!: propagate optional dependency read errors in host wiring`）。
 
-### 5.9. admin 新增账本全量读取 `TenantService.ListAllRows`（非破坏，新增面登记）
-
-- **面**：`go/admin` 新增导出方法 `TenantService.ListAllRows(ctx) ([]Tenant, error)`——租户账本的全量读取：分页走完 `TenantRepository.List` 的全部游标页，而不是发一次调用（单次调用在上限处静默截断）。既有导出符号无变化：此前的逐页拼装散在各跨租户读取内（未导出面），收敛到该方法不构成消费者可见破坏。
-- **消费者影响**：无破坏、无升级动作；需要"平台已知全部租户"作为候选列表的跨租户读取（用量看板、跨租户审计、发送记录检索）此前各自在单次 `List` 的上限处静默截断，现在一次调用即得全量。
-- **登记理由**：公共符号面新增，按"宿主可见面变更须带 `!BREAKING` footer 或登记本清单"的纪律登记（本轮为纯新增，不带 footer）。
-- **出处**：`68bd691b`（`refactor(admin): fan cross-tenant ledger reads out through one walk`）。
-
 ### 5.9. notification：联系人 SMS 的身份 locale 改为渲染实际 locale（行为修正）
 
 - **面**：`go/notification` 的两条 contact 系 SMS 发送——投递路径（`deliverContactSMS`）与联系人验证码（`sendCode` 经 `renderContactCode`）——此前正文渲染 locale 与 seam 携带的 `SMS.Locale` 是两个来源：正文按档 locale（dispatch 捕获的请求语言 / 验证码创建与重发请求的协商语言）渲染，`SMS.Locale` 恒为平台默认（`en-US`）。现两者同源：`SMS.Locale` 即正文实际渲染 locale（生产者未捕获语言时同为平台默认 tier）。用户投递路径（`deliverUserSMS`）与 authn 验证码（`renderSMSCode` 回报的 `usedLocale`）本已同源，不变。
 - **消费者影响**：模板型适配器（`pkgcore/sms/aliyun`、`pkgcore/sms/tencent`）按 `(locale, message-id)` 选择已审批模板。档 locale 非平台默认时，联系人与联系人验证码消息的模板选择从"平台默认语言模板"变为"该 locale 语言模板"——例如 zh-CN 档此前正文中文而模板取 en-US（或在该 pair 无映射时被拒）。只在平台默认语言注册过这些 message-id 模板的宿主，需为其实流量携带的其余 locale 补注册，否则消息在适配器侧发送前拒绝（fail-closed 无兜底，即既有适配器契约，本轮未新增行为）。自由文本传输（console/HTTP 网关/Twilio）忽略身份字段，不受影响。
 - **替代路径**：无（同签名行为修正）；按流量语言补注册 `(locale, message-id)` 模板即可。
 - **登记理由**：宿主可观测面（发送消息的模板语言与可达性）的行为修正，按"宿主可见面变更须带 `!BREAKING` footer 或登记本清单"的纪律登记（公共签名面未变，不带 footer）。
-- **出处**：`51da1649`（`fix(notification): select contact SMS templates in the locale the copy rendered in`）。
+- **出处**：`f29618b9`（`fix(notification): select contact SMS templates in the locale the copy rendered in`）。
 
 ### 5.10. pkgcore：typed-nil 产品与 Put 值按缺失拒绝（行为收紧）
 
@@ -179,7 +172,7 @@
 - **消费者影响**：此前 New 返回 typed-nil 的组件"构造成功"，nil 指针进入按类型上下文，依赖方向的 `Get` 返回一个"存在但为 nil"的值（首个方法调用即 panic，远离装配错误现场）；现在构造期即失败并点名组件。以 typed-nil 表达"服务不可用"的误用形态从"启动后首用崩"变为"启动期拒绝"；正确返回产品的组件零行为变化。
 - **替代路径**：无（行为收紧）；让 `New` 返回真实产品或 `(nil, err)`。
 - **登记理由**：宿主可见的装配契约行为收紧（此前可启动的形态现在构造期拒绝），按"宿主可见面变更须带 `!BREAKING` footer 或登记本清单"的纪律登记（签名不变、非 API 破坏，不带 footer）。
-- **出处**：`82823591`（`fix(pkgcore): treat a typed nil product as the absence it is`）。
+- **出处**：`25e1a77d`（`fix(pkgcore): treat a typed nil product as the absence it is`）。
 
 ### 5.11. pkgcore：整数目标字段拒收越界浮点（行为收紧）
 
@@ -187,7 +180,21 @@
 - **消费者影响**：把整数键写成越界浮点（如 `retries: 1e30`）的宿主此前以垃圾整数启动，现在 `Load`/`Decode` 失败并点名键；范围内数值配置零行为变化。
 - **替代路径**：无（行为收紧）；把配置值改回目标整数范围内。
 - **登记理由**：宿主可见的配置接受面行为收紧，同 §5.10（签名不变，不带 footer）。
-- **出处**：`c663f610`（`fix(pkgcore): refuse out-of-range floats before converting to integers`）。
+- **出处**：`6e20f187`（`fix(pkgcore): refuse out-of-range floats before converting to integers`）。
+
+### 5.12. admin 新增账本全量读取 `TenantService.ListAllRows`（非破坏，新增面登记）
+
+- **面**：`go/admin` 新增导出方法 `TenantService.ListAllRows(ctx) ([]Tenant, error)`——租户账本的全量读取：分页走完 `TenantRepository.List` 的全部游标页，而不是发一次调用（单次调用在上限处静默截断）。既有导出符号无变化：分页读取本身自 `ListAllIDs`（§5.13）起就在单处，散在各跨租户读取内的是各调用方手写的 per-tenant 授权循环（未导出面），收敛进统一 walk 不构成消费者可见破坏。
+- **消费者影响**：无破坏、无升级动作；本变更带来的是逐页走账的拼装收敛与用量看板 `Summary` 的重读消除——用量看板、成员资格组合与发送记录检索此前各自手写同样的 per-tenant 授权循环（逐租户进入已审计的 system-context、首个失败即中止），现收敛进 `TenantService.forEachLedgerTenant` 统一 walk（未导出面）；`Summary` 改从同一份账本清单直读每行的 display name，逐行的单行重读就此消除——单行读失败不再可能把行的名字置空。各跨租户读取的完整性（全量账本）自 2026-09-05 起即已由该日引入的分页读取（`afd4997f` 的 `ListAllIDs`，见 §5.13）保证，本变更未触及；授权、顺序与错误传播语义均不变。
+- **登记理由**：公共符号面新增，按"宿主可见面变更须带 `!BREAKING` footer 或登记本清单"的纪律登记（本轮为纯新增，不带 footer）。
+- **出处**：`68bd691b`（`refactor(admin): fan cross-tenant ledger reads out through one walk`）。
+
+### 5.13. admin 新增账本全量 ID 读取 `TenantService.ListAllIDs`（非破坏，新增面登记）
+
+- **面**：`go/admin` 新增导出方法 `TenantService.ListAllIDs(ctx) ([]string, error)`——租户账本全部租户 ID 的全量读取：分页走完 `TenantRepository.List` 的全部游标页，而不是发一次调用（单次调用在上限处静默截断）。引入时 `SearchService.MembershipsOf` 与 `AuditService.Query` 的候选租户列表正取自被上限截断的单次 `List` 调用（账本超过一页即静默丢弃其后各行），两处随之改用本方法取得全量。其后 `68bd691b` 把实现改为 `ListAllRows` 的 ID 投影（§5.12），签名与语义不变。
+- **消费者影响**：无破坏、无升级动作；需要"平台已知全部租户"ID 面作为候选列表的跨租户读取可直接调用本方法，一次调用即得全量。
+- **登记理由**：公共符号面新增，按"宿主可见面变更须带 `!BREAKING` footer 或登记本清单"的纪律登记（纯新增面，不带 footer）。
+- **出处**：`afd4997f`（`fix(admin): refuse system-domain impersonation targets and page the full tenant ledger`）+ `68bd691b`（`refactor(admin): fan cross-tenant ledger reads out through one walk`；改为 `ListAllRows` 投影）。
 
 ## 6. D 组：configrefgen 工具内部迁移（工具面，非宿主面）
 
