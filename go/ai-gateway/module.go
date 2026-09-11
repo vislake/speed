@@ -18,8 +18,11 @@ const moduleName = "ai-gateway"
 // declares (pkgcore.WithSystemContext, or tenancy.WithSystemContext's own
 // registration path) when it builds the system context that authorizes a
 // platform-wide credential write (CredentialService.SetPlatformCredential).
-// Register calls pkgcore.RegisterSystemPurpose with it, so a host that
-// bootstraps this module never needs to register it by hand.
+// The purpose is descriptor data: the component descriptor (component.go)
+// declares it as SystemPurposes, which the assembly registers when it
+// closes its Init stage and the transition bridge registers inside the
+// module's own registration turn, so a host that bootstraps this module
+// never needs to register it by hand.
 const SystemPurposeCredentialWrite pkgcore.SystemPurpose = "ai-gateway.credential_write"
 
 // The permissions ai-gateway contributes to the platform's permission
@@ -152,9 +155,9 @@ func (m *Module) Locales() embed.FS { return embed.FS{} }
 func (m *Module) OpenAPISpec() []byte { return openAPISpecYAML }
 
 // Register implements pkgcore.Module. Per the interface's own contract it
-// performs no I/O; it declares SystemPurposeCredentialWrite
-// (pkgcore.RegisterSystemPurpose is a pure in-memory registration, not I/O)
-// so a host's system context can name it, claims the image-generation job
+// performs no I/O; SystemPurposeCredentialWrite is descriptor data the
+// component descriptor declares, not a declaration made here, so a host's
+// system context can name it. Register claims the image-generation job
 // handler on reg.Jobs whenever the Module's Gateway was built with
 // WithImageGeneration (image_gateway.go's imageJobHandler):
 // reg.Jobs.Handle is itself a plain catalog insertion, no I/O, so
@@ -168,7 +171,6 @@ func (m *Module) OpenAPISpec() []byte { return openAPISpecYAML }
 // reg.Routes.Mount is a plain registration, no I/O, so Register's no-I/O
 // contract stands.
 func (m *Module) Register(reg pkgcore.Registrar) error {
-	pkgcore.RegisterSystemPurpose(SystemPurposeCredentialWrite)
 	if err := reg.PermissionsSeat().Add(PermissionRead, PermissionWrite, PermissionManagePlatform); err != nil {
 		return err
 	}

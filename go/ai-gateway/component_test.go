@@ -2,6 +2,7 @@ package aigateway
 
 import (
 	"context"
+	"slices"
 	"testing"
 
 	"github.com/vislake/speed/go/dbkit/dbtest"
@@ -77,5 +78,57 @@ func TestComponent_NewFailsWithoutTheDatabase(t *testing.T) {
 	instance, err := aiGatewayComponent.New(context.Background(), pkgcore.NewComponentRegistry(), pkgcore.NewComponentConfig(nil))
 	if err == nil {
 		t.Fatalf("New = %v, nil error; want the missing database reported", instance)
+	}
+}
+
+// TestComponent_SelfDescribesItsSystemPurposes pins the module's one audited
+// purpose as descriptor data: the assembly registers the declaration when it
+// closes its Init stage, so the purpose is registered with no help from the
+// module's Register call.
+func TestComponent_SelfDescribesItsSystemPurposes(t *testing.T) {
+	want := []pkgcore.SystemPurpose{SystemPurposeCredentialWrite}
+	if !slices.Equal(aiGatewayComponent.SystemPurposes, want) {
+		t.Fatalf("component SystemPurposes = %v, want %v", aiGatewayComponent.SystemPurposes, want)
+	}
+}
+
+// TestComponent_InitDeclaresThroughTheGate drives the descriptor's Init
+// through a real assembly: the module's Register runs inside the one stage
+// whose seats accept writes, so its permissions and HTTP mount land in the
+// assembly's own seats and the gateway takes the assembly's own declaration
+// face for its call-time KVStore reads.
+func TestComponent_InitDeclaresThroughTheGate(t *testing.T) {
+	reg := pkgcore.NewComponentRegistry()
+	if err := componenttest.RunInit(t, reg, aiGatewayComponent,
+		dbtest.NewSQLite(t),
+		pkgcore.NewMemoryKVStore(),
+		pkgcore.NewMemoryEventBus(),
+	); err != nil {
+		t.Fatalf("RunInit: %v", err)
+	}
+	m, err := pkgcore.Get[*Module](reg)
+	if err != nil {
+		t.Fatalf("the assembly's product: %v", err)
+	}
+
+	perms := reg.Permissions.Permissions()
+	for _, want := range []string{PermissionRead, PermissionWrite, PermissionManagePlatform} {
+		if !slices.Contains(perms, want) {
+			t.Errorf("Permissions seat = %v, want the %q declaration", perms, want)
+		}
+	}
+	if routes := reg.Routes.Routes(); len(routes) != 1 || routes[0].Path != apiPath {
+		t.Fatalf("Init mounted %v, want exactly the %s mount", routes, apiPath)
+	}
+	// No queue and no storage product were provided: Init must claim no
+	// image-generation handler, the chat-only shape.
+	if _, ok := reg.Jobs.Handlers()[TaskTypeImageGenerate]; ok {
+		t.Error("Init claimed the image-generation handler without a queue and storage")
+	}
+	if m.gateway.host == nil {
+		t.Error("the gateway did not take the assembly's declaration face")
+	}
+	if m.handler == nil {
+		t.Error("the module's HTTP handler was not built by Init")
 	}
 }

@@ -2,6 +2,7 @@ package aigateway
 
 import (
 	"context"
+	"slices"
 	"testing"
 
 	"github.com/vislake/speed/go/pkgcore"
@@ -21,21 +22,20 @@ func TestModule_DependsOn_Nil(t *testing.T) {
 	}
 }
 
-func TestModule_Register_DeclaresSystemPurpose(t *testing.T) {
+func TestModule_Register_DeclaresTheSurface(t *testing.T) {
 	m := NewModule(newTestDB(t))
 	bus := pkgcore.NewMemoryEventBus()
 	reg := pkgcore.NewRegistry(bus, pkgcore.NewMemoryKVStore(), pkgcore.NewConsoleMailer())
 	if err := m.Register(reg); err != nil {
 		t.Fatalf("Register: %v", err)
 	}
-	// Register must have declared SystemPurposeCredentialWrite -- proven by
-	// WithSystemContext now accepting it where it would otherwise refuse an
-	// unregistered purpose.
-	if _, err := pkgcore.WithSystemContext(context.Background(), pkgcore.SystemReason{
-		Actor:   "test",
-		Purpose: SystemPurposeCredentialWrite,
-	}); err != nil {
-		t.Fatalf("WithSystemContext after Register: %v, want SystemPurposeCredentialWrite to be registered", err)
+	for _, want := range []string{PermissionRead, PermissionWrite, PermissionManagePlatform} {
+		if !slices.Contains(reg.Permissions.Permissions(), want) {
+			t.Errorf("Permissions = %v, want the %q declaration", reg.Permissions.Permissions(), want)
+		}
+	}
+	if routes := reg.Routes.Routes(); len(routes) != 1 || routes[0].Path != apiPath {
+		t.Fatalf("Register mounted %v, want exactly the %s mount", routes, apiPath)
 	}
 }
 

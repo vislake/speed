@@ -5,10 +5,13 @@ package aigateway
 // as the "ai-gateway" module's single implementation. The component builds
 // the same *Module every other caller builds through NewModule, so the
 // module's credential service, gateway and HTTP surface are one
-// implementation reachable two ways.
+// implementation reachable two ways. Its Init runs the module's one
+// declaration entry point, Register, inside the assembly's Init stage -- the
+// one stage whose seats accept writes.
 
 import (
 	"context"
+	"fmt"
 
 	"gorm.io/gorm"
 
@@ -33,6 +36,10 @@ import (
 // recording). The key-value store backs the per-tenant rate limiter and
 // fails closed when absent.
 //
+// Init runs the module's one declaration entry point, Register, inside the
+// assembly's Init stage -- the one stage whose seats accept writes -- so the
+// component world declares exactly what the module's Register declares.
+//
 // SystemPurposes declares SystemPurposeCredentialWrite: the audited purpose
 // a host names when it builds the system context authorizing a platform-wide
 // credential write.
@@ -41,10 +48,9 @@ import (
 // model to vendor model mapping is a construction-time concern of the
 // deploying application, not something a composition block carries.
 //
-// Prepare and Init are deliberately not declared: the credential API-key
-// serializer is registered today by the host's pre-database path from
-// material the host holds, and declaration (the module's Register call) is
-// made by the host's bootstrap path, not by this descriptor.
+// Prepare is deliberately not declared: the credential API-key serializer
+// is registered today by the host's pre-database path from material the
+// host holds.
 var aiGatewayComponent = pkgcore.Component{
 	Name:           "ai-gateway",
 	Module:         "ai-gateway",
@@ -83,6 +89,13 @@ var aiGatewayComponent = pkgcore.Component{
 			opts = append(opts, WithUsageRecorder(recorder))
 		}
 		return NewModule(db, opts...), nil
+	},
+	Init: func(_ context.Context, reg *pkgcore.ComponentRegistry, instance any) error {
+		m, ok := instance.(*Module)
+		if !ok {
+			return fmt.Errorf("ai-gateway: component init got a %T instance, want *ai-gateway.Module", instance)
+		}
+		return m.Register(reg)
 	},
 }
 
