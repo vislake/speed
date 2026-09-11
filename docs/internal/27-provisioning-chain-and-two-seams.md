@@ -127,7 +127,7 @@ org 的订阅者 `handleUserCreated`(go/org/events.go:305)只处理**带租户**
 
 ### 4.1 现状
 
-缝已经存在:`notification.UserAddressResolver`(go/notification/delivery.go:248,`UserAddresses` :219)是"用户投递在发送时解析收件地址"的结构化模块接口,**必装**:`Module.Register` 在缺失时以 `ErrUserAddressResolverRequired`(go/notification/errors.go:359)拒绝启动,`WithUserAddressResolver`(module.go:210)是注入点。契约三条:发送时读取(非入队时);缺地址不是错误(渠道跳过并记一条 skipped 记录);返回的地址必须是宿主**已验证**的地址——用户路径上模块不做验证,resolver 就是全部"可否发送"的门(delivery.go 的契约文本明说这只能写在契约里)。
+模块接口已经存在:`notification.UserAddressResolver`(go/notification/delivery.go:248,`UserAddresses` :219)是"用户投递在发送时解析收件地址"的结构化模块接口,**必装**:`Module.Register` 在缺失时以 `ErrUserAddressResolverRequired`(go/notification/errors.go:359)拒绝启动,`WithUserAddressResolver`(module.go:210)是注入点。契约三条:发送时读取(非入队时);缺地址不是错误(渠道跳过并记一条 skipped 记录);返回的地址必须是宿主**已验证**的地址——用户路径上模块不做验证,resolver 就是全部"可否发送"的门(delivery.go 的契约文本明说这只能写在契约里)。
 
 **手写重写有三处**:
 
