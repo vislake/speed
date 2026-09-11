@@ -264,6 +264,57 @@ func TestPrepareAmbiguity(t *testing.T) {
 	})
 }
 
+// TestPrepareRejectsDuplicateDeclaredDeliveries pins the whole-selection
+// form of the single-value ambiguity rule: two selected components whose
+// declared deliveries address one another are refused at plan time even
+// when no requirement anchors the token -- the shape whose later by-type
+// readings (Get, GetOptional, the nil-for-absent sugars) would all fail or
+// silently answer absent while two deliveries sit in the context.
+func TestPrepareRejectsDuplicateDeclaredDeliveries(t *testing.T) {
+	t.Run("no requirement anchors the token", func(t *testing.T) {
+		p1 := providerComponent("asm.dup.p1", &asmTokenA{}, (*asmTokenA)(nil))
+		p2 := providerComponent("asm.dup.p2", &asmTokenA{}, (*asmTokenA)(nil))
+
+		_, err := prepareAssembly(t, []Component{p1, p2},
+			configEntry{key: "asm.dup.p1", value: nil},
+			configEntry{key: "asm.dup.p2", value: nil},
+		)
+		if !errors.Is(err, ErrAmbiguousProvider) {
+			t.Fatalf("Prepare = %v, want ErrAmbiguousProvider", err)
+		}
+		for _, want := range []string{"stage prepare", "asmTokenA", "asm.dup.p1", "asm.dup.p2", "deselect all but one"} {
+			if !strings.Contains(err.Error(), want) {
+				t.Errorf("error %q does not carry %q", err, want)
+			}
+		}
+	})
+
+	t.Run("disjoint declared tokens stay legal", func(t *testing.T) {
+		p1 := providerComponent("asm.dup.q1", &asmTokenA{}, (*asmTokenA)(nil))
+		p2 := providerComponent("asm.dup.q2", &asmTokenB{}, (*asmTokenB)(nil))
+		if _, err := prepareAssembly(t, []Component{p1, p2},
+			configEntry{key: "asm.dup.q1", value: nil},
+			configEntry{key: "asm.dup.q2", value: nil},
+		); err != nil {
+			t.Fatalf("Prepare = %v, want nil for two components delivering distinct tokens", err)
+		}
+	})
+
+	t.Run("an undeclared duplicate stays outside the plan check", func(t *testing.T) {
+		// Both components put the same product type but declare nothing:
+		// the plan reads no delivery for it, so the selection stays legal --
+		// the boundary of a declarations-driven check.
+		p1 := plainComponent("asm.dup.u1", &asmTokenA{})
+		p2 := plainComponent("asm.dup.u2", &asmTokenA{})
+		if _, err := prepareAssembly(t, []Component{p1, p2},
+			configEntry{key: "asm.dup.u1", value: nil},
+			configEntry{key: "asm.dup.u2", value: nil},
+		); err != nil {
+			t.Fatalf("Prepare = %v, want nil for undeclared deliveries", err)
+		}
+	})
+}
+
 func TestPrepareOptionalRequirements(t *testing.T) {
 	optionalConsumer := func(name string) Component {
 		return Component{

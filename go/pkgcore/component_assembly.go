@@ -77,6 +77,9 @@ func (r *ComponentRegistry) planAssembly(ctx context.Context) error {
 	if resolveErr := r.resolveRequirements(draft, comp.strict); resolveErr != nil {
 		return resolveErr
 	}
+	if deliveryErr := validateDeclaredDeliveries(draft); deliveryErr != nil {
+		return deliveryErr
+	}
 	if validateErr := r.validateSelection(draft, comp.mode); validateErr != nil {
 		return validateErr
 	}
@@ -253,6 +256,52 @@ func appendUnique(names []string, name string) []string {
 		return names
 	}
 	return append(names, name)
+}
+
+// validateDeclaredDeliveries refuses a selection in which two selected
+// components' Provides declarations address one another: one single-value
+// token delivered twice, which every by-type reading of it -- Get,
+// GetOptional, the nil-for-absent sugars -- would find ambiguous. The
+// requirement walk above anchors that rule on the token a consumer names;
+// this pass completes it over the selection itself, so a duplicate
+// delivery nothing requires cannot slip through to the by-type context and
+// surface only as a read-time failure or a sugar answering absent. Only
+// declared deliveries are visible here -- a value put outside a
+// component's declaration is invisible to the plan and stays a read-time
+// condition -- and components read by name rather than by token
+// (directory-style members) carry no single-value declaration to collide.
+func validateDeclaredDeliveries(draft *assemblyDraft) error {
+	for i, nameA := range draft.order {
+		a := draft.byName[nameA].component
+		for _, nameB := range draft.order[i+1:] {
+			b := draft.byName[nameB].component
+			if token, ok := overlappingDelivery(a, b); ok {
+				return fmt.Errorf("%w (stage prepare): %s is provided by multiple selected components: %s; deselect all but one", ErrAmbiguousProvider, tokenDisplay(token), joinNames([]string{a.Name, b.Name}))
+			}
+		}
+	}
+	return nil
+}
+
+// overlappingDelivery reports whether one component's declared deliveries
+// would be found by a by-type reading for a token another component also
+// declares: the same declaration twice, or a pair whose declared types
+// address one another (an interface token beside a concrete type that
+// implements it). It returns the token to name in the refusal.
+func overlappingDelivery(a, b Component) (reflect.Type, bool) {
+	for _, declaredA := range a.Provides {
+		ta := reflect.TypeOf(declaredA)
+		for _, declaredB := range b.Provides {
+			tb := reflect.TypeOf(declaredB)
+			switch {
+			case productMatchesToken(ta, tb):
+				return tb, true
+			case productMatchesToken(tb, ta):
+				return ta, true
+			}
+		}
+	}
+	return nil, false
 }
 
 // validateSelection runs the per-component validations in selection order:

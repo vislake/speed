@@ -82,77 +82,80 @@ func TestBuiltinComponents_GlobalRosterIsWellFormed(t *testing.T) {
 	}
 }
 
+// builtinAssemblies enumerates every built-in implementation but kv.nats
+// (whose construction dials a NATS server synchronously and has no offline
+// success path), each with the decodable configuration its block takes.
+// One implementation per seam is an assembly's shape under the single-value
+// delivery rule, so every entry is assembled on its own.
+var builtinAssemblies = []struct {
+	name       string
+	cfg        any
+	migrations bool // the implementation carries a support-table migration set
+}{
+	{name: "eventbus.memory"},
+	{name: "eventbus.redis"},
+	{name: "eventbus.nats"},
+	{name: "eventbus.postgres", cfg: map[string]any{"dsn": assembledPostgresDSN, "replica_id": "assembly-replica"}, migrations: true},
+	{name: "kv.memory"},
+	{name: "kv.redis"},
+	{name: "kv.postgres", cfg: map[string]any{"dsn": assembledPostgresDSN}, migrations: true},
+	{name: "kv.memcached"},
+	{name: "mailer.console"},
+	{name: "mailer.smtp", cfg: map[string]any{"host": "relay.assembly.test"}},
+	{name: "objectstore.local"},
+	{name: "objectstore.s3", cfg: map[string]any{
+		"endpoint":   "objects.assembly.test",
+		"bucket":     "assembly",
+		"access_key": "assembly-key",
+		"secret_key": "assembly-secret",
+	}},
+	{name: "sms.console"},
+	{name: "sms.http", cfg: map[string]any{"endpoint": "https://gateway.assembly.test/sms"}},
+}
+
 // TestBuiltinComponents_AssembleAndConstructAll drives the full roster
-// through a real assembly: every built-in but kv.nats (whose construction
-// dials a NATS server synchronously and has no offline success path) is
-// selected with a decodable configuration, Prepare validates every block,
-// capability and asset, and Construct runs every New. It is the end-to-end
-// proof that a composition naming the whole roster resolves and builds
-// through the component registry.
+// through real assemblies: each implementation is selected with its
+// decodable configuration, Prepare validates its block, capability and
+// assets, and Construct runs its New. It is the end-to-end proof that every
+// built-in resolves and builds through the component registry.
 func TestBuiltinComponents_AssembleAndConstructAll(t *testing.T) {
-	ctx := context.Background()
-	reg := pkgcore.NewComponentRegistry()
-	reg.Put(pkgcore.NewComponentConfig(map[string]any{
-		"components": map[string]any{
-			"eventbus.memory":   nil,
-			"eventbus.redis":    nil,
-			"eventbus.nats":     nil,
-			"eventbus.postgres": map[string]any{"dsn": assembledPostgresDSN, "replica_id": "assembly-replica"},
-			"kv.memory":         nil,
-			"kv.redis":          nil,
-			"kv.postgres":       map[string]any{"dsn": assembledPostgresDSN},
-			"kv.memcached":      nil,
-			"mailer.console":    nil,
-			"mailer.smtp":       map[string]any{"host": "relay.assembly.test"},
-			"objectstore.local": nil,
-			"objectstore.s3": map[string]any{
-				"endpoint":   "objects.assembly.test",
-				"bucket":     "assembly",
-				"access_key": "assembly-key",
-				"secret_key": "assembly-secret",
-			},
-			"sms.console": nil,
-			"sms.http":    map[string]any{"endpoint": "https://gateway.assembly.test/sms"},
-		},
-	}))
+	for _, impl := range builtinAssemblies {
+		t.Run(impl.name, func(t *testing.T) {
+			ctx := context.Background()
+			reg := pkgcore.NewComponentRegistry()
+			reg.Put(pkgcore.NewComponentConfig(map[string]any{
+				"components": map[string]any{impl.name: impl.cfg},
+			}))
 
-	if err := reg.Prepare(ctx); err != nil {
-		t.Fatalf("Prepare() error = %v, want every built-in selected and validated", err)
-	}
-	if err := reg.Construct(ctx); err != nil {
-		t.Fatalf("Construct() error = %v, want every built-in constructed", err)
-	}
-	// Construct on success is followed by the host-driven teardown; Close
-	// releases what New built (dialed clients, pools, the temporary object
-	// store directory).
-	t.Cleanup(func() {
-		closeCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer cancel()
-		if err := reg.Close(closeCtx); err != nil {
-			t.Errorf("Close() error = %v, want the constructed set released", err)
-		}
-	})
+			if err := reg.Prepare(ctx); err != nil {
+				t.Fatalf("Prepare() error = %v, want %s selected and validated", err, impl.name)
+			}
+			if err := reg.Construct(ctx); err != nil {
+				t.Fatalf("Construct() error = %v, want %s constructed", err, impl.name)
+			}
+			closeCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			if err := reg.Close(closeCtx); err != nil {
+				t.Errorf("Close() error = %v, want %s released", err, impl.name)
+			}
 
-	// MemberNames answers the module membership of the selected set: four
-	// eventbus implementations and four kv implementations were selected.
-	if got := pkgcore.MemberNames(reg, "eventbus"); len(got) != 4 {
-		t.Errorf("MemberNames(reg, %q) = %v, want the four selected implementations", "eventbus", got)
-	}
-
-	// The two PostgreSQL-backed implementations carry their support-table
-	// migration sets, so the database component's Verify step has them to
-	// apply.
-	var zeroFS embed.FS
-	withMigrations := make(map[string]bool)
-	for _, asset := range pkgcore.Assets(reg) {
-		if asset.Migrations != zeroFS {
-			withMigrations[asset.Name] = true
-		}
-	}
-	for _, name := range []string{"eventbus.postgres", "kv.postgres"} {
-		if !withMigrations[name] {
-			t.Errorf("Assets(reg) carries no migrations for %q, want the package's support-table set", name)
-		}
+			// The PostgreSQL-backed implementations carry their
+			// support-table migration sets, so the database component's
+			// Verify step has them to apply.
+			if !impl.migrations {
+				return
+			}
+			var zeroFS embed.FS
+			carried := false
+			for _, asset := range pkgcore.Assets(reg) {
+				if asset.Name == impl.name && asset.Migrations != zeroFS {
+					carried = true
+				}
+			}
+			if !carried {
+				t.Errorf("Assets(reg) carries no migrations for %q, want the package's support-table set", impl.name)
+			}
+		})
 	}
 }
 
