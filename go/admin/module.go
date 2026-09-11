@@ -101,15 +101,19 @@ const (
 	AuditActionAuditExport = "admin.audit_export"
 )
 
-// SystemPurposeAdminCrossTenant is the pkgcore.SystemPurpose admin
-// registers for every cross-tenant operation it performs under the
-// audited system-context wrapper: the user search and its membership
-// composition (both halves take the audited wrapper -- see search.go),
-// the cross-tenant audit query, the cross-tenant notification dispatch to
-// an impersonation target, the per-tenant usage dashboard and the
+// SystemPurposeAdminCrossTenant is the pkgcore.SystemPurpose every
+// cross-tenant operation admin performs acts under, walking the audited
+// system-context wrapper: the user search and its membership composition
+// (both halves take the audited wrapper -- see search.go), the
+// cross-tenant audit query, the cross-tenant notification dispatch to an
+// impersonation target, the per-tenant usage dashboard and the
 // cross-tenant send-record search. One purpose covers all of them, since
 // they are all instances of the same underlying operation -- "admin
-// acting across the tenant boundary it does not itself belong to".
+// acting across the tenant boundary it does not itself belong to". The
+// purpose is descriptor data: the component descriptor (component.go)
+// declares it as SystemPurposes, which the assembly registers when it
+// closes its Init stage and the transition bridge registers inside the
+// module's own registration turn.
 const SystemPurposeAdminCrossTenant pkgcore.SystemPurpose = "admin.cross_tenant"
 
 // NotificationTypeImpersonationStarted is the notification type the
@@ -287,12 +291,15 @@ func (m *Module) Usage() *UsageService { return m.usage }
 func (m *Module) Export() *ExportService { return m.exportSvc }
 
 // AttachRBAC gives the module's RoleService the *rbac.Service every one
-// of its methods delegates to. The host calls this exactly once,
-// immediately after its own rbacModule.Attach(registry) succeeds -- a
-// call that, by rbac's own documented contract, must run strictly AFTER
-// pkgcore.Kernel.Bootstrap returns (Attach freezes the snapshot of every
-// permission every module declared, so it cannot run any earlier without
-// risking an incomplete catalog).
+// of its methods delegates to. It is called exactly once, with a Service
+// whose catalog snapshot is already frozen: the host calls it right after
+// its own rbacModule.Attach(registry) succeeds -- a call that, by rbac's
+// own documented contract, must run strictly after
+// pkgcore.Kernel.Bootstrap returns, because Attach freezes the snapshot of
+// every permission every module declared -- and the component descriptor
+// (component.go) calls it from the assembly's Init stage, where the
+// *rbac.Service sits in the by-type context after rbac's own Init turn
+// published it.
 //
 // This is why rbac is NOT wired through a WithXxx(*rbac.Module)
 // construction-time Option the way authn, org, compliance and
@@ -341,6 +348,9 @@ func (m *Module) Name() string { return moduleName }
 // strictly after authn's -- this is exactly what DependsOn exists to
 // express, and Kernel.Bootstrap's own dependency sort (sortModulesByDependency)
 // honors it regardless of the order modules were passed to Bootstrap in.
+// The component descriptor states the same edge as a Requirement token on
+// (*authn.Module)(nil), which is what orders admin's declaration stage
+// after authn's in the assembly.
 func (m *Module) DependsOn() []string { return []string{authnModuleName} }
 
 // authnModuleName is authn's pkgcore.Module.Name() -- "authn" -- spelled
@@ -460,8 +470,6 @@ func (m *Module) Register(reg pkgcore.Registrar) error {
 	}); err != nil {
 		return err
 	}
-
-	pkgcore.RegisterSystemPurpose(SystemPurposeAdminCrossTenant)
 
 	bus := reg.EventBus()
 	m.tenants.attachAudit(bus, reg.AuditActionsSeat(), authnSvc)

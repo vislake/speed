@@ -3,6 +3,7 @@ package admin
 import (
 	"context"
 	"reflect"
+	"slices"
 	"testing"
 
 	"github.com/vislake/speed/go/pkgcore"
@@ -123,5 +124,70 @@ func TestComponent_NewFailsWithoutTheDatabase(t *testing.T) {
 	instance, err := adminComponent.New(context.Background(), pkgcore.NewComponentRegistry(), pkgcore.NewComponentConfig(nil))
 	if err == nil {
 		t.Fatalf("New = %v, nil error; want the missing database reported", instance)
+	}
+}
+
+// TestComponent_InitDeclaresThroughTheGate drives the descriptor's Init
+// through a real assembly over the module graph buildTestAdminModule stands
+// up: the module's Register runs inside the one stage whose seats accept
+// writes -- permissions, audit vocabulary, the impersonation notification
+// type, the audit-export handler and the HTTP mount all land in the
+// assembly's own seats -- and AttachRBAC then wires the assembly's own
+// published *rbac.Service onto the role and impersonation services.
+func TestComponent_InitDeclaresThroughTheGate(t *testing.T) {
+	env := buildTestAdminModule(t)
+
+	reg := pkgcore.NewComponentRegistry()
+	if err := componenttest.RunInit(t, reg, adminComponent,
+		env.DB,
+		env.Queue,
+		env.Authn,
+		env.Org,
+		env.Compliance,
+		env.Notification,
+		env.RBAC,
+		pkgcore.NewMemoryEventBus(),
+	); err != nil {
+		t.Fatalf("RunInit: %v", err)
+	}
+	m, err := pkgcore.Get[*Module](reg)
+	if err != nil {
+		t.Fatalf("the assembly's product: %v", err)
+	}
+
+	perms := reg.Permissions.Permissions()
+	for _, want := range []string{PermissionAccess, PermissionImpersonate, PermissionAuditExport} {
+		if !slices.Contains(perms, want) {
+			t.Errorf("Permissions seat = %v, want the %q declaration", perms, want)
+		}
+	}
+	actions := reg.AuditActions.Actions()
+	for _, want := range []string{AuditActionImpersonationStarted, AuditActionAuditExport} {
+		if !slices.Contains(actions, want) {
+			t.Errorf("AuditActions seat = %v, want the %q declaration", actions, want)
+		}
+	}
+	var typeKeys []string
+	for _, typ := range reg.Notifications.Types() {
+		typeKeys = append(typeKeys, typ.Key)
+	}
+	if !slices.Contains(typeKeys, NotificationTypeImpersonationStarted) {
+		t.Errorf("Notifications seat = %v, want the impersonation-started type", typeKeys)
+	}
+	if _, claimed := reg.Jobs.Handlers()[jobTypeAuditExport]; !claimed {
+		t.Errorf("Jobs seat = %v, want the audit-export handler", reg.Jobs.Handlers())
+	}
+	if routes := reg.Routes.Routes(); len(routes) != 1 || routes[0].Path != APIPath {
+		t.Fatalf("Init mounted %v, want exactly the %s mount", routes, APIPath)
+	}
+
+	// AttachRBAC ran inside the Init stage: the role and impersonation
+	// services hold the assembly's own Service, so role management stopped
+	// failing closed.
+	if m.roles.svc != env.RBAC {
+		t.Error("RoleService did not take the assembly's rbac Service")
+	}
+	if m.handler == nil {
+		t.Error("the module's HTTP handler was not built by Init")
 	}
 }

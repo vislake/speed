@@ -8,6 +8,7 @@ package admin
 
 import (
 	"context"
+	"fmt"
 
 	"gorm.io/gorm"
 
@@ -42,11 +43,16 @@ import (
 // is mandatory: the audit-export leg enqueues onto it (ErrQueueRequired).
 //
 // SystemPurposes declares SystemPurposeAdminCrossTenant: the one audited
-// purpose every cross-tenant operation this module performs acts under.
+// purpose every cross-tenant operation this module performs acts under. The
+// assembly registers it when it closes its Init stage, after every Init
+// callback has run.
 //
-// AttachRBAC's call is deliberately not part of this descriptor: the host
-// calls it after Bootstrap today, and the component declares no Init to
-// carry it until the assembly drives declaration itself.
+// Init runs the module's one declaration entry point, Register, then
+// AttachRBAC -- the *rbac.Service whose catalog snapshot is already frozen
+// when rbac's own Init turn published it into the by-type context, so the
+// RoleService and impersonation pipeline wired here read a complete
+// catalog, and the roles fail closed exactly as they do on the host path
+// until this call runs.
 var adminComponent = pkgcore.Component{
 	Name:           "admin",
 	Module:         "admin",
@@ -106,6 +112,21 @@ var adminComponent = pkgcore.Component{
 			opts = append(opts, WithBilling(billingModule))
 		}
 		return NewModule(db, opts...), nil
+	},
+	Init: func(_ context.Context, reg *pkgcore.ComponentRegistry, instance any) error {
+		m, ok := instance.(*Module)
+		if !ok {
+			return fmt.Errorf("admin: component init got a %T instance, want *admin.Module", instance)
+		}
+		if err := m.Register(reg); err != nil {
+			return err
+		}
+		svc, err := pkgcore.Get[*rbac.Service](reg)
+		if err != nil {
+			return fmt.Errorf("admin: read the published rbac Service: %w", err)
+		}
+		m.AttachRBAC(svc)
+		return nil
 	},
 }
 
