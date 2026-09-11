@@ -39,6 +39,9 @@ func component() pkgcore.Component {
 		// normalize every captured write and recorded action into the
 		// audit trail.
 		Provides: []any{(*Module)(nil)},
+		// The audit trail's state is its rows in the deployment's shared
+		// database, so several replicas may run it at once.
+		Capabilities: pkgcore.MultiReplicaSafe,
 		// The module takes no configuration: its whole construction input
 		// is the database, and a composition block for it accepts no keys.
 		// It ships no user-facing messages (no query or report surface

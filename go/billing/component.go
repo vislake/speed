@@ -48,6 +48,9 @@ func component() pkgcore.Component {
 		// The construction product is the *Module; the Entitlements it
 		// exposes is the judgment entry point business code calls.
 		Provides: []any{(*Module)(nil)},
+		// billing's state is its rows in the deployment's shared database,
+		// so several replicas may run it at once.
+		Capabilities: pkgcore.MultiReplicaSafe,
 		// The module takes no configuration: every construction input
 		// besides the database is a dependency (the usage reader, the
 		// queue) or host-wired implementation (the payment gateway map,

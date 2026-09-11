@@ -78,7 +78,10 @@ func component() pkgcore.Component {
 		},
 		// The construction product is the *Module; the Scope it exposes is
 		// what authorization consumers are adapted to.
-		Provides:      []any{(*Module)(nil)},
+		Provides: []any{(*Module)(nil)},
+		// org's state is its rows in the deployment's shared database and
+		// the shared event bus, so several replicas may run it at once.
+		Capabilities:  pkgcore.MultiReplicaSafe,
 		ConfigSchema:  (*componentConfig)(nil),
 		BootstrapKeys: []pkgcore.BootstrapKey{bootstrapKeyDecl},
 		Migrations:    migrations.FS,
