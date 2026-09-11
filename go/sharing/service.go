@@ -221,10 +221,19 @@ type Service struct {
 // NewService returns a Service whose tables live in db. cfg may be nil; see
 // TenantConfigReader's own doc comment. Constructing a Service performs no
 // I/O: opening and migrating db is the host's responsibility.
+//
+// The two repositories are built over ONE gate (concurrency.go's
+// sqliteGate): the share tables and the access-log table live in the same
+// SQLite file, so on SQLite every statement of either repository must
+// order through the same in-process lock -- one gate per repository would
+// leave the two halves of the module meeting each other on the file's
+// single-writer lock. On PostgreSQL the gate is nil and neither repository
+// takes any in-process lock.
 func NewService(db *gorm.DB, cfg TenantConfigReader) *Service {
+	gate := newSQLiteGate(db)
 	return &Service{
-		shares:         NewShareRepository(db),
-		accessLogs:     NewAccessLogRepository(db),
+		shares:         newShareRepository(db, gate),
+		accessLogs:     newAccessLogRepository(db, gate),
 		cfg:            cfg,
 		now:            time.Now,
 		newShareID:     uuid.NewString,
@@ -1259,11 +1268,12 @@ func (s *Service) accessLogEntry(tenant pkgcore.TenantID, shareID, outcome strin
 // withTxRetry envelope this module's guarded writes run under -- so a
 // transient, contention-only database failure (SQLITE_BUSY, a PostgreSQL
 // serialization conflict) retries the insert up to txRetryBudget times
-// rather than failing a denied access over a momentary conflict. A denied
-// row carries no share state, so it deliberately does NOT join
-// ShareRepository's own writeMu ordering: only the granted row -- which
-// travels inside the view-recording transaction (recordView's doc comment)
-// -- needs to be ordered against the module's other writers.
+// rather than failing a denied access over a momentary conflict. The
+// insert carries no share state, but it is still one of this module's own
+// writes to the share file, so it runs behind the module's ordering gate
+// (sqliteGate, concurrency.go) like every other module write -- a denied
+// row written by this path never meets a concurrent read or write of this
+// module on the SQLite file lock.
 func (s *Service) writeAccessLog(ctx context.Context, entry *AccessLogEntry) error {
 	if err := s.accessLogs.createWithRetry(ctx, entry); err != nil {
 		observability.FromContext(ctx).Error("sharing access log write failed", "share_id", entry.ShareID, "error", err)
@@ -1321,7 +1331,7 @@ func (s *Service) Revoke(ctx context.Context, shareID string) error {
 	if err != nil {
 		return err
 	}
-	share, err := s.shares.FindByID(ctx, shareID)
+	share, err := s.shares.findByIDGuarded(ctx, shareID)
 	if err != nil {
 		if dbkit.IsRecordNotFound(err) {
 			return ErrShareNotFound.WithParam("id", shareID)
@@ -1355,7 +1365,7 @@ func (s *Service) Revoke(ctx context.Context, shareID string) error {
 // not-found into ErrShareNotFound -- an owner-facing lookup, safe to
 // disclose non-existence for, unlike Access's ErrNotAccessible.
 func (s *Service) Get(ctx context.Context, shareID string) (*Share, error) {
-	share, err := s.shares.FindByID(ctx, shareID)
+	share, err := s.shares.findByIDGuarded(ctx, shareID)
 	if err != nil {
 		if dbkit.IsRecordNotFound(err) {
 			return nil, ErrShareNotFound.WithParam("id", shareID)

@@ -1044,82 +1044,112 @@ func TestService_Access_ConcurrentViewsSurviveRevoke(t *testing.T) {
 
 	const iterations = 10
 	for iter := 0; iter < iterations; iter++ {
-		created, err := svc.Create(testCtx(), CreateParams{ResourceRef: "storage:obj-1"})
-		if err != nil {
-			t.Fatalf("Create: %v", err)
-		}
-		share, err := svc.Shares().FindByID(testCtx(), created.Share.ID)
-		if err != nil {
-			t.Fatalf("FindByID: %v", err)
-		}
+		revokeRaceIteration(t, svc, iter, now)
+	}
+}
 
-		var granted, workerErrors int32
-		var workers sync.WaitGroup
-		stop := make(chan struct{})
-		defer close(stop)
-		for w := 0; w < 4; w++ {
-			workers.Add(1)
-			go func() {
-				defer workers.Done()
-				for {
-					select {
-					case <-stop:
-						return
-					default:
-					}
-					// A real granted log entry rides along with each winning
-					// recordView (committed in the same transaction), so
-					// this race also proves the count-and-trail insert
-					// survives a concurrent revocation without errors or
-					// duplicates.
-					entry := svc.accessLogEntry(testTenant, share.ID, AccessOutcomeGranted, AccessParams{})
-					_, won, viewErr := svc.recordView(testCtx(), share, now, entry)
-					if viewErr != nil {
-						atomic.AddInt32(&workerErrors, 1)
-						return
-					}
-					if !won {
-						return // the share was revoked -- this worker is done
-					}
-					atomic.AddInt32(&granted, 1)
+// revokeRaceIteration runs one iteration of the race above on a fresh
+// share: four recordView workers record views until the first granted view
+// signals them live, Revoke races them, and the row the owner reads back
+// must carry exactly the granted count and log trail. It is one function
+// per iteration so the workers' stop channel has an explicit lifetime --
+// closed as soon as this iteration's Revoke has landed, on every exit path
+// -- instead of one deferred close per iteration accumulating on the test
+// function until it returns.
+//
+// The workers' liveness signal is the first granted view itself -- a
+// channel closed by whichever worker records it -- never a wall-clock
+// poll: progress is an event, and the only timeout below is a broken-test
+// detector (a worker population that never records anything), generous
+// enough that a slow-but-healthy runner can never trip it.
+func revokeRaceIteration(t *testing.T, svc *Service, iter int, now time.Time) {
+	t.Helper()
+	created, err := svc.Create(testCtx(), CreateParams{ResourceRef: "storage:obj-1"})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	share, err := svc.Shares().FindByID(testCtx(), created.Share.ID)
+	if err != nil {
+		t.Fatalf("FindByID: %v", err)
+	}
+
+	var granted, workerErrors int32
+	var workers sync.WaitGroup
+	stop := make(chan struct{})
+	firstGrant := make(chan struct{})
+	for w := 0; w < 4; w++ {
+		workers.Add(1)
+		go func() {
+			defer workers.Done()
+			for {
+				select {
+				case <-stop:
+					return
+				default:
 				}
-			}()
-		}
+				// A real granted log entry rides along with each winning
+				// recordView (committed in the same transaction), so
+				// this race also proves the count-and-trail insert
+				// survives a concurrent revocation without errors or
+				// duplicates.
+				entry := svc.accessLogEntry(testTenant, share.ID, AccessOutcomeGranted, AccessParams{})
+				_, won, viewErr := svc.recordView(testCtx(), share, now, entry)
+				if viewErr != nil {
+					atomic.AddInt32(&workerErrors, 1)
+					return
+				}
+				if !won {
+					return // the share was revoked -- this worker is done
+				}
+				if atomic.AddInt32(&granted, 1) == 1 {
+					close(firstGrant)
+				}
+			}
+		}()
+	}
 
-		// Wait until at least one view has been recorded, then revoke while
-		// the workers are still recording -- the race window a whole-row
-		// read-modify-write Revoke would lose increments in. Bounded: a
-		// worker population that never records anything is a broken test,
-		// not a hang.
-		deadline := time.Now().Add(5 * time.Second)
-		for atomic.LoadInt32(&granted) == 0 && time.Now().Before(deadline) {
-			time.Sleep(time.Millisecond)
-		}
-		if atomic.LoadInt32(&granted) == 0 {
-			t.Fatalf("iteration %d: no view was recorded before the revoke deadline", iter)
-		}
-		if revokeErr := svc.Revoke(testCtx(), created.Share.ID); revokeErr != nil {
-			t.Fatalf("Revoke: %v", revokeErr)
-		}
+	// Revoke lands the moment a view has been genuinely recorded, while the
+	// workers are still recording -- the race window a whole-row
+	// read-modify-write Revoke would lose increments in. The timeout is a
+	// broken-test detector (a worker population that never records a view),
+	// never an assertion about how fast a view must land.
+	select {
+	case <-firstGrant:
+	case <-time.After(30 * time.Second):
+		close(stop)
 		workers.Wait()
+		t.Fatalf("iteration %d: no view was recorded within 30s -- a worker population that never records is a broken test, not a slow runner", iter)
+	}
 
-		if errs := atomic.LoadInt32(&workerErrors); errs != 0 {
-			t.Fatalf("iteration %d: %d recordView store errors -- the view-recording path must not fail under this concurrency", iter, errs)
-		}
-		got, err := svc.Get(testCtx(), created.Share.ID)
-		if err != nil {
-			t.Fatalf("Get: %v", err)
-		}
-		if got.ViewCount != int(atomic.LoadInt32(&granted)) {
-			t.Fatalf("iteration %d: ViewCount = %d but %d views were granted -- the revoke rolled back a concurrently recorded view", iter, got.ViewCount, atomic.LoadInt32(&granted))
-		}
-		rows, err := svc.ListAccessLog(testCtx(), created.Share.ID)
-		if err != nil {
-			t.Fatalf("ListAccessLog: %v", err)
-		}
-		if len(rows) != int(atomic.LoadInt32(&granted)) {
-			t.Fatalf("iteration %d: %d access log rows for %d granted views -- each granted view's log row must commit exactly once in the view's own transaction, even racing a revoke", iter, len(rows), atomic.LoadInt32(&granted))
-		}
+	if revokeErr := svc.Revoke(testCtx(), created.Share.ID); revokeErr != nil {
+		close(stop)
+		workers.Wait()
+		t.Fatalf("Revoke: %v", revokeErr)
+	}
+	// The workers' stop channel closes with the race itself: once Revoke
+	// has landed the workers exit on their own (their next recordView is
+	// refused by the revoked row), and the close is the belt-and-braces
+	// release for any worker still between attempts, so Wait below can
+	// never hang on a scheduling accident.
+	close(stop)
+	workers.Wait()
+
+	if errs := atomic.LoadInt32(&workerErrors); errs != 0 {
+		t.Fatalf("iteration %d: %d recordView store errors -- the view-recording path must not fail under this concurrency", iter, errs)
+	}
+	got, err := svc.Get(testCtx(), created.Share.ID)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if got.ViewCount != int(atomic.LoadInt32(&granted)) {
+		t.Fatalf("iteration %d: ViewCount = %d but %d views were granted -- the revoke rolled back a concurrently recorded view", iter, got.ViewCount, atomic.LoadInt32(&granted))
+	}
+	rows, err := svc.ListAccessLog(testCtx(), created.Share.ID)
+	if err != nil {
+		t.Fatalf("ListAccessLog: %v", err)
+	}
+	if len(rows) != int(atomic.LoadInt32(&granted)) {
+		t.Fatalf("iteration %d: %d access log rows for %d granted views -- each granted view's log row must commit exactly once in the view's own transaction, even racing a revoke", iter, len(rows), atomic.LoadInt32(&granted))
 	}
 }
 

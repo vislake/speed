@@ -1,18 +1,19 @@
 //go:build integration
 
-// This file is go/sharing's PostgreSQL proof for the writeMu scope
-// decision (concurrency.go's own doc comment): the in-process mutex
-// around guarded writes exists for SQLite's single-writer file lock and
-// must NOT be taken on PostgreSQL, where the database's own row locks
-// plus the bounded conflict retry (concurrency.go's withTxRetry) are the
-// honest mechanism.
-// The SQLite half of the same decision -- the mutex stays engaged there,
-// so the module's writers never contend for the file lock -- is pinned by
-// the unit tier (concurrency_test.go's
-// TestShareRepository_GuardedWritesStaySerializedOnSQLite, which runs on
-// every plain `go test`); this file exists because the PostgreSQL half
-// needs a real server to be honest about. A single-writer premise that
-// does not exist on PostgreSQL cannot be proven against SQLite.
+// This file is go/sharing's PostgreSQL proof for the gate scope
+// decision (concurrency.go's sqliteGate doc comment): the in-process
+// ordering around this module's statements exists for SQLite's
+// single-writer file lock and must NOT be taken on PostgreSQL, where the
+// database's own row locks plus the bounded conflict retry (concurrency.go's
+// withTxRetry) are the honest mechanism.
+// The SQLite half of the same decision -- the gate stays engaged there,
+// so the module's own statements never contend for the file lock -- is
+// pinned by the unit tier (concurrency_test.go's
+// TestShareRepository_GuardedWritesStaySerializedOnSQLite and the gate
+// windows beside it, which run on every plain `go test`); this file exists
+// because the PostgreSQL half needs a real server to be honest about. A
+// single-writer premise that does not exist on PostgreSQL cannot be proven
+// against SQLite.
 //
 // The proof is deterministic, not a timing measurement: the test holds one
 // tenant's share row locked at the database level (SELECT ... FOR UPDATE
@@ -44,15 +45,15 @@ import (
 // TestPostgres_GuardedWrites_UnrelatedTenantsNotSerialized proves two
 // unrelated tenants' guarded writes proceed concurrently on a real
 // PostgreSQL server -- one never blocks behind the other's in-process
-// mutex: on PostgreSQL, guarded writes take no in-process mutex (writeMu
-// is the SQLite single-writer dialect's mechanism, per concurrency.go's
-// own doc comment), and the retry path (withTxRetry) is what absorbs the
-// rare real conflict. A process-wide, cross-tenant mutex here would
-// serialize tenant B's write behind tenant A's: with A's transaction
-// parked on the row lock this test holds, B could not complete at all --
-// the failure this test times out on. The proof is that B completes while
-// A is still parked, and both tenants' writes land correctly once A's
-// lock is released.
+// ordering: on PostgreSQL the gate is nil and guarded writes take no
+// in-process lock (the gate is the SQLite single-writer dialect's
+// mechanism, per concurrency.go's sqliteGate doc comment), and the retry
+// path (withTxRetry) is what absorbs the rare real conflict. A
+// process-wide, cross-tenant gate here would serialize tenant B's write
+// behind tenant A's: with A's transaction parked on the row lock this test
+// holds, B could not complete at all -- the failure this test times out
+// on. The proof is that B completes while A is still parked, and both
+// tenants' writes land correctly once A's lock is released.
 func TestPostgres_GuardedWrites_UnrelatedTenantsNotSerialized(t *testing.T) {
 	db := testutil.NewPostgres(t, "sharing", migrations.FS)
 

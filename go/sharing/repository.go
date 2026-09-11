@@ -3,7 +3,6 @@ package sharing
 import (
 	"context"
 	"errors"
-	"sync"
 	"time"
 
 	"gorm.io/gorm"
@@ -24,42 +23,49 @@ type ShareRepository struct {
 
 	db *gorm.DB
 
-	// serializeWrites reports whether this repository's guarded writes
-	// (runGuardedWrite, concurrency.go) order themselves behind writeMu:
-	// true only when db speaks SQLite, the one dialect whose single-writer
-	// file lock this ordering exists to keep contention-free (concurrency.go's
-	// own doc comment has the full reasoning). On PostgreSQL the field is
-	// false and guarded writes run without the in-process mutex -- the
+	// serializeWrites reports whether this repository's statements order
+	// themselves behind the module's in-process gate (gate below): true
+	// only when db speaks SQLite, the one dialect whose single-writer file
+	// lock this ordering exists to keep contention-free (concurrency.go's
+	// sqliteGate carries the full reasoning). On PostgreSQL the field is
+	// false and gate is nil -- no in-process lock is taken at all: the
 	// database's own row locks plus the bounded conflict retry are the
-	// honest mechanism there, and a process-wide cross-tenant mutex would
-	// only serialize unrelated tenants' writes for no benefit. Set once at
-	// construction from the dialector name (db.Name()), never read per call.
+	// honest mechanism there, and a process-wide cross-tenant gate would
+	// only serialize unrelated tenants for no benefit. Set once at
+	// construction from the dialector name (db.Name()), never read per
+	// call.
 	serializeWrites bool
 
-	// writeMu is the mutex serializeWrites gates: it orders this
-	// repository's own guarded writes behind one in-process lock on
-	// SQLite, so the view-recording, revocation and sweep writers this
-	// module itself spawns never contend with each other for the file
-	// lock -- see concurrency.go's own doc comment for why that ordering
-	// exists alongside the bounded conflict retry, and why the zero value
-	// is ready to use.
-	writeMu sync.Mutex
+	// gate is the module-wide in-process ordering gate every statement of
+	// this repository passes through: writes behind its write side, reads
+	// behind its read side (concurrency.go's sqliteGate). It is non-nil
+	// exactly when serializeWrites is true. NewService constructs one gate
+	// and hands the same pointer to this repository and the module's
+	// AccessLogRepository, since the two sit over the same file; a standalone
+	// repository carries a gate of its own. The promoted
+	// dbkit.Repository[Share] surface a host drives directly (boot-time
+	// seeding, single-threaded inspection) is deliberately not gated; every
+	// runtime path in the module goes through the gated methods below.
+	gate *sqliteGate
 }
 
 // NewShareRepository returns a ShareRepository backed by db.
 func NewShareRepository(db *gorm.DB) *ShareRepository {
-	// db may be nil on a Service constructed only for identity checks
-	// (NewModule(nil) -- module_test.go's TestModule_Identity); the
-	// dialect probe is guarded so construction still succeeds, and any
-	// actual I/O on such a Service panics exactly as it always did.
-	// (db.Name() is gorm's own Dialector.Name promoted through the
-	// embedded dialector -- "sqlite" for the SQLite driver, "postgres"
-	// for PostgreSQL.)
-	serialize := db != nil && db.Name() == "sqlite"
+	return newShareRepository(db, newSQLiteGate(db))
+}
+
+// newShareRepository returns a ShareRepository backed by db whose
+// statements order themselves through gate -- the shared-gate constructor
+// NewService uses to put this repository and the module's
+// AccessLogRepository behind one gate, since the two sit over the same
+// file. A nil gate (the PostgreSQL shape) disables the in-process ordering
+// entirely; see sqliteGate's own doc comment.
+func newShareRepository(db *gorm.DB, gate *sqliteGate) *ShareRepository {
 	return &ShareRepository{
 		Repository:      dbkit.NewRepository[Share](db),
 		db:              db,
-		serializeWrites: serialize,
+		serializeWrites: gate != nil,
+		gate:            gate,
 	}
 }
 
@@ -73,8 +79,14 @@ func NewShareRepository(db *gorm.DB) *ShareRepository {
 // alone. Service.Access reports the plain ErrNotAccessible (rather than a
 // code naming "not found") specifically so a caller cannot distinguish this
 // outcome from a revoked, expired or view-exhausted share.
+//
+// The read runs behind the gate's read side (sqliteGate, concurrency.go),
+// like every other read of this module's own rows: on SQLite a read can
+// never meet one of this module's own writers on the file's lock.
 func (r *ShareRepository) byTokenHash(ctx context.Context, hash string) (*Share, error) {
 	var share Share
+	r.gate.lockRead()
+	defer r.gate.unlockRead()
 	err := dbkit.WithTenantSession(ctx, r.db, func(tx *gorm.DB) error {
 		return tx.Where("token_hash = ?", hash).First(&share).Error
 	})
@@ -159,12 +171,13 @@ func (r *ShareRepository) byTokenHash(ctx context.Context, hash string) (*Share,
 // concurrency as "not accessible" -- see its own doc comment.
 //
 // The statement itself runs through runGuardedWrite (concurrency.go):
-// on SQLite this repository's guarded writes are ordered behind one
-// in-process mutex -- so a view-recording storm and a revoke racing it
-// never contend with each other for the SQLite file lock at all -- while
-// on PostgreSQL no in-process mutex is taken (the database's own row locks
-// arbitrate; see serializeWrites's own doc comment); and each attempt's
-// transaction retries up to txRetryBudget times on a transient,
+// on SQLite it is ordered through the repository's gate -- so a
+// view-recording storm and a revoke racing it never contend with each
+// other for the SQLite file lock at all, and neither does any read of this
+// module -- while on PostgreSQL no in-process lock is taken (the
+// database's own row locks arbitrate; see sqliteGate's own doc comment);
+// and each attempt's transaction retries up to txRetryBudget times on a
+// transient,
 // contention-only database failure (SQLITE_BUSY from a writer outside this
 // module, or PostgreSQL's deadlock/serialization failure) rather than
 // surfacing as a store error. A lost CAS race is NOT such a failure (it is
@@ -431,11 +444,11 @@ func (r *ShareRepository) tryRefundView(ctx context.Context, shareID string, now
 //
 // The statement itself runs through runGuardedWrite (concurrency.go),
 // the same ordered-and-retried path tryRecordView and markRevoked use: on
-// SQLite this repository's own writers are ordered behind writeMu, and a
+// SQLite it runs behind the repository's gate's write side, and a
 // transient, contention-only database failure (SQLITE_BUSY from a writer
 // outside this module, or PostgreSQL's deadlock/serialization failure --
-// the only conflicts left once PostgreSQL skips the in-process mutex
-// entirely, per serializeWrites's own doc comment) retries the whole
+// the only conflicts left once PostgreSQL skips the in-process gate
+// entirely, per sqliteGate's own doc comment) retries the whole
 // guarded increment from a fresh transaction up to txRetryBudget times
 // rather than surfacing as a store error. Each retried attempt is the same
 // atomic server-side increment, so a retry can never double-count.
@@ -481,8 +494,8 @@ func (r *ShareRepository) tryIncrementView(ctx context.Context, share *Share, no
 // The statement itself runs through runGuardedWrite (concurrency.go),
 // the same ordered-and-retried path tryRecordView and tryIncrementView
 // use: a revoke racing this module's own concurrent view recording never
-// contends with it for the SQLite file lock at all (writeMu orders the
-// two), and a transient, contention-only database failure from a writer
+// contends with it for the SQLite file lock at all (the gate's write side
+// orders the two), and a transient, contention-only database failure from a writer
 // outside this module -- SQLite's SQLITE_BUSY, or PostgreSQL's deadlock/
 // serialization failure -- retries the whole guarded UPDATE from a fresh
 // transaction up to txRetryBudget times rather than surfacing as a store
@@ -520,11 +533,22 @@ func (r *ShareRepository) markRevoked(ctx context.Context, id string, at time.Ti
 // type implements no dbkit.TenantScoped -- see its own doc comment), and a
 // failure on either write rolls back both, never leaving one committed
 // without the other.
+//
+// The transaction runs behind the gate's write side (sqliteGate,
+// concurrency.go): this is one of this module's own writes to the share
+// file, so it must never overlap a read or a write of this module either.
+// It does NOT run through runGuardedWrite: that envelope's retry presumes
+// WHERE-guarded statements that re-evaluate the row's state on every
+// attempt, which an insert has nothing of -- the gate is the whole of what
+// this write needs, and a conflict that outlasts it (a writer outside this
+// module) surfaces as an ordinary store error.
 func (r *ShareRepository) createWithTokenIndex(ctx context.Context, share *Share) error {
 	tenant, err := pkgcore.MustTenantFromContext(ctx)
 	if err != nil {
 		return err
 	}
+	r.gate.lockWrite()
+	defer r.gate.unlockWrite()
 	return dbkit.WithTenantSession(ctx, r.db, func(tx *gorm.DB) error {
 		if err := tx.Create(share).Error; err != nil {
 			return err
@@ -578,6 +602,8 @@ func (r *ShareRepository) createWithTokenIndex(ctx context.Context, share *Share
 // holds it.
 func (r *ShareRepository) tenantForTokenHash(ctx context.Context, hash string) (pkgcore.TenantID, error) {
 	var idx shareTokenIndex
+	r.gate.lockRead()
+	defer r.gate.unlockRead()
 	err := r.db.WithContext(ctx).Where("token_hash = ?", hash).First(&idx).Error
 	switch {
 	case errors.Is(err, gorm.ErrRecordNotFound):
@@ -613,6 +639,8 @@ func (r *ShareRepository) tenantForTokenHash(ctx context.Context, hash string) (
 // share of the tenant at all.
 func (r *ShareRepository) listPage(ctx context.Context, limit int, beforeID string) ([]Share, error) {
 	var out []Share
+	r.gate.lockRead()
+	defer r.gate.unlockRead()
 	err := dbkit.WithTenantSession(ctx, r.db, func(tx *gorm.DB) error {
 		query := tx.Order("created_at DESC, id DESC").Limit(limit)
 		if beforeID != "" {
@@ -634,6 +662,20 @@ func (r *ShareRepository) listPage(ctx context.Context, limit int, beforeID stri
 		return nil, ErrInternal.WithCause(err)
 	}
 	return out, nil
+}
+
+// findByIDGuarded is the promoted dbkit.Repository[Share].FindByID behind
+// the gate's read side -- Service.Get and Service.Revoke's pre-read go
+// through here (rather than through the promoted method, which stays
+// available unchanged to a host) so an owner-facing read of a share can
+// never meet one of this module's own writers on the SQLite file lock
+// (sqliteGate, concurrency.go). The promoted method's own semantics are
+// untouched: same query, same dbkit.ErrRecordNotFound answer, same error
+// wrapping.
+func (r *ShareRepository) findByIDGuarded(ctx context.Context, id string) (*Share, error) {
+	r.gate.lockRead()
+	defer r.gate.unlockRead()
+	return r.FindByID(ctx, id)
 }
 
 // findByIDIn resolves one share of the caller's tenant inside the
@@ -658,6 +700,8 @@ func (r *ShareRepository) findByIDIn(tx *gorm.DB, id string) (*Share, error) {
 // been reached -- the expiry sweep's own listing (cleanup.go).
 func (r *ShareRepository) listExpiredOrExhausted(ctx context.Context, now time.Time) ([]Share, error) {
 	var out []Share
+	r.gate.lockRead()
+	defer r.gate.unlockRead()
 	err := dbkit.WithTenantSession(ctx, r.db, func(tx *gorm.DB) error {
 		return tx.
 			Where("revoked_at IS NULL").
@@ -683,6 +727,8 @@ func (r *ShareRepository) listExpiredOrExhausted(ctx context.Context, now time.T
 // acts on.
 func (r *ShareRepository) listStaleReserved(ctx context.Context, now time.Time) ([]Share, error) {
 	var out []Share
+	r.gate.lockRead()
+	defer r.gate.unlockRead()
 	err := dbkit.WithTenantSession(ctx, r.db, func(tx *gorm.DB) error {
 		return tx.
 			Where("views_reserved = 1").
@@ -709,25 +755,47 @@ type AccessLogRepository struct {
 	*dbkit.Repository[AccessLogEntry]
 
 	db *gorm.DB
+
+	// gate is the module-wide in-process ordering gate every statement of
+	// this repository passes through: writes behind its write side, reads
+	// behind its read side (concurrency.go's sqliteGate). When both this
+	// repository and the module's ShareRepository were built by NewService
+	// they share one gate, since the two sit over the same file; a
+	// standalone repository carries a gate of its own. Nil on PostgreSQL,
+	// where no in-process lock is taken.
+	gate *sqliteGate
 }
 
 // NewAccessLogRepository returns an AccessLogRepository backed by db.
 func NewAccessLogRepository(db *gorm.DB) *AccessLogRepository {
-	return &AccessLogRepository{Repository: dbkit.NewRepository[AccessLogEntry](db), db: db}
+	return newAccessLogRepository(db, newSQLiteGate(db))
+}
+
+// newAccessLogRepository returns an AccessLogRepository backed by db whose
+// statements order themselves through gate -- the shared-gate constructor
+// NewService uses to put this repository behind the same gate as the
+// module's ShareRepository. A nil gate (the PostgreSQL shape) disables the
+// in-process ordering entirely; see sqliteGate's own doc comment.
+func newAccessLogRepository(db *gorm.DB, gate *sqliteGate) *AccessLogRepository {
+	return &AccessLogRepository{Repository: dbkit.NewRepository[AccessLogEntry](db), db: db, gate: gate}
 }
 
 // createWithRetry appends one access log row, retrying the insert through
 // the same withTxRetry envelope this module's guarded writes run under
 // when the database reports a transient, contention-only failure
-// (SQLITE_BUSY, a PostgreSQL deadlock/serialization conflict). A denied
-// row carries no share state -- nothing to order against this module's
-// other writers and nothing a failed insert leaves inconsistent -- so this
-// is deliberately the retry alone, without ShareRepository's writeMu
-// ordering: the retry absorbs momentary congestion, and a failure that
-// outlasts it surfaces to Service.writeAccessLog as ErrInternal
-// (Service.Access's own doc comment).
+// (SQLITE_BUSY, a PostgreSQL deadlock/serialization conflict). The row
+// carries no share state -- nothing a failed insert leaves inconsistent,
+// which is why the bare retry is the right envelope -- but the insert is
+// still one of this module's own writes to the same file, so each attempt
+// runs behind the gate's write side (sqliteGate, concurrency.go) exactly
+// as every other module write does, rather than meeting a module reader or
+// writer on the SQLite file lock. A failure that outlasts the retry
+// surfaces to Service.writeAccessLog as ErrInternal (Service.Access's own
+// doc comment).
 func (r *AccessLogRepository) createWithRetry(ctx context.Context, entry *AccessLogEntry) error {
 	return withTxRetry(func() error {
+		r.gate.lockWrite()
+		defer r.gate.unlockWrite()
 		return dbkit.WithTenantSession(ctx, r.db, func(tx *gorm.DB) error {
 			return tx.Create(entry).Error
 		})
@@ -740,6 +808,8 @@ func (r *AccessLogRepository) createWithRetry(ctx context.Context, entry *Access
 // owner.
 func (r *AccessLogRepository) listByShare(ctx context.Context, shareID string) ([]AccessLogEntry, error) {
 	var out []AccessLogEntry
+	r.gate.lockRead()
+	defer r.gate.unlockRead()
 	err := dbkit.WithTenantSession(ctx, r.db, func(tx *gorm.DB) error {
 		return tx.
 			Where("share_id = ?", shareID).
@@ -765,6 +835,8 @@ func (r *AccessLogRepository) listByShare(ctx context.Context, shareID string) (
 // tenant with an unbounded expired history.
 func (r *AccessLogRepository) listOlderThan(ctx context.Context, cutoff time.Time, limit int) ([]AccessLogEntry, error) {
 	var out []AccessLogEntry
+	r.gate.lockRead()
+	defer r.gate.unlockRead()
 	err := dbkit.WithTenantSession(ctx, r.db, func(tx *gorm.DB) error {
 		return tx.
 			Where("occurred_at <= ?", cutoff).
@@ -776,4 +848,20 @@ func (r *AccessLogRepository) listOlderThan(ctx context.Context, cutoff time.Tim
 		return nil, ErrInternal.WithCause(err)
 	}
 	return out, nil
+}
+
+// hardDeleteGuarded is the promoted dbkit.Repository[AccessLogEntry].HardDelete
+// behind the gate's write side: the retention sweep's reaping write
+// (sweepAccessLog, retention_participant.go) goes through here -- rather
+// than through the promoted method, which stays available unchanged to a
+// host -- so a reap can never meet this module's own readers or writers on
+// the SQLite file lock (sqliteGate, concurrency.go). The promoted method's
+// own semantics are untouched: same system-context gate,
+// dbkit.HardDelete's own context requirements included, same
+// dbkit.ErrRecordNotFound answer for a row a concurrent pass already
+// removed.
+func (r *AccessLogRepository) hardDeleteGuarded(ctx context.Context, id string) error {
+	r.gate.lockWrite()
+	defer r.gate.unlockWrite()
+	return r.HardDelete(ctx, id)
 }

@@ -14,65 +14,204 @@ import (
 )
 
 // TestShareRepository_GuardedWritesStaySerializedOnSQLite pins the SQLite
-// half of the writeMu scope decision (concurrency.go's own doc comment):
-// the in-process mutex exists for SQLite's single-writer file lock and
-// MUST stay engaged there -- serializeWrites is true over the SQLite test
+// half of the gate scope decision (concurrency.go's sqliteGate): the
+// in-process ordering exists for SQLite's single-writer file lock and MUST
+// stay engaged there -- serializeWrites is true over the SQLite test
 // database, and a guarded write issued while another guarded write holds
-// the mutex queues behind it (deterministically: the goroutine cannot
-// finish until the holder releases) rather than contending for the file
-// lock. The PostgreSQL half -- no mutex, unrelated tenants never block on
-// each other -- is proven against a real server by the module's
-// integration tier (integration_test/postgres_mutex_scope_test.go).
+// the gate's write side queues behind it (deterministically: the goroutine
+// cannot finish until the holder releases) rather than contending for the
+// file lock. The PostgreSQL half -- no in-process gate, unrelated tenants
+// never block on each other -- is proven against a real server by the
+// module's integration tier
+// (integration_test/postgres_mutex_scope_test.go).
 func TestShareRepository_GuardedWritesStaySerializedOnSQLite(t *testing.T) {
 	repo := NewShareRepository(newTestDB(t))
 	if !repo.serializeWrites {
-		t.Fatalf("serializeWrites = false over the SQLite test DB, want true -- the mutex must stay engaged on the single-writer dialect")
+		t.Fatalf("serializeWrites = false over the SQLite test DB, want true -- the in-process ordering must stay engaged on the single-writer dialect")
 	}
 
 	ctx := pkgcore.WithTenant(context.Background(), testTenant)
-	repo.writeMu.Lock()
-	started := make(chan struct{})
+	release, occupier := holdWriteGate(t, repo, ctx)
+	defer release()
+
 	done := make(chan error, 1)
 	go func() {
-		close(started)
 		done <- repo.runGuardedWrite(ctx, func(tx *gorm.DB) error {
 			return tx.Exec("SELECT 1").Error
 		})
 	}()
-	// Wait for the goroutine to be past its launch, then give it ample time
-	// to reach (and fail to acquire) the mutex: completion is impossible
-	// while the test holds writeMu, so a completed write in this window is
-	// a definite ordering failure, never a scheduling artifact.
-	<-started
-	select {
-	case err := <-done:
-		t.Fatalf("guarded write completed (%v) while writeMu was held -- SQLite guarded writes must serialize behind the mutex", err)
-	case <-time.After(500 * time.Millisecond):
-		// Blocked behind the holder, as the SQLite ordering requires.
+	awaitBlocked(t, "a guarded write behind a held gate", done)
+	release()
+	if err := awaitReleased(t, "the queued guarded write", done); err != nil {
+		t.Fatalf("guarded write after release: %v", err)
 	}
-	repo.writeMu.Unlock()
-	select {
-	case err := <-done:
-		if err != nil {
-			t.Fatalf("guarded write after release: %v", err)
-		}
-	case <-time.After(5 * time.Second):
-		t.Fatal("guarded write did not complete after writeMu was released")
+	if err := awaitReleased(t, "the occupying guarded write", occupier); err != nil {
+		t.Fatalf("occupying guarded write: %v", err)
 	}
 }
 
-// This file's tests pin withTxRetry's classification contract
-// deterministically: which errors retry (dbkit.IsRetryableConflict's
-// transient-contention class), which surface immediately, the attempt
-// bound, and the exhaustion answer. The concurrency the retry absorbs is
-// exercised end to end by the real multi-connection SQLite tournaments in
-// service_test.go's TestService_Access_Concurrent* family: under a
-// single-attempt guarded write those tournaments can lose the file's
-// write lock past the busy_timeout and fail the views-survive-revoke
-// regression as sharing.internal_error (the plain runner's harsher
-// scheduling, a GOMAXPROCS=1 run included), but they cannot fail
-// deterministically the way this file's injected conflicts can. This file
-// is the deterministic half of the pin, they are the end-to-end half.
+// gateWindow is how long an assertion below waits for an operation to
+// complete while a guarded write holds the gate. Completion in that state
+// is impossible by construction -- the write side holds every other
+// statement of the module off, and the goroutine cannot finish until the
+// holder releases -- so a completion inside the window is a definite
+// ordering failure, never a scheduling artifact. The window only has to
+// outlast an unblocked operation's own latency, which over a local SQLite
+// file is milliseconds.
+const gateWindow = 500 * time.Millisecond
+
+// holdWriteGate starts one real guarded write on repo whose transaction
+// body blocks until the returned release is called, and returns once that
+// write is genuinely holding the gate (its body has started, which happens
+// only after the write side was taken). Occupying through the real
+// guarded-write path -- rather than poking a mutex field -- is what keeps
+// the assertions below about the behaviour that path actually produces:
+// whatever orders guarded writes is exactly what is under test. release is
+// idempotent; the occupying write's own completion (and error, if any) is
+// reported on the returned channel.
+func holdWriteGate(t *testing.T, repo *ShareRepository, ctx context.Context) (release func(), done <-chan error) {
+	t.Helper()
+	started := make(chan struct{})
+	releaseCh := make(chan struct{})
+	doneCh := make(chan error, 1)
+	go func() {
+		doneCh <- repo.runGuardedWrite(ctx, func(*gorm.DB) error {
+			close(started)
+			<-releaseCh
+			return nil
+		})
+	}()
+	<-started
+	var once sync.Once
+	return func() { once.Do(func() { close(releaseCh) }) }, doneCh
+}
+
+// awaitBlocked fails the test if what completes within the gate window --
+// see gateWindow's own comment for why that verdict is deterministic.
+func awaitBlocked(t *testing.T, what string, done <-chan error) {
+	t.Helper()
+	select {
+	case err := <-done:
+		t.Fatalf("%s completed (%v) while a guarded write held the ordering gate -- it must queue behind the gate's write side", what, err)
+	case <-time.After(gateWindow):
+	}
+}
+
+// awaitReleased waits for what to complete after the gate was released,
+// failing the test if it does not.
+func awaitReleased(t *testing.T, what string, done <-chan error) error {
+	t.Helper()
+	select {
+	case err := <-done:
+		return err
+	case <-time.After(5 * time.Second):
+		t.Fatalf("%s did not complete after the gate was released", what)
+		return nil
+	}
+}
+
+// TestService_Get_WaitsBehindAHeldGuardedWriteOnSQLite pins the read side
+// of the module's SQLite ordering: Service.Get's lookup
+// (ShareRepository.findByIDGuarded) cannot proceed while one of the
+// module's own guarded writes holds the gate -- it queues behind the write
+// side and lands once that write releases -- so an owner-facing read can
+// never meet a concurrent module write on the file's single-writer lock.
+// A reader that took no in-process ordering would complete immediately
+// here.
+func TestService_Get_WaitsBehindAHeldGuardedWriteOnSQLite(t *testing.T) {
+	svc, _ := newTestService(t, nil)
+	created, err := svc.Create(testCtx(), CreateParams{ResourceRef: "storage:obj-1"})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	release, occupier := holdWriteGate(t, svc.Shares(), testCtx())
+	defer release()
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := svc.Get(testCtx(), created.Share.ID)
+		done <- err
+	}()
+	awaitBlocked(t, "Get", done)
+	release()
+	if err := awaitReleased(t, "Get", done); err != nil {
+		t.Fatalf("Get after release: %v", err)
+	}
+	if err := awaitReleased(t, "the occupying guarded write", occupier); err != nil {
+		t.Fatalf("occupying guarded write: %v", err)
+	}
+}
+
+// TestService_Create_WaitsBehindAHeldGuardedWriteOnSQLite pins the same
+// ordering for the module's ordinary create write: the share-plus-index
+// insert pair (ShareRepository.createWithTokenIndex) queues behind the
+// gate's write side like every other module write.
+func TestService_Create_WaitsBehindAHeldGuardedWriteOnSQLite(t *testing.T) {
+	svc, _ := newTestService(t, nil)
+
+	release, occupier := holdWriteGate(t, svc.Shares(), testCtx())
+	defer release()
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := svc.Create(testCtx(), CreateParams{ResourceRef: "storage:obj-2"})
+		done <- err
+	}()
+	awaitBlocked(t, "Create", done)
+	release()
+	if err := awaitReleased(t, "Create", done); err != nil {
+		t.Fatalf("Create after release: %v", err)
+	}
+	if err := awaitReleased(t, "the occupying guarded write", occupier); err != nil {
+		t.Fatalf("occupying guarded write: %v", err)
+	}
+}
+
+// TestService_WriteAccessLog_WaitsBehindAHeldGuardedWriteOnSQLite pins the
+// ordering of the denied-access trail write (writeAccessLog ->
+// AccessLogRepository.createWithRetry), and with it the shared gate: the
+// occupying write is on the module's SHARE repository while the append
+// runs through the module's ACCESS-LOG repository, so the append can only
+// queue behind the other repository's write if NewService put both behind
+// one gate. The append carries no share state, but it is still a write of
+// this module to the same file.
+func TestService_WriteAccessLog_WaitsBehindAHeldGuardedWriteOnSQLite(t *testing.T) {
+	svc, _ := newTestService(t, nil)
+	created, err := svc.Create(testCtx(), CreateParams{ResourceRef: "storage:obj-3"})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	release, occupier := holdWriteGate(t, svc.Shares(), testCtx())
+	defer release()
+
+	done := make(chan error, 1)
+	go func() {
+		entry := svc.accessLogEntry(testTenant, created.Share.ID, AccessOutcomeDenied, AccessParams{})
+		done <- svc.writeAccessLog(testCtx(), entry)
+	}()
+	awaitBlocked(t, "the denied-access log append", done)
+	release()
+	if err := awaitReleased(t, "the denied-access log append", done); err != nil {
+		t.Fatalf("writeAccessLog after release: %v", err)
+	}
+	if err := awaitReleased(t, "the occupying guarded write", occupier); err != nil {
+		t.Fatalf("occupying guarded write: %v", err)
+	}
+}
+
+// This file's tests pin deterministically what the rest of the module
+// exercises end to end: withTxRetry's classification contract (which
+// errors retry -- dbkit.IsRetryableConflict's transient-contention class --
+// which surface immediately, the attempt bound, and the exhaustion
+// answer), and the SQLite ordering gate's coverage (the tests above: a
+// held write side queues every other statement of the module behind it,
+// reads included). The concurrency the retry absorbs is exercised end to
+// end by the real multi-connection SQLite tournaments in service_test.go's
+// TestService_Access_Concurrent* family; those tournaments cannot fail
+// deterministically the way this file's gate windows can. This file is
+// the deterministic half of the pin, they are the end-to-end half.
 
 // retryableConflictErr returns an error dbkit.IsRetryableConflict
 // classifies as transient contention, using the same driver wording the
@@ -152,7 +291,7 @@ func TestWithTxRetry_ExhaustingTheBudgetReturnsTheLastConflict(t *testing.T) {
 // guarantee no read-then-decide can fake -- and the losers' later
 // resolution attempts are all harmless no-ops, so exactly one view is
 // ever spent. Runs under -race in the standard suite; on SQLite the
-// guarded write's writeMu ordering makes the outcome deterministic.
+// gate's write-side ordering makes the outcome deterministic.
 func TestShareRepository_ConcurrentReservesOnOneShare_SingleFlightWins(t *testing.T) {
 	repo := NewShareRepository(newTestDB(t))
 	now := time.Now().UTC()

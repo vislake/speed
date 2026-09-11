@@ -24,12 +24,19 @@ package sharing
 // that its row was soft-deleted before it.
 //
 // The Sweep callback hard-deletes one candidate row at a time through the
-// repository's promoted dbkit.HardDelete -- never a hand-written DELETE,
-// never a bulk statement -- running under the system-context-carrying,
-// tenant-carrying ctx RetentionService supplies: HardDelete reads both
-// from ctx and stays strictly tenant-bound even past its system-context
-// gate, which is where the sweep's cross-tenant non-reaping property comes
-// from (the tenant-scoped candidate listing is the first half of it).
+// repository's own hardDeleteGuarded (repository.go) -- the promoted
+// dbkit.HardDelete behind the module's ordering gate's write side, never a
+// hand-written DELETE, never a bulk statement -- running under the
+// system-context-carrying, tenant-carrying ctx RetentionService supplies:
+// HardDelete reads both from ctx and stays strictly tenant-bound even past
+// its system-context gate, which is where the sweep's cross-tenant
+// non-reaping property comes from (the tenant-scoped candidate listing is
+// the first half of it). The participant wraps whatever
+// AccessLogRepository it is handed, so on the Module.Register path -- the
+// module's own Service repository, which shares its gate with the module's
+// ShareRepository (NewService) -- a reap joins the same in-process
+// ordering as the module's own writers and readers; a participant built
+// over a standalone repository carries that repository's own gate.
 //
 // Erase states the explicit nothing-to-erase answer -- (0, nil) -- because
 // no sharing row carries a subject attribution a right-to-erasure request
@@ -136,7 +143,7 @@ func sweepAccessLog(ctx context.Context, repo *AccessLogRepository, tenant pkgco
 			return reaped, nil
 		}
 		for _, row := range rows {
-			err := repo.HardDelete(ctx, row.ID)
+			err := repo.hardDeleteGuarded(ctx, row.ID)
 			if dbkit.IsRecordNotFound(err) {
 				// Already removed between the listing above and this delete --
 				// convergence, never a partial failure.
