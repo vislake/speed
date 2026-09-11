@@ -156,8 +156,8 @@ module's own instance, and the component assembly never consults one.
 A composition that selects a
 distributed implementation resolves only after the host's binary
 imports that subpackage — a blank import suffices — or the assembly
-refuses the selection, naming the component and listing the
-registered ones: the accepted `database/sql`-style trade that turns a
+refuses the selection with `ErrUnknownComponent`, naming the component
+and listing the registered ones: the accepted `database/sql`-style trade that turns a
 compile-time error into a startup error whose message names the
 import that fixes it.
 

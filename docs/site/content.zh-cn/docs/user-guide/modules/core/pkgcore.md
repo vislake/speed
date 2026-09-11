@@ -145,8 +145,8 @@ if err := app.Assemble(ctx, reg, spec); err != nil {
   缺消息是错误,绝不回落到另一语言。
 - **子包实现**——Redis、PostgreSQL、NATS、Memcached 与 S3 实现
   住在各自子包,由 `init()` 自注册;组合只有在宿主空导入其子包后
-  才能选中对应组件——`database/sql` 式的公认代价(拒绝会点名该
-  组件并列出已注册的组件)。
+  才能选中对应组件——`database/sql` 式的公认代价(`ErrUnknownComponent`
+  会点名该组件并列出已注册的组件)。
 
 ## 边界与注意
 

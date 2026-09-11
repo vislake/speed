@@ -171,8 +171,8 @@ client must not see.
   and S3 implementations live in their own subpackages and
   self-register from `init()`; a composition can select one only after
   the host blank-imports its subpackage — the accepted
-  `database/sql`-style cost, with the refusal naming the component and
-  listing the registered ones.
+  `database/sql`-style cost, with `ErrUnknownComponent` naming the
+  component and listing the registered ones.
 
 ## Boundaries and pitfalls
 
