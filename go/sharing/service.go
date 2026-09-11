@@ -4,7 +4,6 @@ import (
 	"context"
 	"strings"
 	"time"
-	"unicode/utf8"
 
 	"github.com/google/uuid"
 	"gorm.io/gorm"
@@ -1241,19 +1240,27 @@ func (s *Service) recordView(ctx context.Context, share *Share, now time.Time, g
 // outcome, ready to be persisted -- the row Service.Access commits
 // alongside a granted view (recordView), or writes on its own for every
 // denied outcome. The caller-supplied metadata fields
-// (AccessParams.IP/UserAgent/Referrer) are cut to their column bounds
-// HERE, before the row is built -- see model.go's column-bound constants
-// and truncateAccessLogValue for why the cut happens in Go rather than
-// being left to the database.
+// (AccessParams.IP/UserAgent/Referrer) are fitted to their column bounds
+// HERE, before the row is built, through dbkit.FitColumnValue: a
+// caller-controlled User-Agent or Referer is free-form bytes -- over the
+// width PostgreSQL refuses with 22001, and invalid UTF-8 with 22021 -- and
+// either refusal would make the whole access leave no trail, the exact
+// failure mode the module's mandatory access-log rule forbids. SQLite
+// ignores both hazards, so the fit happens in Go at this write boundary
+// rather than being left to the database; the widths live in model.go's
+// column-bound constants.
 func (s *Service) accessLogEntry(tenant pkgcore.TenantID, shareID, outcome string, p AccessParams) *AccessLogEntry {
+	ip, _ := dbkit.FitColumnValue(p.IP, accessLogIPLen)
+	userAgent, _ := dbkit.FitColumnValue(p.UserAgent, accessLogUserAgentLen)
+	referrer, _ := dbkit.FitColumnValue(p.Referrer, accessLogReferrerLen)
 	return &AccessLogEntry{
 		ID:          s.newAccessLogID(),
 		TenantModel: dbkit.TenantModel{TenantID: string(tenant)},
 		ShareID:     shareID,
 		OccurredAt:  s.now(),
-		IP:          truncateAccessLogValue(p.IP, accessLogIPLen),
-		UserAgent:   truncateAccessLogValue(p.UserAgent, accessLogUserAgentLen),
-		Referrer:    truncateAccessLogValue(p.Referrer, accessLogReferrerLen),
+		IP:          ip,
+		UserAgent:   userAgent,
+		Referrer:    referrer,
 		Outcome:     outcome,
 	}
 }
@@ -1280,32 +1287,6 @@ func (s *Service) writeAccessLog(ctx context.Context, entry *AccessLogEntry) err
 		return ErrInternal.WithCause(err)
 	}
 	return nil
-}
-
-// truncateAccessLogValue cuts a caller-supplied access-log field value to
-// maxRunes runes and guarantees valid UTF-8, the two properties the column
-// it is about to be stored in requires on PostgreSQL: VARCHAR(n) counts
-// CHARACTERS, so a cut by rune (not byte) is what actually fits, and a
-// UTF-8-encoded database refuses a value carrying invalid byte sequences
-// outright (SQL error 22021). A caller-controlled User-Agent or Referer
-// can carry either hazard -- HTTP headers are free-form bytes -- and either
-// one failing the INSERT would make the whole access leave no trail (the
-// exact failure the mandatory access-log rule forbids), which is why the
-// value is made
-// safe HERE, at the write boundary, rather than relying on the database to
-// reject it after the fact. Invalid bytes are rendered as the Unicode
-// replacement character, never silently dropped (dropping them could
-// concatenate two arbitrary byte runs into a different valid value); the
-// cut happens after that sanitization, on the resulting runes.
-func truncateAccessLogValue(v string, maxRunes int) string {
-	if len(v) <= maxRunes && utf8.ValidString(v) {
-		return v
-	}
-	runes := []rune(strings.ToValidUTF8(v, "\uFFFD"))
-	if len(runes) > maxRunes {
-		runes = runes[:maxRunes]
-	}
-	return string(runes)
 }
 
 // Revoke withdraws share immediately: the very next Access call against it

@@ -241,7 +241,7 @@ var _ dbkit.TenantScoped = Share{}
 // columns, declared by the migrations that create the table
 // (migrations/{sqlite,postgres}/0002_create_sharing_access_log.sql) --
 // THE MIGRATIONS ARE THE AUTHORITY: these constants exist so the write
-// boundary (service.go's truncateAccessLogValue, called from logAccess)
+// boundary (dbkit.FitColumnValue, applied in service.go's accessLogEntry)
 // can cut caller-controlled values to the column's width in Go, and they
 // must track the migration files' VARCHAR(n) declarations and the gorm
 // size tags on AccessLogEntry below (both dialects, both files) -- a
