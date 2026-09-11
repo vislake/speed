@@ -494,25 +494,26 @@ func firstLine(s string) string {
 
 // TestAuthnSelectionsConsumeTheThreeKeyMaterialsFromServerConfig pins the
 // server side of the key-material contract: every authn-wiring selection's
-// server.go must build the blind index, the PII cipher and the pki
-// local-key cipher from the cfg fields config.go resolves
-// (APP_AUTHN__BLIND_INDEX_KEY / APP_AUTHN__PII_CIPHER_KEY /
-// APP_PKI__LOCAL_KEY_CIPHER_KEY, the loader's derived spellings of the
-// declared key paths, each with its dev fallback), never from
-// bare dev constants used unconditionally -- an operator who sets all the
-// APP_* key variables must not still be running on committed public key
-// bytes. No selection may carry the harm-amplifying claim that such a
-// constant is "the same documented trade-off as config.go's devConfigKey"
-// (false: devConfigKey is a fallback behind an env override, a bare
-// constant has no override at all). The "none" selection wires no authn,
-// so it must carry none of the three usages. The config.go half of the
-// contract (the env declarations, the parse blocks and the dev fallbacks)
-// is pinned by appconfig's own twin tests, which re-read that file.
+// server.go must read the blind-index key, the PII cipher key and the pki
+// local-key cipher key from the assembly's published bootstrap material --
+// the declared paths the composed module components carry, resolved from
+// APP_AUTHN__BLIND_INDEX_KEY / APP_AUTHN__PII_CIPHER_KEY /
+// APP_PKI__LOCAL_KEY_CIPHER_KEY's derived spellings with the dev table as
+// the fallback -- never from bare dev constants used unconditionally: an
+// operator who sets all the APP_* key variables must not still be running
+// on committed public key bytes. No selection may carry the
+// harm-amplifying claim that such a constant is "the same documented
+// trade-off as config.go's devConfigKey" (false: devConfigKey is a
+// fallback behind an env override, a bare constant has no override at
+// all). The "none" selection wires no authn, so it must carry none of the
+// three usages. The config.go half of the contract (the env declarations,
+// the parse blocks and the dev table) is pinned by appconfig's own twin
+// tests, which re-read that file.
 func TestAuthnSelectionsConsumeTheThreeKeyMaterialsFromServerConfig(t *testing.T) {
 	authnKeys := []string{
-		"dbkit.NewCipher(b.hostConfig.PlatformConfig.Authn.PII_Cipher_Key)",
-		"dbkit.NewCipher(b.hostConfig.PlatformConfig.PKI.Local_Key_Cipher_Key)",
-		"authn.WithBlindIndexKey(b.hostConfig.PlatformConfig.Authn.Blind_Index_Key)",
+		`declaredKeyMaterial(deps.Material, "authn.pii_cipher_key")`,
+		`declaredKeyMaterial(deps.Material, "pki.local_key_cipher_key")`,
+		`declaredKeyMaterial(deps.Material, "authn.blind_index_key")`,
 	}
 	banished := []string{
 		"dbkit.NewCipher(devPIICipherKey)",
@@ -562,8 +563,9 @@ func TestAuthnSelectionsConsumeTheThreeKeyMaterialsFromServerConfig(t *testing.T
 // anything anywhere failed. The selections that wire no org module must
 // mention neither call.
 func TestOrgSelectionsBuildTheInvitationIndexerOverEmailIndexColumn(t *testing.T) {
-	const wantRegistrar = "org.RegisterEmailSerializer(cipher)"
-	const wantConstructor = "org.NewEmailIndexer(b.hostConfig.PlatformConfig.Org.Invitation_Email_Index_Key)"
+	const wantRegistrar = "org.RegisterEmailSerializer(deps.Cipher)"
+	const wantMaterialRead = `declaredKeyMaterial(deps.Material, "org.invitation_email_index_key")`
+	const wantConstructor = "org.NewEmailIndexer(orgIndexKey)"
 	const stale = "dbkit.NewBlindIndexer("
 	for _, key := range validSelectionKeys {
 		path := ProjectRoot + "/selection/" + key + "/server.go"
@@ -574,8 +576,8 @@ func TestOrgSelectionsBuildTheInvitationIndexerOverEmailIndexColumn(t *testing.T
 		src := string(content)
 		switch key {
 		case "authn+org", "authn+org+rbac":
-			if !strings.Contains(src, wantRegistrar) || !strings.Contains(src, wantConstructor) {
-				t.Errorf("%s does not bind org's encrypted column through org's own registrar and indexer constructor", key)
+			if !strings.Contains(src, wantRegistrar) || !strings.Contains(src, wantMaterialRead) || !strings.Contains(src, wantConstructor) {
+				t.Errorf("%s does not bind org's encrypted column through org's own registrar and indexer constructor over the declared material", key)
 			}
 			if strings.Contains(src, stale) {
 				t.Errorf("%s still constructs a blind indexer over dbkit directly; go/org owns its index column", key)
@@ -858,13 +860,14 @@ var envVarBacktickPattern = regexp.MustCompile("`([A-Z][A-Z0-9_]*)`")
 var configGoEnvVarPattern = regexp.MustCompile(`config:"env=([A-Za-z0-9_]+)"`)
 
 // derivedPlatformKeyEnvs returns the six environment variable names the
-// loader derives for the platform key materials the template's embedded
-// declaration carries: the declared key path uppercased with every dot
-// doubled under the APP_ prefix (pkgcore/config's own spelling rule). The
-// paths are listed here as the declaration's ground truth; a platform key
-// added to go/app's PlatformConfig without this list and the README and
-// the appconfig twin following fails the README-vs-config test's derived
-// half by construction.
+// loader derives for the platform key materials: the declared key path
+// uppercased with every dot doubled under the APP_ prefix (pkgcore/config's
+// own spelling rule). The paths are listed here as the declaration's ground
+// truth -- the declaring module components carry these key paths, and the
+// template's bootstrapDevDefaults keys its table by them;
+// readEnvVarNamesFromConfigGo pins the table to exactly this set below, so a
+// platform key added to a module without the table, the README and the
+// appconfig twin following fails by construction.
 func derivedPlatformKeyEnvs() []string {
 	var envs []string
 	for _, path := range []string{
@@ -890,8 +893,22 @@ func readEnvVarNamesFromConfigGo(t *testing.T) map[string]bool {
 	if err != nil {
 		t.Fatalf("read the embedded template config.go: %v", err)
 	}
-	if !strings.Contains(string(content), "speedapp.PlatformConfig") {
-		t.Fatal("the template config.go no longer embeds speedapp.PlatformConfig; the derived key names below would rest on a declaration the file does not carry")
+	// The declared key materials are no longer embedded in the file: the
+	// importing module components declare them, and the file carries the
+	// declared defaults table keyed by those paths. The table's entries are
+	// pinned to the six declared paths, so a derived name below can never
+	// rest on a key path the template does not carry.
+	for _, path := range []string{
+		"authn.blind_index_key",
+		"authn.pii_cipher_key",
+		"config.cipher_key",
+		"notification.contact_index_key",
+		"org.invitation_email_index_key",
+		"pki.local_key_cipher_key",
+	} {
+		if !strings.Contains(string(content), "\""+path+"\":") {
+			t.Fatalf("the template config.go carries no bootstrapDevDefaults entry for the declared key path %q; a derived key name below would rest on a path the file does not carry", path)
+		}
 	}
 	names := map[string]bool{}
 	for _, m := range configGoEnvVarPattern.FindAllStringSubmatch(string(content), -1) {

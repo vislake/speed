@@ -476,10 +476,10 @@ func TestLoadSMTPPortMustBeAValidNumber(t *testing.T) {
 // is the twin side of the same names). The tag is a raw string literal, so
 // a name ends at the closing quote -- a tag carrying further options
 // (nothing does today) would still expose its env name to this pattern.
-// The six key-material names are absent from this set by construction:
-// their declaration lives in go/app's PlatformConfig, which the template
-// embeds, and the loader derives each variable name from the declared key
-// path (see derivedKeyEnv below).
+// The six key-material names are absent from this set by construction: the
+// declaring module components carry those key paths, the template keys its
+// bootstrapDevDefaults table by them, and the loader derives each variable
+// name from the declared path (see derivedKeyEnv below).
 var envTagPattern = regexp.MustCompile(`config:"env=([A-Za-z0-9_]+)"`)
 
 // extractEnvVarNames returns the set of environment-variable names pinned
@@ -523,14 +523,13 @@ func TestAppConfigEnvSetMatchesTheTemplateExactly(t *testing.T) {
 		t.Fatal("extracted zero environment variable names from the template; the extraction pattern itself has drifted")
 	}
 
-	// The six key materials: the template's config.go must embed the
-	// platform declaration and must NOT pin any of the six key variables
-	// itself (a pinned key would shadow the declared path's derived name),
-	// and each derived name must be the twin's constant for that path.
+	// The six key materials: their declaring module components own the key
+	// paths, the template's config.go must key its bootstrapDevDefaults
+	// table by exactly those paths and must NOT pin any of the six key
+	// variables itself (a pinned key would shadow the declared path's
+	// derived name), and each derived name must be the twin's constant for
+	// that path.
 	src := string(content)
-	if !strings.Contains(src, "speedapp.PlatformConfig") {
-		t.Error("template config.go does not embed speedapp.PlatformConfig; the six key paths would no longer be declared by the platform")
-	}
 	for keyPath, env := range map[string]string{
 		"config.cipher_key":              ConfigKeyEnv,
 		"authn.blind_index_key":          AuthnBlindIndexKeyEnv,
@@ -539,6 +538,9 @@ func TestAppConfigEnvSetMatchesTheTemplateExactly(t *testing.T) {
 		"org.invitation_email_index_key": OrgIndexKeyEnv,
 		"pki.local_key_cipher_key":       PKILocalKeyCipherKeyEnv,
 	} {
+		if !strings.Contains(src, `"`+keyPath+`":`) {
+			t.Errorf("template config.go carries no bootstrapDevDefaults entry for the declared key path %s; the twin's derived name for it would rest on a path the template does not carry", keyPath)
+		}
 		if want := derivedKeyEnv(keyPath); env != want {
 			t.Errorf("twin constant for declared key path %s is %s, want the loader's derived spelling %s", keyPath, env, want)
 		}
@@ -625,14 +627,16 @@ func TestAppConfigIsTheGeneratedProjectsTwin(t *testing.T) {
 		}
 	}
 
-	// The six key materials are declared, not pinned: the template embeds
-	// the platform declaration and hands it to the engine as its own
-	// configuration target, so the template's source must carry the embed
-	// (skipped by the host walk with config:"-") and none of the six
-	// variables as an env tag -- a pinned key would read under the pinned
-	// name while the twin resolves the derived one.
-	if !strings.Contains(src, "speedapp.PlatformConfig `config:\"-\"`") {
-		t.Error("template's hostConfig does not embed speedapp.PlatformConfig with the config:\"-\" skip; the twin's key resolution assumes the embed")
+	// The six key materials are declared, not pinned: each declaring module
+	// component carries its key's declaration, the template's config.go
+	// keys its bootstrapDevDefaults table by those paths, and the template
+	// must carry none of the six variables as an env tag -- a pinned key
+	// would read under the pinned name while the twin resolves the derived
+	// one.
+	for _, keyPath := range []string{"config.cipher_key", "org.invitation_email_index_key", "authn.blind_index_key", "authn.pii_cipher_key", "pki.local_key_cipher_key", "notification.contact_index_key"} {
+		if !strings.Contains(src, `"`+keyPath+`":`) {
+			t.Errorf("template config.go carries no bootstrapDevDefaults entry for the declared key path %s; a declared key not keyed by the table would silently resolve to nothing", keyPath)
+		}
 	}
 	for _, env := range []string{ConfigKeyEnv, OrgIndexKeyEnv, AuthnBlindIndexKeyEnv, AuthnPIICipherKeyEnv, PKILocalKeyCipherKeyEnv, NotificationIndexKeyEnv} {
 		if strings.Contains(src, "env="+env) {

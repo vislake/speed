@@ -32,10 +32,12 @@ import (
 )
 
 // serverBuild carries the assembly state this selection's callbacks hand each
-// other: the resolved configuration and the loader target the engine fills
-// (the platform key materials included), the modules the WithModules stage
-// constructs, the services the post-bootstrap attach derives from them, and
-// the Redis resources this host built and therefore owns.
+// other: the resolved configuration and the loader target the engine fills,
+// the modules the WithModules stage constructs, the services the post-bootstrap
+// attach derives from them, and the Redis resources this host built and
+// therefore owns. The declared key materials are not carried here: the
+// assembly resolves them off the module components' declarations and hands
+// them to the callbacks as the published bootstrap material.
 type serverBuild struct {
 	cfg        serverConfig
 	hostConfig hostConfig
@@ -118,25 +120,24 @@ func (b *serverBuild) closeRedis() {
 }
 
 // options maps the resolved configuration onto the engine's option set: the
-// configuration targets and loader options, the database, the
+// host's configuration target and the loader options the declared keys
+// resolve under, the database, the
 // encrypted-column registrations, the module set, the kernel's seam
 // composition, the observability spec, the HTTP face, and the host's attach
 // hook. Everything host-specific the engine cannot know is named here;
 // nothing is defaulted on the host's behalf.
 func (b *serverBuild) options() []speedapp.Option {
 	return []speedapp.Option{
-		// The host target carries this project's own keys; the platform
-		// target is the embedded declaration of the six bootstrap key
-		// materials, loaded as its own target so the declared key paths stay
-		// unprefixed, exactly the two-target load configFromEnv performs
-		// before assembly. The one loader option is the environment prefix:
-		// the embedded declaration's derive tags resolve from a root key
-		// only when a host installs WithRootKeyEnv and WithKeyDerivation,
-		// and this project keeps the committed development keys as the
-		// unset fallback instead.
+		// The host target carries this project's own keys. The declared key
+		// materials come off the module components' declarations and resolve
+		// on this same loader chain: the environment prefix derives each
+		// key's variable from its declared path, and bootstrapDevDefaults is
+		// the table that stands when no variable does. This project installs
+		// no root key, so the derivation tier stays unconfigured.
 		speedapp.WithConfig(
-			speedapp.ConfigSpec{Host: &b.hostConfig, Platform: &b.hostConfig.PlatformConfig},
+			speedapp.ConfigSpec{Host: &b.hostConfig},
 			speedapp.ConfigEnvPrefix(envPrefix),
+			speedapp.ConfigDevDefaults(bootstrapDevDefaults()),
 		),
 		speedapp.WithDatabase(speedapp.DatabaseSpec{
 			Dialect: dbkit.DialectSQLite,
@@ -158,13 +159,17 @@ func (b *serverBuild) options() []speedapp.Option {
 // pki's encrypted columns need their serializers registered BEFORE
 // dbkit.Open, because GORM resolves a model's serializer while it parses the
 // schema and the registration is process-global (each registrar's own doc
-// comment states the contract). The cipher parameter is the engine's
-// platform cipher, built from the config.cipher_key material; authn's PII
-// cipher and pki's local-key cipher come from their own key materials on the
-// embedded platform declaration -- separate secrets, because an AES key must
-// never double as another construction's key (dbkit's key-separation rule).
-func (b *serverBuild) registerEncryptedColumns(_ context.Context, cipher *dbkit.Cipher) error {
-	piiCipher, err := dbkit.NewCipher(b.hostConfig.PlatformConfig.Authn.PII_Cipher_Key)
+// comment states the contract). deps carries the engine's platform cipher,
+// built from the config.cipher_key material, and the assembly's resolved
+// bootstrap material, which is where authn's PII key and pki's local-key
+// cipher key come from -- separate secrets, because an AES key must never
+// double as another construction's key (dbkit's key-separation rule).
+func (b *serverBuild) registerEncryptedColumns(_ context.Context, deps speedapp.PreDBDeps) error {
+	piiKey, err := declaredKeyMaterial(deps.Material, "authn.pii_cipher_key")
+	if err != nil {
+		return err
+	}
+	piiCipher, err := dbkit.NewCipher(piiKey)
 	if err != nil {
 		return fmt.Errorf("__APP_NAME__: build authn's PII cipher: %w", err)
 	}
@@ -172,7 +177,11 @@ func (b *serverBuild) registerEncryptedColumns(_ context.Context, cipher *dbkit.
 		return fmt.Errorf("__APP_NAME__: register authn's PII serializer: %w", regErr)
 	}
 
-	pkiLocalKeyCipher, err := dbkit.NewCipher(b.hostConfig.PlatformConfig.PKI.Local_Key_Cipher_Key)
+	pkiLocalKeyKey, err := declaredKeyMaterial(deps.Material, "pki.local_key_cipher_key")
+	if err != nil {
+		return err
+	}
+	pkiLocalKeyCipher, err := dbkit.NewCipher(pkiLocalKeyKey)
 	if err != nil {
 		return fmt.Errorf("__APP_NAME__: build pki's local-key cipher: %w", err)
 	}
@@ -187,7 +196,7 @@ func (b *serverBuild) registerEncryptedColumns(_ context.Context, cipher *dbkit.
 	// the AES-key-doubling-as-an-HMAC-key weakness dbkit warns about. The
 	// module's own registrar and constructor own the serializer name and the
 	// index column, so neither crosses this wiring as a hand-typed string.
-	if regErr := org.RegisterEmailSerializer(cipher); regErr != nil {
+	if regErr := org.RegisterEmailSerializer(deps.Cipher); regErr != nil {
 		return fmt.Errorf("__APP_NAME__: register org's email serializer: %w", regErr)
 	}
 	return nil
@@ -220,9 +229,16 @@ func (b *serverBuild) constructModules(_ context.Context, deps speedapp.ModuleDe
 	// authn.ErrMissingDistributedSMSSender rather than this composition
 	// silently keeping a console sender nobody in a distributed replica pool
 	// is reading.
+	// authn's blind-index key is one of the declared key materials the
+	// assembly resolved before this callback ran; the material source it
+	// published is where the declared path resolves.
+	blindIndexKey, err := declaredKeyMaterial(deps.Material, "authn.blind_index_key")
+	if err != nil {
+		return nil, err
+	}
 	authnOpts := []authn.Option{
 		authn.WithKeySource(b.pkiModule.Service()),
-		authn.WithBlindIndexKey(b.hostConfig.PlatformConfig.Authn.Blind_Index_Key),
+		authn.WithBlindIndexKey(blindIndexKey),
 		authn.WithDeploymentMode(b.cfg.DeploymentMode),
 	}
 	switch {
@@ -241,7 +257,11 @@ func (b *serverBuild) constructModules(_ context.Context, deps speedapp.ModuleDe
 	// indexer is built from the org.invitation_email_index_key material --
 	// the serializer above encrypted the column; this key makes it
 	// queryable.
-	orgIndexer, err := org.NewEmailIndexer(b.hostConfig.PlatformConfig.Org.Invitation_Email_Index_Key)
+	orgIndexKey, err := declaredKeyMaterial(deps.Material, "org.invitation_email_index_key")
+	if err != nil {
+		return nil, err
+	}
+	orgIndexer, err := org.NewEmailIndexer(orgIndexKey)
 	if err != nil {
 		return nil, fmt.Errorf("__APP_NAME__: build the org email indexer: %w", err)
 	}

@@ -2,8 +2,8 @@
 // consumer project: APP_DEPLOYMENT_MODE, PORT, APP_DB_PATH, APP_REDIS_ADDR,
 // APP_OTLP_ENDPOINT, the APP_S3_* group, the APP_SMTP_* group,
 // APP_SMS_GATEWAY_URL, and the six platform key materials -- the six
-// variables the loader derives from the key paths go/app's PlatformConfig
-// declares (config.cipher_key reads as APP_CONFIG__CIPHER_KEY,
+// variables the loader derives from the declared key paths the module
+// components carry (config.cipher_key reads as APP_CONFIG__CIPHER_KEY,
 // authn.blind_index_key as APP_AUTHN__BLIND_INDEX_KEY, and so on: the
 // declared path uppercased with its dots doubled) -- resolved exactly as
 // the generated project's own cmd/server/config.go resolves them.
@@ -29,9 +29,10 @@
 //
 // The twin is a sibling implementation, not a shared one, and that split is
 // deliberate. The template resolves its surface through go/pkgcore/config's
-// loader -- the host's own pinned text fields by their exact env tags, the
-// six key materials through the embedded platform declaration the loader
-// reads as its own target -- and transforms the loaded text (the scalar
+// loader -- the host's own pinned text fields by their exact env tags, and
+// the six key materials off the importing module components' declarations,
+// with the template's bootstrapDevDefaults table as the fallback -- and
+// transforms the loaded text (the scalar
 // parses and the completeness refusals) in the same file; the template file
 // is a build-ignored asset this module cannot import, and the loader
 // exposes no per-value provenance, which is exactly what config print
@@ -70,10 +71,10 @@ import (
 // bootstrap surface, exported because the command groups that render
 // provenance and the tests that pin template parity all name the same
 // variables. The six key-material names are the loader's derivation of the
-// key paths go/app's PlatformConfig declares -- the declared path,
+// declared key paths the module components carry -- the declared path,
 // uppercased, its dots doubled -- not names the generated project pins
-// anywhere: the declaration is what owns them, and a platform key added to
-// it arrives with its derived name together.
+// anywhere: the declarations own them, and a platform key added to a module
+// arrives with its derived name together.
 const (
 	// DeploymentModeEnv names the environment variable selecting a
 	// generated project's deployment mode. Empty defaults to standalone
@@ -239,7 +240,8 @@ var devOrgIndexKey = []byte{
 // devPIICipherKey the cipher sealing authn's encrypted PII columns,
 // devPKILocalKeyCipherKey the cipher sealing pki's persisted signing-key
 // column, and devNotificationIndexKey the notification contact-index key
-// the embedded platform declaration carries uniformly. Each is a FALLBACK
+// the template's declared defaults table carries uniformly. Each is a
+// FALLBACK
 // only -- an environment value always wins -- and each is a distinct value,
 // because dbkit's key-separation rule applies across modules, not only
 // within one. Like the template's own copies, they are honest placeholders,

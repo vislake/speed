@@ -24,10 +24,12 @@ import (
 )
 
 // serverBuild carries the assembly state this selection's callbacks hand each
-// other: the resolved configuration and the loader target the engine fills
-// (the platform key materials included), the module the WithModules stage
-// constructs, the service the post-bootstrap attach derives from it, and the
-// Redis resources this host built and therefore owns.
+// other: the resolved configuration and the loader target the engine fills,
+// the module the WithModules stage constructs, the service the post-bootstrap
+// attach derives from it, and the Redis resources this host built and
+// therefore owns. The declared key materials are not carried here: the
+// assembly resolves them off the module components' declarations and hands
+// them to the callbacks as the published bootstrap material.
 type serverBuild struct {
 	cfg        serverConfig
 	hostConfig hostConfig
@@ -100,25 +102,24 @@ func (b *serverBuild) closeRedis() {
 }
 
 // options maps the resolved configuration onto the engine's option set: the
-// configuration targets and loader options, the database, the module set,
+// host's configuration target and the loader options the declared keys
+// resolve under, the database, the module set,
 // the kernel's seam composition, the observability spec, the HTTP face (with
 // no protected-face composition -- see runServer's doc comment), and the
 // host's attach hook. Everything host-specific the engine cannot know is
 // named here; nothing is defaulted on the host's behalf.
 func (b *serverBuild) options() []speedapp.Option {
 	return []speedapp.Option{
-		// The host target carries this project's own keys; the platform
-		// target is the embedded declaration of the six bootstrap key
-		// materials, loaded as its own target so the declared key paths stay
-		// unprefixed, exactly the two-target load configFromEnv performs
-		// before assembly. The one loader option is the environment prefix:
-		// the embedded declaration's derive tags resolve from a root key
-		// only when a host installs WithRootKeyEnv and WithKeyDerivation,
-		// and this project keeps the committed development keys as the
-		// unset fallback instead.
+		// The host target carries this project's own keys. The declared key
+		// materials come off the module components' declarations and resolve
+		// on this same loader chain: the environment prefix derives each
+		// key's variable from its declared path, and bootstrapDevDefaults is
+		// the table that stands when no variable does. This project installs
+		// no root key, so the derivation tier stays unconfigured.
 		speedapp.WithConfig(
-			speedapp.ConfigSpec{Host: &b.hostConfig, Platform: &b.hostConfig.PlatformConfig},
+			speedapp.ConfigSpec{Host: &b.hostConfig},
 			speedapp.ConfigEnvPrefix(envPrefix),
+			speedapp.ConfigDevDefaults(bootstrapDevDefaults()),
 		),
 		speedapp.WithDatabase(speedapp.DatabaseSpec{
 			Dialect: dbkit.DialectSQLite,

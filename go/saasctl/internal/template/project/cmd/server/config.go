@@ -7,19 +7,19 @@ package main
 // into the serverConfig the composition consumes, and the committed
 // development keys zero-setup development falls back to.
 //
-// The six platform key materials are declared once, in go/app's
-// PlatformConfig -- the platform's normative declaration of its bootstrap
-// keys -- which hostConfig embeds. The engine loads that embedded
-// declaration as its own configuration target (its key paths stay
-// unprefixed only that way), so a platform key added later arrives here
-// without this file changing. The declaration pins no environment variable
-// names: each key reads under the loader's own derivation of its declared
-// path -- uppercased, dots doubled -- so config.cipher_key reads
-// APP_CONFIG__CIPHER_KEY and authn.blind_index_key reads
-// APP_AUTHN__BLIND_INDEX_KEY. An unset variable leaves the pre-filled
-// development key standing (hostConfigDefaults); a set one must hold 64 hex
-// characters (a 32-byte key), and anything else fails the load naming the
-// key path and the variable the loader read.
+// The six platform key materials are declared by the module components the
+// composition imports -- each module declares its own key, and the
+// declarations ride the components -- so this file restates none of them.
+// The engine's loader resolves every declaration on its own chain: the key
+// path's derived environment variable -- uppercased, dots doubled -- so
+// config.cipher_key reads APP_CONFIG__CIPHER_KEY and authn.blind_index_key
+// reads APP_AUTHN__BLIND_INDEX_KEY, and an unset variable leaves the
+// development key below standing (bootstrapDevDefaults is the loader's
+// lowest-priority table). A set variable must hold 64 hex characters (a
+// 32-byte key), and anything else fails the load naming the key path and the
+// variable the loader read. This project wires no root key (the committed
+// development keys are its unset fallback), so the derivation tier stays
+// unconfigured here.
 //
 // Every other variable of this project's surface is flat and
 // single-underscored, a shape the loader's nesting derivation never
@@ -32,7 +32,6 @@ import (
 	"strconv"
 	"strings"
 
-	speedapp "github.com/vislake/speed/go/app"
 	"github.com/vislake/speed/go/pkgcore"
 	"github.com/vislake/speed/go/pkgcore/config"
 	objectstores3 "github.com/vislake/speed/go/pkgcore/objectstore/s3"
@@ -42,11 +41,10 @@ const (
 	// envPrefix is the prefix every bootstrap variable of this project
 	// carries, with one exception: PORT, the unprefixed name hosting
 	// platforms inject. It is handed to the loader as config.WithEnvPrefix,
-	// the one loader option this project wires (the embedded platform
-	// declaration's derive tags resolve from a root key only when a host
-	// installs WithRootKeyEnv and WithKeyDerivation; this project keeps the
-	// committed development keys as the unset fallback instead, so no
-	// APP_ROOT_KEY is read).
+	// alongside the declared defaults table (bootstrapDevDefaults) the
+	// declared key materials fall back to. This project installs no root
+	// key -- the committed development keys are the unset fallback, so no
+	// APP_ROOT_KEY is read and the derivation tier stays unconfigured.
 	envPrefix = "APP_"
 
 	// defaultPort is used when the PORT environment variable is unset.
@@ -67,7 +65,7 @@ const (
 	defaultSQLitePath = "app.db"
 )
 
-// devConfigKey is the config-module cipher key hostConfigDefaults pre-fills
+// devConfigKey is the config-module cipher key bootstrapDevDefaults carries
 // when APP_CONFIG__CIPHER_KEY is unset. Zero-setup standalone development
 // must work with no environment at all, while config's Sensitive items
 // demand a real 32-byte key the moment one is declared (the config module's
@@ -90,8 +88,9 @@ var devConfigKey = []byte{
 	0x18, 0x19, 0x1a, 0x1b, 0x1c, 0x1d, 0x1e, 0x1f,
 }
 
-// devOrgIndexKey is the org invitation blind-index HMAC key pre-filled when
-// APP_ORG__INVITATION_EMAIL_INDEX_KEY is unset: the descending 0xff..0xe0
+// devOrgIndexKey is the org invitation blind-index HMAC key
+// bootstrapDevDefaults carries when APP_ORG__INVITATION_EMAIL_INDEX_KEY is
+// unset: the descending 0xff..0xe0
 // byte sequence, chosen precisely so it is visibly a DIFFERENT 32 bytes
 // from devConfigKey's ascending 0x00..0x1f (the reason is dbkit's
 // key-separation rule: an AES key must never double as an HMAC key). The
@@ -126,8 +125,8 @@ var devOrgIndexKey = []byte{
 // database across restarts, so no derivation from a dev seed is ever
 // needed; and devNotificationIndexKey stands behind
 // notification.contact_index_key, which this generator's selections do not
-// wire today but which the embedded platform declaration carries uniformly,
-// so a selection that later adds notification finds its key pre-filled.
+// wire today but which the declared defaults table carries uniformly, so a
+// selection that later adds notification finds its key supplied.
 //
 // These are the same documented trade-off as devConfigKey's own: each is a
 // FALLBACK applied only when its environment variable is unset, never a
@@ -163,13 +162,15 @@ var (
 	}
 )
 
-// hostConfig is the loader target carrying this project's whole bootstrap
-// surface: the embedded platform declaration (the six key materials, see
-// the file comment) plus one pinned field per host variable. The three
-// fields whose unset behavior is a scalar default -- DeploymentMode, Port
-// and DBPath -- are pre-set by hostConfigDefaults as the loader's
-// lowest-priority source; every other field's empty value is its documented
-// unset behavior, handled by serverConfigFrom below.
+// hostConfig is the loader target carrying this project's own bootstrap
+// surface: one pinned field per host variable. The six key materials are
+// deliberately absent -- the importing module components declare them, and
+// the assembly's loader resolves the declarations into the bootstrap
+// material the wiring reads. The three fields whose unset behavior is a
+// scalar default -- DeploymentMode, Port and DBPath -- are pre-set by
+// hostConfigDefaults as the loader's lowest-priority source; every other
+// field's empty value is its documented unset behavior, handled by
+// serverConfigFrom below.
 //
 // Field types are the loader's text type deliberately. A string field
 // holds its variable's text verbatim, so "unset" and "set to the empty
@@ -182,15 +183,6 @@ var (
 // so a malformed value fails with this file's own precise message naming
 // the variable.
 type hostConfig struct {
-	// PlatformConfig is the platform's normative declaration of its six
-	// bootstrap key materials, each nested under its module's own key-path
-	// segment. The config:"-" tag keeps this file's own target walk from
-	// descending into it: the engine loads the declaration as its own
-	// configuration target, which is what keeps the six keys at their
-	// declared top-level paths, and hostConfigDefaults pre-fills each
-	// field's development key so an unset variable leaves it standing.
-	speedapp.PlatformConfig `config:"-"`
-
 	// DeploymentMode names APP_DEPLOYMENT_MODE: the deployment topology
 	// this process runs as -- "standalone" (the default) or "distributed".
 	// An unset or emptied variable reads as standalone; anything else that
@@ -309,9 +301,9 @@ type hostConfig struct {
 }
 
 // hostConfigDefaults returns the loader target with its three scalar
-// defaults and its six development keys pre-set -- the loader's
-// lowest-priority source, applied where no flag, environment variable or
-// config file (none is wired here) supplied a value. Every other field's
+// defaults pre-set -- the loader's lowest-priority source, applied where no
+// flag, environment variable or config file (none is wired here) supplied a
+// value. Every other field's
 // empty value is its documented unset behavior: the seam variables' "leave
 // the Preset default" and the cross-variable rules all live in
 // serverConfigFrom, which is also what treats an explicitly emptied
@@ -320,41 +312,58 @@ type hostConfig struct {
 // defaults over it).
 func hostConfigDefaults() hostConfig {
 	return hostConfig{
-		PlatformConfig: speedapp.PlatformConfig{
-			Authn: speedapp.PlatformAuthnKeyMaterial{
-				Blind_Index_Key: devBlindIndexKey,
-				PII_Cipher_Key:  devPIICipherKey,
-			},
-			Config:       speedapp.PlatformConfigKeyMaterial{Cipher_Key: devConfigKey},
-			Notification: speedapp.PlatformNotificationKeyMaterial{Contact_Index_Key: devNotificationIndexKey},
-			Org:          speedapp.PlatformOrgKeyMaterial{Invitation_Email_Index_Key: devOrgIndexKey},
-			PKI:          speedapp.PlatformPKIKeyMaterial{Local_Key_Cipher_Key: devPKILocalKeyCipherKey},
-		},
 		DeploymentMode: string(pkgcore.DeploymentModeStandalone),
 		Port:           defaultPort,
 		DBPath:         defaultSQLitePath,
 	}
 }
 
+// bootstrapDevDefaults returns this file's six committed development keys as
+// the declared defaults table: the loader's lowest-priority source for the
+// declared key materials, keyed by the declared key path each declaring
+// module's component carries. It is handed to the assembly's loader options
+// (the selection's options()), which is the pass that resolves the
+// declarations; an entry naming a key no imported module declares is inert,
+// so one table serves every selection -- a composition that imports no authn
+// module simply has nothing to resolve authn.blind_index_key for.
+func bootstrapDevDefaults() map[string][]byte {
+	return map[string][]byte{
+		"authn.blind_index_key":          devBlindIndexKey,
+		"authn.pii_cipher_key":           devPIICipherKey,
+		"config.cipher_key":              devConfigKey,
+		"notification.contact_index_key": devNotificationIndexKey,
+		"org.invitation_email_index_key": devOrgIndexKey,
+		"pki.local_key_cipher_key":       devPKILocalKeyCipherKey,
+	}
+}
+
+// declaredKeyMaterial reads one declared bootstrap key's material from the
+// assembly's published source, naming the declared key path when the assembly
+// resolved no value for it (a key whose variable was emptied with no table
+// entry to fall back to, or a composition that declares no such key at all).
+func declaredKeyMaterial(material *pkgcore.BootstrapMaterial, keyPath string) ([]byte, error) {
+	value, ok := material.Material(keyPath)
+	if !ok {
+		return nil, fmt.Errorf("__APP_NAME__: the assembly resolved no material for the declared bootstrap key %q", keyPath)
+	}
+	return value, nil
+}
+
 // loadHostConfig resolves the bootstrap surface from the process
 // environment through the loader: flags first, then the environment
-// (PORT and every pinned variable under its exact env tag, the six key
-// materials under the loader's derived spellings of their declared key
-// paths), no config file, then hostConfigDefaults. The host target and the
-// embedded platform declaration are loaded through one loader, the same
-// two-target load the engine's configuration stage performs over the very
-// same struct -- this pass exists so the option values that depend on the
-// loaded configuration (the database DSN, the listen address, the kernel's
-// seam composition) are resolved before the engine assembles anything, and
-// the engine's own pass re-resolves the identical sources into the
-// identical target, so the two cannot disagree.
+// (PORT and every pinned variable under its exact env tag), no config file,
+// then hostConfigDefaults. The declared key materials resolve in the
+// assembly's own pass, over the module components' declarations and the same
+// process environment, with bootstrapDevDefaults as the table no individual
+// variable overrides -- this pass exists so the option values that depend on
+// the loaded configuration (the database DSN, the listen address, the
+// kernel's seam composition) are resolved before the engine assembles
+// anything, and the engine's own pass re-resolves the identical sources into
+// the identical target, so the two cannot disagree.
 func loadHostConfig() (hostConfig, error) {
 	hc := hostConfigDefaults()
 	loader := config.New(config.WithEnvPrefix(envPrefix))
 	if err := loader.Load(&hc); err != nil {
-		return hostConfig{}, err
-	}
-	if err := loader.Load(&hc.PlatformConfig); err != nil {
 		return hostConfig{}, err
 	}
 	return hc, nil
@@ -366,8 +375,8 @@ func loadHostConfig() (hostConfig, error) {
 // external dependencies. It is loadHostConfig plus the transform below, in
 // one call, for every caller that wants the assembled config rather than
 // the raw surface. The loader target travels onward because the assembly
-// hands it to the engine as the configuration targets; the six key
-// materials stay on it, resolved once by the loader.
+// hands it to the engine as the configuration target; the declared key
+// materials resolve in the assembly's own pass.
 func configFromEnv() (serverConfig, hostConfig, error) {
 	hc, err := loadHostConfig()
 	if err != nil {
@@ -384,7 +393,7 @@ func configFromEnv() (serverConfig, hostConfig, error) {
 // the values a process must know before anything else can start (deployment
 // mode, port, database path, the infrastructure seam addresses and the OTLP
 // endpoint) -- everything except the six platform key materials, which the
-// loaded hostConfig's embedded declaration carries. It is the transform
+// assembly's declared-key resolution carries. It is the transform
 // output of the loader-filled hostConfig, NOT the dynamic configuration the
 // config module serves: dynamic configuration lives in the configs table
 // and can never hold the very key that encrypts it, so this bootstrap
@@ -445,10 +454,10 @@ type serverConfig struct {
 // single-variable loader cannot state. Every refusal names the variable an
 // operator must change.
 //
-// The six key materials are already resolved on hc's embedded platform
-// declaration when this transform runs -- the loader decoded an explicit
-// 64-hex-character value or left the pre-filled development key standing --
-// so they cross this file untouched.
+// The six key materials are not part of this transform: the assembly's
+// loader resolved them off the declaring components (an explicit
+// 64-hex-character variable, or the declared defaults table), and the
+// wiring reads them from the published bootstrap material.
 //
 // Strings arrive from the loader with "" for both an unset and an
 // explicitly emptied variable -- the same value a direct environment read
