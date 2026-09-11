@@ -210,8 +210,18 @@ the language names in the current UI language (`Intl.DisplayNames`,
 falling back to the raw tag); choosing one PATCHes the account first
 and, only on a confirmed write, runs the persisting `switchLanguage` --
 the settings switch is the one place the decision is meant to land on
-the device (the manual-choice slot) and the account together. The
-timezone options are the engine's IANA list
+the device (the manual-choice slot) and the account together -- while
+clearing the preference (the "not chosen" choice, the empty string the
+server stores as no choice) moves the account alone: the empty string
+is not a language to switch the device to. The preference is what
+backend-rendered content resolves against (verification messages,
+notification emails, invitations), and its acceptable set is the
+deployment's locale set -- the languages the shipped catalogs cover. A
+host that extends the instance beyond the platform's shipped set (a
+`supportedLanguages` carrying extra languages) must confirm the backend
+can render them first: a locale outside the deployed catalogs is
+refused with 400 `authn.invalid_locale`, so such an option could only
+ever fail. The timezone options are the engine's IANA list
 (`Intl.supportedValuesOf('timeZone')`, guarded) plus an explicit "not
 chosen" choice whose value is the empty string (the API's clearing
 value), and the stored value is always among the options: a value the

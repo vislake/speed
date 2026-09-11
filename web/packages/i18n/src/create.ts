@@ -56,6 +56,18 @@ export interface CreateI18nOptions {
    * normalizeLanguageTag) -- creation refuses anything else, naming the
    * canonical form, because a non-canonical entry could never be matched
    * by a canonicalized negotiation source and would be dead weight.
+   *
+   * This set is also the acceptable set of the signed-in account's
+   * language preference: the stored preference drives backend-rendered
+   * content (verification messages, notification emails, invitations),
+   * which renders in the deployment's catalog languages -- the locales
+   * the shipped Go modules carry (`go/<module>/locales`) -- and a
+   * preference outside them is refused with 400 authn.invalid_locale. A
+   * host extending this option beyond the platform's shipped set must
+   * first confirm the backend can render the extra languages, or the
+   * option could only ever fail. The default set is a build-time
+   * constant; distributing the deployment's optional languages through
+   * public configuration is the future convergence path for it.
    */
   readonly supportedLanguages?: readonly string[]
   /**
