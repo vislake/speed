@@ -297,9 +297,11 @@ func (m *Module) Export() *ExportService { return m.exportSvc }
 // own documented contract, must run strictly after
 // the assembly returns, because Attach freezes the snapshot of
 // every permission every module declared -- and the component descriptor
-// (component.go) calls it from the assembly's Init stage, where the
-// *rbac.Service sits in the by-type context after rbac's own Init turn
-// published it.
+// (component.go) calls it from the assembly's Start stage, whose turn the
+// requirement on rbac's product orders after rbac's own Start: the
+// *rbac.Service sits in the by-type context from rbac's Init turn
+// publication, and its catalog snapshot is complete by the time this
+// reads it.
 //
 // This is why rbac is NOT wired through a WithXxx(*rbac.Module)
 // construction-time Option the way authn, org, compliance and

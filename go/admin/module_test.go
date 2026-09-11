@@ -87,6 +87,13 @@ type testAdminEnv struct {
 	// fail-closed ErrRBACServiceRequired contract.
 	RBAC *rbac.Service
 
+	// RBACModule is the real, Register()-ed *rbac.Module over the shared
+	// database -- the product a component assembly resolves the admin
+	// descriptor's requirement on rbac's product against (the requirement
+	// names the module, never the runtime service, and orders admin's
+	// Start turn after rbac's).
+	RBACModule *rbac.Module
+
 	// Sharing is the real *sharing.Module compliance.WithSharing delivers
 	// the audit exports through.
 	Sharing *sharing.Module
@@ -264,6 +271,7 @@ func buildTestAdminModule(t *testing.T, extra ...func(*pkgcore.ComponentRegistry
 		Queue:        queue,
 		DB:           db,
 		RBAC:         rbacService,
+		RBACModule:   rbacModule,
 		Sharing:      sharingModule,
 		Metering:     meteringModule,
 		Billing:      billingModule,

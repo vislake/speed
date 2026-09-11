@@ -19,8 +19,10 @@ func TestComponent_WellFormed(t *testing.T) {
 
 // TestComponent_RequiresPinsTheTokenSet pins the component's dependency
 // declaration exactly: the database and the queue, the products of the four
-// modules the console reads mandatorily, the provider's product the rbac
-// declaration stage is ordered behind, and the two optional module
+// modules the console reads mandatorily, the rbac product whose requirement
+// orders admin's Start turn after rbac's -- the Start callback reads the
+// published *rbac.Service there, at its use time, so the token names the
+// module product, never the service -- and the two optional module
 // products. A change here is a change to what a composition must select for
 // admin to assemble, so it is asserted token by token rather than by count
 // alone.
@@ -35,7 +37,7 @@ func TestComponent_RequiresPinsTheTokenSet(t *testing.T) {
 		{"*org.Module", false},
 		{"*compliance.Module", false},
 		{"*notification.Module", false},
-		{"*rbac.Service", false},
+		{"*rbac.Module", false},
 		{"*metering.Module", true},
 		{"*billing.Module", true},
 	}
@@ -132,8 +134,11 @@ func TestComponent_NewFailsWithoutTheDatabase(t *testing.T) {
 // up: the module's Register runs inside the one stage whose seats accept
 // writes -- permissions, audit vocabulary, the impersonation notification
 // type, the audit-export handler and the HTTP mount all land in the
-// assembly's own seats -- and AttachRBAC then wires the assembly's own
-// published *rbac.Service onto the role and impersonation services.
+// assembly's own seats. The rbac binding is deliberately NOT part of this
+// stage: both the role and the impersonation services still hold nothing
+// when the stage closes, fail-closed exactly as they stay for a host that
+// never wires the seam; the Start test drives the assembly's next stage,
+// where the descriptor binds the published *rbac.Service.
 func TestComponent_InitDeclaresThroughTheGate(t *testing.T) {
 	env := buildTestAdminModule(t)
 
@@ -145,6 +150,7 @@ func TestComponent_InitDeclaresThroughTheGate(t *testing.T) {
 		env.Org,
 		env.Compliance,
 		env.Notification,
+		env.RBACModule,
 		env.RBAC,
 		pkgcore.NewMemoryEventBus(),
 	); err != nil {
@@ -181,13 +187,56 @@ func TestComponent_InitDeclaresThroughTheGate(t *testing.T) {
 		t.Fatalf("Init mounted %v, want exactly the %s mount", routes, APIPath)
 	}
 
-	// AttachRBAC ran inside the Init stage: the role and impersonation
-	// services hold the assembly's own Service, so role management stopped
-	// failing closed.
-	if m.roles.svc != env.RBAC {
-		t.Error("RoleService did not take the assembly's rbac Service")
+	// AttachRBAC is the Start stage's binding, not Init's: even with the
+	// assembly's own *rbac.Service already in the by-type context, both
+	// services still hold nothing at the close of Init -- fail-closed
+	// exactly as they stay for a host that never wires the seam.
+	if m.roles.svc != nil {
+		t.Error("RoleService took an rbac Service during Init; the binding is the Start callback's own turn")
+	}
+	if m.impersonation.rbacSvc != nil {
+		t.Error("ImpersonationService took an rbac Service during Init; the binding is the Start callback's own turn")
 	}
 	if m.handler == nil {
 		t.Error("the module's HTTP handler was not built by Init")
+	}
+}
+
+// TestComponent_StartBindsTheRBACService drives the descriptor through the
+// Start stage RunInit leaves ready: rbac's published *rbac.Service sits in
+// the by-type context from its own Init turn, and Start's one job is
+// binding it onto the role and impersonation services -- the turn the
+// requirement on rbac's product orders after rbac's own Start, which
+// completed the catalog snapshot the service decides through.
+func TestComponent_StartBindsTheRBACService(t *testing.T) {
+	env := buildTestAdminModule(t)
+
+	reg := pkgcore.NewComponentRegistry()
+	if err := componenttest.RunInit(t, reg, adminComponent,
+		env.DB,
+		env.Queue,
+		env.Authn,
+		env.Org,
+		env.Compliance,
+		env.Notification,
+		env.RBACModule,
+		env.RBAC,
+		pkgcore.NewMemoryEventBus(),
+	); err != nil {
+		t.Fatalf("RunInit: %v", err)
+	}
+	m, err := pkgcore.Get[*Module](reg)
+	if err != nil {
+		t.Fatalf("the assembly's product: %v", err)
+	}
+
+	if err := reg.Start(context.Background()); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	if m.roles.svc != env.RBAC {
+		t.Error("RoleService did not take the assembly's rbac Service at Start")
+	}
+	if m.impersonation.rbacSvc != env.RBAC {
+		t.Error("ImpersonationService did not take the assembly's rbac Service at Start")
 	}
 }
