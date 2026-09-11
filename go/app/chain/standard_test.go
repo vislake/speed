@@ -185,6 +185,57 @@ func TestStandard_PartitionsTheMountedRoutes(t *testing.T) {
 	}
 }
 
+// routesProbe is the trivial product of the component-registry fixture.
+type routesProbe struct{}
+
+// TestStandard_AcceptsAComponentRegistry pins the route source's second
+// shape: the component assembly's registry answers the same route reading as
+// the module registry, so a host whose assembly produced that registry
+// composes the same chain from the same declarations.
+func TestStandard_AcceptsAComponentRegistry(t *testing.T) {
+	reg := pkgcore.NewComponentRegistry()
+	authn := &countingHandler{}
+	err := reg.Register(pkgcore.Component{
+		Name: "fixture.routes",
+		New: func(context.Context, *pkgcore.ComponentRegistry, pkgcore.ComponentConfig) (any, error) {
+			return &routesProbe{}, nil
+		},
+		Init: func(_ context.Context, r *pkgcore.ComponentRegistry, _ any) error {
+			r.Routes.Mount(app.AuthnAPIPath, authn)
+			return nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("register the fixture component: %v", err)
+	}
+	reg.Put(pkgcore.NewComponentConfig(map[string]any{
+		"components": map[string]any{"fixture.routes": nil},
+	}))
+
+	ctx := context.Background()
+	if err := reg.Prepare(ctx); err != nil {
+		t.Fatalf("Prepare: %v", err)
+	}
+	if err := reg.Construct(ctx); err != nil {
+		t.Fatalf("Construct: %v", err)
+	}
+	if err := reg.Verify(ctx); err != nil {
+		t.Fatalf("Verify: %v", err)
+	}
+	if err := reg.Init(ctx); err != nil {
+		t.Fatalf("Init: %v", err)
+	}
+	t.Cleanup(func() { _ = reg.Close(context.Background()) })
+
+	handler, err := Standard(reg, newTestVerifier(t), http.NewServeMux())
+	if err != nil {
+		t.Fatalf("Standard over a component registry: %v", err)
+	}
+	if rec := do(handler, http.MethodGet, app.AuthnAPIPath+"/register", nil); authn.hits != 1 {
+		t.Fatalf("GET %s/register: status %d, authn hits %d; the component registry's routes must partition like the module registry's", app.AuthnAPIPath, rec.Code, authn.hits)
+	}
+}
+
 // TestStandard_WeavesTheAuthorizationTable pins the rbac weave: a gated
 // route's handler runs only when the authorizer admits the request, and the
 // refusal is rbac's own fail-closed 403 -- so the gate demonstrably sits

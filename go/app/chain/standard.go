@@ -11,6 +11,17 @@ import (
 	"github.com/vislake/speed/go/tenancy"
 )
 
+// RouteSource is what Standard derives its route partition from: the
+// mounted route set of a bootstrapped registry. Both registry shapes answer
+// it -- the module Registry (*pkgcore.Registry) and the component assembly's
+// ComponentRegistry -- so a host passes whichever one its assembly produced
+// without the chain knowing which.
+type RouteSource interface {
+	// MountedRoutes returns every route the registry's modules (or
+	// components) mounted, in registration order.
+	MountedRoutes() []pkgcore.MountedRoute
+}
+
 // Standard derives the fixed middleware chain from the bootstrapped registry
 // instead of from a hand-partitioned route set: it admits every mounted
 // route through the host's route-authorization table (rbac.GuardRoutes),
@@ -41,7 +52,7 @@ import (
 // quota mechanism is the entitlements seam checked inside go/ai-gateway
 // before a provider is reached, wired at module construction
 // (aigateway.WithEntitlements), not a route-level decorator.
-func Standard(reg *pkgcore.Registry, verifier *authn.Verifier, protected *http.ServeMux, opts ...Option) (http.Handler, error) {
+func Standard(reg RouteSource, verifier *authn.Verifier, protected *http.ServeMux, opts ...Option) (http.Handler, error) {
 	cfg := &standardConfig{}
 	for _, opt := range opts {
 		if opt != nil {
@@ -55,7 +66,7 @@ func Standard(reg *pkgcore.Registry, verifier *authn.Verifier, protected *http.S
 		return nil, fmt.Errorf("chain: protected is required (Standard mounts the non-exempt module routes on it)")
 	}
 
-	routes := reg.Routes.Routes()
+	routes := reg.MountedRoutes()
 	if (cfg.az == nil) != (len(cfg.rules) == 0) {
 		return nil, fmt.Errorf("chain: the route-authorization table and its authorizer are declared together; WithAuthorization takes both or neither")
 	}
