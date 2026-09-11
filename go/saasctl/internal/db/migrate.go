@@ -1,9 +1,9 @@
 package db
 
 import (
-	"embed"
 	"context"
 	"crypto/rand"
+	"embed"
 	"errors"
 	"flag"
 	"fmt"
