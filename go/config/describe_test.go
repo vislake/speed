@@ -153,21 +153,20 @@ func TestService_Describe_NoItemsOrFlags_ReturnsEmptyNotNil(t *testing.T) {
 	}
 }
 
-// TestService_Describe_RedactsASensitiveItemsDefault is the regression test
-// for a leak ddf42cf's markdown-layer fix left open: that commit redacted a
-// Sensitive item's Default in RenderMarkdown's renderDefault only, while
-// Describe() itself -- whose doc comment names the admin console as an
-// intended direct consumer, sitting at the same exported boundary as the
-// generated reference document -- kept serving the plaintext canonical
-// default of every item, Sensitive ones included. The shared schema
-// fixture's own Sensitive item declares no Default, which is why the leak
-// stayed latent (no module declares a Sensitive item with a non-empty
-// Default today); this test registers one WITH a non-empty Default and
-// pins the redaction at the boundary Describe() itself applies, so no
-// consumer of the exported view -- the admin console, a generated-reference tool --
-// needs to remember to redact. A non-Sensitive item's Default must come
-// through unchanged: the redaction is per-item, decided by the entry's own
-// Sensitive flag, never by its neighbours.
+// TestService_Describe_RedactsASensitiveItemsDefault pins the redaction
+// Describe() applies at its own boundary: a Sensitive item's Default is
+// redacted in the exported view -- whose doc comment names the admin
+// console as an intended direct consumer, sitting at the same exported
+// boundary as the generated reference document -- the same treatment
+// RenderMarkdown's renderDefault gives it, so no consumer of the exported
+// view (the admin console, a generated-reference tool) needs to remember
+// to redact. The shared schema fixture's own Sensitive item declares no
+// Default, which is why the leak stays latent (no module declares a
+// Sensitive item with a non-empty Default today); this test registers one
+// WITH a non-empty Default and pins the redaction at that boundary. A
+// non-Sensitive item's Default must come through unchanged: the
+// redaction is per-item, decided by the entry's own Sensitive flag,
+// never by its neighbours.
 func TestService_Describe_RedactsASensitiveItemsDefault(t *testing.T) {
 	svc, _ := attachServiceForTest(t, openServiceTestDB(t), buildTestCipher(t), []pkgcore.ConfigItem{
 		{Key: "brand.site_name", Type: "string", Default: "Smile Studio", Public: true, Description: "The tenant's display name", Group: "brand"},

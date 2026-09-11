@@ -104,8 +104,8 @@ func TestDecodeValue_ErrorNamesTheTypeNeverTheValue(t *testing.T) {
 	// written twice in this file for the caller-supplied halves
 	// (canonicalizeValue's and rangeViolation's doc comments) and must hold
 	// here too: the error names the declared type, never the value. The
-	// realistic route to this failure is a type migration -- a round
-	// changing a declared Type from string to int/bool/duration while
+	// realistic route to this failure is a type migration -- a declared
+	// Type changing from string to int/bool/duration while
 	// stored values exist -- after which every read of the migrated key
 	// hits this branch.
 	for _, tc := range []struct {

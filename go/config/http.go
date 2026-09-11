@@ -28,8 +28,8 @@ const (
 	// (internal/app/server.go's middleware allowlist).
 	//
 	// Both this path and PathSystemFeatures are a breaking change for a
-	// host that addressed the endpoints by their earlier, unversioned
-	// paths by hand; a host that named these constants follows the move
+	// host that addressed the endpoints by hand-written unversioned
+	// paths; a host that named these constants follows a path move
 	// without an edit, which is the point of exporting them.
 	PathPublic = "/api/v1/config/public"
 

@@ -903,10 +903,10 @@ func TestService_IsEnabled_WalksTheDependencyChain(t *testing.T) {
 // graph, so the runtime walk must not re-report a shared dependency as a
 // cycle when it is reachable through two chains. IsEnabled must answer true
 // for every flag and EnabledFlags must not fail wholesale (it is what both
-// features endpoints consume). Regression: the walk marked a flag for the
-// whole traversal instead of for its own subtree, so the second chain into
-// the shared flag tripped ErrFeatureFlagDependencyCycle and every consumer
-// of the flag surface failed on a legal declaration.
+// features endpoints consume). Regression: a walk that marks a flag for
+// the whole traversal instead of for its own subtree trips
+// ErrFeatureFlagDependencyCycle on the second chain into a shared flag,
+// failing every consumer of the flag surface on a legal declaration.
 func TestService_IsEnabled_SharedDependencyThroughTwoChainsIsNotACycle(t *testing.T) {
 	svc, _ := attachServiceForTest(t, openServiceTestDB(t), buildTestCipher(t), nil, []pkgcore.FeatureFlag{
 		{Key: "billing.base", Default: true, Description: "Base billing, shared by the export and analytics chains"},
@@ -1523,8 +1523,8 @@ func TestService_Get_AnAbsentRowIsReadFromTheStoreOnceThenServedFromCache(t *tes
 	// PathPublic and PathSystemFeatures request produces while no
 	// override row exists, where falling back to platform defaults is the
 	// normal answer, not an error path -- never touches the database again.
-	// Before negative caching every read of an absent key paid those store
-	// lookups again; the query counter below (a gorm callback registered
+	// Without negative caching every read of an absent key would pay those
+	// store lookups again; the query counter below (a gorm callback registered
 	// before Attach, so the count is deterministic, -count=1) proves the
 	// second read pays none. The multiplier stays fixed by the declared
 	// schema: only the store rows the resolve walk consults are ever
