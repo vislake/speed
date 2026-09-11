@@ -1,15 +1,12 @@
 package admin
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
-	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
-	"strings"
 	"testing"
 
 	"gorm.io/gorm"
@@ -19,7 +16,6 @@ import (
 	"github.com/vislake/speed/go/authn"
 	"github.com/vislake/speed/go/billing"
 	"github.com/vislake/speed/go/metering"
-	obs "github.com/vislake/speed/go/observability"
 	"github.com/vislake/speed/go/pkgcore"
 	"github.com/vislake/speed/go/pkgcore/apperr"
 )
@@ -31,7 +27,6 @@ import (
 func TestUsageService_NeitherModuleWired_Refused(t *testing.T) {
 	db := testutil.NewDB(t)
 	svc := NewUsageService(nil, nil, NewTenantService(NewTenantRepository(db)))
-	svc.attach(newTestRegistry().EventBus())
 
 	_, err := svc.Summary(context.Background(), "operator-1")
 	if !apperr.HasCode(err, ErrUsageModulesNotWired.Code) {
@@ -70,7 +65,6 @@ func TestUsageService_Summary_StitchesMeteringAndBilling(t *testing.T) {
 	}
 
 	svc := NewUsageService(env.Metering, env.Billing, env.Admin.Tenants())
-	svc.attach(env.Registry.EventBus())
 
 	rows, err := svc.Summary(context.Background(), "operator-1")
 	if err != nil {
@@ -113,7 +107,6 @@ func TestUsageService_Summary_OnlyMeteringWired(t *testing.T) {
 	}
 
 	svc := NewUsageService(env.Metering, nil, env.Admin.Tenants())
-	svc.attach(env.Registry.EventBus())
 
 	rows, err := svc.Summary(context.Background(), "operator-1")
 	if err != nil {
@@ -145,11 +138,11 @@ func TestUsageService_Summary_OnlyMeteringWired(t *testing.T) {
 // single-row admin_tenants lookups (TenantRepository.Get's own
 // .Where(...).First(&t) call) always fail, while a bulk lookup on the same
 // table (TenantRepository.List's own .Find(&rows), which
-// TenantService.ListAllIDs pages through) is completely unaffected. This
-// forces exactly the race UsageService.Summary's DisplayName lookup can
-// hit in production -- a tenant id the ledger listing just returned, whose
-// own row read then fails -- deterministically, through a GORM query
-// callback rather than a genuine concurrent DELETE's timing.
+// TenantService.ListAllRows pages through) is completely unaffected. It
+// makes "does this read path re-fetch a tenant row per tenant?"
+// deterministically observable: a walk built on the ledger listing must
+// answer every row's display name from that same listing, never through a
+// single-row re-read the forced failure would blank out.
 func failingSingleRowTenantDB(t *testing.T, db *gorm.DB) *gorm.DB {
 	t.Helper()
 	session := db.Session(&gorm.Session{NewDB: true})
@@ -168,36 +161,31 @@ func failingSingleRowTenantDB(t *testing.T, db *gorm.DB) *gorm.DB {
 	return session
 }
 
-// TestUsageService_Summary_DisplayNameLookupFails_SurfacedNotSilentlyBlank
-// pins the no-silent-omission discipline on the cosmetic read: a tenant
-// present in the ledger (so ListAllIDs, and therefore the row itself, are
-// produced) whose own TenantService.Get call fails must still render a
-// row (DisplayName simply blank, matching every other omitted dimension
-// in this file), but the failure itself must be SURFACED -- a Warn log
-// carrying the tenant id -- never silently swallowed into an unexplained
-// blank name.
-func TestUsageService_Summary_DisplayNameLookupFails_SurfacedNotSilentlyBlank(t *testing.T) {
+// TestUsageService_Summary_DisplayNameComesFromTheLedgerListing pins that
+// a summary row's display name is read from the same ledger listing that
+// produces the row (TenantService.forEachLedgerTenant's own paged walk),
+// never through a per-tenant re-read of the tenant row: with every
+// single-row admin_tenants read forced to fail, Summary must still
+// succeed and must still render the ledger's recorded name -- exactly the
+// evidence a per-tenant Get-based read could not produce.
+func TestUsageService_Summary_DisplayNameComesFromTheLedgerListing(t *testing.T) {
 	env := buildTestAdminModule(t)
 
-	const tenant = pkgcore.TenantID("tenant-displayname-warn-flow")
-	if _, err := env.Org.Tree().CreateRoot(pkgcore.WithTenant(context.Background(), tenant), "DisplayName Warn Co", "workspace"); err != nil {
-		t.Fatalf("CreateRoot() error = %v", err)
-	}
-	if _, err := env.Admin.Tenants().Get(context.Background(), string(tenant)); err != nil {
-		t.Fatalf("Get() error = %v, want the org.node.created subscriber to have lazily registered the ledger row already", err)
+	const tenant = pkgcore.TenantID("tenant-displayname-listing-flow")
+	if err := env.Admin.Tenants().Create(context.Background(), &Tenant{
+		TenantID:    string(tenant),
+		DisplayName: "DisplayName Listing Co",
+	}); err != nil {
+		t.Fatalf("Create() error = %v", err)
 	}
 
 	failingTenants := NewTenantService(NewTenantRepository(failingSingleRowTenantDB(t, env.DB)))
+	failingTenants.attachAudit(env.Registry.EventBus(), env.Registry.AuditActions, nil)
 	svc := NewUsageService(env.Metering, nil, failingTenants)
-	svc.attach(env.Registry.EventBus())
 
-	var logged bytes.Buffer
-	logger := slog.New(slog.NewJSONHandler(&logged, &slog.HandlerOptions{Level: slog.LevelDebug}))
-	ctx := obs.WithLogger(context.Background(), logger)
-
-	rows, err := svc.Summary(ctx, "operator-1")
+	rows, err := svc.Summary(context.Background(), "operator-1")
 	if err != nil {
-		t.Fatalf("Summary() error = %v, want success (the DisplayName lookup failing must not abort the whole call)", err)
+		t.Fatalf("Summary() error = %v, want success (no per-tenant row re-read exists for the forced failure to hit)", err)
 	}
 
 	var row *UsageSummaryRow
@@ -210,16 +198,8 @@ func TestUsageService_Summary_DisplayNameLookupFails_SurfacedNotSilentlyBlank(t 
 	if row == nil {
 		t.Fatalf("Summary() rows = %+v, want a row for %q", rows, tenant)
 	}
-	if row.DisplayName != "" {
-		t.Errorf("row.DisplayName = %q, want blank (the forced Get failure must not surface stale or fabricated data)", row.DisplayName)
-	}
-
-	out := logged.String()
-	if !strings.Contains(out, string(tenant)) {
-		t.Errorf("log output = %q, want it to name the failing tenant %q", out, tenant)
-	}
-	if !strings.Contains(out, "WARN") {
-		t.Errorf("log output = %q, want a WARN-level record for the swallowed-no-more failure", out)
+	if row.DisplayName != "DisplayName Listing Co" {
+		t.Errorf("row.DisplayName = %q, want the ledger listing's own recorded name -- the name must come from the same listing that produced the row", row.DisplayName)
 	}
 }
 
@@ -295,7 +275,6 @@ func TestUsageService_Summary_MaterializesExactlyOneZeroBalanceRowPerRowlessTena
 	}
 
 	svc := NewUsageService(env.Metering, env.Billing, env.Admin.Tenants())
-	svc.attach(env.Registry.EventBus())
 
 	first, err := svc.Summary(context.Background(), "operator-1")
 	if err != nil {

@@ -5,9 +5,6 @@ import (
 
 	"github.com/vislake/speed/go/billing"
 	"github.com/vislake/speed/go/metering"
-	obs "github.com/vislake/speed/go/observability"
-	"github.com/vislake/speed/go/pkgcore"
-	"github.com/vislake/speed/go/tenancy"
 )
 
 // UsageSummaryRow is one tenant's row of the cross-tenant usage/billing
@@ -70,10 +67,6 @@ type UsageService struct {
 	metering *metering.Module // nil when WithMetering was never applied
 	billing  *billing.Module  // nil when WithBilling was never applied
 	tenants  *TenantService
-
-	// bus backs the tenancy.WithSystemContext grant Summary takes out per
-	// candidate tenant. Nil until Module.Register calls attach.
-	bus pkgcore.EventBus
 }
 
 // NewUsageService returns a UsageService reading metering/billing data
@@ -84,12 +77,12 @@ func NewUsageService(meteringModule *metering.Module, billingModule *billing.Mod
 	return &UsageService{metering: meteringModule, billing: billingModule, tenants: tenants}
 }
 
-// attach gives the service the bus it needs for tenancy.WithSystemContext.
-func (s *UsageService) attach(bus pkgcore.EventBus) { s.bus = bus }
-
-// Summary returns a row for every tenant in admin's own ledger, looping
-// tenancy.WithSystemContext per tenant, exactly like
-// SearchService.MembershipsOf and AuditService's cross-tenant path.
+// Summary returns a row for every tenant in admin's own ledger. Each row
+// carries the tenant's id and display name straight from the one ledger
+// listing the walk is built on (TenantService.forEachLedgerTenant's own
+// ListAllRows walk, which is also where the per-tenant system-context
+// grants come from), then the per-tenant metering/billing reads stitched
+// under that tenant's grant.
 //
 // Writes: none against admin's own tables, go/metering's tables, or any
 // subscription or credit-transaction table; exactly one zero-valued
@@ -100,62 +93,27 @@ func (s *UsageService) attach(bus pkgcore.EventBus) { s.bus = bus }
 // and a repeated Summary writes nothing further.
 //
 // actorUserID identifies the platform operator making this cross-tenant
-// read, for pkgcore.SystemReason.Actor. When neither go/metering nor
-// go/billing was ever wired, this refuses outright with
-// ErrUsageModulesNotWired before touching the ledger at all: a dashboard
-// with nothing to stitch is not a partial answer, it is a wiring gap. A
-// per-tenant read failing for any OTHER reason (a real storage error, an
-// audited-escape-hatch failure) aborts the whole call rather than
-// silently omitting that tenant, the same no-silent-omission discipline
-// SearchService.MembershipsOf documents for its own identical loop.
+// read, for pkgcore.SystemReason.Actor on every per-tenant grant. When
+// neither go/metering nor go/billing was ever wired, this refuses
+// outright with ErrUsageModulesNotWired before touching the ledger at
+// all: a dashboard with nothing to stitch is not a partial answer, it is
+// a wiring gap. A per-tenant read failing for any other reason (a real
+// storage error, an audited-escape-hatch failure) aborts the whole call
+// rather than silently omitting that tenant, the same no-silent-omission
+// discipline the walk documents for its own failure handling.
 func (s *UsageService) Summary(ctx context.Context, actorUserID string) ([]UsageSummaryRow, error) {
 	if s.metering == nil && s.billing == nil {
 		return nil, ErrUsageModulesNotWired
 	}
 
-	ledger, err := s.tenants.ListAllIDs(ctx)
-	if err != nil {
-		return nil, err
-	}
-
-	rows := make([]UsageSummaryRow, 0, len(ledger))
-	for _, id := range ledger {
-		tenantID := pkgcore.TenantID(id)
-		tenantCtx, err := tenancy.WithSystemContext(
-			pkgcore.WithTenant(ctx, tenantID),
-			s.bus,
-			pkgcore.SystemReason{
-				Actor:   actorUserID,
-				Purpose: SystemPurposeAdminCrossTenant,
-			},
-		)
-		if err != nil {
-			return nil, err
-		}
-
-		row := UsageSummaryRow{TenantID: id}
-		if t, getErr := s.tenants.Get(ctx, id); getErr == nil {
-			row.DisplayName = t.DisplayName
-		} else {
-			// DisplayName is cosmetic (the row's TenantID is already
-			// authoritative -- it came from the ledger's own ListAllIDs a
-			// moment ago), so a failure here does not abort the whole
-			// call the way a real metering/billing read failure does
-			// below -- but this file's own no-silent-omission discipline
-			// (see this method's doc comment) means the failure must
-			// still be SURFACED, not silently swallowed into an
-			// unexplained blank name. A Warn log is the honest middle
-			// ground: the row still renders, and an operator staring at
-			// a blank DisplayName can find out why in the logs instead
-			// of assuming the ledger genuinely has none recorded.
-			obs.FromContext(ctx).Warn("admin could not read a tenant's display name for the usage summary row",
-				"tenant_id", id, "error", getErr)
-		}
+	rows := make([]UsageSummaryRow, 0)
+	err := s.tenants.forEachLedgerTenant(ctx, actorUserID, func(tenantCtx context.Context, t Tenant) error {
+		row := UsageSummaryRow{TenantID: t.TenantID, DisplayName: t.DisplayName}
 
 		if s.metering != nil {
 			summaries, err := s.metering.Summaries().List(tenantCtx)
 			if err != nil {
-				return nil, err
+				return err
 			}
 			row.MeteringSummaries = summaries
 		}
@@ -163,18 +121,22 @@ func (s *UsageService) Summary(ctx context.Context, actorUserID string) ([]Usage
 		if s.billing != nil {
 			balance, err := s.billing.Credits().Balance(tenantCtx)
 			if err != nil {
-				return nil, err
+				return err
 			}
 			row.CreditBalance = balance
 
 			sub, err := s.billing.Subscriptions().Active(tenantCtx)
 			if err != nil {
-				return nil, err
+				return err
 			}
 			row.ActiveSubscription = sub
 		}
 
 		rows = append(rows, row)
+		return nil
+	})
+	if err != nil {
+		return nil, err
 	}
 	return rows, nil
 }

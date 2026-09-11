@@ -489,8 +489,11 @@ func (m *Module) Register(reg *pkgcore.ComponentRegistry) error {
 		return err
 	}
 
+	// The usage dashboard holds no audit seam of its own: every
+	// per-tenant read it makes runs under the ledger's own per-tenant
+	// grant (TenantService.forEachLedgerTenant), taken out through the
+	// emitter m.tenants.attachAudit wired above.
 	m.usage = NewUsageService(m.meteringModule, m.billingModule, m.tenants)
-	m.usage.attach(bus)
 
 	sendRecords := NewSendRecordSearchService(m.notificationModule.Deliveries(), m.tenants)
 	sendRecords.attach(bus)

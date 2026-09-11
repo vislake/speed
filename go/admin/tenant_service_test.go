@@ -2,6 +2,7 @@ package admin
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"testing"
 
@@ -218,6 +219,155 @@ func TestTenantService_ListAllIDs_PagesPastSingleCallLimit(t *testing.T) {
 			t.Fatalf("ListAllIDs() returned id %q more than once", id)
 		}
 		seen[id] = true
+	}
+}
+
+// TestTenantService_ListAllRows_PagesPastSingleCallLimit is ListAllIDs'
+// own paging test's counterpart for the row-returning read: every ledger
+// row comes back past one page, each carrying the listing's own columns.
+func TestTenantService_ListAllRows_PagesPastSingleCallLimit(t *testing.T) {
+	db := testutil.NewDB(t)
+	repo := NewTenantRepository(db)
+	svc := NewTenantService(repo)
+	ctx := context.Background()
+
+	const seeded = maxTenantListLimit + 5
+	want := make(map[string]string, seeded)
+	for i := 0; i < seeded; i++ {
+		id := fmt.Sprintf("tenant-row-page-%05d", i)
+		name := fmt.Sprintf("Row Page Co %05d", i)
+		if err := repo.Create(ctx, &Tenant{TenantID: id, DisplayName: name}); err != nil {
+			t.Fatalf("seed tenant %d: %v", i, err)
+		}
+		want[id] = name
+	}
+
+	rows, err := svc.ListAllRows(ctx)
+	if err != nil {
+		t.Fatalf("ListAllRows() error = %v", err)
+	}
+	if len(rows) != seeded {
+		t.Fatalf("ListAllRows() returned %d rows, want %d (a single-page List call would silently cap at %d)",
+			len(rows), seeded, maxTenantListLimit)
+	}
+	seen := make(map[string]bool, len(rows))
+	for _, row := range rows {
+		name, ok := want[row.TenantID]
+		if !ok {
+			t.Fatalf("ListAllRows() returned unexpected tenant %q", row.TenantID)
+		}
+		if row.DisplayName != name {
+			t.Fatalf("row %q DisplayName = %q, want %q -- rows must carry the listing's own columns", row.TenantID, row.DisplayName, name)
+		}
+		if seen[row.TenantID] {
+			t.Fatalf("ListAllRows() returned tenant %q more than once", row.TenantID)
+		}
+		seen[row.TenantID] = true
+	}
+}
+
+// TestTenantService_ForEachLedgerTenant_EntersPerTenantSystemContext pins
+// the walk's contract: fn runs once per ledger row in ledger order, each
+// call under that tenant's own audited system-context grant -- one
+// tenancy.system_context.entered event per tenant, attributed to the
+// operator -- and the row handed to fn carries both the tenant scope and
+// the listing's own columns.
+func TestTenantService_ForEachLedgerTenant_EntersPerTenantSystemContext(t *testing.T) {
+	pkgcore.RegisterSystemPurpose(SystemPurposeAdminCrossTenant)
+
+	db := testutil.NewDB(t)
+	repo := NewTenantRepository(db)
+	svc := NewTenantService(repo)
+	reg := newTestRegistry()
+	svc.attachAudit(reg.EventBus(), reg.AuditActions, nil)
+
+	ctx := context.Background()
+	for i, id := range []string{"tenant-walk-a", "tenant-walk-b"} {
+		if err := repo.Create(ctx, &Tenant{TenantID: id, DisplayName: fmt.Sprintf("Walk Co %d", i)}); err != nil {
+			t.Fatalf("Create(%q) error = %v", id, err)
+		}
+	}
+
+	var entered []tenancy.SystemContextEnteredEvent
+	reg.EventBus().Subscribe(tenancy.EventSystemContextEntered, func(_ context.Context, evt pkgcore.Event) error {
+		var e tenancy.SystemContextEnteredEvent
+		if err := pkgcore.DecodeEventPayload(evt.Payload, &e); err != nil {
+			return err
+		}
+		entered = append(entered, e)
+		return nil
+	})
+
+	var visited []string
+	var names []string
+	err := svc.forEachLedgerTenant(ctx, "operator-1", func(tenantCtx context.Context, row Tenant) error {
+		tenant, ok := pkgcore.TenantFromContext(tenantCtx)
+		if !ok {
+			t.Errorf("fn received a context with no tenant for row %q", row.TenantID)
+		} else if string(tenant) != row.TenantID {
+			t.Errorf("fn context tenant = %q, want the row's own %q", tenant, row.TenantID)
+		}
+		if _, ok := pkgcore.SystemReasonFromContext(tenantCtx); !ok {
+			t.Errorf("fn context for %q carries no system reason -- the walk must grant each tenant's system context", row.TenantID)
+		}
+		visited = append(visited, row.TenantID)
+		names = append(names, row.DisplayName)
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("forEachLedgerTenant() error = %v", err)
+	}
+
+	if len(visited) != 2 || visited[0] != "tenant-walk-a" || visited[1] != "tenant-walk-b" {
+		t.Fatalf("visited = %v, want the ledger order [tenant-walk-a tenant-walk-b]", visited)
+	}
+	if names[0] != "Walk Co 0" || names[1] != "Walk Co 1" {
+		t.Errorf("row display names = %v, want each row's own ledger columns", names)
+	}
+	if len(entered) != 2 {
+		t.Fatalf("published %d tenancy.system_context.entered events, want one per tenant", len(entered))
+	}
+	for i, e := range entered {
+		if e.Actor != "operator-1" || e.Purpose != SystemPurposeAdminCrossTenant {
+			t.Errorf("system-context event %d = %+v, want Actor operator-1 under %s", i, e, SystemPurposeAdminCrossTenant)
+		}
+	}
+}
+
+// TestTenantService_ForEachLedgerTenant_AbortsOnFnError pins the
+// no-silent-omission edge the walk's cross-tenant callers rely on: an fn
+// failure stops the walk at that tenant -- every later tenant is skipped
+// -- and the error is returned unchanged.
+func TestTenantService_ForEachLedgerTenant_AbortsOnFnError(t *testing.T) {
+	pkgcore.RegisterSystemPurpose(SystemPurposeAdminCrossTenant)
+
+	db := testutil.NewDB(t)
+	repo := NewTenantRepository(db)
+	svc := NewTenantService(repo)
+	reg := newTestRegistry()
+	svc.attachAudit(reg.EventBus(), reg.AuditActions, nil)
+
+	ctx := context.Background()
+	for _, id := range []string{"tenant-stop-1", "tenant-stop-2", "tenant-stop-3"} {
+		if err := repo.Create(ctx, &Tenant{TenantID: id}); err != nil {
+			t.Fatalf("Create(%q) error = %v", id, err)
+		}
+	}
+
+	wantErr := errors.New("per-tenant read failed (test)")
+	var visited []string
+	err := svc.forEachLedgerTenant(ctx, "operator-1", func(_ context.Context, row Tenant) error {
+		visited = append(visited, row.TenantID)
+		if row.TenantID == "tenant-stop-2" {
+			return wantErr
+		}
+		return nil
+	})
+	if !errors.Is(err, wantErr) {
+		t.Fatalf("forEachLedgerTenant() error = %v, want the fn's own error returned unchanged", err)
+	}
+	if len(visited) != 2 || visited[0] != "tenant-stop-1" || visited[1] != "tenant-stop-2" {
+		t.Fatalf("visited = %v, want the walk to stop at the failing tenant", visited)
 	}
 }
 

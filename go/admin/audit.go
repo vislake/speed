@@ -41,9 +41,10 @@ type AuditService struct {
 	query   *compliance.AuditQuery
 	tenants *TenantService
 
-	// bus backs the tenancy.WithSystemContext grant every call takes out.
-	// Nil until Module.Register calls attach.
-	bus pkgcore.EventBus
+	// emitter carries the bus the tenancy.WithSystemContext grant every
+	// call takes out audits onto (auditEmitter's own doc comment).
+	// Unattached until Module.Register calls attach.
+	emitter auditEmitter
 }
 
 // NewAuditService returns an AuditService reading through query, with
@@ -52,8 +53,10 @@ func NewAuditService(query *compliance.AuditQuery, tenants *TenantService) *Audi
 	return &AuditService{query: query, tenants: tenants}
 }
 
-// attach gives the service the bus it needs for tenancy.WithSystemContext.
-func (s *AuditService) attach(bus pkgcore.EventBus) { s.bus = bus }
+// attach gives the service the bus it needs for tenancy.WithSystemContext
+// -- this service's only use of the audit seam, so it wires through the
+// emitter's bus door.
+func (s *AuditService) attach(bus pkgcore.EventBus) { s.emitter.attachBus(bus) }
 
 // Query answers GET /api/v1/admin/audit-events. actorUserID identifies the
 // platform operator making the request, for pkgcore.SystemReason.Actor.
@@ -84,7 +87,7 @@ func (s *AuditService) Query(ctx context.Context, actorUserID string, filter Aud
 	if filter.TenantID != "" {
 		tenantCtx, err := tenancy.WithSystemContext(
 			pkgcore.WithTenant(ctx, pkgcore.TenantID(filter.TenantID)),
-			s.bus, reason,
+			s.emitter.bus, reason,
 		)
 		if err != nil {
 			return nil, err
@@ -107,7 +110,7 @@ func (s *AuditService) Query(ctx context.Context, actorUserID string, filter Aud
 	tenantIDs = append(tenantIDs, "")
 	tenantIDs = append(tenantIDs, ledger...)
 
-	sysCtx, err := tenancy.WithSystemContext(ctx, s.bus, reason)
+	sysCtx, err := tenancy.WithSystemContext(ctx, s.emitter.bus, reason)
 	if err != nil {
 		return nil, err
 	}

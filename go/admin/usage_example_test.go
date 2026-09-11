@@ -90,10 +90,12 @@ func ExampleUsageService_Summary() {
 	}
 
 	// The two wiring steps Module.Register performs for a real host:
-	// declare the "admin.cross_tenant" system purpose, and hand the
-	// service the bus every tenancy.WithSystemContext grant audits onto.
-	// This example composes the service directly rather than through a
-	// full Module graph; a real host never does either step itself.
+	// declare the "admin.cross_tenant" system purpose, and give the
+	// ledger's runtime the audit seam its per-tenant
+	// tenancy.WithSystemContext grants audit onto (Summary's walk takes
+	// every grant through the tenant service's own emitter). This example
+	// composes the service directly rather than through a full Module
+	// graph; a real host never does either step itself.
 	pkgcore.RegisterSystemPurpose(SystemPurposeAdminCrossTenant)
 	reg := componenttest.NewRegistry()
 
@@ -115,8 +117,8 @@ func ExampleUsageService_Summary() {
 		return
 	}
 
+	adminModule.Tenants().attachAudit(reg.EventBus(), reg.AuditActions, nil)
 	usageSvc := NewUsageService(meteringModule, nil, adminModule.Tenants())
-	usageSvc.attach(reg.EventBus())
 
 	rows, err := usageSvc.Summary(ctx, "operator-1")
 	if err != nil {

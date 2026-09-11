@@ -19,21 +19,19 @@ import (
 type TenantService struct {
 	repo *TenantRepository
 
-	// bus and auditActions are nil until Module.Register calls attachAudit
-	// -- every method that needs them (SetStatus) tolerates that by
-	// skipping the audit side effect rather than panicking, so a host that
-	// has not finished wiring never crashes a request; it just runs
-	// without an audit trail for that one call, exactly like go/pki's
-	// Handler.recordAudit.
-	bus          pkgcore.EventBus
-	auditActions pkgcore.AuditActionRegistrar
-
-	// authnSvc resolves the acting operator's display name onto audit
-	// records at record time (see recordAudit and resolveActorName). Nil
-	// until Module.Register calls attachAudit; WithAuthn is a mandatory
-	// production option, so this is never nil in a correctly wired
-	// the assembly, and a nil-seam unit fixture records id-only actors.
-	authnSvc *authn.Service
+	// emitter carries the audit seam this service's two record-time paths
+	// read: SetStatus's explicit record (recordAudit) and the per-tenant
+	// system-context grants forEachLedgerTenant takes out. Its seats are
+	// unattached until Module.Register calls attachAudit -- SetStatus
+	// tolerates that by skipping the audit side effect rather than
+	// panicking, so a host that has not finished wiring never crashes a
+	// request; it just runs without an audit trail for that one call,
+	// exactly like go/pki's Handler.recordAudit. The actor display name
+	// recordAudit records resolves through emitter.resolveActor (see
+	// resolveActorName's own doc comment for the policy); WithAuthn is a
+	// mandatory production option, so a correctly wired assembly always
+	// has that seat, and a nil-seam unit fixture records id-only actors.
+	emitter auditEmitter
 }
 
 // NewTenantService returns a TenantService over repo.
@@ -41,16 +39,12 @@ func NewTenantService(repo *TenantRepository) *TenantService {
 	return &TenantService{repo: repo}
 }
 
-// attachAudit gives the service what SetStatus needs to record an audit
-// event: the bus to publish on, the registry's frozen-by-use-time audit
-// action catalog, and the *authn.Service whose users table recordAudit
-// reads the acting operator's display name from (resolveActorName's own
-// doc comment), all read from the host's *pkgcore.ComponentRegistry (and authn
-// module) during Module.Register.
+// attachAudit gives the service the audit seam SetStatus and
+// forEachLedgerTenant need, read from the host's *pkgcore.ComponentRegistry
+// (and authn module) during Module.Register -- see auditEmitter's own doc
+// comment for what the three seats are.
 func (s *TenantService) attachAudit(bus pkgcore.EventBus, actions pkgcore.AuditActionRegistrar, authnSvc *authn.Service) {
-	s.bus = bus
-	s.auditActions = actions
-	s.authnSvc = authnSvc
+	s.emitter.attach(bus, actions, authnSvc)
 }
 
 // Create is the manual-registration path: an operator registers a tenant
@@ -69,41 +63,97 @@ func (s *TenantService) List(ctx context.Context, filter TenantFilter) ([]Tenant
 	return s.repo.List(ctx, filter)
 }
 
-// ListAllIDs returns EVERY tenant id in the ledger, paging through
+// ListAllRows returns EVERY tenant row in the ledger, paging through
 // TenantRepository.List's own Cursor mechanism rather than issuing a
 // single call capped at maxTenantListLimit.
 //
-// This exists because MembershipsOf and the cross-tenant
-// AuditService.Query both need "every tenant the platform knows about" as
-// their candidate list, and a single List(ctx, TenantFilter{Limit:
-// maxTenantListLimit}) call silently drops every ledger row past that
-// limit once the platform has grown beyond it -- an omission neither
-// caller's own contract allows (MembershipsOf's doc comment: a failure
-// aborts the call rather than silently omitting a tenant; the same
-// no-silent-omission expectation applies to an audit search meant to
-// cover "every tenant"). Paging here, once, is what lets both callers
-// keep their own single-call simplicity while still seeing the whole
-// ledger.
-func (s *TenantService) ListAllIDs(ctx context.Context) ([]string, error) {
-	var ids []string
+// This exists because every cross-tenant read of the ledger needs "every
+// tenant the platform knows about" as its candidate list -- the
+// membership composition, the cross-tenant audit query, the send-record
+// search and the usage dashboard -- and a single List(ctx,
+// TenantFilter{Limit: maxTenantListLimit}) call silently drops every
+// ledger row past that limit once the platform has grown beyond it, an
+// omission none of those callers' own contracts allows (a failure aborts
+// a cross-tenant read rather than silently omitting a tenant). Paging
+// here, once, is what lets every caller keep its own single-call
+// simplicity while still seeing the whole ledger.
+func (s *TenantService) ListAllRows(ctx context.Context) ([]Tenant, error) {
+	var rows []Tenant
 	cursor := ""
 	for {
-		rows, err := s.repo.List(ctx, TenantFilter{Limit: maxTenantListLimit, Cursor: cursor})
+		page, err := s.repo.List(ctx, TenantFilter{Limit: maxTenantListLimit, Cursor: cursor})
 		if err != nil {
 			return nil, err
 		}
-		if len(rows) == 0 {
+		if len(page) == 0 {
 			break
 		}
-		for _, row := range rows {
-			ids = append(ids, row.TenantID)
-		}
-		if len(rows) < maxTenantListLimit {
+		rows = append(rows, page...)
+		if len(page) < maxTenantListLimit {
 			break
 		}
-		cursor = rows[len(rows)-1].TenantID
+		cursor = page[len(page)-1].TenantID
+	}
+	return rows, nil
+}
+
+// ListAllIDs returns EVERY tenant id in the ledger -- the id projection
+// of ListAllRows' own paged walk, for callers that need only the ids.
+func (s *TenantService) ListAllIDs(ctx context.Context) ([]string, error) {
+	rows, err := s.ListAllRows(ctx)
+	if err != nil {
+		return nil, err
+	}
+	var ids []string
+	for i := range rows {
+		ids = append(ids, rows[i].TenantID)
 	}
 	return ids, nil
+}
+
+// forEachLedgerTenant runs fn once per tenant in admin's own ledger,
+// under that tenant's own audited system-context grant
+// (tenancy.WithSystemContext through the emitter's bus): the one shape
+// this module's per-tenant cross-tenant reads share. The membership
+// composition, the cross-tenant send-record search and the usage
+// dashboard all fan out over the ledger this way, and both the ledger
+// itself and the bus every grant audits onto are this service's own, so
+// the fan-out lives here rather than being re-assembled at each caller.
+//
+// actorUserID identifies the platform operator every per-tenant grant is
+// attributable to, for pkgcore.SystemReason.Actor. Rows arrive in
+// ListAllRows' own order (the paged List order), and a listing failure, a
+// grant failure or an fn failure aborts the walk with the error returned
+// unchanged: a cross-tenant read must report a storage outage as an
+// error rather than silently answering for fewer tenants than the ledger
+// holds.
+//
+// The row -- not just its id -- reaches fn, so a caller that needs a
+// ledger column (the usage dashboard's DisplayName) reads the same
+// listing that produced the row instead of re-reading the tenant
+// afterwards.
+func (s *TenantService) forEachLedgerTenant(ctx context.Context, actorUserID string, fn func(tenantCtx context.Context, row Tenant) error) error {
+	rows, err := s.ListAllRows(ctx)
+	if err != nil {
+		return err
+	}
+	for i := range rows {
+		tenantCtx, err := tenancy.WithSystemContext(
+			pkgcore.WithTenant(ctx, pkgcore.TenantID(rows[i].TenantID)),
+			s.emitter.bus,
+			pkgcore.SystemReason{
+				Actor:   actorUserID,
+				Purpose: SystemPurposeAdminCrossTenant,
+			},
+		)
+		if err != nil {
+			return err
+		}
+		if err := fn(tenantCtx, rows[i]); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // SetStatus applies patch (rename, suspend/resume, notes) to tenantID's
@@ -129,17 +179,19 @@ func (s *TenantService) SetStatus(ctx context.Context, tenantID string, patch Te
 }
 
 // recordAudit emits admin.tenant.status_changed. It is a no-op (not an
-// error) when the host has not attached a bus yet.
+// error) while the host has not attached the emitter's bus -- the
+// publish itself is skipped (emitBestEffort's own guard); the record's
+// construction above it is pure.
 //
 // The caller-supplied actor (built by handler.go's callerUserID from the
 // operator's verified Principal user id alone) is resolved against the
 // users table here, at record time, so the row carries the operator's
 // display name rather than an id-only actor -- resolveActorName's own doc
-// comment has the full policy, including what stays id-only and why.
+// comment has the full policy, including what stays id-only and why. A
+// publish failure is Warn-logged and swallowed, never returned: the
+// ledger write already committed by the time this runs
+// (emitBestEffort's own contract).
 func (s *TenantService) recordAudit(ctx context.Context, actor pkgcore.Actor, tenantID string, patch TenantPatch) {
-	if s.bus == nil {
-		return
-	}
 	after := map[string]any{}
 	if patch.Status != nil {
 		after["status"] = string(*patch.Status)
@@ -147,22 +199,22 @@ func (s *TenantService) recordAudit(ctx context.Context, actor pkgcore.Actor, te
 	if patch.DisplayName != nil {
 		after["display_name"] = *patch.DisplayName
 	}
-	auditCtx := pkgcore.WithActor(ctx, resolveActorName(ctx, s.authnSvc, actor))
-	err := audit.Emit(auditCtx, s.bus, s.auditActions, audit.Input{
-		Action: AuditActionTenantStatusChanged,
-		Resource: audit.Resource{
-			Type: "admin.tenant",
-			ID:   tenantID,
+	s.emitter.emitBestEffort(
+		pkgcore.WithActor(ctx, s.emitter.resolveActor(ctx, actor)),
+		"admin failed to record a tenant status-change audit event",
+		[]any{"tenant_id", tenantID},
+		audit.Input{
+			Action: AuditActionTenantStatusChanged,
+			Resource: audit.Resource{
+				Type: "admin.tenant",
+				ID:   tenantID,
+			},
+			Result: audit.Result{Success: true},
+			Changes: &audit.Diff{
+				After: after,
+			},
 		},
-		Result: audit.Result{Success: true},
-		Changes: &audit.Diff{
-			After: after,
-		},
-	})
-	if err != nil {
-		obs.FromContext(ctx).Warn("admin failed to record a tenant status-change audit event",
-			"tenant_id", tenantID, "error", err)
-	}
+	)
 }
 
 // Status implements tenancy.TenantStatusResolver: the ledger row's stored

@@ -23,10 +23,12 @@ type SendRecordSearchService struct {
 	deliveries *notification.DeliveryService
 	tenants    *TenantService
 
-	// bus backs the tenancy.WithSystemContext grant the cross-tenant path
-	// takes out per candidate tenant. Nil until Module.Register calls
-	// attach.
-	bus pkgcore.EventBus
+	// emitter carries the bus the single-tenant path's
+	// tenancy.WithSystemContext grant audits onto. The cross-tenant path
+	// takes its per-tenant grants through the tenants service's own
+	// emitter (TenantService.forEachLedgerTenant). Unattached until
+	// Module.Register calls attach.
+	emitter auditEmitter
 }
 
 // NewSendRecordSearchService returns a SendRecordSearchService reading
@@ -36,8 +38,9 @@ func NewSendRecordSearchService(deliveries *notification.DeliveryService, tenant
 	return &SendRecordSearchService{deliveries: deliveries, tenants: tenants}
 }
 
-// attach gives the service the bus it needs for tenancy.WithSystemContext.
-func (s *SendRecordSearchService) attach(bus pkgcore.EventBus) { s.bus = bus }
+// attach gives the service the bus it needs for tenancy.WithSystemContext
+// -- this service's only use of the audit seam.
+func (s *SendRecordSearchService) attach(bus pkgcore.EventBus) { s.emitter.attachBus(bus) }
 
 // Query returns send records matching filter (Channel/Status/From/To/
 // Limit/Offset). When tenantID is non-empty, this is the single-tenant
@@ -50,9 +53,10 @@ func (s *SendRecordSearchService) attach(bus pkgcore.EventBus) { s.bus = bus }
 // leave the same tenancy.system_context.entered audit trail every other
 // admin cross-tenant read does. When tenantID is empty, this is the
 // cross-tenant path: every tenant in admin's own ledger is searched in
-// turn under the same mechanism and the results are concatenated in
-// ledger order -- Limit/Offset then apply PER TENANT
-// (SendRecordRepository.ListByFilter's own contract), not to the
+// turn under the same mechanism -- TenantService.forEachLedgerTenant's own
+// per-tenant grant, exactly like SearchService.MembershipsOf -- and the
+// results are concatenated in ledger order. Limit/Offset then apply PER
+// TENANT (SendRecordRepository.ListByFilter's own contract), not to the
 // concatenated cross-tenant result as a whole, an inherited limitation
 // mirroring compliance.AuditQuery's own identical pagination shape, not
 // re-solved here.
@@ -61,15 +65,14 @@ func (s *SendRecordSearchService) attach(bus pkgcore.EventBus) { s.bus = bus }
 // pkgcore.SystemReason.Actor on every path -- the audit trail of who
 // entered the system context is exactly what makes each read attributable.
 func (s *SendRecordSearchService) Query(ctx context.Context, actorUserID, tenantID string, filter notification.SendRecordFilter) ([]notification.SendRecord, error) {
-	reason := pkgcore.SystemReason{
-		Actor:   actorUserID,
-		Purpose: SystemPurposeAdminCrossTenant,
-	}
-
 	if tenantID != "" {
 		tenantCtx, err := tenancy.WithSystemContext(
 			pkgcore.WithTenant(ctx, pkgcore.TenantID(tenantID)),
-			s.bus, reason,
+			s.emitter.bus,
+			pkgcore.SystemReason{
+				Actor:   actorUserID,
+				Purpose: SystemPurposeAdminCrossTenant,
+			},
 		)
 		if err != nil {
 			return nil, err
@@ -78,27 +81,19 @@ func (s *SendRecordSearchService) Query(ctx context.Context, actorUserID, tenant
 		return s.deliveries.SendRecords().ListByFilter(tenantCtx, filter)
 	}
 
-	ledger, err := s.tenants.ListAllIDs(ctx)
-	if err != nil {
-		return nil, err
-	}
-
 	var all []notification.SendRecord
-	for _, id := range ledger {
-		tenantCtx, err := tenancy.WithSystemContext(
-			pkgcore.WithTenant(ctx, pkgcore.TenantID(id)),
-			s.bus, reason,
-		)
-		if err != nil {
-			return nil, err
-		}
+	err := s.tenants.forEachLedgerTenant(ctx, actorUserID, func(tenantCtx context.Context, row Tenant) error {
 		perTenant := filter
-		perTenant.TenantID = id
+		perTenant.TenantID = row.TenantID
 		records, err := s.deliveries.SendRecords().ListByFilter(tenantCtx, perTenant)
 		if err != nil {
-			return nil, err
+			return err
 		}
 		all = append(all, records...)
+		return nil
+	})
+	if err != nil {
+		return nil, err
 	}
 	return all, nil
 }

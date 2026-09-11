@@ -191,6 +191,10 @@ func TestSearchService_MembershipsOf_ListsOnlyTenantsWithActiveMembership(t *tes
 	tenantRepo := NewTenantRepository(tenantDB)
 	tenants := NewTenantService(tenantRepo)
 	reg := newTestRegistry()
+	// MembershipsOf takes its per-tenant grants through the tenants
+	// service's own emitter, so the ledger runtime carries the bus here
+	// exactly as Module.Register wires it.
+	tenants.attachAudit(reg.EventBus(), reg.AuditActions, nil)
 
 	search := NewSearchService(nil, orgModule.Members(), tenants)
 	search.attach(reg.EventBus())

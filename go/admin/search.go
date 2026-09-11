@@ -31,10 +31,12 @@ type SearchService struct {
 	members  *org.MemberService
 	tenants  *TenantService
 
-	// bus backs the tenancy.WithSystemContext grant both halves take out:
-	// Users one grant covering the whole platform-wide call, MembershipsOf
-	// one per candidate tenant. Nil until Module.Register calls attach.
-	bus pkgcore.EventBus
+	// emitter carries the bus the Users half's one platform-wide
+	// tenancy.WithSystemContext grant audits onto. MembershipsOf takes its
+	// per-tenant grants through the tenants service's own emitter
+	// (TenantService.forEachLedgerTenant). Unattached until
+	// Module.Register calls attach.
+	emitter auditEmitter
 }
 
 // NewSearchService returns a SearchService reading users through authnSvc
@@ -44,8 +46,9 @@ func NewSearchService(authnSvc *authn.Service, members *org.MemberService, tenan
 	return &SearchService{authnSvc: authnSvc, members: members, tenants: tenants}
 }
 
-// attach gives the service the bus it needs for tenancy.WithSystemContext.
-func (s *SearchService) attach(bus pkgcore.EventBus) { s.bus = bus }
+// attach gives the service the bus it needs for tenancy.WithSystemContext
+// -- this service's only use of the audit seam.
+func (s *SearchService) attach(bus pkgcore.EventBus) { s.emitter.attachBus(bus) }
 
 // Users is the search surface's identity-lookup half: a passthrough to
 // authn.Service.SearchUsers, authn's platform-operator search entry point,
@@ -66,7 +69,7 @@ func (s *SearchService) attach(bus pkgcore.EventBus) { s.bus = bus }
 // -- is the HTTP handler's own job, at admin's handler layer; authn.Service
 // itself knows nothing about rbac.
 func (s *SearchService) Users(ctx context.Context, actorUserID string, q authn.UserSearchQuery) ([]authn.User, error) {
-	sysCtx, err := tenancy.WithSystemContext(ctx, s.bus, pkgcore.SystemReason{
+	sysCtx, err := tenancy.WithSystemContext(ctx, s.emitter.bus, pkgcore.SystemReason{
 		Actor:   actorUserID,
 		Purpose: SystemPurposeAdminCrossTenant,
 	})
@@ -82,44 +85,31 @@ func (s *SearchService) Users(ctx context.Context, actorUserID string, q authn.U
 //
 // actorUserID identifies the platform operator making this cross-tenant
 // read, for pkgcore.SystemReason.Actor -- never the searched-for userID.
-// A per-tenant membership lookup failing for a reason OTHER than "no
+// The walk runs through TenantService.forEachLedgerTenant, which pages
+// through the FULL ledger rather than one capped List call and enters
+// each tenant's own audited system-context grant around its lookup. A
+// per-tenant membership lookup failing for a reason OTHER than "no
 // membership" aborts the whole call rather than silently omitting that
 // tenant from the answer, so a storage outage is reported as an error
 // instead of masquerading as "this person belongs to fewer tenants than
-// they actually do". The candidate tenant list itself comes from
-// TenantService.ListAllIDs, which pages through the FULL ledger rather
-// than one capped List call, for the identical no-silent-omission reason
-// -- a ledger larger than one List page must not make this answer quietly
-// incomplete.
+// they actually do" -- the same no-silent-omission contract the helper
+// documents, which also keeps a ledger larger than one List page from
+// making this answer quietly incomplete.
 func (s *SearchService) MembershipsOf(ctx context.Context, userID, actorUserID string) ([]pkgcore.TenantID, error) {
-	ledger, err := s.tenants.ListAllIDs(ctx)
+	var found []pkgcore.TenantID
+	err := s.tenants.forEachLedgerTenant(ctx, actorUserID, func(tenantCtx context.Context, row Tenant) error {
+		if _, err := s.members.Get(tenantCtx, userID); err != nil {
+			if apperr.HasCode(err, org.ErrMembershipNotFound.Code) {
+				// No membership here: skip this tenant, not the walk.
+				return nil
+			}
+			return err
+		}
+		found = append(found, pkgcore.TenantID(row.TenantID))
+		return nil
+	})
 	if err != nil {
 		return nil, err
-	}
-
-	var found []pkgcore.TenantID
-	for _, id := range ledger {
-		tenantID := pkgcore.TenantID(id)
-		tenantCtx, err := tenancy.WithSystemContext(
-			pkgcore.WithTenant(ctx, tenantID),
-			s.bus,
-			pkgcore.SystemReason{
-				Actor:   actorUserID,
-				Purpose: SystemPurposeAdminCrossTenant,
-			},
-		)
-		if err != nil {
-			return nil, err
-		}
-
-		_, err = s.members.Get(tenantCtx, userID)
-		if err != nil {
-			if apperr.HasCode(err, org.ErrMembershipNotFound.Code) {
-				continue
-			}
-			return nil, err
-		}
-		found = append(found, tenantID)
 	}
 	return found, nil
 }
