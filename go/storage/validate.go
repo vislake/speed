@@ -47,8 +47,8 @@ func canonicalMediaType(raw string) string {
 // probeMediaType reports the media type http.DetectContentType assigns to
 // head, the probe the pipeline trusts over any declared value. The probe is
 // content-addressable: it looks at magic bytes, never at a filename or a
-// header a caller controls, so it is the server-side authority the
-// adjudication named. DetectContentType examines at most 512 bytes, which is
+// header a caller controls, so it is the server-side authority for what the
+// bytes actually are. DetectContentType examines at most 512 bytes, which is
 // enough for every magic the module's allowlist can admit.
 func probeMediaType(head []byte) string {
 	return http.DetectContentType(head)

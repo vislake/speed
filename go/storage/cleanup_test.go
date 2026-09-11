@@ -888,7 +888,7 @@ func TestEnqueueExpirySweep_SameWindowEnqueuesCollapseIntoOneJob(t *testing.T) {
 
 // TestEnqueueExpirySweep_LaterWindowEnqueuesNewJobAndSweepsAgain pins
 // regression (b): an enqueue in a later window is a NEW job and the sweep
-// runs again. Fails on the pre-window key (tenant only), where the later
+// runs again. Fails under a tenant-only key (no window), where the later
 // enqueue resolves the first job's id -- the first-ever sweep's permanent
 // dedupe -- so no second row is ever created and nothing ever runs again.
 func TestEnqueueExpirySweep_LaterWindowEnqueuesNewJobAndSweepsAgain(t *testing.T) {

@@ -42,8 +42,8 @@ func seedObject(t *testing.T, repo *ObjectRepository, ctx context.Context, o Obj
 	}
 }
 
-// newUpload builds one Object in ObjectStateUploading -- the exact shape the
-// upload declaration round creates -- with a key of the canonical
+// newUpload builds one Object in ObjectStateUploading -- the exact shape an
+// upload declaration creates -- with a key of the canonical
 // "<tenantID>/<objectID>/original" grammar. The explicit CreatedAt is what
 // the ordering tests seed staggered times with: gorm's autoCreateTime only
 // fills a zero timestamp, so a non-zero one is preserved as given.

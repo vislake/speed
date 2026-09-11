@@ -309,7 +309,7 @@ func TestModule_Options_StoreTheirValues(t *testing.T) {
 // option carries: zero and negative values are nonsense for a bound (a
 // ceiling of zero bytes would refuse every upload), so they are ignored and
 // the package default stands. A value nobody can configure away by accident
-// is a value an enforcing round can trust.
+// is a value the enforcement path can trust.
 func TestModule_Options_IgnoreNonsenseValues(t *testing.T) {
 	m := NewModule(nil,
 		WithMaxUploadBytes(0),
@@ -339,8 +339,7 @@ func TestModule_Options_IgnoreNonsenseValues(t *testing.T) {
 // pins the never-expiry permission: a module built without WithNoExpiryAllowed
 // has it off -- so a NoExpiry create request is refused (object_test.go's
 // gating test) -- and the option flips exactly the field the service's
-// config is built from, never some other copy a reviewer would have to
-// chase.
+// config is built from, never a detached copy.
 func TestModule_Options_NoExpiryAllowed_IsOffByDefaultAndFlowsToTheService(t *testing.T) {
 	if m := NewModule(nil); m.noExpiryAllowed {
 		t.Error("noExpiryAllowed defaults to true; a host must opt in to never-expiring objects")

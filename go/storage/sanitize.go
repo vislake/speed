@@ -399,10 +399,10 @@ func sanitizePNG(raw []byte) ([]byte, error) {
 // the whitelist may not admit one: Register's admission gate
 // (checkAdmittedMediaType, validate.go) refuses any configured type whose
 // strip coverage is missing, so no type without a walker here can reach the
-// pipeline as an admitted one. The branch stays for direct calls (tests,
-// a future type's walker round) and reports changed=false as it always did
-// -- the pipeline's choice to store the bytes or not belongs to its caller,
-// this function only reports.
+// pipeline as an admitted one. The branch serves direct calls (tests,
+// a future type's walker round) and reports changed=false -- the pipeline's
+// choice to store the bytes or not belongs to its caller, this function
+// only reports.
 func sanitizeContent(raw []byte, mime string) ([]byte, bool, error) {
 	switch mime {
 	case "image/jpeg":

@@ -402,14 +402,11 @@ func TestObjectService_Create_ReservesUploadRowAndCanonicalizesTheType(t *testin
 }
 
 // TestObjectService_Create_NoRetentionRequestIsBoundedByTheLifetimeCeiling
-// is the P2 regression for the default path: WithMaxObjectLifetime documents
-// "the longest an object may be retained before it expires", and a host sets
-// that option expecting an unconditional cap. Before the fix an upload that
-// requested NO retention defaulted to never-expiring -- the cap applied only
-// to explicitly requested retentions -- so under a short configured maximum
-// an ordinary upload carried no expiry at all and the sweep could never reap
-// it. After the fix the default path is bounded: an unrequested retention
-// means the object lives exactly the configured maximum.
+// pins the default path: WithMaxObjectLifetime documents "the longest an
+// object may be retained before it expires" as an unconditional cap, so an
+// upload that requests NO retention is bounded by it -- the object lives
+// exactly the configured maximum, carrying a real expiry the sweep can reap
+// rather than a row that never expires under a short configured maximum.
 func TestObjectService_Create_NoRetentionRequestIsBoundedByTheLifetimeCeiling(t *testing.T) {
 	cap := 10 * time.Minute
 	svc, _, _, _ := newTestService(t, func(cfg *serviceConfig) {
@@ -434,8 +431,7 @@ func TestObjectService_Create_NoRetentionRequestIsBoundedByTheLifetimeCeiling(t 
 	// Complete the object inside its window, then ask the expiry listing
 	// whether the row is due past the cap: the completed object must be
 	// listed once its default life has run out -- the state the expiry sweep
-	// reaps. Before the fix the row carried no expiry and could never be
-	// listed, surviving the cap forever.
+	// reaps.
 	content := testutil.JPEG(t, 4, 4)
 	completed, err := svc.Create(ctx, CreateParams{DeclaredSize: int64(len(content)), DeclaredType: "image/jpeg"})
 	if err != nil {
@@ -1175,9 +1171,8 @@ func TestObjectService_Upload_RefusesWhenTheReclaimRemovesTheRowMidWrite(t *test
 // rewrite then recreates bytes the reclaim already removed, and the finalize
 // commits zero rows; the completion answers storage.object_not_found (what
 // the caller will find) and removes the rewrite, so a finalize that did not
-// commit never leaves the bytes it wrote under the key. (On the pre-cleanup
-// code this test failed with the reclaimed key holding the rewritten bytes
-// after the refusal -- the orphan this fix removes.)
+// commit never leaves the bytes it wrote under the key -- the writeback is
+// removed after the refusal, so the reclaimed key holds no bytes at all.
 func TestObjectService_Complete_TakesBackItsWritebackWhenTheReclaimWins(t *testing.T) {
 	svc, store, queue, bus := newTestService(t, nil)
 	ctx := serviceCtx("tenant-a")

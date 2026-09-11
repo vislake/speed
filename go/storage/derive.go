@@ -3,7 +3,7 @@ package storage
 // DeriveService turns a completed image object's stored bytes into its
 // thumbnail derivative, the module's first -- and so far only -- consumer of
 // the ObjectDerivative rows and derivative-key grammar the delete protocol
-// round already wired.
+// defines.
 //
 // A derive reads the object's sanitized original from the store (the same
 // bytes OpenContent serves), downscales it with a pure-stdlib exact area
