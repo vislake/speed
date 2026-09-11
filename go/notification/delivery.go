@@ -206,21 +206,15 @@ func (d Dispatch) validate() error {
 	return nil
 }
 
-// ErrTransportPermanent is the sentinel a transport returns -- wrapped, per
-// Go convention -- when a delivery failure is permanent: the address rejects
-// the message (an SMTP 5xx, a provider "invalid number" response), and no
-// retry will ever succeed. It is the job's signal to stop retrying a
-// transport attempt, and, for an external contact, to mark the tenant's own
-// contact bounced (MarkBounced) so future deliveries to it are refused
-// before they reach any transport.
-//
-// The module's own transports never return it (the console mailer and SMS
-// sender have no permanent failures); a host's real transports wrap it, and
-// a test double returns it to pin the bounce path. The sentinel deliberately
-// lives here rather than in errors.go because it is not an apperr: it is a
-// control signal between the transport and the delivery job, matched with
-// errors.Is, never surfaced to a caller.
-var ErrTransportPermanent = errors.New("notification: permanent transport failure")
+// The transport's permanent-failure sentinel is pkgcore.ErrTransportPermanent:
+// it lives on the dependency floor because the transports that must produce
+// it -- pkgcore's SMTP mailer and the aliyun and tencent SMS adapters --
+// sit below this module and could not reach a sentinel declared here (see
+// that sentinel's own doc comment for the exact destination's-verdict
+// boundary). This module is the consumer: the delivery paths below settle a
+// wrapped transport failure as terminal -- and, for an external contact,
+// mark the tenant's own contact bounced (MarkBounced) so future deliveries
+// to it are refused before they reach any transport.
 
 // UserAddresses is what a user delivery's address resolution returns: the
 // outbound addresses the host has on file for one user. Either field may be
@@ -950,7 +944,7 @@ func (s *DeliveryService) deliverUserEmail(ctx context.Context, tenantID string,
 		// bounded classification is what the record carries, while the raw
 		// cause stays reachable through Unwrap for errors.Is/As.
 		cause := classifyTransportCause(err)
-		if errors.Is(err, ErrTransportPermanent) {
+		if errors.Is(err, pkgcore.ErrTransportPermanent) {
 			// A user's address is the host's data, not a verified_contacts
 			// row, so there is no contact to mark bounced -- the refusal
 			// is terminal, recorded, and the job stops.
@@ -1006,7 +1000,7 @@ func (s *DeliveryService) deliverUserSMS(ctx context.Context, tenantID string, d
 	rec.DurationMs = time.Since(start).Milliseconds()
 	if err != nil {
 		cause := classifyTransportCause(err)
-		if errors.Is(err, ErrTransportPermanent) {
+		if errors.Is(err, pkgcore.ErrTransportPermanent) {
 			return s.failAndStop(ctx, tenantID, rec, cause)
 		}
 		return s.failAndRetry(ctx, tenantID, rec, cause)
@@ -1176,7 +1170,7 @@ func (s *DeliveryService) deliverContactEmail(ctx context.Context, tenantID stri
 	rec.DurationMs = time.Since(start).Milliseconds()
 	if err != nil {
 		cause := classifyTransportCause(err)
-		if errors.Is(err, ErrTransportPermanent) {
+		if errors.Is(err, pkgcore.ErrTransportPermanent) {
 			// The address rejects mail. Mark the tenant's own contact
 			// bounced -- its future deliveries are refused by the ledger
 			// before any transport -- record the failed attempt, and stop.
@@ -1230,7 +1224,7 @@ func (s *DeliveryService) deliverContactSMS(ctx context.Context, tenantID string
 	rec.DurationMs = time.Since(start).Milliseconds()
 	if err != nil {
 		cause := classifyTransportCause(err)
-		if errors.Is(err, ErrTransportPermanent) {
+		if errors.Is(err, pkgcore.ErrTransportPermanent) {
 			bounceErr := s.contacts.MarkBounced(ctx, contact.ID)
 			stopErr := s.failAndStop(ctx, tenantID, rec, cause)
 			if bounceErr != nil {
@@ -1335,9 +1329,9 @@ const (
 // The failure classifications of a failed send record, grouped by the
 // settle site that decides them. failureReasonTransportRefused and
 // failureReasonTransportFailed classify a transport error by its
-// permanent/transient signal (ErrTransportPermanent): refused is terminal
-// and stops the channel (and, on the contact path, marks the contact
-// bounced), failed is retried. failureReasonResolutionFailed and
+// permanent/transient signal (pkgcore.ErrTransportPermanent): refused is
+// terminal and stops the channel (and, on the contact path, marks the
+// contact bounced), failed is retried. failureReasonResolutionFailed and
 // failureReasonResolverMissing cover the host's user-address resolver
 // seam; failureReasonRenderFailed covers every copy-render refusal (a
 // missing template or catalog is terminal and cannot heal on retry);
@@ -1382,12 +1376,13 @@ func classify(reason string, cause error) error {
 }
 
 // classifyTransportCause classifies a transport failure by its permanent
-// signal: a cause wrapping ErrTransportPermanent is a refusal (terminal),
-// any other transport failure is retried -- the two failureReasonTransport*
-// values. The delivery paths' four send sites and the verification-code
-// send path (contact.go's sendCode) share the classification.
+// signal: a cause wrapping pkgcore.ErrTransportPermanent is a refusal
+// (terminal), any other transport failure is retried -- the two
+// failureReasonTransport* values. The delivery paths' four send sites and
+// the verification-code send path (contact.go's sendCode) share the
+// classification.
 func classifyTransportCause(cause error) error {
-	if errors.Is(cause, ErrTransportPermanent) {
+	if errors.Is(cause, pkgcore.ErrTransportPermanent) {
 		return classify(failureReasonTransportRefused, cause)
 	}
 	return classify(failureReasonTransportFailed, cause)

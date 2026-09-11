@@ -1616,7 +1616,7 @@ func TestContactService_List_ReturnsTheRosterNewestFirst(t *testing.T) {
 // that leaves this path therefore carries the bounded classification alone
 // ("transport refused" for a permanent refusal, "transport failed" for a
 // retryable failure), while the original cause stays reachable through
-// Unwrap (errors.Is still sees ErrTransportPermanent), the plaintext code
+// Unwrap (errors.Is still sees pkgcore.ErrTransportPermanent), the plaintext code
 // never enters the error, and ordinary code sends are unaffected.
 func TestContact_CodeSendFailure_CarriesOnlyTheBoundedClassification(t *testing.T) {
 	t.Run("email", func(t *testing.T) {
@@ -1624,7 +1624,7 @@ func TestContact_CodeSendFailure_CarriesOnlyTheBoundedClassification(t *testing.
 		ctx := tenantCtx("tenant-acme")
 		const address = "verify@example.com"
 
-		env.host.mailer.failWith = fmt.Errorf("smtp: 550 <%s>: mailbox unavailable: %w", address, ErrTransportPermanent)
+		env.host.mailer.failWith = fmt.Errorf("smtp: 550 <%s>: mailbox unavailable: %w", address, pkgcore.ErrTransportPermanent)
 		_, err := env.svc.CreateContact(ctx, ContactCreateInput{Channel: ChannelEmail, Address: address})
 		if err == nil {
 			t.Fatal("CreateContact succeeded while the mailer refused, want the delivery-failed error")
@@ -1639,7 +1639,7 @@ func TestContact_CodeSendFailure_CarriesOnlyTheBoundedClassification(t *testing.
 		if contactCodeRe.MatchString(err.Error()) {
 			t.Errorf("the delivery-failed error carries a six-digit run (the code must never enter it): %q", err.Error())
 		}
-		if !errors.Is(err, ErrTransportPermanent) {
+		if !errors.Is(err, pkgcore.ErrTransportPermanent) {
 			t.Errorf("the classified error lost the transport's wrapped sentinel (errors.Is = false)")
 		}
 		env.host.mailer.failWith = nil
@@ -1673,7 +1673,7 @@ func TestContact_CodeSendFailure_CarriesOnlyTheBoundedClassification(t *testing.
 		if contactCodeRe.MatchString(err.Error()) {
 			t.Errorf("the delivery-failed error carries a six-digit run (the code must never enter it): %q", err.Error())
 		}
-		if errors.Is(err, ErrTransportPermanent) {
+		if errors.Is(err, pkgcore.ErrTransportPermanent) {
 			t.Errorf("a transient failure classified as the permanent refusal (errors.Is = true)")
 		}
 		env.svc.sms = pkgcore.NewConsoleSMSSender(env.smsBuf)

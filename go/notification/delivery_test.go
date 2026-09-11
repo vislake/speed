@@ -28,11 +28,13 @@ package notification
 // dispatch's locale asks for it.
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"maps"
+	"net"
 	"slices"
 	"strings"
 	"sync"
@@ -1084,7 +1086,7 @@ func TestDelivery_SMSTransientFailureIsRecordedAndRetried(t *testing.T) {
 
 // TestDelivery_PermanentTransportFailureStopsTheChannelWithoutRetrying pins
 // the terminal-failure half of the failure semantics: a transport error
-// wrapping ErrTransportPermanent -- the address the gateway refuses, the
+// wrapping pkgcore.ErrTransportPermanent -- the address the gateway refuses, the
 // message it will never accept -- settles a failed record and returns nil,
 // so the queue does NOT retry a failure retrying cannot resolve. The
 // per-channel independence shows in the same attempt: the email channel
@@ -1096,7 +1098,7 @@ func TestDelivery_PermanentTransportFailureStopsTheChannelWithoutRetrying(t *tes
 	ctx := tenantCtx(deliveryTenant)
 	payload := env.enqueue(t, deliveryDispatch())
 
-	env.host.mailer.failWith = fmt.Errorf("550 mailbox unavailable: %w", ErrTransportPermanent)
+	env.host.mailer.failWith = fmt.Errorf("550 mailbox unavailable: %w", pkgcore.ErrTransportPermanent)
 	if err := env.attempt(t, payload); err != nil {
 		t.Fatalf("attempt with a permanent transport failure returned %v, want nil (stop, not retry)", err)
 	}
@@ -1150,7 +1152,7 @@ func TestDelivery_ContactPermanentFailureMarksTheContactBounced(t *testing.T) {
 		Locale: "zh-CN",
 		Params: renderTestParams,
 	}
-	env.host.mailer.failWith = fmt.Errorf("550 mailbox unavailable: %w", ErrTransportPermanent)
+	env.host.mailer.failWith = fmt.Errorf("550 mailbox unavailable: %w", pkgcore.ErrTransportPermanent)
 
 	if attemptErr := env.dispatchAndAttempt(t, d); attemptErr != nil {
 		t.Fatalf("attempt with a permanent contact failure returned %v, want nil (stop, not retry)", attemptErr)
@@ -1958,7 +1960,7 @@ func TestDelivery_MetricsRecordCountAndDurationByChannelAndStatus(t *testing.T) 
 	d := deliveryDispatch()
 	payload := env.enqueue(t, d)
 
-	env.host.mailer.failWith = fmt.Errorf("550 mailbox unavailable: %w", ErrTransportPermanent)
+	env.host.mailer.failWith = fmt.Errorf("550 mailbox unavailable: %w", pkgcore.ErrTransportPermanent)
 	if err := env.attempt(t, payload); err != nil {
 		t.Fatalf("attempt with a permanent transport failure returned %v, want nil (stop, not retry)", err)
 	}
@@ -2236,7 +2238,7 @@ func TestDelivery_ContactBounceCarryingTheAddress_StoredRecordAndReadbackNeverCa
 		Locale: "zh-CN",
 		Params: renderTestParams,
 	}
-	env.host.mailer.failWith = fmt.Errorf("smtp: 550 <%s>: mailbox unavailable: %w", address, ErrTransportPermanent)
+	env.host.mailer.failWith = fmt.Errorf("smtp: 550 <%s>: mailbox unavailable: %w", address, pkgcore.ErrTransportPermanent)
 	if attemptErr := env.dispatchAndAttempt(t, d); attemptErr != nil {
 		t.Fatalf("delivery attempt: %v", attemptErr)
 	}
@@ -2299,7 +2301,7 @@ func TestDelivery_TransportEchoingTheAddressInANonNormalizedForm_NeverReachesThe
 		d := deliveryDispatch()
 
 		echo := strings.ToUpper(deliveryAddresses.Email)
-		env.host.mailer.failWith = fmt.Errorf("smtp: 550 <%s>: mailbox unavailable: %w", echo, ErrTransportPermanent)
+		env.host.mailer.failWith = fmt.Errorf("smtp: 550 <%s>: mailbox unavailable: %w", echo, pkgcore.ErrTransportPermanent)
 		if attemptErr := env.dispatchAndAttempt(t, d); attemptErr != nil {
 			t.Fatalf("permanent refusal returned %v, want the terminal stop", attemptErr)
 		}
@@ -2334,7 +2336,7 @@ func TestDelivery_TransportEchoingTheAddressInANonNormalizedForm_NeverReachesThe
 		d := deliveryDispatch()
 
 		echo := strings.TrimPrefix(deliveryAddresses.Phone, "+")
-		env.sms.failWith = fmt.Errorf("gateway: 550 %s: invalid number: %w", echo, ErrTransportPermanent)
+		env.sms.failWith = fmt.Errorf("gateway: 550 %s: invalid number: %w", echo, pkgcore.ErrTransportPermanent)
 		if attemptErr := env.dispatchAndAttempt(t, d); attemptErr != nil {
 			t.Fatalf("permanent refusal returned %v, want the terminal stop", attemptErr)
 		}
@@ -2350,6 +2352,200 @@ func TestDelivery_TransportEchoingTheAddressInANonNormalizedForm_NeverReachesThe
 			t.Errorf("record error = %q, want the bounded classification %q (no transport text stored)", rec.Error, refused)
 		}
 	})
+}
+
+// ---- the real-transport reachability tests --------------------------------
+//
+// The failure-semantics tests above drive a test double that wraps the
+// permanent sentinel directly; the two tests below instead point the
+// delivery at pkgcore's own SMTP mailer and a scripted relay, so the
+// refusal a production composition produces is produced here too -- by the
+// transport implementation itself, exactly as a host's relay would produce
+// it, never by the test's hand-wrapped error. That is the difference that
+// makes them the tests for the sentinel's reachability: a wrapper only the
+// double can write proves nothing about what the real transports return.
+
+// smtpMailerHost is a testHost whose mailer seam hands the delivery a real
+// pkgcore transport instead of the recording double.
+type smtpMailerHost struct {
+	*testHost
+	mailer pkgcore.Mailer
+}
+
+func (h *smtpMailerHost) Mailer() pkgcore.Mailer { return h.mailer }
+
+// smtpMailerRefusingRecipients starts a minimal in-process SMTP relay that
+// answers every RCPT line with rcptReply -- a scripted refusal such as
+// "550 5.1.1 No such user" -- and every other command with a success, and
+// returns pkgcore's own SMTP mailer pointed at it. The module's tests
+// cannot reuse pkgcore's internal fake relay (go/pkgcore/internal is
+// importable only within that module), so this relay scripts the few lines
+// of the protocol a refusal needs; no TLS is advertised and no AUTH runs,
+// so the transaction stays plaintext on loopback.
+func smtpMailerRefusingRecipients(t *testing.T, rcptReply string) pkgcore.Mailer {
+	t.Helper()
+
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("start the scripted SMTP relay: %v", err)
+	}
+	t.Cleanup(func() { _ = ln.Close() })
+	go func() {
+		for {
+			conn, acceptErr := ln.Accept()
+			if acceptErr != nil {
+				return
+			}
+			go serveScriptedSMTP(conn, rcptReply)
+		}
+	}()
+
+	host, portText, err := net.SplitHostPort(ln.Addr().String())
+	if err != nil {
+		t.Fatalf("split relay address %q: %v", ln.Addr(), err)
+	}
+	var port int
+	if _, err := fmt.Sscanf(portText, "%d", &port); err != nil {
+		t.Fatalf("parse relay port %q: %v", portText, err)
+	}
+	return pkgcore.NewSMTPMailer(pkgcore.SMTPConfig{Host: host, Port: port})
+}
+
+// serveScriptedSMTP runs one scripted SMTP session: greet, answer every RCPT
+// with the scripted reply, and succeed everything else a command-line client
+// sends up to QUIT.
+func serveScriptedSMTP(conn net.Conn, rcptReply string) {
+	defer func() { _ = conn.Close() }()
+	_, _ = fmt.Fprint(conn, "220 scripted ESMTP ready\r\n")
+
+	br := bufio.NewReader(conn)
+	for {
+		line, err := br.ReadString('\n')
+		if err != nil {
+			return
+		}
+		cmd := strings.ToUpper(strings.SplitN(strings.TrimRight(line, "\r\n"), " ", 2)[0])
+		switch cmd {
+		case "EHLO", "HELO":
+			_, _ = fmt.Fprint(conn, "250-scripted\r\n250 2.0.0 Ok\r\n")
+		case "MAIL":
+			_, _ = fmt.Fprint(conn, "250 2.1.0 Ok\r\n")
+		case "RCPT":
+			_, _ = fmt.Fprint(conn, rcptReply+"\r\n")
+		case "QUIT":
+			_, _ = fmt.Fprint(conn, "221 2.0.0 Bye\r\n")
+			return
+		default:
+			_, _ = fmt.Fprint(conn, "250 2.0.0 Ok\r\n")
+		}
+	}
+}
+
+// TestDelivery_RealSMTPMailerRecipientRefusal_MarksTheContactBounced pins
+// the permanent-refusal path end to end through the transport the host
+// actually runs: the delivery sends through pkgcore's own SMTP mailer, the
+// relay refuses the recipient with 550, and that refusal must reach the
+// module's terminal handling -- the attempt stops instead of retrying, the
+// record settles failed under the bounded permanent classification, and the
+// tenant's own contact is marked bounced, so the consent gate refuses the
+// address before any later transport. A refusal the transport did not
+// signal as permanent would leave the contact deliverable and the attempt
+// retryable, which is precisely the state this test exists to rule out.
+func TestDelivery_RealSMTPMailerRecipientRefusal_MarksTheContactBounced(t *testing.T) {
+	env := newDeliveryEnv(t)
+	ctx := tenantCtx(deliveryTenant)
+	env.svc.host = &smtpMailerHost{
+		testHost: env.host,
+		mailer:   smtpMailerRefusingRecipients(t, "550 5.1.1 No such user"),
+	}
+
+	contact, err := env.contacts.CreateContact(ctx, ContactCreateInput{
+		Channel:    ChannelEmail,
+		Address:    "wangfang@external.example.com",
+		ConsentRef: "consent-ref-1",
+	})
+	if err != nil {
+		t.Fatalf("create the verified contact: %v", err)
+	}
+
+	d := Dispatch{
+		TypeKey: fixtureTypeAppointment,
+		Recipient: DispatchRecipient{
+			Class:     RecipientClassExternal,
+			ContactID: contact.ID,
+		},
+		Locale: "zh-CN",
+		Params: renderTestParams,
+	}
+
+	if attemptErr := env.dispatchAndAttempt(t, d); attemptErr != nil {
+		t.Fatalf("attempt with a permanently refused recipient returned %v, want nil (terminal stop, not retry)", attemptErr)
+	}
+
+	rec := env.sendRecordByChannel(t, ctx, d, ChannelEmail)
+	if rec == nil || rec.Status != SendRecordStatusFailed {
+		t.Fatalf("email record after the relay's 550 = %+v, want failed", rec)
+	}
+	if rec.Error != failureReasonTransportRefused {
+		t.Errorf("record error = %q, want the bounded permanent-transport classification %q", rec.Error, failureReasonTransportRefused)
+	}
+
+	// The consent gate refuses the address as bounced: the mark the
+	// transport's own refusal must have produced.
+	if _, err = env.contacts.EnsureDeliverable(ctx, contact.ID); err == nil {
+		t.Fatal("the contact is still deliverable after the relay refused its address, want the bounced refusal")
+	}
+	assertCode(t, err, ErrContactBounced.Code)
+}
+
+// TestDelivery_RealSMTPMailerTransientRefusal_RetriesWithoutBouncing pins
+// the other half of the transport contract: a transient refusal from the
+// real transport -- a 4xx reply, the relay asking for a retry -- must stay
+// retryable and must leave the contact deliverable. Only a permanent
+// refusal is the destination's verdict; the sentinel is deliberately
+// narrow, so a mailbox-full refusal never blacklists the address.
+func TestDelivery_RealSMTPMailerTransientRefusal_RetriesWithoutBouncing(t *testing.T) {
+	env := newDeliveryEnv(t)
+	ctx := tenantCtx(deliveryTenant)
+	env.svc.host = &smtpMailerHost{
+		testHost: env.host,
+		mailer:   smtpMailerRefusingRecipients(t, "452 4.2.2 Mailbox full"),
+	}
+
+	contact, err := env.contacts.CreateContact(ctx, ContactCreateInput{
+		Channel:    ChannelEmail,
+		Address:    "wangfang@external.example.com",
+		ConsentRef: "consent-ref-1",
+	})
+	if err != nil {
+		t.Fatalf("create the verified contact: %v", err)
+	}
+
+	d := Dispatch{
+		TypeKey: fixtureTypeAppointment,
+		Recipient: DispatchRecipient{
+			Class:     RecipientClassExternal,
+			ContactID: contact.ID,
+		},
+		Locale: "zh-CN",
+		Params: renderTestParams,
+	}
+
+	if attemptErr := env.dispatchAndAttempt(t, d); attemptErr == nil {
+		t.Fatal("attempt with a transient refusal returned nil, want the retryable error")
+	}
+
+	rec := env.sendRecordByChannel(t, ctx, d, ChannelEmail)
+	if rec == nil || rec.Status != SendRecordStatusFailed {
+		t.Fatalf("email record after the relay's 452 = %+v, want failed", rec)
+	}
+	if rec.Error != failureReasonTransportFailed {
+		t.Errorf("record error = %q, want the bounded transient-transport classification %q", rec.Error, failureReasonTransportFailed)
+	}
+
+	if _, err = env.contacts.EnsureDeliverable(ctx, contact.ID); err != nil {
+		t.Errorf("EnsureDeliverable after a transient refusal = %v, want the contact still deliverable", err)
+	}
 }
 
 // TestDelivery_ContactVerifiedOnAnUnknownChannel_RecordsAndStops pins the

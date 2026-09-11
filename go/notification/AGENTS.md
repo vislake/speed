@@ -254,10 +254,14 @@ with the offending `field` param), the inbox group (`ErrMessageNotFound` with
 `Err*Required` sentinels, all `apperr.Internal`, that `Register` refuses
 with. Every code ships bilingual copy in `locales/` (identical id sets in
 `zh-CN.toml` and `en-US.toml`, enforced by the catalog builder and by
-`tools/check_i18n_keys.py`). `ErrTransportPermanent` deliberately lives OUT
-of the catalog: it is not an `apperr` but a control signal between a
-transport and the delivery job, matched with `errors.Is`, never surfaced to a
-caller. `TestErrorCatalog_IsComplete` pins the catalog's completeness.
+`tools/check_i18n_keys.py`). The permanent-transport signal is deliberately
+OUT of the catalog and out of this module: it is `pkgcore.ErrTransportPermanent`,
+not an `apperr` but a control signal between a transport and the delivery
+job, matched with `errors.Is`, never surfaced to a caller -- and declared on
+the dependency floor because the transports that must produce it (pkgcore's
+SMTP mailer and the aliyun/tencent SMS adapters) sit below this module and
+could not reach a sentinel declared here. `TestErrorCatalog_IsComplete` pins
+the catalog's completeness.
 
 ## Wiring and host seams
 
@@ -477,7 +481,8 @@ indexed. Consent arrives two ways:
 
 The status machine: `pending --verify--> verified --unsubscribe-->
 unsubscribed`; `pending --resend--> pending`; permanent transport failure
-(`ErrTransportPermanent`) marks the tenant's own contact `bounced`. Terminal
+(`pkgcore.ErrTransportPermanent`, the sentinel the real transports themselves
+wrap) marks the tenant's own contact `bounced`. Terminal
 states are per-contact (see "Unsubscribe is permanent for the contact as a
 whole"). Delivery refuses unsubscribed and bounced contacts before any
 transport is touched (`EnsureDeliverable`), and a user recipient whose
