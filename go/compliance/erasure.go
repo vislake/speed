@@ -2,9 +2,6 @@ package compliance
 
 import (
 	"context"
-	"fmt"
-	"sort"
-	"strings"
 
 	"github.com/vislake/speed/go/dbkit/audit"
 	obs "github.com/vislake/speed/go/observability"
@@ -210,41 +207,45 @@ func (s *ErasureService) Erase(ctx context.Context, subject pkgcore.SubjectRef, 
 		Erased:  make(map[string]int),
 		Errors:  make(map[string]error),
 	}
-	for _, p := range s.retention.Participants() {
-		if p.Erase == nil {
-			continue
-		}
-		erased, err := p.Erase(sysCtx, subject)
-		result.Erased[p.Name] = erased
-		if err != nil {
-			// The participant's reported count is still recorded: a
-			// callback that failed part-way through has already
-			// hard-deleted erased rows (pkgcore.RetentionParticipant's
-			// own contract, and the count this module's testutil
-			// participants report on a mid-loop failure), and
-			// TotalErased -- and the audit event's Changes["erased"]
-			// breakdown -- must count rows that are genuinely gone, not
-			// silently drop them from the record of an irreversible
-			// operation because the callback also errored.
-			result.Errors[p.Name] = err
-			// The participant error's text is logged here -- behind
-			// go/observability's redaction layer -- never written into the
-			// audit record's Changes: an erasure-path error can carry the
-			// erased subject's own identifier, and the changes column is on
-			// the one table erasure must not touch (see
-			// erasureAuditErrorMarker's doc comment). The returned
-			// ErasureResult.Errors keeps the error available to this call's
-			// own caller; this log line keeps it available to operators.
-			obs.FromContext(sysCtx).Error("compliance: erasure participant failed",
-				"participant", p.Name, "error", err)
-		}
-	}
+	eachParticipant(s.retention.Participants(),
+		func(p pkgcore.RetentionParticipant) (int, bool, error) {
+			if p.Erase == nil {
+				return 0, false, nil
+			}
+			erased, err := p.Erase(sysCtx, subject)
+			return erased, true, err
+		},
+		func(p pkgcore.RetentionParticipant, erased int, err error) {
+			result.Erased[p.Name] = erased
+			if err != nil {
+				// The participant's reported count is still recorded: a
+				// callback that failed part-way through has already
+				// hard-deleted erased rows (pkgcore.RetentionParticipant's
+				// own contract, and the count this module's testutil
+				// participants report on a mid-loop failure), and
+				// TotalErased -- and the audit event's Changes["erased"]
+				// breakdown -- must count rows that are genuinely gone, not
+				// silently drop them from the record of an irreversible
+				// operation because the callback also errored.
+				result.Errors[p.Name] = err
+				// The participant error's text is logged here -- behind
+				// go/observability's redaction layer -- never written into the
+				// audit record's Changes: an erasure-path error can carry the
+				// erased subject's own identifier, and the changes column is on
+				// the one table erasure must not touch (see
+				// erasureAuditErrorMarker's doc comment). The returned
+				// ErasureResult.Errors keeps the error available to this call's
+				// own caller; this log line keeps it available to operators.
+				obs.FromContext(sysCtx).Error("compliance: erasure participant failed",
+					"participant", p.Name, "error", err)
+			}
+		})
 
 	if err := s.emitErasureAudit(ctx, result); err != nil {
 		return result, ErrAuditRecordFailed.WithCause(err)
 	}
 	if result.HasErrors() {
-		return result, ErrErasurePartialFailure.WithParam("participants", erasureFailureReason(result))
+		return result, ErrErasurePartialFailure.WithParam("participants", ParticipantFailureReason(result.Errors))
 	}
 	return result, nil
 }
@@ -269,11 +270,7 @@ func (s *ErasureService) Erase(ctx context.Context, subject pkgcore.SubjectRef, 
 func (s *ErasureService) emitErasureAudit(ctx context.Context, result ErasureResult) error {
 	changes := map[string]any{"erased": result.Erased}
 	if result.HasErrors() {
-		errs := make(map[string]string, len(result.Errors))
-		for name := range result.Errors {
-			errs[name] = erasureAuditErrorMarker
-		}
-		changes["errors"] = errs
+		changes["errors"] = participantFailureClassification(result.Errors, erasureAuditErrorMarker)
 	}
 	return audit.Emit(ctx, s.bus, s.actions, audit.Input{
 		Action: AuditActionErasureRequest,
@@ -283,23 +280,8 @@ func (s *ErasureService) emitErasureAudit(ctx context.Context, result ErasureRes
 		},
 		Result: audit.Result{
 			Success:       !result.HasErrors(),
-			FailureReason: erasureFailureReason(result),
+			FailureReason: ParticipantFailureReason(result.Errors),
 		},
 		Changes: &audit.Diff{After: changes},
 	})
-}
-
-// erasureFailureReason renders a short summary of which participants
-// failed an erasure request, for audit.Result.FailureReason. Empty when
-// result has no errors.
-func erasureFailureReason(result ErasureResult) string {
-	if !result.HasErrors() {
-		return ""
-	}
-	names := make([]string, 0, len(result.Errors))
-	for name := range result.Errors {
-		names = append(names, name)
-	}
-	sort.Strings(names)
-	return fmt.Sprintf("participants failed: %s", strings.Join(names, ", "))
 }

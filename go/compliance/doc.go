@@ -54,6 +54,12 @@
 //   - RenderAuditReport (report.go): pure CSV/JSON rendering of an
 //     []audit.AuditEvent, with no I/O, pagination or tenant-scope
 //     enforcement of its own.
+//   - ParticipantFailureReason (participants.go): the shared rendering of a
+//     failed-participant set -- the sorted participant names after the
+//     "participants failed: " prefix -- used as the participants parameter
+//     of the three partial-failure errors and the FailureReason of the
+//     sweep, erasure and export audit events, and consumed by go/admin's
+//     audit-export leg for its own audit event.
 //
 // What is not shipped here is a boundary, not a gap: no HTTP surface of
 // its own, no hash chain over the audit trail, no time-partitioned

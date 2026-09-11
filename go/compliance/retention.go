@@ -287,45 +287,49 @@ func (s *RetentionService) SweepTenant(ctx context.Context, tenant pkgcore.Tenan
 		Reaped: make(map[string]int),
 		Errors: make(map[string]error),
 	}
-	for _, p := range s.retention.Participants() {
-		if p.Sweep == nil {
-			continue
-		}
-		reaped, err := p.Sweep(sysCtx, tenant, cutoff)
-		result.Reaped[p.Name] = reaped
-		if err != nil {
-			// The participant's reported count is still recorded: a
-			// callback that failed part-way through has already
-			// hard-deleted reaped rows (pkgcore.RetentionParticipant's
-			// own contract, and the count this module's testutil
-			// participants report on a mid-loop failure), and
-			// TotalReaped -- and the audit event's Changes["reaped"]
-			// breakdown -- must count rows that are genuinely and
-			// irreversibly gone, not silently drop them from the record
-			// of the sweep because the callback also errored. This is the
-			// identical count-on-error semantics ErasureService.Erase's
-			// own accounting applies to ErasureResult.Erased.
-			result.Errors[p.Name] = err
-			// The participant error's text is logged here -- behind
-			// go/observability's redaction layer -- never written into the
-			// audit record's Changes, whose errors entry classifies each
-			// failed participant by name keyed to participantErrorMarker
-			// (see emitSweepAudit, and the erasure path's identical rule):
-			// the changes column is effectively permanent, and sweep-path
-			// error text can carry internal row or storage details no
-			// audit reader was ever promised. This log line and the
-			// returned SweepResult.Errors keep the text available to the
-			// operator and this call's own caller.
-			observability.FromContext(sysCtx).Error("compliance: retention sweep participant failed",
-				"participant", p.Name, "error", err)
-		}
-	}
+	eachParticipant(s.retention.Participants(),
+		func(p pkgcore.RetentionParticipant) (int, bool, error) {
+			if p.Sweep == nil {
+				return 0, false, nil
+			}
+			reaped, err := p.Sweep(sysCtx, tenant, cutoff)
+			return reaped, true, err
+		},
+		func(p pkgcore.RetentionParticipant, reaped int, err error) {
+			result.Reaped[p.Name] = reaped
+			if err != nil {
+				// The participant's reported count is still recorded: a
+				// callback that failed part-way through has already
+				// hard-deleted reaped rows (pkgcore.RetentionParticipant's
+				// own contract, and the count this module's testutil
+				// participants report on a mid-loop failure), and
+				// TotalReaped -- and the audit event's Changes["reaped"]
+				// breakdown -- must count rows that are genuinely and
+				// irreversibly gone, not silently drop them from the record
+				// of the sweep because the callback also errored. This is the
+				// identical count-on-error semantics ErasureService.Erase's
+				// own accounting applies to ErasureResult.Erased.
+				result.Errors[p.Name] = err
+				// The participant error's text is logged here -- behind
+				// go/observability's redaction layer -- never written into the
+				// audit record's Changes, whose errors entry classifies each
+				// failed participant by name keyed to participantErrorMarker
+				// (see emitSweepAudit, and the erasure path's identical rule):
+				// the changes column is effectively permanent, and sweep-path
+				// error text can carry internal row or storage details no
+				// audit reader was ever promised. This log line and the
+				// returned SweepResult.Errors keep the text available to the
+				// operator and this call's own caller.
+				observability.FromContext(sysCtx).Error("compliance: retention sweep participant failed",
+					"participant", p.Name, "error", err)
+			}
+		})
 
 	if err := s.emitSweepAudit(ctx, result); err != nil {
 		return result, ErrAuditRecordFailed.WithCause(err)
 	}
 	if result.HasErrors() {
-		return result, ErrSweepPartialFailure.WithParam("participants", sweepFailureReason(result))
+		return result, ErrSweepPartialFailure.WithParam("participants", ParticipantFailureReason(result.Errors))
 	}
 	return result, nil
 }
@@ -349,11 +353,7 @@ func (s *RetentionService) SweepTenant(ctx context.Context, tenant pkgcore.Tenan
 func (s *RetentionService) emitSweepAudit(ctx context.Context, result SweepResult) error {
 	changes := map[string]any{"reaped": result.Reaped}
 	if result.HasErrors() {
-		errs := make(map[string]string, len(result.Errors))
-		for name := range result.Errors {
-			errs[name] = participantErrorMarker
-		}
-		changes["errors"] = errs
+		changes["errors"] = participantFailureClassification(result.Errors, participantErrorMarker)
 	}
 	return audit.Emit(ctx, s.bus, s.actions, audit.Input{
 		Action: AuditActionRetentionSweep,
@@ -363,25 +363,10 @@ func (s *RetentionService) emitSweepAudit(ctx context.Context, result SweepResul
 		},
 		Result: audit.Result{
 			Success:       !result.HasErrors(),
-			FailureReason: sweepFailureReason(result),
+			FailureReason: ParticipantFailureReason(result.Errors),
 		},
 		Changes: &audit.Diff{After: changes},
 	})
-}
-
-// sweepFailureReason renders a short summary of which participants failed
-// a sweep, for audit.Result.FailureReason. Empty when result has no
-// errors.
-func sweepFailureReason(result SweepResult) string {
-	if !result.HasErrors() {
-		return ""
-	}
-	names := make([]string, 0, len(result.Errors))
-	for name := range result.Errors {
-		names = append(names, name)
-	}
-	sort.Strings(names)
-	return fmt.Sprintf("participants failed: %s", strings.Join(names, ", "))
 }
 
 // SweepAllTenants sweeps every tenant TenantLister.ListTenants returns,

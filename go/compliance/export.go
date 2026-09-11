@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"sort"
-	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -350,33 +349,37 @@ func (s *ExportService) Export(ctx context.Context, tenant pkgcore.TenantID) (*E
 		GeneratedAt:  time.Now(),
 		Participants: make(map[string]any),
 	}
-	for _, p := range s.retention.Participants() {
-		if p.Export == nil {
-			continue
-		}
-		data, exportErr := p.Export(ctx, tenant)
-		if exportErr != nil {
-			// The participant's error text is logged here -- behind
-			// go/observability's redaction layer -- never written into the
-			// manifest's Errors entry, which is the classification-only
-			// participantErrorMarker: the manifest is the export
-			// deliverable, delivered to its recipient over an
-			// unauthenticated, single-view share link whose holder is
-			// entitled to the export's data, not platform-internal failure
-			// text (see participantErrorMarker's doc comment, and the
-			// erasure path's identical classification rule). The manifest
-			// itself must still say WHO failed and THAT it failed -- the
-			// marker is that record.
-			if manifest.Errors == nil {
-				manifest.Errors = make(map[string]string)
+	eachParticipant(s.retention.Participants(),
+		func(p pkgcore.RetentionParticipant) (any, bool, error) {
+			if p.Export == nil {
+				return nil, false, nil
 			}
-			manifest.Errors[p.Name] = participantErrorMarker
-			observability.FromContext(ctx).Error("compliance: export participant failed",
-				"participant", p.Name, "error", exportErr)
-			continue
-		}
-		manifest.Participants[p.Name] = data
-	}
+			data, exportErr := p.Export(ctx, tenant)
+			return data, true, exportErr
+		},
+		func(p pkgcore.RetentionParticipant, data any, exportErr error) {
+			if exportErr != nil {
+				// The participant's error text is logged here -- behind
+				// go/observability's redaction layer -- never written into the
+				// manifest's Errors entry, which is the classification-only
+				// participantErrorMarker: the manifest is the export
+				// deliverable, delivered to its recipient over an
+				// unauthenticated, single-view share link whose holder is
+				// entitled to the export's data, not platform-internal failure
+				// text (see participantErrorMarker's doc comment, and the
+				// erasure path's identical classification rule). The manifest
+				// itself must still say WHO failed and THAT it failed -- the
+				// marker is that record.
+				if manifest.Errors == nil {
+					manifest.Errors = make(map[string]string)
+				}
+				manifest.Errors[p.Name] = participantErrorMarker
+				observability.FromContext(ctx).Error("compliance: export participant failed",
+					"participant", p.Name, "error", exportErr)
+				return
+			}
+			manifest.Participants[p.Name] = data
+		})
 
 	encoded, err := json.Marshal(manifest)
 	if err != nil {
@@ -426,7 +429,7 @@ func (s *ExportService) Export(ctx context.Context, tenant pkgcore.TenantID) (*E
 		return result, ErrAuditRecordFailed.WithCause(auditErr)
 	}
 	if manifest.HasErrors() {
-		return result, ErrExportPartialFailure.WithParam("participants", exportFailureReason(manifest))
+		return result, ErrExportPartialFailure.WithParam("participants", ParticipantFailureReason(manifest.Errors))
 	}
 	return result, nil
 }
@@ -548,14 +551,10 @@ func (s *ExportService) emitExportAudit(ctx context.Context, tenant pkgcore.Tena
 		"participants": participantNames(manifest.Participants),
 	}
 	if manifest.HasErrors() {
-		errs := make(map[string]string, len(manifest.Errors))
-		for name := range manifest.Errors {
-			errs[name] = participantErrorMarker
-		}
-		changes["errors"] = errs
+		changes["errors"] = participantFailureClassification(manifest.Errors, participantErrorMarker)
 	}
 	success := !manifest.HasErrors()
-	failureReason := exportFailureReason(manifest)
+	failureReason := ParticipantFailureReason(manifest.Errors)
 	if deliverErr != nil {
 		success = false
 		failureReason = "delivery failed"
@@ -587,19 +586,4 @@ func participantNames(m map[string]any) []string {
 	}
 	sort.Strings(names)
 	return names
-}
-
-// exportFailureReason renders a short summary of which participants
-// failed to export, for audit.Result.FailureReason. Empty when manifest
-// has no errors.
-func exportFailureReason(manifest ExportManifest) string {
-	if !manifest.HasErrors() {
-		return ""
-	}
-	names := make([]string, 0, len(manifest.Errors))
-	for name := range manifest.Errors {
-		names = append(names, name)
-	}
-	sort.Strings(names)
-	return fmt.Sprintf("participants failed: %s", strings.Join(names, ", "))
 }

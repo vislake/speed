@@ -18,6 +18,7 @@ package compliance_test
 import (
 	"context"
 	"embed"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -341,4 +342,28 @@ func ExampleNewConfigReader() {
 	// before Attach: config.service_not_attached
 	// unconfigured: false
 	// configured: true 2h0m0s
+}
+
+// ExampleParticipantFailureReason shows the failure-reason rendering the
+// sweep, erasure and export paths (and go/admin's audit-export leg) all
+// share: the failed participants' names, sorted, joined after the
+// "participants failed: " prefix. It is the participants parameter of the
+// three partial-failure errors and the FailureReason of every audit event
+// those paths emit, and "" for an empty failure set.
+func ExampleParticipantFailureReason() {
+	reason := compliance.ParticipantFailureReason(map[string]error{
+		"sharing.access_log": errors.New("participant sweep failed"),
+		"notes.note":         errors.New("participant sweep failed"),
+	})
+	fmt.Println(reason)
+
+	// An ExportManifest holds map[string]string, so the same rendering
+	// serves the export path's classification map too; an empty set
+	// renders as the empty string.
+	empty := compliance.ParticipantFailureReason(map[string]string{})
+	fmt.Printf("empty: %q\n", empty)
+
+	// Output:
+	// participants failed: notes.note, sharing.access_log
+	// empty: ""
 }
