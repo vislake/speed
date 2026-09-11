@@ -33,7 +33,7 @@ flowchart TB
     end
 
     subgraph ENG["引擎 go/app"]
-        SRC["loader 组件（引导根，引擎提供）：命令行解析 + 五源分层加载：内置默认 ＜ 项目文件 ＜ env ＜ flag ＜ 代码覆盖"]
+        SRC["loader（引导根，引擎内建前置）：命令行解析 + 五源分层加载：内置默认 ＜ 项目文件 ＜ env ＜ flag ＜ 代码覆盖"]
         ORCH["按序驱动七阶段：Prepare→Construct→Verify→Init→Start→Stop→Close"]
     end
 
@@ -149,8 +149,9 @@ func (r *ComponentRegistry) Close(ctx context.Context) error     // 逆拓扑序
 func (r *ComponentRegistry) Put(v any)
 func Get[T any](r *ComponentRegistry) (T, error) // 泛型不可为方法，保持自由函数
 
-// 声明席（仅 Init 阶段开放，构造期写入被拒绝并点名阶段；共 10 席）：
-//   Routes、Config、Features、Permissions、Jobs、
+// 声明席（共 10 席）：**写入仅限 Init 阶段**（构造期与 Init 之后的写入均被拒绝
+//   并点名阶段——声明由此冻结）；**读取自 Init 起开放**（供收尾校验与 Init 后的
+//   全目录校验）。Routes、Config、Features、Permissions、Jobs、
 //   Notifications、Events、AuditActions、Retention、Schedules
 // 注意：启动期密钥材料（BootstrapKeys）与系统用途（SystemPurposes）是描述符静态
 //   字段——二者先于席门禁存在，不经席位。
@@ -164,10 +165,11 @@ func Assets(r *ComponentRegistry) []Asset                                       
 ### 4.5 ComponentConfig：结构化组件配置
 
 ```go
-type ComponentConfig struct{ /* raw map */ }
+type ComponentConfig struct{ /* 有序键值；值层不可变 */ }
 
-func (c ComponentConfig) Decode(target any) error  // 严格：未知键 = 错误，并在错误里给出已接受键集
-func Value[T any](c ComponentConfig, key string) (T, error)
+func (c ComponentConfig) Decode(target any) error          // 严格：未知键 = 错误，并在错误里给出已接受键集
+func (c ComponentConfig) Get(key string) (any, bool)       // 原始读取（标量与嵌套块）
+func Value[T any](c ComponentConfig, key string) (T, error) // 类型化标量；嵌套块经 Decode（或 Get）
 ```
 
 同一个 `ComponentConfig` 类型贯穿两级：整体组合配置是一棵 `ComponentConfig`，每个组件在 `New` 里收到的是 `components.<name>` 子树。
@@ -209,7 +211,7 @@ classDiagram
         +注册信息（名→描述符）
         +组装信息（选中集合，按拓扑序）
         +Put(v) / Get~T~() 按类型
-        +10 个声明席（Init 阶段前门禁）
+        +10 个声明席（写仅限 Init；读自 Init 起开放）
         +Prepare / Construct / Verify / Init / Start / Stop / Close(ctx)
     }
     class Config {
@@ -257,11 +259,11 @@ stateDiagram-v2
 
 | 阶段 | 回调 | 行为 | 执行顺序 | 失败处理 |
 |---|---|---|---|---|
-| Prepare | `Component.Prepare` | loader 组件（引导根，引擎提供）命令行解析、加载配置；装配器解析选择、拓扑排序、依赖验证；其余组件执行各自 Prepare（如注册 serializer） | 引导组件先行，其余按注册顺序 | 直接报错 |
+| Prepare | `Component.Prepare` | loader（引导根，引擎内建）命令行解析、加载配置；装配器解析选择、拓扑排序、依赖验证；其余组件执行各自 Prepare（如注册 serializer） | 引导组件先行，其余按注册顺序 | 直接报错 |
 | Construct | `Component.New` | 构造产物；db 组件完成连接（不迁移） | 图拓扑序 | 逆序关闭 |
 | Verify | `Component.Verify` | db 组件**应用数据库迁移**；各组件校验自身前提（只做校验，不做初始化） | 图拓扑序 | 逆序关闭 |
 | Init | `Component.Init` | 声明席开放：声明进 10 席、挂接、发布运行时服务；全部完成后装配器做收尾统一校验 | 图拓扑序 | 逆序关闭 |
-| Start | `Component.Start` | 开始对外服务（Worker / scheduler / seed；宿主应用组件从 10 席组装路由并起监听） | 图拓扑序 | 逆序关闭 |
+| Start | `Component.Start` | 开始对外服务（Worker / scheduler / seed；宿主应用组件起监听——face 组装与订阅已在 Init） | 图拓扑序 | 逆序关闭 |
 | Stop | `Component.Stop` | 非阻塞停止通知（停接单、开始排空） | 逆拓扑序 | 忽略 |
 | Close | `Component.Close` | 等待排空、释放资源 | 逆拓扑序 | 错误聚合返回 |
 
@@ -269,15 +271,15 @@ stateDiagram-v2
 
 ### 5.2 逐阶段
 
-**Prepare——一切构造之前。** 内部三拍：① loader 组件（引导根：由引擎提供、零依赖、必然参与）做命令行解析与五源分层加载，把宿主配置、组合配置写入注册表；同时解析全部已注册组件的 `BootstrapKeys`（键路径＋purpose，沿用 pkgcore 的解析/派生链），把结果作为**按 purpose 寻址的材料源**（`pkgcore.BootstrapMaterial`）发布进注册表；装载完成后立即核对“已声明键 ↔ 解析结果 ↔ 宿主目标”的绑定，不闭合即四要素错误、启动失败。② 装配器对组合配置严格解码，完成选择解析、拓扑排序与依赖验证（见 §7）。③ 其余组件执行各自 Prepare——需要“先于开库”的行为都在这里：如 authn 经材料源取自己的密钥材料、自建 PII cipher 并注册 serializer。
+**Prepare——一切构造之前。** 内部三拍：① loader（引导根：引擎内建的前置步骤，零依赖、必然执行）做命令行解析与五源分层加载，把宿主配置、组合配置写入注册表；同时解析全部已注册组件的 `BootstrapKeys`（键路径＋purpose，沿用 pkgcore 的解析/派生链），把结果作为**按 purpose 寻址的材料源**（`pkgcore.BootstrapMaterial`）发布进注册表；装载完成后立即核对“已声明键 ↔ 解析结果 ↔ 宿主目标”的绑定，不闭合即四要素错误、启动失败。② 装配器对组合配置严格解码，完成选择解析、拓扑排序与依赖验证（见 §7）。③ 其余组件执行各自 Prepare——需要“先于开库”的行为都在这里：如 authn 经材料源取自己的密钥材料、自建 PII cipher 并注册 serializer。
 
 **Construct——构造产物。** 按 Requires 图拓扑序执行 `New`；每个产物 `Put` 进注册表，组装信息随之写入。db 组件零依赖、最先构造：`New` 只完成连接——构造期尚不知全部组件是否构造成功，且构造失败不应先动库。失败语义见 §5.3。
 
 **Verify——数据库可达后的自验。** db 组件先应用迁移（全部构造已完成，迁移集合完整；零依赖使其在本阶段序最先），随后各组件校验自身前提（如 schema 与模型一致、依赖的外部条件成立）。只做校验，不承担初始化。需要“全目录”的领域级校验（如权限目录快照、配置 schema 冻结）放在相应组件的 `Start` 回调——进入 Start 的条件是 Init 全部完成，彼时声明集合完整。
 
-**Init——声明、挂接与服务发布。** 声明席开放；按拓扑序执行各组件 `Init`：声明束进 10 席、挂接依赖、发布运行时服务。全部完成后装配器做收尾统一校验（席一致性、资产合并、特征图）并汇总注册各组件的 `SystemPurposes`（重复/冲突 fail-closed）。**值进构造、服务进 Init**：能进构造图的是值，进不了的是服务（见 §5.4）。
+**Init——声明、挂接与服务发布。** 声明席开放；按拓扑序执行各组件 `Init`：声明束进 10 席、挂接依赖、发布运行时服务（含 app 组件的 face 组装与订阅——它拓扑序最后，彼时声明齐备，且订阅先于一切 Start）。全部完成后装配器做收尾统一校验（席一致性、资产合并、特征图）并汇总注册各组件的 `SystemPurposes`（重复/冲突 fail-closed）。**值进构造、服务进 Init**：能进构造图的是值，进不了的是服务（见 §5.4）。
 
-**Start——开始服务。** 在 Init 收尾校验通过之后：`jobs` 的 queue 组件先 wire（Jobs/Schedules 席已完整——全部 Init 已毕），再按自身配置启动 worker 与 scheduler（“本副本不启 worker”即该组件的配置，如 `worker: false`）；seed 执行；对外监听由**宿主应用组件**承担——它在本阶段从 10 席组装路由并开始监听。引擎不含任何 HTTP 组装或监听逻辑。
+**Start——开始服务。** 在 Init 收尾校验通过之后：`jobs` 的 queue 组件先 wire（Jobs/Schedules 席已完整——全部 Init 已毕），再按自身配置启动 worker 与 scheduler（“本副本不启 worker”即该组件的配置，如 `worker: false`）；seed 执行；对外监听由**宿主应用组件**承担——face 的组装与订阅已在 Init 完成（订阅须先于任何 Start，运行期事件不致丢失），本阶段只起监听。引擎不含任何 HTTP 组装或监听逻辑。
 
 **Stop——停止通知。** 逆拓扑序发出停止信号，非阻塞：停接单、开始排空；失败忽略，不阻断后续阶段。
 
@@ -308,10 +310,10 @@ sequenceDiagram
     H->>R: Verify(ctx)
     R->>P: db 组件应用迁移（最先）→ 各组件自查需求
     H->>R: Init(ctx)
-    R->>P: 拓扑序：声明进 10 席、挂接、发布运行时服务
+    R->>P: 拓扑序：声明进 10 席、挂接、发布运行时服务（app：face 组装与订阅）
     R->>R: 收尾统一校验（席/资产合并/特征图）
     H->>R: Start(ctx)
-    R->>P: 拓扑序：Worker/scheduler/seed 启动；app 组件从 10 席组装路由并起监听
+    R->>P: 拓扑序：Worker/scheduler/seed 启动；app 组件起监听（组装与订阅已在 Init）
     H-->>H: 监听（Running）
 ```
 
@@ -344,7 +346,7 @@ sequenceDiagram
 
 - 能进构造图的是**值**（`New` 产物，如 pki 的 `Service()`）；进不了的是**运行时服务**（需等声明齐备后构建，如 config/rbac 的 Service）——后者在 `Init` 阶段 `Put` 发布。
 - 需要运行时服务的组件依赖**提供者的产物**获得次序保证；取值发生在使用时刻 `Get`——此时提供者的 `Init` 已在拓扑序中执行过。
-- 声明席仅在 Init 开放：构造期写入被拒绝并点名阶段——“构造 ≠ 声明”由阶段门禁保证。
+- 声明席的**写入**仅在 Init 开放：构造期与 Init 之后的写入均被拒绝并点名阶段——“构造 ≠ 声明”由阶段门禁保证；**读取**自 Init 起开放（冻结后只读）。
 
 ## 6 组合配置
 
@@ -478,11 +480,11 @@ components:
 
 `loader`、`observability`、`config`、`db`、`app` 与业务组件零差别：同一注册、同一配置选择、同一生命周期；引擎只负责“按序调用阶段方法”与相间的宿主步骤。
 
-- **loader（引导根，引擎提供）**：随引擎（`go/app`）分发、零依赖、必然参与。`Prepare` 第一拍做命令行解析与五源分层加载，产出宿主配置与组合配置（一棵 `ComponentConfig`），并解析各组件的 `BootstrapKeys`、发布材料源、核对键绑定（见 §5.2 拍①）——宿主不必自带加载器；加载设施来自 `pkgcore/config` 子包。
+- **loader（引导根，引擎内建）**：引擎驱动的**前置步骤**——先于注册与选择（不存在“选中与否”的语义，故不以组件描述符注册；它是装配器自身的组成部分，不是被装配的组件）。零依赖、必然执行。`Prepare` 第一拍做命令行解析与五源分层加载，产出宿主配置与组合配置（一棵 `ComponentConfig`），并解析各组件的 `BootstrapKeys`、发布材料源、核对键绑定（见 §5.2 拍①）——宿主不必自带加载器；加载设施来自 `pkgcore/config` 子包。
 - **observability**：标准组件（引擎提供、默认参与）：`Prepare`（拍③首位）初始化 OTel（配置经 loader 同路装载）、`Close` 关停并 flush——引擎不再在装配之前自行初始化观察面。
 - **config（配置服务）**：`go/config` 模块的组件，只承担运行期配置服务。依赖 db（存在 Sensitive 项时还需 cipher）与 tenancy 的解析数据；`Init` 发布配置服务；`Start` 做 schema 冻结校验。
 - **db**：模块 `db`，实现 `db.sqlite` / `db.postgres`（方言注册表，database/sql 式）。`New` 完成连接；`Verify` 应用选中组件的迁移（零依赖 → 序最先）；`Close` 关库；产物 `(*gorm.DB)`。
-- **app（宿主应用，宿主提供）**：`New` 产出应用对象；`Start` 从 10 席组装路由并起监听（异步）；`Stop` 停接单；`Close` 等待排空、释放监听。对外 HTTP 服务是组件行为。引擎（`go/app`）的边界：**只做编排**——提供 `Run` 糖（创建注册表、按序驱动七阶段、信号等待与两拍关闭），路由组装与监听生命周期全部属于 app 组件。
+- **app（宿主应用，宿主提供）**：`New` 产出应用对象；**`Init` 组装 face——从 10 席收集路由并完成订阅**（拓扑序最后，彼时声明齐备；订阅先于一切 Start，运行期事件不致丢失）；`Start` 起监听（异步）；`Stop` 停接单；`Close` 等待排空、释放监听。对外 HTTP 服务是组件行为。引擎（`go/app`）的边界：**只做编排**——提供 `Run` 糖（创建注册表、按序驱动七阶段、信号等待与两拍关闭），路由组装与监听生命周期全部属于 app 组件。
 - **模块组件**（如 authn）：`Requires` 声明 db、pki 等依赖；`BootstrapKeys` 声明密钥材料、`Prepare` 经材料源自建 cipher 并注册 serializer；`Init` 声明与发布服务；`Verify` 校验自身前提；示例见附录 B。
 - **cipher 不设共享句柄**：各组件经材料源读取自己的密钥材料、在需要时自建——密钥分离天然成立。
 
@@ -563,8 +565,8 @@ func (r *ComponentRegistry) Register(c Component) error
 
 func (r *ComponentRegistry) Put(v any)
 func Get[T any](r *ComponentRegistry) (T, error)
-// 声明席（Init 阶段前门禁，共 10 席）：Routes、Config、Features、Permissions、
-//   Jobs、Notifications、Events、AuditActions、Retention、Schedules
+// 声明席（写仅限 Init；读自 Init 起开放；共 10 席）：Routes、Config、Features、
+//   Permissions、Jobs、Notifications、Events、AuditActions、Retention、Schedules
 
 func (r *ComponentRegistry) Prepare(ctx context.Context) error   // 阶段 0
 func (r *ComponentRegistry) Construct(ctx context.Context) error // 阶段 1：db 组件连接
@@ -575,8 +577,9 @@ func (r *ComponentRegistry) Stop(ctx context.Context) error   // 阶段 5：非�
 func (r *ComponentRegistry) Close(ctx context.Context) error     // 阶段 6：恰好一次
 
 // ── 配置 ─────────────────────────────────────────────────
-type ComponentConfig struct{ /* raw */ }
+type ComponentConfig struct{ /* 有序键值；值层不可变 */ }
 func (c ComponentConfig) Decode(target any) error
+func (c ComponentConfig) Get(key string) (any, bool)
 func Value[T any](c ComponentConfig, key string) (T, error)
 
 // ── 注册与读法 ────────────────────────────────────────────
