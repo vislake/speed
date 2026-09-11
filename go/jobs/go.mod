@@ -9,6 +9,13 @@ go 1.26.0
 // consumers, so this affects this module's own standalone builds only.
 replace github.com/vislake/speed/go/pkgcore => ../pkgcore
 
+// The dbkit version this module requires declares its migration registry
+// against pkgcore.Module, a type current pkgcore does not declare, so this
+// module resolves dbkit from the sibling checkout. A replace directive in a
+// dependency is ignored by consumers, so this affects this module's own
+// standalone builds only.
+replace github.com/vislake/speed/go/dbkit => ../dbkit
+
 require (
 	github.com/google/uuid v1.6.0
 	github.com/hibiken/asynq v0.26.0
