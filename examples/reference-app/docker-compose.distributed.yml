@@ -33,7 +33,7 @@
 # compose MultiReplicaSafe implementations, exactly the property
 # examples/reference-app/integration_test/distributed_mode_test.go proves
 # with two real replicas. This compose file runs only ONE `app` container,
-# so it demonstrates the SEAM composition passing Kernel.Bootstrap's
+# so it demonstrates the SEAM composition passing the assembly's
 # capability validation under the distributed mode, not multi-replica
 # convergence itself -- that stays integration_test/distributed_mode_test.go's
 # job, run via `go test -tags=integration ./...` (Docker required), not this
@@ -93,7 +93,7 @@ services:
   # exits. minio-go (the client objectstore/s3.NewObjectStore builds on)
   # never creates its own bucket -- see go/pkgcore/objectstore/s3's own
   # Config doc comment -- so something must, exactly once, before `app`
-  # first calls Kernel.Bootstrap. minio/mc is kept here deliberately: it is
+  # first drives its assembly. minio/mc is kept here deliberately: it is
   # a generic S3-API client (built on minio-go internally, the same library
   # objectstore/s3 uses), not tied to a MinIO server, so it works against
   # RustFS unchanged -- only the alias target below moved from minio:9000

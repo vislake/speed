@@ -20,7 +20,7 @@
 # delivery (the derived delivery key hashes the dispatch's params).
 #
 # The copy is rendered by the notification module out of the merged catalog
-# Kernel.Bootstrap assembles from each module's Locales() -- which is exactly
+# The host's catalog merge assembles from each component's locale assets -- which is exactly
 # why demo must exist as a member of the bootstrap module set (see the
 # package comment in module.go) -- and demo itself never reads these files.
 #

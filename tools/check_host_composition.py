@@ -146,8 +146,9 @@ HOST_COMPOSITION_PATHS = (
 
 # Assembly calls the application engine (go/app) owns: their appearance in
 # a non-test .go file inside either host tree means a host re-issued a step
-# of the shared assembly -- the option surface's steps and the component
-# assembly's alike. Each entry is (label, regex, scope, allowed):
+# of the shared assembly -- the seven-stage component drive, the loader's
+# composition merge and the lifecycle helpers alike. Each entry is
+# (label, regex, scope, allowed):
 #
 #   * label  -- the human-readable call the finding names;
 #   * regex  -- what to look for. Most regexes guard the leading boundary so

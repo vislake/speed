@@ -338,24 +338,23 @@ if err := config.New().Load(&boot); err != nil {
 	return err
 }
 mode, err := pkgcore.ParseDeploymentMode(boot.DeploymentMode)
-
-// A bare app.Assemble() -- no options -- is DeploymentModeStandalone composed
-// with the standalone component set and needs nothing else. DeploymentModeDistributed
-// requires every seam's resolved implementation to declare MultiReplicaSafe,
-// which the standalone component set's four in-process implementations do not, so a
-// distributed host injects its own real ones and declares what they can do.
-opts := []the assemblyOption{pkgcore.the composition's deployment field(mode)}
-if mode == pkgcore.DeploymentModeDistributed {
-	const multiReplica = pkgcore.MultiReplicaSafe | pkgcore.SurvivesRestart
-	opts = append(opts,
-		pkgcore.Put(broker.NewEventBus(cfg), multiReplica),
-		pkgcore.Put(redis.NewKVStore(cfg), multiReplica),
-		pkgcore.Put(smtp.NewMailer(cfg), multiReplica),
-		pkgcore.Put(s3.NewObjectStore(cfg), multiReplica))
+if err != nil {
+	return err
 }
+
+// The assembly is the host's own: it selects the components the composition
+// configuration names. A bare selection is the standalone composition (the
+// in-process seam components); a distributed host names the distributed ones
+// instead (eventbus.redis, kv.redis, mailer.smtp, objectstore.s3), each
+// declaring MultiReplicaSafe and SurvivesRestart, so a distributed-mode
+// composition passes the capability validation Prepare runs. The deployment
+// mode never selects an implementation -- it only states which capabilities
+// the selected components must declare.
 reg := pkgcore.NewComponentRegistry()
-// ... register the components the composition selects, put the values it needs ...
-err := app.Assemble(ctx, reg) // the engine drives the seven stages
+if err := app.Assemble(ctx, reg, spec); err != nil {
+	return err
+}
+_ = mode
 ```
 
 A host that wants pkgcore's own Redis/SMTP/S3 implementations instead of

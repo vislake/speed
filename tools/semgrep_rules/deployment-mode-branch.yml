@@ -7,12 +7,12 @@
 # `if mode == \"standalone\"` in business logic".
 #
 # The deployment-composition retrofit (docs/internal/03-deployment-modes.md)
-# turned the mode from a selector into a constraint: NewKernel takes no
-# deployment mode, each seam is resolved from its registry of
-# capability-declaring implementations, and Bootstrap fails assembly when a
-# resolved implementation cannot satisfy the declared mode's
-# RequiredCapabilities(). What survives of the mode is a few wiring-time
-# sites -- the RequiredCapabilities() dispatch in deployment_mode.go, the
+# turned the mode from a selector into a constraint: the assembly takes no
+# per-call deployment mode, each seam value comes from a selected component
+# declaring its own capabilities, and Prepare fails assembly when a selected
+# component cannot satisfy the configured mode's RequiredCapabilities().
+# What survives of the mode is a few wiring-time sites -- the
+# RequiredCapabilities() dispatch in deployment_mode.go, the
 # consumer binary's command entry reading APP_DEPLOYMENT_MODE, and the
 # assembly-time seam check go/authn performs against the mode a host wired
 # (module.go, below) -- plus the mode constants themselves, still part of

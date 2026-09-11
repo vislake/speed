@@ -15,7 +15,7 @@
 # 为同一收件人完成的模拟是两次独立的发生，各自投递，不会因为派发参数相同而在
 # 派生投递键上坍缩成一次（派生投递键对派发的参数做哈希）。
 #
-# 这些文案在 dispatch 时由 notification 模块从合并目录渲染（Kernel.Bootstrap
+# 这些文案在 dispatch 时由 notification 模块从合并目录渲染（宿主的目录合并
 # 把 demo 模块的 Locales() 收进目录后冻结），demo 模块自身从不读取它们——
 # 这正是 demo 必须作为 bootstrap 模块集一员存在的原因（见 module.go 的包
 # 注释）。

@@ -1207,8 +1207,9 @@ def app_registration_checklist(module_name: str, target_dir: str) -> list[str]:
         "  2. Wire the module in the application's assembly: construct it "
         f"with internal/{module_name}.NewModule(db), register it with the "
         "dbkit.MigrationRegistry beside every other module BEFORE the "
-        "startup Apply, and pass it to Kernel.Bootstrap's module list so "
-        "its Register runs (routes, permissions, event, audit action). "
+        "startup Apply, and put its descriptor on the assembly's "
+        "component registry so its Register runs (routes, permissions, "
+        "event, audit action). "
         "The host-neutral parts of that assembly are shared through the "
         "platform's composition toolkit, github.com/vislake/speed/go/app; "
         "compose them the way the generated server.go does.",

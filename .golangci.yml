@@ -175,11 +175,9 @@ linters:
           # the suite's shipped code (assert_conforms.go) may never import
           # the client and the package is not an implementation.
           # unittest's factory-path driver
-          # (factory_registration_test.go) proves the name-registration loop
-          # end to end -- register under an alias name, reference it from a
-          # Preset, Bootstrap resolves it -- over the two Redis-backed seams
-          # sharing one client, and the factories it drives
-          # (eventbus/redis.Registration, kv/redis.Registration) take the
+          # proves the typed-configuration loop end to end -- register under
+          # an alias name, select it from a composition, resolve it -- over
+          # the two Redis-backed seams sharing one client
           # concrete *redis.Client by design, so the driver cannot exist
           # without the import; it is exempted per file, and every other
           # file under go/pkgcore/unittest stays under the ban.
@@ -232,7 +230,7 @@ linters:
           # that only wires the in-process or Redis-backed implementations.
           # Unlike kv.redis, this implementation is honestly NOT
           # SurvivesRestart (see the package's own doc comment) and is not
-          # named by any built-in Preset, but the packaging rule is
+          # named by any built-in composition, but the packaging rule is
           # identical either way: an implementation must not share a
           # package with a different seam's implementation, or with the
           # KVStore interface itself.
