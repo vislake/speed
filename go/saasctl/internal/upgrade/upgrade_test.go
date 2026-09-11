@@ -411,8 +411,8 @@ func TestRunRefusesAStaleSpeedModuleReplacePinAndLeavesTheFileUntouched(t *testi
 	}
 }
 
-// TestSelfCheckDetectsSpeedModuleExcludeAtGoalVersion is the P2 regression
-// for the version-defeating-directives check: an exclude directive naming a
+// TestSelfCheckDetectsSpeedModuleExcludeAtGoalVersion pins the
+// version-defeating-directives check: an exclude directive naming a
 // speed module at the goal version itself survives the rewrite (excludes are
 // left untouched by contract) and defeats every require line the rewrite
 // claims: the go command never selects an excluded version, so the module

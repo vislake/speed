@@ -325,13 +325,13 @@ func TestRunAppNameContainingTokenTextMaterializesByteIdentical(t *testing.T) {
 }
 
 // TestRunSpeedRootBreakingGoModGrammarIsRefusedBeforeAnythingCreated
-// pins the P1 fix for a speed checkout whose PATH the go.mod grammar
+// pins the refusal for a speed checkout whose PATH the go.mod grammar
 // cannot carry: the replace directives embed the resolved speed-root path
 // verbatim, and the go.mod grammar is not every filesystem path's grammar
 // -- a space cuts the replace right-hand side (modfile then reads the
 // remainder as a version), parentheses derail the directive's shape -- so
-// materializing against such a checkout ships a go.mod no go tool accepts,
-// while `saasctl new` had exited 0 over it. The produced go.mod document
+// materializing against such a checkout would ship a go.mod no go tool
+// accepts, while `saasctl new` reported success over it. The produced go.mod document
 // is therefore handed to the go command's own parser (modfile.Parse)
 // before anything is created, and a document that does not parse is
 // refused with an execution error naming the checkout path. The check

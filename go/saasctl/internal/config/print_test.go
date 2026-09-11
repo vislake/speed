@@ -516,14 +516,15 @@ func TestPrintTooManyGoModArgumentsIsAUsageError(t *testing.T) {
 }
 
 // TestPrintSqlitePathRowShowsTheEffectiveFileAnchoredAtTheGoModArgument
-// pins the P2 fix for the sqlite path row: print exists to tell the
-// operator which file the generated app would actually use, and before the
-// fix it reported the RAW relative APP_DB_PATH -- the value db migrate
-// anchors to the go.mod argument's directory before opening (its own
-// relative-path regression test pins that half) -- so an operator reading
-// "db.sqlite" from print while migrate operated on
-// /path/to/project/db.sqlite had exactly the misunderstanding print exists
-// to prevent. The operator shape is the one the anchoring rule exists for:
+// pins the sqlite path row: print exists to tell the operator which file
+// the generated app would actually use, so the value column must carry
+// the relative APP_DB_PATH resolved the way db migrate resolves it --
+// anchored to the go.mod argument's directory before opening (its own
+// relative-path regression test pins that half). Reporting the raw
+// relative value instead would leave an operator reading "db.sqlite" from
+// print while migrate operated on /path/to/project/db.sqlite, exactly the
+// misunderstanding print exists to prevent. The operator shape is the one
+// the anchoring rule exists for:
 // the project's go.mod lives in another directory, the command runs from
 // this one, and APP_DB_PATH carries a relative value. The row's value
 // column must carry the effective file -- anchored to the go.mod

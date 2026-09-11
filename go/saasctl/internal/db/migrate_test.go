@@ -300,16 +300,16 @@ func TestMigrateDefaultDatabaseAnchorsAtTheGoModArgument(t *testing.T) {
 	}
 }
 
-// TestMigrateRelativeDBPathAnchorsAtTheGoModArgument pins the P1 fix for
-// a RELATIVE APP_DB_PATH: the operator runs the command from another
-// directory against another directory's project with APP_DB_PATH set to a
-// relative value. The generated app, booted from its own directory,
-// resolves that relative value against its working directory; this
-// command must resolve it against the go.mod argument's directory the same
-// way -- so the file migrate writes is the file a boot from the project's
-// own directory opens. Before the fix the relative value resolved against
-// the CALLER's working directory: the database was created and migrated
-// at the wrong path and the run reported success over it.
+// TestMigrateRelativeDBPathAnchorsAtTheGoModArgument pins that a RELATIVE
+// APP_DB_PATH anchors at the go.mod argument: the operator runs the command
+// from another directory against another directory's project with
+// APP_DB_PATH set to a relative value. The generated app, booted from its
+// own directory, resolves that relative value against its working
+// directory; this command must resolve it against the go.mod argument's
+// directory the same way -- so the file migrate writes is the file a boot
+// from the project's own directory opens. Resolving it against the
+// CALLER's working directory instead would create and migrate the database
+// at the wrong path while the run reported success over it.
 func TestMigrateRelativeDBPathAnchorsAtTheGoModArgument(t *testing.T) {
 	projectDir := t.TempDir()
 	mod := filepath.Join(projectDir, "go.mod")
@@ -362,14 +362,15 @@ func TestMigrateRelativeDBPathAnchorsAtTheGoModArgument(t *testing.T) {
 	}
 }
 
-// TestMigrateFailureRemovesAFreshlyCreatedDatabaseFile pins the P3 fix
-// for a database file this command created itself: when the run opened a
-// FRESH file (one that did not exist when the command started) and then
-// failed before the migration ledger existed, the leftover file carried no
-// schema_migrations table and every later run was refused with
-// errLedgerMissing -- an operator told to delete a file the command itself
-// had just created. The failing run must remove its own fresh file,
-// restoring the pre-run state so the next run starts clean again. The
+// TestMigrateFailureRemovesAFreshlyCreatedDatabaseFile pins that a failing
+// run removes a database file this command created itself: when the run
+// opened a FRESH file (one that did not exist when the command started)
+// and then failed before the migration ledger existed, the leftover file
+// would carry no schema_migrations table and every later run would be
+// refused with errLedgerMissing -- an operator told to delete a file the
+// command itself had just created. The failing run must therefore remove
+// its own fresh file, restoring the pre-run state so the next run starts
+// clean again. The
 // failure is injected by swapping migrationUniverse for one whose module
 // construct fails, a deterministic pre-Apply failure after the file has
 // been opened (SQLite creates the file on open) and before any ledger

@@ -39,8 +39,8 @@ func TestLoadDefaultsResolveTheGeneratedProjectsOwnDefaults(t *testing.T) {
 	if cfg.SQLitePath != defaultSQLitePath {
 		t.Errorf("SQLitePath = %q, want the fixed %q default", cfg.SQLitePath, defaultSQLitePath)
 	}
-	// The P3 rename regression: the default must NOT follow the module
-	// path's final element (the appName argument). The generated app's own
+	// The default must NOT follow the module path's final element (the
+	// appName argument), even under a rename: the generated app's own
 	// default is frozen at materialization, so a twin default derived from
 	// the CURRENT module path would fork from the app the moment a
 	// consumer renamed the module -- the CLI migrating and printing one

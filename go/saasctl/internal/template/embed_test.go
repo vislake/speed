@@ -174,11 +174,10 @@ func TestProjectReadmeNamesTheShippedMaintenanceCommands(t *testing.T) {
 			t.Errorf("%s section does not name the shipped command %q", section, cmd)
 		}
 	}
-	// The stale wording this pins against presented upgrade, db and config
-	// as "later rounds" and claimed config inspects its dynamic
-	// configuration; config print renders the bootstrap environment only,
-	// and dynamic-configuration print is a separate, unimplemented
-	// surface.
+	// The upgrade, db and config sections must not present those commands as
+	// "later rounds" nor claim config inspects its dynamic configuration:
+	// config print renders the bootstrap environment only, and
+	// dynamic-configuration print is a separate, unimplemented surface.
 	for _, stale := range []string{"inspects its dynamic configuration", "`saasctl db` runs", "`saasctl config` inspects"} {
 		if strings.Contains(body, stale) {
 			t.Errorf("%s section still carries the stale claim %q", section, stale)
@@ -333,15 +332,16 @@ func TestSelectionServerGoMatchesSelectionKey(t *testing.T) {
 }
 
 // TestAuthnSelectionsExemptAuthnSubtreeByStructure is the structural half
-// of the P1 regression: an anonymous enterprise-OIDC authorize/callback
-// request (provider "oidc:<tenant>", a per-tenant name no allowlist can
-// enumerate) must reach authn's own handler instead of being refused 403
-// tenancy.tenant_unresolved by tenancy.Middleware. The exemption must be
-// STRUCTURAL -- every route under authn's API path dispatched ahead of
-// tenancy.Middleware -- never an enumerated allowlist, which is exactly
-// the fixed-channel enumeration that failed: each authn selection's
-// server.go must derive its chain through chain.Standard, whose own
-// derivation splits the authn subtree out with authn.ExemptSubtree and
+// of the pre-auth exemption pin: an anonymous enterprise-OIDC
+// authorize/callback request (provider "oidc:<tenant>", a per-tenant name
+// no allowlist can enumerate) must reach authn's own handler instead of
+// being refused 403 tenancy.tenant_unresolved by tenancy.Middleware. The
+// exemption must be STRUCTURAL -- every route under authn's API path
+// dispatched ahead of tenancy.Middleware -- never an enumerated allowlist,
+// which is exactly the fixed-channel enumeration the exemption rules out:
+// each authn selection's server.go must derive its chain through
+// chain.Standard, whose own derivation splits the authn subtree out with
+// authn.ExemptSubtree and
 // hands it to speedchain.Chain as the AuthnRoutes branch (dispatched from
 // authn.Middleware's output, exempt from the tenancy chain by
 // construction); the host must NOT hand-partition the route set or carry a
@@ -630,7 +630,7 @@ func TestOrgSelectionsBuildTheInvitationIndexerOverEmailIndexColumn(t *testing.T
 }
 
 // TestPreauthExemption_DrivesTheGeneratedProjectShape is the behavioral
-// half of the P1 regression: an anonymous enterprise-OIDC authorize
+// half of the pre-auth exemption pin: an anonymous enterprise-OIDC authorize
 // request -- provider "oidc:acme", the dynamic per-tenant name authn
 // derives from authn.ProviderOIDCPrefix + a tenant id, which no fixed
 // allowlist can enumerate -- must reach authn's own handler instead of
@@ -643,7 +643,7 @@ func TestOrgSelectionsBuildTheInvitationIndexerOverEmailIndexColumn(t *testing.T
 // other routes. Authn answers a provider it has never seen with its own
 // coded refusal -- 400 authn.provider_unknown -- which is the proof the
 // request crossed the tenancy layer: the allowlist shape (asserted by the legacyShape leg below)
-// answered this exact request 403 tenancy.tenant_unresolved.
+// answers this exact request 403 tenancy.tenant_unresolved.
 func TestPreauthExemption_DrivesTheGeneratedProjectShape(t *testing.T) {
 	handler := buildComposedHandler(t, composedShapeNew)
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/authn/social/oidc:acme/authorize?redirect_uri=https%3A%2F%2Fapp.example%2Fcb", nil)
