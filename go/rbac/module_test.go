@@ -13,8 +13,8 @@ import (
 	"github.com/vislake/speed/go/dbkit"
 	"github.com/vislake/speed/go/dbkit/dbtest"
 	"github.com/vislake/speed/go/pkgcore"
-	"github.com/vislake/speed/go/pkgcore/componenttest"
 	"github.com/vislake/speed/go/pkgcore/apperr"
+	"github.com/vislake/speed/go/pkgcore/componenttest"
 	"github.com/vislake/speed/go/pkgcore/i18n"
 )
 
@@ -50,7 +50,6 @@ type declaringModule struct {
 	name  string
 	perms []string
 }
-
 
 func (d *declaringModule) Name() string         { return d.name }
 func (d *declaringModule) DependsOn() []string  { return nil }

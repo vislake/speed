@@ -9,8 +9,8 @@ import (
 	"gorm.io/gorm"
 
 	"github.com/vislake/speed/go/pkgcore"
-	"github.com/vislake/speed/go/pkgcore/componenttest"
 	"github.com/vislake/speed/go/pkgcore/apperr"
+	"github.com/vislake/speed/go/pkgcore/componenttest"
 )
 
 // testPermissions is what the host's OTHER modules declare in these tests.
