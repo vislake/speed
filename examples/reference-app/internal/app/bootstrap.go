@@ -5,34 +5,39 @@ package app
 // resolved values into the ServerConfig the assembly consumes.
 //
 // The surface is resolved by go/pkgcore/config's loader, never by direct
-// environment reads. hostConfig is the loader target: its config tags pin each
-// variable's exact name (the app's names are flat and single-underscored, a
-// spelling the loader's nesting derivation never produces), its field defaults
-// are the loader's lowest-priority source, and loadHostConfig drives
+// environment reads. hostConfig is the loader target: its own config tags pin
+// each variable's exact name (the app's names are flat and single-underscored,
+// a spelling the loader's nesting derivation never produces), its field
+// defaults are the loader's lowest-priority source, and loadHostConfig drives
 // config.New(config.WithEnvPrefix("APP_")) over the five-source chain -- flags,
-// the environment, an optional config file (none is wired here), the six key
-// materials' derivation from APP_ROOT_KEY, then those defaults. The six
-// key-material fields are typed []byte and tagged derive, so the loader owns
-// their whole resolution: an explicit 64-hex-character value wins, the
-// configured root key's derivation stands next, and the documented development
-// default (a Dev* constant) is what remains -- this app carries no key
-// precedence or hex-decoding logic of its own. serverConfigFrom then turns the
-// loaded surface into ServerConfig: parsing the deployment mode, splitting the
-// proxy list and the cross-variable refusals are the shapes the loader's
-// text decoding deliberately does not carry. No os.Getenv call survives in this
-// app's executable code.
+// the environment, an optional config file (none is wired here), the key
+// materials' derivation from APP_ROOT_KEY, then those defaults -- loading two
+// targets with the one loader: the host's own fields, and the platform
+// key-material declaration (go/app's PlatformConfig), which hostConfig embeds
+// tagged config:"-" so the host target's walk skips it and it resolves as its
+// own target under the six declared key paths. Those fields are typed []byte
+// and tagged derive, so the loader owns their whole resolution: an explicit
+// 64-hex-character value wins, the configured root key's derivation stands
+// next, and the documented development default (a Dev* constant) is what
+// remains -- this app carries no key precedence or hex-decoding logic of its
+// own. serverConfigFrom then turns the loaded surface into ServerConfig:
+// parsing the deployment mode, splitting the proxy list and the cross-variable
+// refusals are the shapes the loader's text decoding deliberately does not
+// carry. No os.Getenv call survives in this app's executable code.
 //
 // The struct doubles as the surface's documentation: each field states what its
 // variable configures, its unset fallback, and the refusals a boot enforces.
-// verifyBootstrapBinding then proves at every boot that the target really binds
+// verifyBootstrapBinding then proves at every boot that the targets really bind
 // the bootstrap keys this app's composition declares on the registry's
 // bootstrap seat, and the keys this app owns besides them.
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 
 	"github.com/vislake/speed/examples/reference-app/internal/app/demo"
+	speedapp "github.com/vislake/speed/go/app"
 	"github.com/vislake/speed/go/dbkit"
 	"github.com/vislake/speed/go/pkgcore"
 	"github.com/vislake/speed/go/pkgcore/config"
@@ -53,10 +58,20 @@ const envPrefix = "APP_"
 // variable.
 const rootKeyEnv = "APP_ROOT_KEY"
 
-// hostConfig is the loader target carrying this app's whole bootstrap surface,
-// one field per variable. Every field pins its variable's exact name with the
-// env tag option, so the names are read as spelled here whatever the loader's
-// prefix derivation would make of the field's key.
+// hostConfig is the loader target carrying this app's whole bootstrap surface:
+// the host's own fields, one per variable, plus the embedded platform
+// key-material declaration. Every one of the host's own fields pins its
+// variable's exact name with the env tag option, so the names are read as
+// spelled here whatever the loader's prefix derivation would make of the
+// field's key.
+//
+// The embedded platform declaration (go/app's PlatformConfig, tagged
+// config:"-") is where the six key materials live. The skip tag keeps the
+// host target's own walk out of it -- a walked embed would contribute its type
+// name as a leading key segment and prefixed every declared key path -- and
+// loadHostConfig loads it as its own target instead, so each of its fields
+// reads the variable the loader derives from the declared key path
+// (config.cipher_key under the APP_ prefix resolves APP_CONFIG__CIPHER_KEY).
 //
 // Field types are the loader's own decoding types: a string field holds its
 // variable's text verbatim (an emptied variable arrives as "", which the
@@ -67,12 +82,12 @@ const rootKeyEnv = "APP_ROOT_KEY"
 // for their own variables). The two existence switches
 // (DisableDemoUserHeader, DisableQueueWorker) are deliberately strings: their
 // contract is "any non-empty value turns this off", not bool parsing, and an
-// emptied variable must keep meaning "off" for them. The six key-material
-// fields inside the *Key groups are typed []byte and tagged derive, and hold
-// the 32-byte materials the loader resolved (an explicit hex value, the
-// APP_ROOT_KEY derivation, or the Dev* struct default); APP_ROOT_KEY itself is
-// not a field at all -- it is consumed inside the same Load, by the
-// WithRootKeyEnv option loadHostConfig wires.
+// emptied variable must keep meaning "off" for them. The declaration's six
+// key-material fields are typed []byte and tagged derive, and hold the 32-byte
+// materials the loader resolved (an explicit hex value, the APP_ROOT_KEY
+// derivation, or the Dev* struct default); APP_ROOT_KEY itself is not a field
+// at all -- it is consumed inside the same Load, by the WithRootKeyEnv option
+// loadHostConfig wires.
 type hostConfig struct {
 	// DeploymentMode names APP_DEPLOYMENT_MODE: the deployment topology the
 	// process runs as -- "standalone" (the default) or "distributed". It is a
@@ -293,28 +308,17 @@ type hostConfig struct {
 	// S3SecretKey's identical exception above.
 	SMSGatewayURL string `config:"env=APP_SMS_GATEWAY_URL"`
 
-	// Config carries the key material the config module declares on the
-	// registry's bootstrap seat. The group exists so the loader target's key
-	// path (config.cipher_key) is exactly the declared key's spelling:
-	// config.Verify compares them literally, which is how a boot proves this
-	// target binds what the module's declaration promises.
-	Config hostConfigKeyConfig
-
-	// Org carries the key material org declares on the registry's bootstrap
-	// seat, under the same literal-key-path rule as Config above.
-	Org hostConfigKeyOrg
-
-	// Notification carries the key material notification declares on the
-	// registry's bootstrap seat, under the same literal-key-path rule.
-	Notification hostConfigKeyNotification
-
-	// Pki carries the key material pki declares on the registry's bootstrap
-	// seat, under the same literal-key-path rule.
-	Pki hostConfigKeyPki
-
-	// Authn carries the two key materials authn declares on the registry's
-	// bootstrap seat, under the same literal-key-path rule.
-	Authn hostConfigKeyAuthn
+	// PlatformConfig is the platform's own declaration of the six key
+	// materials this app's bootstrap resolves -- the host target embeds it
+	// rather than restating its keys, so a platform key added later (or a
+	// path renamed) arrives through the declaration and needs no edit here.
+	// The skip tag keeps the host walk out of it; loadHostConfig loads it as
+	// its own target under the declared key paths, each field reading the
+	// variable the loader derives from its path. hostConfigDefaults
+	// pre-fills this file's Dev* constants as the loader's lowest-priority
+	// source (the loader only writes what a source actually supplied, so a
+	// pre-filled material stands when nothing else does).
+	speedapp.PlatformConfig `config:"-"`
 
 	// DemoUsersPassword names APP_DEMO_USERS_PASSWORD: the passphrase that,
 	// when non-empty, makes BuildServer seed the three demo accounts of
@@ -455,142 +459,20 @@ type hostConfig struct {
 	FailSelfServiceProvision int `config:"env=APP_FAIL_SELF_SERVICE_PROVISION"`
 }
 
-// hostConfigKeyConfig carries the key material the config module declares: the
-// parent and child names spell the declared key path config.cipher_key
-// literally, which config.Verify compares against the declaration.
-type hostConfigKeyConfig struct {
-	// Cipher_Key names APP_CONFIG_KEY: the 32-byte AES cipher key the config
-	// module seals Sensitive values with (config.WithCipher over
-	// dbkit.NewCipher). It is the bootstrap configuration this app's own configs
-	// table must never hold -- the key that encrypts the table cannot live in
-	// the table -- so it resolves through the loader like every other bootstrap
-	// value. The derive tag makes the loader the owner of its resolution: an
-	// explicit APP_CONFIG_KEY must be 64 hex characters, the configured root
-	// key (APP_ROOT_KEY, via loadHostConfig's WithRootKeyEnv) derives the key's
-	// material from the declared path when no explicit value is set, and the
-	// documented development default (DevConfigKey) stands when neither is
-	// present. An emptied variable reads as unset, as it always has.
-	//
-	//nolint:staticcheck // the field name must lowercase to the declared bootstrap key config.cipher_key, which Verify compares literally.
-	Cipher_Key []byte `config:"env=APP_CONFIG_KEY,derive"`
-}
-
-// hostConfigKeyOrg carries the key material org declares: the parent and child
-// names spell the declared key path org.invitation_email_index_key literally.
-type hostConfigKeyOrg struct {
-	// Invitation_Email_Index_Key names APP_ORG_INDEX_KEY: the 32-byte HMAC key
-	// org.WithEmailIndexer's blind indexer is built from
-	// (org.NewEmailIndexer), resolved through the loader's derive path
-	// exactly like the config key above (explicit 64 hex characters, else the
-	// APP_ROOT_KEY derivation, else DevOrgIndexKey). It is a SEPARATE bootstrap
-	// secret from the config cipher key on purpose: this app reuses the config
-	// cipher (built from APP_CONFIG_KEY) to also encrypt org's Invitation.Email
-	// column (registered through org.RegisterEmailSerializer), and dbkit's own
-	// rule is that an AES key must never double as an HMAC key -- see
-	// go/org/invitation.go's EmailSerializerName doc comment. Introducing this
-	// one additional key, distinct from the cipher key, is what keeps that rule
-	// real rather than aspirational in this app's own wiring. An invitation
-	// whose address cannot be indexed can never be found again, so the key must
-	// not change between restarts.
-	//
-	//nolint:staticcheck // the field name must lowercase to the declared bootstrap key org.invitation_email_index_key, which Verify compares literally.
-	Invitation_Email_Index_Key []byte `config:"env=APP_ORG_INDEX_KEY,derive"`
-}
-
-// hostConfigKeyNotification carries the key material notification declares: the
-// parent and child names spell the declared key path
-// notification.contact_index_key literally.
-type hostConfigKeyNotification struct {
-	// Contact_Index_Key names APP_NOTIFICATION_INDEX_KEY: the 32-byte HMAC key
-	// the blind indexers over the notification module's encrypted contact
-	// addresses are built from
-	// (notification.NewContactEmailIndexer/NewContactPhoneIndexer), resolved
-	// through the loader's derive path exactly like the two keys above
-	// (explicit 64 hex characters, else the APP_ROOT_KEY derivation, else
-	// DevNotificationIndexKey). It is a SEPARATE bootstrap secret from the
-	// config cipher key for the same reason the org key above gives: this app
-	// reuses the config cipher to also encrypt notification's Contact.Address
-	// column (registered through
-	// notification.RegisterContactAddressSerializer), and
-	// dbkit's own rule is that an AES key must never double as an HMAC key. One
-	// HMAC key serves both the email and the phone indexers, exactly as authn's
-	// single blind-index key serves both of its indexers -- the two normalizers
-	// keep the two index columns' inputs in disjoint canonical forms, so a
-	// shared key leaks nothing between them. It must not change between
-	// restarts.
-	//
-	//nolint:staticcheck // the field name must lowercase to the declared bootstrap key notification.contact_index_key, which Verify compares literally.
-	Contact_Index_Key []byte `config:"env=APP_NOTIFICATION_INDEX_KEY,derive"`
-}
-
-// hostConfigKeyPki carries the key material pki declares: the parent and child
-// names spell the declared key path pki.local_key_cipher_key literally.
-type hostConfigKeyPki struct {
-	// Local_Key_Cipher_Key names APP_PKI_LOCAL_KEY_CIPHER_KEY: the 32-byte AES
-	// key that seals go/pki's LocalSigner private-key column (pki_local_keys,
-	// via pki.RegisterLocalKeySerializer), resolved through the loader's derive
-	// path (explicit 64 hex characters, else the APP_ROOT_KEY derivation, else
-	// DevPKILocalKeyCipherKey). Without it, a deployment that sets none of this
-	// file's other keys would silently run its signing-key storage on a key
-	// committed to this repository's own source (the DevPKILocalKeyCipherKey
-	// development default). It is a SEPARATE bootstrap secret from every other
-	// key in this file: dbkit's key-separation rule applies across modules, not
-	// only within one. The signing key itself is generated once by
-	// pki.Service.EnsurePurpose and PERSISTS in cfg.SQLitePath across restarts,
-	// so this key must stay stable across restarts too.
-	//
-	//nolint:staticcheck // the field name must lowercase to the declared bootstrap key pki.local_key_cipher_key, which Verify compares literally.
-	Local_Key_Cipher_Key []byte `config:"env=APP_PKI_LOCAL_KEY_CIPHER_KEY,derive"`
-}
-
-// hostConfigKeyAuthn carries the two key materials authn declares: the parent
-// and child names spell the declared key paths authn.blind_index_key and
-// authn.pii_cipher_key literally.
-type hostConfigKeyAuthn struct {
-	// Blind_Index_Key names APP_AUTHN_BLIND_INDEX_KEY: the 32-byte HMAC key
-	// authn.WithBlindIndexKey indexes its users.email_index/phone_index columns
-	// with (dbkit.NewBlindIndexer), resolved through the loader's derive path
-	// (explicit 64 hex characters, else the APP_ROOT_KEY derivation, else
-	// DevBlindIndexKey). This key must stay IDENTICAL across restarts or every
-	// already-stored email/phone blind index becomes unfindable, so setting
-	// this variable (or APP_ROOT_KEY, which derives it) and then changing it
-	// has the same operational consequences a real key rotation always has.
-	//
-	//nolint:staticcheck // the field name must lowercase to the declared bootstrap key authn.blind_index_key, which Verify compares literally.
-	Blind_Index_Key []byte `config:"env=APP_AUTHN_BLIND_INDEX_KEY,derive"`
-
-	// PII_Cipher_Key names APP_AUTHN_PII_CIPHER_KEY: the 32-byte AES key that
-	// seals authn's encrypted PII columns (email, phone, TOTP secrets) via
-	// authn.RegisterPIISerializer, resolved through the loader's derive path
-	// (explicit 64 hex characters, else the APP_ROOT_KEY derivation, else
-	// DevPIICipherKey) -- deliberately a SEPARATE secret from every other key
-	// in this file, including the pki key.
-	//
-	//nolint:staticcheck // the field name must lowercase to the declared bootstrap key authn.pii_cipher_key, which Verify compares literally.
-	PII_Cipher_Key []byte `config:"env=APP_AUTHN_PII_CIPHER_KEY,derive"`
-}
-
 // hostConfigDefaults returns the loader target with the defaults the loader
 // falls back to when no source supplies a key (its lowest-priority source).
 // An unset deployment mode is standalone, an unset port is DefaultPort, an
 // unset database path is DefaultSQLitePath, and each of the six key materials
 // starts at its documented, recognizable, NON-SECRET development default (the
-// Dev* constants) -- the value that stands when neither the key's own variable
-// nor APP_ROOT_KEY is set. Every other field's zero value is its documented
-// unset behavior.
+// Dev* constants, through DevPlatformConfig) -- the value that stands when
+// neither the key's own variable nor APP_ROOT_KEY is set. Every other field's
+// zero value is its documented unset behavior.
 func hostConfigDefaults() hostConfig {
 	return hostConfig{
 		DeploymentMode: string(pkgcore.DeploymentModeStandalone),
 		Port:           DefaultPort,
 		DBPath:         DefaultSQLitePath,
-		Config:         hostConfigKeyConfig{Cipher_Key: DevConfigKey},
-		Org:            hostConfigKeyOrg{Invitation_Email_Index_Key: DevOrgIndexKey},
-		Notification:   hostConfigKeyNotification{Contact_Index_Key: DevNotificationIndexKey},
-		Pki:            hostConfigKeyPki{Local_Key_Cipher_Key: DevPKILocalKeyCipherKey},
-		Authn: hostConfigKeyAuthn{
-			Blind_Index_Key: DevBlindIndexKey,
-			PII_Cipher_Key:  DevPIICipherKey,
-		},
+		PlatformConfig: DevPlatformConfig(),
 	}
 }
 
@@ -598,6 +480,13 @@ func hostConfigDefaults() hostConfig {
 // environment through the loader: flags first, then the environment under the
 // APP_ prefix (PORT pinned by name), no config file, the key-material
 // derivation over APP_ROOT_KEY, then hostConfigDefaults.
+//
+// One loader drives two Load calls, the way the engine's own configuration
+// stage does: the host target's own fields (their pins read the spellings
+// above), then the embedded platform declaration as its own target, so its
+// six fields resolve under the declared key paths -- each from the variable
+// the loader derives from its path (config.cipher_key reads
+// APP_CONFIG__CIPHER_KEY), never a host-restated spelling.
 //
 // The two derivation options are this app's whole root-key wiring.
 // WithRootKeyEnv("APP_ROOT_KEY") has the loader read the host's root secret --
@@ -609,30 +498,36 @@ func hostConfigDefaults() hostConfig {
 // variable. WithKeyDerivation(dbkit.DeriveBootstrapKey) installs the platform
 // composition each derive-tagged field's material comes from: the field's
 // dotted key path gets its purpose string at the bootstrap seat
-// (pkgcore.BootstrapKeyPurpose -- which is why the six key-group field names
-// spell the declared key paths literally, the same literals config.Verify
-// compares), and dbkit.DeriveKey turns the root key plus that purpose into the
-// field's 32 bytes.
+// (pkgcore.BootstrapKeyPurpose -- the declaration's field names spell the
+// declared key paths literally, the same literals config.Verify compares), and
+// dbkit.DeriveKey turns the root key plus that purpose into the field's 32
+// bytes.
 //
 // The precedence the loader applies per key is the documented three tiers: an
-// explicitly-set individual variable (e.g. APP_ORG_INDEX_KEY) always wins,
-// over what APP_ROOT_KEY would have derived for that same key, which in turn
-// always wins over the hardcoded development default -- so setting
-// APP_ROOT_KEY alone is the recommended deployment shape (DEPLOY.md documents
-// it), while a deployment that wants fine-grained, independent rotation for
-// one specific key keeps setting that key's own variable instead, and the two
-// compose freely. The trade-off APP_ROOT_KEY inherits from the platform
-// derivation is real: a leaked root key compromises every derived key at once,
-// and rotating it rotates all six materials together; a deployment that can
-// accept neither keeps setting the individual variables.
+// explicitly-set individual variable (e.g. APP_ORG__INVITATION_EMAIL_INDEX_KEY)
+// always wins, over what APP_ROOT_KEY would have derived for that same key,
+// which in turn always wins over the hardcoded development default -- so
+// setting APP_ROOT_KEY alone is the recommended deployment shape (DEPLOY.md
+// documents it), while a deployment that wants fine-grained, independent
+// rotation for one specific key keeps setting that key's own variable instead,
+// and the two compose freely. The trade-off APP_ROOT_KEY inherits from the
+// platform derivation is real: a leaked root key compromises every derived key
+// at once, and rotating it rotates all six materials together; a deployment
+// that can accept neither keeps setting the individual variables.
 func loadHostConfig() (hostConfig, error) {
 	hc := hostConfigDefaults()
-	err := config.New(
+	loader := config.New(
 		config.WithEnvPrefix(envPrefix),
 		config.WithRootKeyEnv(rootKeyEnv),
 		config.WithKeyDerivation(dbkit.DeriveBootstrapKey),
-	).Load(&hc)
-	return hc, err
+	)
+	if err := loader.Load(&hc); err != nil {
+		return hc, err
+	}
+	if err := loader.Load(&hc.PlatformConfig); err != nil {
+		return hc, err
+	}
+	return hc, nil
 }
 
 // ConfigFromEnv resolves ServerConfig from the process environment through the
@@ -654,9 +549,9 @@ func ConfigFromEnv() (ServerConfig, error) {
 // cross-variable rules (the S3 and SMTP completeness pairs, the object-store
 // ambiguity, the Fly-client-IP declaration pair) that a single-variable loader
 // cannot state. Every refusal names the variable an operator must change. The
-// six key materials arrive fully resolved -- the loader decoded an explicit
-// value, derived one from APP_ROOT_KEY, or left the development default
-// standing -- so this transform only carries them over.
+// platform key materials arrive fully resolved -- the loader decoded an
+// explicit value, derived one from APP_ROOT_KEY, or left the development
+// default standing -- so this transform only carries the declaration over.
 //
 // Strings arrive from the loader with "" for both an unset and an explicitly
 // emptied variable -- the same value a direct environment read reports -- so
@@ -693,18 +588,6 @@ func serverConfigFrom(hc hostConfig) (ServerConfig, error) {
 	if failProvisionCount < 0 {
 		return ServerConfig{}, fmt.Errorf("reference-app: APP_FAIL_SELF_SERVICE_PROVISION must not be negative (absent or 0 disables the injection), got %d", failProvisionCount)
 	}
-
-	// The six key materials arrive from the loader already resolved: an
-	// explicit individual variable's hex text was decoded, APP_ROOT_KEY's
-	// derivation filled whatever no explicit value supplied, and the Dev*
-	// struct defaults (hostConfigDefaults) stand for the rest -- see
-	// loadHostConfig's own doc comment for the wiring and the precedence.
-	configKey := hc.Config.Cipher_Key
-	orgIndexKey := hc.Org.Invitation_Email_Index_Key
-	notificationIndexKey := hc.Notification.Contact_Index_Key
-	pkiLocalKeyCipherKey := hc.Pki.Local_Key_Cipher_Key
-	authnBlindIndexKey := hc.Authn.Blind_Index_Key
-	authnPIICipherKey := hc.Authn.PII_Cipher_Key
 
 	// s3Endpoint/s3Bucket/s3AccessKey/s3SecretKey stay empty when unset,
 	// leaving the "objectstore" seam on the Preset's local-directory default;
@@ -800,15 +683,14 @@ func serverConfigFrom(hc hostConfig) (ServerConfig, error) {
 	}
 
 	cfg := ServerConfig{
-		DeploymentMode:        deploymentMode,
-		Port:                  port,
-		SQLitePath:            dbPath,
-		ConfigKey:             configKey,
-		OrgIndexKey:           orgIndexKey,
-		NotificationIndexKey:  notificationIndexKey,
-		PKILocalKeyCipherKey:  pkiLocalKeyCipherKey,
-		AuthnBlindIndexKey:    authnBlindIndexKey,
-		AuthnPIICipherKey:     authnPIICipherKey,
+		DeploymentMode: deploymentMode,
+		Port:           port,
+		SQLitePath:     dbPath,
+		// The platform declaration travels as the loader filled it: every
+		// material is already resolved (an explicit value decoded, the
+		// APP_ROOT_KEY derivation, or the Dev* default -- loadHostConfig's
+		// doc comment has the wiring and the precedence).
+		PlatformConfig:        hc.PlatformConfig,
 		RedisAddr:             hc.RedisAddr,
 		OTLPEndpoint:          hc.OTLPEndpoint,
 		S3Endpoint:            s3Endpoint,
@@ -882,12 +764,12 @@ func splitTrustedProxies(raw string) []string {
 // hostBootstrapKeys lists the bootstrap keys this app owns: the deployment
 // shape, connection addresses, switches and demo rigs of its own assembly. The
 // six key materials the platform modules declare are deliberately not listed
-// here -- they are verified from the live registry instead, so a module adding
-// a key fails this app's boot until its target binds it. APP_ROOT_KEY is
-// absent for a structural reason rather than an omission: it is not a field of
-// the loader target at all, it is the variable loadHostConfig's
-// WithRootKeyEnv option reads inside the same Load (so there is no field for
-// config.Verify to bind).
+// here -- they are verified against the embedded platform declaration instead,
+// so a module adding a key fails this app's boot until one of the two targets
+// binds it. APP_ROOT_KEY is absent for a structural reason rather than an
+// omission: it is not a field of the loader target at all, it is the variable
+// loadHostConfig's WithRootKeyEnv option reads inside the same Load (so there
+// is no field for config.Verify to bind).
 var hostBootstrapKeys = []string{
 	"deploymentmode",
 	"port",
@@ -921,22 +803,30 @@ var hostBootstrapKeys = []string{
 	"failselfserviceprovision",
 }
 
-// verifyBootstrapBinding proves the loader target binds this app's whole
+// verifyBootstrapBinding proves the bootstrap targets bind this app's whole
 // bootstrap surface: every key the composed modules declared on the registry's
-// bootstrap seat maps onto a field, and every key this app owns does too. A
-// field nobody declares and no key reaches is what the target's own leaf count
-// pins (bootstrap_test.go), so the two directions together are the strict
-// correspondence between the target and its surface.
+// bootstrap seat maps onto a field of the host target or of the embedded
+// platform declaration, and every key this app owns maps onto a field of the
+// host target. A field nobody declares and no key reaches is what the targets'
+// own leaf counts pin (bootstrap_test.go), so the two directions together are
+// the strict correspondence between the targets and the surface.
 func verifyBootstrapBinding(reg *pkgcore.Registry) error {
-	declared := reg.Bootstrap.Keys()
-	declaredKeys := make([]string, 0, len(declared))
-	for _, key := range declared {
-		declaredKeys = append(declaredKeys, key.Key)
+	hc := hostConfig{}
+	var unbound []error
+	for _, key := range reg.Bootstrap.Keys() {
+		if config.Verify(&hc, []string{key.Key}) == nil {
+			continue
+		}
+		if config.Verify(&hc.PlatformConfig, []string{key.Key}) == nil {
+			continue
+		}
+		unbound = append(unbound, fmt.Errorf("%w: declared bootstrap key %q maps onto no field of the bootstrap target or of the embedded platform declaration",
+			config.ErrInvalidTarget, key.Key))
 	}
-	if err := config.Verify(&hostConfig{}, declaredKeys); err != nil {
-		return fmt.Errorf("reference-app: the bootstrap target must bind the keys the composed modules declared: %w", err)
+	if len(unbound) > 0 {
+		return fmt.Errorf("reference-app: the bootstrap targets must bind every bootstrap key the composed modules declared: %w", errors.Join(unbound...))
 	}
-	if err := config.Verify(&hostConfig{}, hostBootstrapKeys); err != nil {
+	if err := config.Verify(&hc, hostBootstrapKeys); err != nil {
 		return fmt.Errorf("reference-app: the bootstrap target must bind the host's own bootstrap keys: %w", err)
 	}
 	return nil

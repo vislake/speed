@@ -13,9 +13,10 @@ package flowtests
 // webhook-subscription-CRUD surface (go/integration/api/openapi.yaml,
 // mounted under /api/v1/integration): each test below subscribes through
 // the integration_createWebhookSubscription operation -- the POST
-// internal/app/webhooks.go's createWebhookSubscription helper issues, mounted through
-// the same generic mountModuleRoutes loop every other module's fragment
-// uses, gated by the integration entry of internal/app/demo/demo_subject.go's DemoRouteRules. The whole CRUD
+// internal/app/webhooks.go's createWebhookSubscription helper issues, mounted
+// through the engine's route registration over the registry's route seat
+// exactly like every other module's fragment (chain.Standard wraps the whole
+// mounted set), gated by the integration entry of internal/app/demo/demo_subject.go's DemoRouteRules. The whole CRUD
 // + recent-deliveries surface, driven end to end, lives in
 // webhook_crud_flow_test.go; this file's job is the DELIVERY side, which
 // no CRUD surface exercises.

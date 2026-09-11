@@ -2,14 +2,17 @@ package app
 
 // bootstrap_test.go pins the bootstrap target's shape: the loader key path of
 // every leaf field of hostConfig, and the correspondence between those paths
-// and the bootstrap surface the app binds -- the keys the platform modules
-// declare on the registry's bootstrap seat, plus the host keys the app owns.
+// and the bootstrap surface the app itself binds -- the host keys the app
+// owns. The platform's six key materials are not part of that target: they
+// arrive through the embedded platform declaration (go/app's PlatformConfig,
+// tagged config:"-"), whose own shape go/app's suite pins.
 //
 // The composition-time half of the same correspondence is
-// verifyBootstrapBinding, which runs at every boot against the live registry;
-// this test is the target-side half, so a field added to hostConfig without a
-// key (or a key without a field) fails here even when no boot happens to
-// compose the declaring module.
+// verifyBootstrapBinding, which runs at every boot against the live registry
+// and proves every declared key binds the host target or the embedded
+// declaration; this test is the target-side half, so a field added to
+// hostConfig without a key (or a key without a field) fails here even when no
+// boot happens to compose the declaring module.
 //
 // The file also drives the resolution the target feeds, with hand-built
 // hostConfig values instead of a process environment: serverConfigFrom,
@@ -35,36 +38,22 @@ import (
 	"github.com/vislake/speed/go/pkgcore/config"
 )
 
-// platformDeclaredKeys are the bootstrap keys the platform modules declare on
-// the registry's bootstrap seat and this app's loader target binds: authn's
-// two key materials, org's invitation-address blind-index key, notification's
-// contact-address blind-index key, pki's local-key cipher key and config's
-// cipher key. Each module's own bootstrapKeyDecl is the spelling's source;
-// verifyBootstrapBinding checks this same set against the live registry, so a
-// module-side rename fails the boot rather than silently drifting from this
-// fixture.
-var platformDeclaredKeys = []string{
-	"authn.blind_index_key",
-	"authn.pii_cipher_key",
-	"config.cipher_key",
-	"notification.contact_index_key",
-	"org.invitation_email_index_key",
-	"pki.local_key_cipher_key",
-}
-
 // hostConfigKeyPaths walks hostConfig the way the loader walks a target: each
 // exported field contributes its lowercased name as a key segment, nested
-// structs descend into path segments of their own, and every other type is a
-// leaf. The fields of this target are strings, ints, bools and the five
-// key-group structs, so the walk needs none of the loader's subtler leaf rules
-// (maps, scalar structs, unexported fields); the loader's own describe is the
-// authority for what it will actually fill.
+// structs descend into path segments of their own, every other type is a
+// leaf, and a field carrying the loader's skip option (config:"-") drops out
+// of the walk entirely -- which is how the embedded platform declaration
+// stays out of the host target's key set, exactly as the loader skips it.
+// The host's own fields are strings, ints and bools, so the walk needs none
+// of the loader's subtler leaf rules (maps, scalar structs, unexported
+// fields); the loader's own describe is the authority for what it will
+// actually fill.
 func hostConfigKeyPaths(t *testing.T, typ reflect.Type) []string {
 	t.Helper()
 	var paths []string
 	for i := 0; i < typ.NumField(); i++ {
 		field := typ.Field(i)
-		if !field.IsExported() {
+		if !field.IsExported() || skippedByLoader(field) {
 			continue
 		}
 		name := strings.ToLower(field.Name)
@@ -79,13 +68,24 @@ func hostConfigKeyPaths(t *testing.T, typ reflect.Type) []string {
 	return paths
 }
 
+// skippedByLoader reports whether a field carries the loader's skip option
+// (config:"-"), the tag the host target uses on the embedded platform
+// declaration: the loader's walk never descends into a skipped field, and
+// neither do the walks below.
+func skippedByLoader(field reflect.StructField) bool {
+	return slices.Contains(strings.Split(field.Tag.Get("config"), ","), "-")
+}
+
 // TestHostConfigBindsExactlyItsBootstrapSurface pins the strict equality the
-// binding proof rests on: the target's leaf key set is exactly the host keys
-// the app owns plus the keys the platform modules declare -- no key without a
-// field (both Verify calls at boot prove that direction too) and no field
-// without a key (this half, which no boot can see).
+// binding proof rests on: the host target's own leaf key set is exactly the
+// host keys the app owns -- no key without a field (the Verify call at boot
+// proves that direction too) and no field without a key (this half, which no
+// boot can see). The platform declaration is not part of this set: the skip
+// tag keeps it out of the host walk, and the boot's binding verification
+// checks the declared keys against the host target and the declaration
+// together.
 func TestHostConfigBindsExactlyItsBootstrapSurface(t *testing.T) {
-	want := append(append([]string{}, hostBootstrapKeys...), platformDeclaredKeys...)
+	want := append([]string{}, hostBootstrapKeys...)
 	sort.Strings(want)
 
 	got := hostConfigKeyPaths(t, reflect.TypeOf(hostConfig{}))
@@ -97,9 +97,13 @@ func TestHostConfigBindsExactlyItsBootstrapSurface(t *testing.T) {
 }
 
 // TestHostConfigPinsEveryLeafField pins the other half of the target's shape:
-// every leaf field states the exact variable it reads, so no field can fall
-// back to the loader's prefix derivation -- which spells the app's flat,
-// single-underscored variable names differently -- without failing here.
+// every one of the host's own leaf fields states the exact variable it reads,
+// so no field can fall back to the loader's prefix derivation -- which spells
+// the app's flat, single-underscored variable names differently -- without
+// failing here. The embedded platform declaration carries no pins by design:
+// the loader reads each of its fields from the variable derived from the
+// declared key path, and the skip tag keeps it out of this walk as it keeps
+// it out of the loader's.
 func TestHostConfigPinsEveryLeafField(t *testing.T) {
 	typ := reflect.TypeOf(hostConfig{})
 	var unpinned []string
@@ -107,7 +111,7 @@ func TestHostConfigPinsEveryLeafField(t *testing.T) {
 	walk = func(t2 reflect.Type, prefix string) {
 		for i := 0; i < t2.NumField(); i++ {
 			field := t2.Field(i)
-			if !field.IsExported() {
+			if !field.IsExported() || skippedByLoader(field) {
 				continue
 			}
 			name := prefix + strings.ToLower(field.Name)
@@ -137,12 +141,12 @@ func TestHostConfigPinsEveryLeafField(t *testing.T) {
 func TestConfigFromEnv_RefusesMalformedKeyMaterial(t *testing.T) {
 	t.Run("an individual key's malformed hex text", func(t *testing.T) {
 		for _, envName := range []string{
-			"APP_CONFIG_KEY",
-			"APP_ORG_INDEX_KEY",
-			"APP_NOTIFICATION_INDEX_KEY",
-			"APP_PKI_LOCAL_KEY_CIPHER_KEY",
-			"APP_AUTHN_BLIND_INDEX_KEY",
-			"APP_AUTHN_PII_CIPHER_KEY",
+			"APP_CONFIG__CIPHER_KEY",
+			"APP_ORG__INVITATION_EMAIL_INDEX_KEY",
+			"APP_NOTIFICATION__CONTACT_INDEX_KEY",
+			"APP_PKI__LOCAL_KEY_CIPHER_KEY",
+			"APP_AUTHN__BLIND_INDEX_KEY",
+			"APP_AUTHN__PII_CIPHER_KEY",
 		} {
 			t.Run(envName, func(t *testing.T) {
 				testutil.ClearBootstrapEnv(t)
@@ -199,12 +203,12 @@ func TestLoadHostConfig_ResolvesKeyMaterialAndKeepsTheDevDefaultsIntact(t *testi
 	testutil.ClearBootstrapEnv(t)
 
 	defaults := map[string][]byte{
-		"APP_CONFIG_KEY":               DevConfigKey,
-		"APP_ORG_INDEX_KEY":            DevOrgIndexKey,
-		"APP_NOTIFICATION_INDEX_KEY":   DevNotificationIndexKey,
-		"APP_PKI_LOCAL_KEY_CIPHER_KEY": DevPKILocalKeyCipherKey,
-		"APP_AUTHN_BLIND_INDEX_KEY":    DevBlindIndexKey,
-		"APP_AUTHN_PII_CIPHER_KEY":     DevPIICipherKey,
+		"APP_CONFIG__CIPHER_KEY":              DevConfigKey,
+		"APP_ORG__INVITATION_EMAIL_INDEX_KEY": DevOrgIndexKey,
+		"APP_NOTIFICATION__CONTACT_INDEX_KEY": DevNotificationIndexKey,
+		"APP_PKI__LOCAL_KEY_CIPHER_KEY":       DevPKILocalKeyCipherKey,
+		"APP_AUTHN__BLIND_INDEX_KEY":          DevBlindIndexKey,
+		"APP_AUTHN__PII_CIPHER_KEY":           DevPIICipherKey,
 	}
 	before := make(map[string][]byte, len(defaults))
 	for name, key := range defaults {
@@ -235,7 +239,7 @@ func TestLoadHostConfig_ResolvesKeyMaterialAndKeepsTheDevDefaultsIntact(t *testi
 		"config.cipher_key":              hc.Config.Cipher_Key,
 		"org.invitation_email_index_key": hc.Org.Invitation_Email_Index_Key,
 		"notification.contact_index_key": hc.Notification.Contact_Index_Key,
-		"pki.local_key_cipher_key":       hc.Pki.Local_Key_Cipher_Key,
+		"pki.local_key_cipher_key":       hc.PKI.Local_Key_Cipher_Key,
 		"authn.blind_index_key":          hc.Authn.Blind_Index_Key,
 		"authn.pii_cipher_key":           hc.Authn.PII_Cipher_Key,
 	} {
@@ -253,8 +257,8 @@ func TestLoadHostConfig_ResolvesKeyMaterialAndKeepsTheDevDefaultsIntact(t *testi
 	}
 
 	// An explicit individual variable wins over the derivation.
-	explicit := sha256.Sum256([]byte("TestLoadHostConfig explicit APP_CONFIG_KEY"))
-	t.Setenv("APP_CONFIG_KEY", hex.EncodeToString(explicit[:]))
+	explicit := sha256.Sum256([]byte("TestLoadHostConfig explicit APP_CONFIG__CIPHER_KEY"))
+	t.Setenv("APP_CONFIG__CIPHER_KEY", hex.EncodeToString(explicit[:]))
 	hc, err = loadHostConfig()
 	if err != nil {
 		t.Fatalf("loadHostConfig with an explicit override: %v", err)
@@ -267,7 +271,7 @@ func TestLoadHostConfig_ResolvesKeyMaterialAndKeepsTheDevDefaultsIntact(t *testi
 	// With the root key and the override emptied, every material falls back to
 	// its development default.
 	t.Setenv("APP_ROOT_KEY", "")
-	t.Setenv("APP_CONFIG_KEY", "")
+	t.Setenv("APP_CONFIG__CIPHER_KEY", "")
 	hc, err = loadHostConfig()
 	if err != nil {
 		t.Fatalf("loadHostConfig with nothing set: %v", err)
@@ -468,10 +472,11 @@ func TestServerConfigFrom_CompleteSMTPCarriesTheTargetWithoutBuildingAMailer(t *
 }
 
 // TestVerifyBootstrapBinding pins both directions of the boot-time proof: a
-// registry whose declared keys all map onto the target passes, a declared key
-// with no matching field fails naming that key, and a host key the target
-// does not bind fails too -- the drift an edit to hostBootstrapKeys without a
-// matching field would introduce.
+// registry whose declared keys all map onto the host target or the embedded
+// platform declaration passes (the two keys below bind the declaration), a
+// declared key with no matching field fails naming that key, and a host key
+// the target does not bind fails too -- the drift an edit to
+// hostBootstrapKeys without a matching field would introduce.
 func TestVerifyBootstrapBinding(t *testing.T) {
 	registry := func(declared ...string) *pkgcore.Registry {
 		reg := pkgcore.NewRegistry(pkgcore.NewMemoryEventBus(), pkgcore.NewMemoryKVStore(), pkgcore.NewConsoleMailer())

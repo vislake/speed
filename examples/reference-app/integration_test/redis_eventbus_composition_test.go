@@ -392,7 +392,7 @@ func TestServer_RealRedisEventBusComposition_NotesAuditEventCrossesProcesses(t *
 	// The child's environment: the ambient environment, scrubbed of every
 	// APP_* variable and PORT (whose ambient values must not leak into
 	// the subprocess), then the explicit configuration for this run.
-	// APP_CONFIG_KEY="" selects the documented dev default key, and
+	// APP_CONFIG__CIPHER_KEY="" selects the documented dev default key, and
 	// APP_DB_PATH points at a fresh file in this test's own temp
 	// directory, so the test can open a second connection to the same
 	// SQLite file afterwards.
@@ -412,7 +412,7 @@ func TestServer_RealRedisEventBusComposition_NotesAuditEventCrossesProcesses(t *
 		"APP_DEPLOYMENT_MODE=standalone",
 		"PORT="+strconv.Itoa(port),
 		"APP_DB_PATH="+dbPath,
-		"APP_CONFIG_KEY=",
+		"APP_CONFIG__CIPHER_KEY=",
 		"APP_REDIS_ADDR="+redisAddr,
 		"APP_DEMO_USERS_PASSWORD="+demoUsersPassword,
 	)

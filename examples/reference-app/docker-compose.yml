@@ -30,8 +30,9 @@
 # file win, environment maps merge key-by-key) is the idiomatic shape for
 # "same service, different composition" rather than "different services".
 #
-# Real deployments must never lift APP_CONFIG_KEY/APP_ORG_INDEX_KEY/
-# APP_NOTIFICATION_INDEX_KEY from here or from .env.example -- see the
+# Real deployments must never lift APP_CONFIG__CIPHER_KEY/
+# APP_ORG__INVITATION_EMAIL_INDEX_KEY/APP_NOTIFICATION__CONTACT_INDEX_KEY
+# from here or from .env.example -- see the
 # comment block on those three keys below.
 
 services:
@@ -81,8 +82,9 @@ services:
       # to empty (or delete this line) to skip that seed.
       APP_DEMO_PLATFORM_STAFF_PASSWORD: local-admin-demo-password
       #
-      # APP_CONFIG_KEY / APP_ORG_INDEX_KEY / APP_NOTIFICATION_INDEX_KEY
-      # are DELIBERATELY UNSET here: internal/app/server.go's own ConfigFromEnv
+      # APP_CONFIG__CIPHER_KEY / APP_ORG__INVITATION_EMAIL_INDEX_KEY /
+      # APP_NOTIFICATION__CONTACT_INDEX_KEY
+      # are DELIBERATELY UNSET here: internal/app/bootstrap.go's own ConfigFromEnv
       # falls back to DevConfigKey/DevOrgIndexKey/DevNotificationIndexKey --
       # fixed, non-secret, already-committed-and-documented byte sequences
       # meant for exactly this (zero-setup local development and demos),
@@ -93,9 +95,9 @@ services:
       #   7619d61c0a55448ac7c2f9dc631fd66dada34fee697d580a6ff191208de8f776
       # Generate your own the same way for anything beyond a disposable
       # local demo, and set it here instead of leaving these three unset:
-      #   APP_CONFIG_KEY: <64 hex chars>
-      #   APP_ORG_INDEX_KEY: <64 hex chars, DIFFERENT from the above>
-      #   APP_NOTIFICATION_INDEX_KEY: <64 hex chars, DIFFERENT from both>
+      #   APP_CONFIG__CIPHER_KEY: <64 hex chars>
+      #   APP_ORG__INVITATION_EMAIL_INDEX_KEY: <64 hex chars, DIFFERENT from the above>
+      #   APP_NOTIFICATION__CONTACT_INDEX_KEY: <64 hex chars, DIFFERENT from both>
       # Never commit real values for any of the three to this file.
     healthcheck:
       # Inherited from the image's own HEALTHCHECK (Dockerfile) -- restated

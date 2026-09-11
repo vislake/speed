@@ -36,30 +36,23 @@ const testPassword = "a perfectly fine passphrase"
 // the same reference BuildServer itself wires (and attaches to org) so a
 // test's grant is visible to the running server.
 //
-// NotificationIndexKey is set because every boot wires the notification
-// module's two contact indexers from the struct field directly -- the
-// APP_NOTIFICATION_INDEX_KEY environment default only exists on the
-// ConfigFromEnv path, which this helper never takes -- and an empty key
-// fails the boot before the first request. PKILocalKeyCipherKey,
-// AuthnBlindIndexKey and AuthnPIICipherKey are set for the identical
-// reason: BuildServer reads all three straight off cfg (APP_ROOT_KEY's
-// derivation and each key's own individual env var both live in
-// ConfigFromEnv, which this helper bypasses entirely), so an empty value
-// here fails the boot the same way an empty ConfigKey would.
+// PlatformConfig carries the documented development key materials
+// (app.DevPlatformConfig) because every boot consumes the six materials
+// straight off cfg -- the engine's platform cipher, the org, notification
+// and authn blind indexers, and the authn PII and pki local-key ciphers are
+// all built from these values -- and a missing material fails the boot
+// before the first request. The environment resolution (each key's own
+// variable, or APP_ROOT_KEY's derivation) lives on the ConfigFromEnv path,
+// which this helper bypasses entirely.
 func testConfig(t *testing.T) app.ServerConfig {
 	t.Helper()
 	return app.ServerConfig{
-		DeploymentMode:       pkgcore.DeploymentModeStandalone,
-		Port:                 "0",
-		SQLitePath:           filepath.Join(t.TempDir(), "reference-app-test.db"),
-		ConfigKey:            app.DevConfigKey,
-		OrgIndexKey:          app.DevOrgIndexKey,
-		NotificationIndexKey: app.DevNotificationIndexKey,
-		PKILocalKeyCipherKey: app.DevPKILocalKeyCipherKey,
-		AuthnBlindIndexKey:   app.DevBlindIndexKey,
-		AuthnPIICipherKey:    app.DevPIICipherKey,
-		HostTenants:          demo.DemoHostTenants,
-		Memberships:          app.NewSignInMemberships(),
+		DeploymentMode: pkgcore.DeploymentModeStandalone,
+		Port:           "0",
+		SQLitePath:     filepath.Join(t.TempDir(), "reference-app-test.db"),
+		PlatformConfig: app.DevPlatformConfig(),
+		HostTenants:    demo.DemoHostTenants,
+		Memberships:    app.NewSignInMemberships(),
 	}
 }
 

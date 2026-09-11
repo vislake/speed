@@ -30,6 +30,7 @@ import (
 	"github.com/vislake/speed/examples/reference-app/internal/app/demo"
 	"github.com/vislake/speed/examples/reference-app/internal/testutil"
 
+	speedapp "github.com/vislake/speed/go/app"
 	"github.com/vislake/speed/go/dbkit"
 	"github.com/vislake/speed/go/pkgcore"
 )
@@ -83,27 +84,27 @@ func legacyConfigFromEnv() (app.ServerConfig, error) {
 		rootKey = decoded
 	}
 
-	configKey, err := legacyResolveKey(rootKey, "config.cipher_key", "APP_CONFIG_KEY", app.DevConfigKey)
+	configKey, err := legacyResolveKey(rootKey, "config.cipher_key", "APP_CONFIG__CIPHER_KEY", app.DevConfigKey)
 	if err != nil {
 		return app.ServerConfig{}, err
 	}
-	orgIndexKey, err := legacyResolveKey(rootKey, "org.invitation_email_index_key", "APP_ORG_INDEX_KEY", app.DevOrgIndexKey)
+	orgIndexKey, err := legacyResolveKey(rootKey, "org.invitation_email_index_key", "APP_ORG__INVITATION_EMAIL_INDEX_KEY", app.DevOrgIndexKey)
 	if err != nil {
 		return app.ServerConfig{}, err
 	}
-	notificationIndexKey, err := legacyResolveKey(rootKey, "notification.contact_index_key", "APP_NOTIFICATION_INDEX_KEY", app.DevNotificationIndexKey)
+	notificationIndexKey, err := legacyResolveKey(rootKey, "notification.contact_index_key", "APP_NOTIFICATION__CONTACT_INDEX_KEY", app.DevNotificationIndexKey)
 	if err != nil {
 		return app.ServerConfig{}, err
 	}
-	pkiLocalKeyCipherKey, err := legacyResolveKey(rootKey, "pki.local_key_cipher_key", "APP_PKI_LOCAL_KEY_CIPHER_KEY", app.DevPKILocalKeyCipherKey)
+	pkiLocalKeyCipherKey, err := legacyResolveKey(rootKey, "pki.local_key_cipher_key", "APP_PKI__LOCAL_KEY_CIPHER_KEY", app.DevPKILocalKeyCipherKey)
 	if err != nil {
 		return app.ServerConfig{}, err
 	}
-	authnBlindIndexKey, err := legacyResolveKey(rootKey, "authn.blind_index_key", "APP_AUTHN_BLIND_INDEX_KEY", app.DevBlindIndexKey)
+	authnBlindIndexKey, err := legacyResolveKey(rootKey, "authn.blind_index_key", "APP_AUTHN__BLIND_INDEX_KEY", app.DevBlindIndexKey)
 	if err != nil {
 		return app.ServerConfig{}, err
 	}
-	authnPIICipherKey, err := legacyResolveKey(rootKey, "authn.pii_cipher_key", "APP_AUTHN_PII_CIPHER_KEY", app.DevPIICipherKey)
+	authnPIICipherKey, err := legacyResolveKey(rootKey, "authn.pii_cipher_key", "APP_AUTHN__PII_CIPHER_KEY", app.DevPIICipherKey)
 	if err != nil {
 		return app.ServerConfig{}, err
 	}
@@ -164,15 +165,19 @@ func legacyConfigFromEnv() (app.ServerConfig, error) {
 	}
 
 	cfg := app.ServerConfig{
-		DeploymentMode:            deploymentMode,
-		Port:                      port,
-		SQLitePath:                dbPath,
-		ConfigKey:                 configKey,
-		OrgIndexKey:               orgIndexKey,
-		NotificationIndexKey:      notificationIndexKey,
-		PKILocalKeyCipherKey:      pkiLocalKeyCipherKey,
-		AuthnBlindIndexKey:        authnBlindIndexKey,
-		AuthnPIICipherKey:         authnPIICipherKey,
+		DeploymentMode: deploymentMode,
+		Port:           port,
+		SQLitePath:     dbPath,
+		PlatformConfig: speedapp.PlatformConfig{
+			Authn: speedapp.PlatformAuthnKeyMaterial{
+				Blind_Index_Key: authnBlindIndexKey,
+				PII_Cipher_Key:  authnPIICipherKey,
+			},
+			Config:       speedapp.PlatformConfigKeyMaterial{Cipher_Key: configKey},
+			Notification: speedapp.PlatformNotificationKeyMaterial{Contact_Index_Key: notificationIndexKey},
+			Org:          speedapp.PlatformOrgKeyMaterial{Invitation_Email_Index_Key: orgIndexKey},
+			PKI:          speedapp.PlatformPKIKeyMaterial{Local_Key_Cipher_Key: pkiLocalKeyCipherKey},
+		},
 		RedisAddr:                 os.Getenv("APP_REDIS_ADDR"),
 		OTLPEndpoint:              os.Getenv("APP_OTLP_ENDPOINT"),
 		S3Endpoint:                s3Endpoint,
@@ -211,9 +216,11 @@ func legacyConfigFromEnv() (app.ServerConfig, error) {
 // helpers' validation and precedence exactly, so the oracle's refusals land
 // where production's do. The oracle derives through the platform composition
 // (pkgcore.BootstrapKeyPurpose over the declared key path, then
-// dbkit.DeriveKey), spelled independently of production's own call sites, so
-// a path literal the two sides disagree on shows up as an equivalence failure
-// rather than passing on both sides of a shared spelling.
+// dbkit.DeriveKey) and spells each key's variable name itself -- production
+// reads the name its loader derives from the embedded declaration's key path
+// -- so a path or a spelling the two sides disagree on shows up as an
+// equivalence failure rather than passing on both sides of a shared
+// restatement.
 func legacyParseHexKeyEnv(envName, encoded string) ([]byte, error) {
 	if len(encoded) != 64 {
 		return nil, fmt.Errorf("reference-app: %s must hold 64 hex characters (a 32-byte key), got %d", envName, len(encoded))
@@ -323,9 +330,9 @@ func equivalenceEnvCases() []equivalenceEnvCase {
 				"APP_OBJECT_STORE_ROOT": "", "APP_SMTP_HOST": "", "APP_SMTP_USERNAME": "",
 				"APP_SMTP_PASSWORD": "", "APP_SMS_GATEWAY_URL": "",
 				"APP_S3_BUCKET_LOOKUP": "",
-				"APP_ROOT_KEY":         "", "APP_CONFIG_KEY": "", "APP_ORG_INDEX_KEY": "",
-				"APP_NOTIFICATION_INDEX_KEY": "", "APP_PKI_LOCAL_KEY_CIPHER_KEY": "",
-				"APP_AUTHN_BLIND_INDEX_KEY": "", "APP_AUTHN_PII_CIPHER_KEY": "",
+				"APP_ROOT_KEY":         "", "APP_CONFIG__CIPHER_KEY": "", "APP_ORG__INVITATION_EMAIL_INDEX_KEY": "",
+				"APP_NOTIFICATION__CONTACT_INDEX_KEY": "", "APP_PKI__LOCAL_KEY_CIPHER_KEY": "",
+				"APP_AUTHN__BLIND_INDEX_KEY": "", "APP_AUTHN__PII_CIPHER_KEY": "",
 				"APP_DEMO_USERS_PASSWORD": "", "APP_DEMO_PLATFORM_STAFF_PASSWORD": "",
 				"APP_AI_GATEWAY_IMAGE_BASE_URL": "", "APP_AI_GATEWAY_IMAGE_API_KEY": "",
 				"APP_DISABLE_QUEUE_WORKER": "", "APP_DISABLE_DEMO_USER_HEADER": "",
@@ -367,9 +374,9 @@ func equivalenceEnvCases() []equivalenceEnvCase {
 		{
 			name: "an individual key overrides its derivation",
 			env: map[string]string{
-				"APP_ROOT_KEY":        rootSecret,
-				"APP_CONFIG_KEY":      "0f0e0d0c0b0a090807060504030201001f1e1d1c1b1a19181716151413121110",
-				"APP_DEPLOYMENT_MODE": "standalone",
+				"APP_ROOT_KEY":           rootSecret,
+				"APP_CONFIG__CIPHER_KEY": "0f0e0d0c0b0a090807060504030201001f1e1d1c1b1a19181716151413121110",
+				"APP_DEPLOYMENT_MODE":    "standalone",
 			},
 		},
 		{
@@ -379,8 +386,8 @@ func equivalenceEnvCases() []equivalenceEnvCase {
 		},
 		{
 			name:    "a malformed individual key refuses",
-			env:     map[string]string{"APP_ORG_INDEX_KEY": "not-64-hex-chars"},
-			wantErr: "APP_ORG_INDEX_KEY",
+			env:     map[string]string{"APP_ORG__INVITATION_EMAIL_INDEX_KEY": "not-64-hex-chars"},
+			wantErr: "APP_ORG__INVITATION_EMAIL_INDEX_KEY",
 		},
 		{
 			name:    "a malformed root key refuses",
@@ -557,12 +564,12 @@ func comparableValues(c app.ServerConfig) serverConfigValues {
 		deploymentMode:            c.DeploymentMode,
 		port:                      c.Port,
 		sqlitePath:                c.SQLitePath,
-		configKey:                 string(c.ConfigKey),
-		orgIndexKey:               string(c.OrgIndexKey),
-		notificationIndexKey:      string(c.NotificationIndexKey),
-		pkiLocalKeyCipherKey:      string(c.PKILocalKeyCipherKey),
-		authnBlindIndexKey:        string(c.AuthnBlindIndexKey),
-		authnPIICipherKey:         string(c.AuthnPIICipherKey),
+		configKey:                 string(c.Config.Cipher_Key),
+		orgIndexKey:               string(c.Org.Invitation_Email_Index_Key),
+		notificationIndexKey:      string(c.Notification.Contact_Index_Key),
+		pkiLocalKeyCipherKey:      string(c.PKI.Local_Key_Cipher_Key),
+		authnBlindIndexKey:        string(c.Authn.Blind_Index_Key),
+		authnPIICipherKey:         string(c.Authn.PII_Cipher_Key),
 		redisAddr:                 c.RedisAddr,
 		otlpEndpoint:              c.OTLPEndpoint,
 		s3Endpoint:                c.S3Endpoint,
@@ -668,7 +675,7 @@ func TestLegacyProvisionFailureInjector_MatchesTheResolvedHook(t *testing.T) {
 			t.Fatalf("attempt %d (%s): resolved hook err=%v, oracle err=%v", i, account, gotErr, wantErr)
 		}
 	}
-	if !bytes.Equal(cfg.ConfigKey, app.DevConfigKey) {
-		t.Fatalf("ConfigKey = %x, want the dev default %x", cfg.ConfigKey, app.DevConfigKey)
+	if !bytes.Equal(cfg.Config.Cipher_Key, app.DevConfigKey) {
+		t.Fatalf("Config.Cipher_Key = %x, want the dev default %x", cfg.Config.Cipher_Key, app.DevConfigKey)
 	}
 }

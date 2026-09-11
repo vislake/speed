@@ -95,7 +95,7 @@ const (
 
 // ServerConfig is main.go's own bootstrap wiring configuration -- the
 // values a process must know before anything else can start (deployment
-// mode, port, database path, the config master key, the optional Redis
+// mode, port, database path, the platform key materials, the optional Redis
 // address, the demo host map). It is a plain struct resolved from the
 // process environment by ConfigFromEnv's loader-driven bootstrap
 // (bootstrap.go), NOT the dynamic configuration the config
@@ -105,27 +105,24 @@ const (
 // dynamic configuration" -- it is main.go's own wiring, which never goes
 // through Module.Register either.
 type ServerConfig struct {
-	DeploymentMode       pkgcore.DeploymentMode
-	Port                 string
-	SQLitePath           string
-	ConfigKey            []byte
-	OrgIndexKey          []byte
-	NotificationIndexKey []byte
+	// PlatformConfig carries the six platform key materials the composed
+	// modules declare, as go/app's normative declaration (PlatformConfig):
+	// authn's blind-index and PII cipher keys, config's cipher key,
+	// notification's contact-index key, org's invitation-email index key
+	// and pki's local-key cipher key. ConfigFromEnv resolves them through
+	// the loader -- each key reads its own variable (the loader's
+	// derivation from the declared key path, so config.cipher_key is
+	// APP_CONFIG__CIPHER_KEY), APP_ROOT_KEY's derivation, or the
+	// documented development default -- and BuildServer hands the value
+	// over as the engine's platform target. Embedding the declaration is
+	// what keeps the six keys declared once, by the platform itself: a
+	// platform key added later arrives through this struct, never through
+	// a restatement here.
+	speedapp.PlatformConfig
 
-	// PKILocalKeyCipherKey, AuthnBlindIndexKey and AuthnPIICipherKey are
-	// the three key materials whose environment overrides arrive through
-	// APP_PKI_LOCAL_KEY_CIPHER_KEY, APP_AUTHN_BLIND_INDEX_KEY and
-	// APP_AUTHN_PII_CIPHER_KEY -- see the Authn and Pki fields' own doc
-	// comments (bootstrap.go) for what each
-	// protects and why each is a separate secret.
-	// ConfigFromEnv resolves all six key fields on this struct (these
-	// three plus ConfigKey/OrgIndexKey/NotificationIndexKey above) through
-	// the same three-tier precedence: an explicitly-set individual
-	// environment variable wins over a APP_ROOT_KEY derivation, which
-	// wins over the hardcoded development default.
-	PKILocalKeyCipherKey []byte
-	AuthnBlindIndexKey   []byte
-	AuthnPIICipherKey    []byte
+	DeploymentMode pkgcore.DeploymentMode
+	Port           string
+	SQLitePath     string
 
 	RedisAddr   string
 	HostTenants map[string]pkgcore.TenantID
@@ -487,12 +484,13 @@ type ServerConfig struct {
 type serverBuild struct {
 	cfg ServerConfig
 
-	// hostConfig and platformConfig are the engine's configuration targets:
-	// the loader target whose shape the bootstrap-binding verification
-	// checks, and the platform key material the engine builds its platform
-	// cipher from (mapped from the resolved ServerConfig in newServerBuild).
-	hostConfig     hostConfig
-	platformConfig speedapp.PlatformConfig
+	// hostConfig is the engine's configuration target: the loader target
+	// whose shape the bootstrap-binding verification checks, with the
+	// platform key materials pre-filled from the resolved ServerConfig
+	// (newServerBuild) so the engine's own load keeps them standing when no
+	// key environment supplies material (the loader only writes what a
+	// source actually supplied).
+	hostConfig hostConfig
 
 	bus             pkgcore.EventBus
 	busCapabilities pkgcore.Capability
@@ -540,36 +538,15 @@ type serverBuild struct {
 }
 
 // newServerBuild returns the build state one BuildServer or Run call
-// assembles from: the resolved configuration, the platform key material the
-// engine's cipher is built from (mapped one-to-one onto the platform
-// declaration, so the six key paths are never restated), and the app's own
-// loader target -- the shape the engine's binding verification checks
-// against the keys the composed modules declared.
+// assembles from: the resolved configuration, and the app's own loader
+// target -- the shape the engine's binding verification checks against the
+// keys the composed modules declared -- pre-filled with the resolved
+// platform key materials, so the engine's configuration pass reads over the
+// same target shape and the same values the host already resolved.
 func newServerBuild(cfg ServerConfig) *serverBuild {
-	return &serverBuild{
-		cfg:            cfg,
-		platformConfig: platformKeyMaterial(cfg),
-	}
-}
-
-// platformKeyMaterial maps the resolved ServerConfig's six key materials
-// onto the engine's platform declaration. The host resolves the materials
-// itself (ConfigFromEnv, or a test's own ServerConfig), so the declaration
-// the engine consumes carries the resolved values; the engine's own
-// configuration pass re-resolves the same environment over the same target
-// shape, which in a real boot derives the identical material and in a test
-// with no key environment leaves the mapped values standing.
-func platformKeyMaterial(cfg ServerConfig) speedapp.PlatformConfig {
-	return speedapp.PlatformConfig{
-		Authn: speedapp.PlatformAuthnKeyMaterial{
-			Blind_Index_Key: cfg.AuthnBlindIndexKey,
-			PII_Cipher_Key:  cfg.AuthnPIICipherKey,
-		},
-		Config:       speedapp.PlatformConfigKeyMaterial{Cipher_Key: cfg.ConfigKey},
-		Notification: speedapp.PlatformNotificationKeyMaterial{Contact_Index_Key: cfg.NotificationIndexKey},
-		Org:          speedapp.PlatformOrgKeyMaterial{Invitation_Email_Index_Key: cfg.OrgIndexKey},
-		PKI:          speedapp.PlatformPKIKeyMaterial{Local_Key_Cipher_Key: cfg.PKILocalKeyCipherKey},
-	}
+	b := &serverBuild{cfg: cfg}
+	b.hostConfig.PlatformConfig = cfg.PlatformConfig
+	return b
 }
 
 // BuildServer assembles the reference app through the application engine and
@@ -679,7 +656,7 @@ func (b *serverBuild) options() []speedapp.Option {
 
 	opts := []speedapp.Option{
 		speedapp.WithConfig(
-			speedapp.ConfigSpec{Host: &b.hostConfig, Platform: &b.platformConfig},
+			speedapp.ConfigSpec{Host: &b.hostConfig, Platform: &b.hostConfig.PlatformConfig},
 			speedapp.ConfigEnvPrefix(envPrefix),
 			speedapp.ConfigRootKeyEnv(rootKeyEnv),
 			speedapp.ConfigKeyDerivation(dbkit.DeriveBootstrapKey),

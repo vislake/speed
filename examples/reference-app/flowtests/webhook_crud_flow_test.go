@@ -6,9 +6,11 @@ package flowtests
 // mandatory-first-consumer proof). It
 // drives the module's own spec-generated HTTP surface --
 // go/integration/api/openapi.yaml's six operations under
-// /api/v1/integration/webhooks, mounted through internal/app/server.go's integrationModule
-// wiring and the same generic mountModuleRoutes loop every other module's
-// fragment uses, gated by the integration entry of internal/app/demo/demo_subject.go's
+// /api/v1/integration/webhooks, served through internal/app/modules.go's
+// integrationModule wiring and the engine's route registration over the
+// registry's route seat exactly like every other module's fragment
+// (chain.Standard wraps the whole mounted set),
+// gated by the integration entry of internal/app/demo/demo_subject.go's
 // DemoRouteRules, whose sub-path selector chooses integration:webhook:read for reads and
 // integration:webhook:manage for everything else -- through the composed
 // HTTP stack: create (capturing the raw signing secret, shown exactly once),

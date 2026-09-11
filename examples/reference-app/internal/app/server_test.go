@@ -1,42 +1,8 @@
 package app
 
 import (
-	"bytes"
 	"testing"
 )
-
-// TestPlatformKeyMaterial_MapsEveryKey pins the ServerConfig-to-platform
-// mapping: each of the six resolved materials lands on the declaration field
-// whose key path the modules declare, so the engine's cipher and the
-// binding verification run against the values this host resolved.
-func TestPlatformKeyMaterial_MapsEveryKey(t *testing.T) {
-	cfg := ServerConfig{
-		ConfigKey:            bytes.Repeat([]byte{0x11}, 32),
-		OrgIndexKey:          bytes.Repeat([]byte{0x22}, 32),
-		NotificationIndexKey: bytes.Repeat([]byte{0x33}, 32),
-		PKILocalKeyCipherKey: bytes.Repeat([]byte{0x44}, 32),
-		AuthnBlindIndexKey:   bytes.Repeat([]byte{0x55}, 32),
-		AuthnPIICipherKey:    bytes.Repeat([]byte{0x66}, 32),
-	}
-
-	platform := platformKeyMaterial(cfg)
-	for _, tc := range []struct {
-		key  string
-		got  []byte
-		want []byte
-	}{
-		{"config.cipher_key", platform.Config.Cipher_Key, cfg.ConfigKey},
-		{"org.invitation_email_index_key", platform.Org.Invitation_Email_Index_Key, cfg.OrgIndexKey},
-		{"notification.contact_index_key", platform.Notification.Contact_Index_Key, cfg.NotificationIndexKey},
-		{"pki.local_key_cipher_key", platform.PKI.Local_Key_Cipher_Key, cfg.PKILocalKeyCipherKey},
-		{"authn.blind_index_key", platform.Authn.Blind_Index_Key, cfg.AuthnBlindIndexKey},
-		{"authn.pii_cipher_key", platform.Authn.PII_Cipher_Key, cfg.AuthnPIICipherKey},
-	} {
-		if !bytes.Equal(tc.got, tc.want) {
-			t.Errorf("platform material %s = %x, want the ServerConfig value %x", tc.key, tc.got, tc.want)
-		}
-	}
-}
 
 // TestObservabilitySpec pins the hand-over the engine's Run initializes
 // from: the fixed service name, and the resolved OTLP endpoint carried

@@ -95,7 +95,7 @@ func OrgSubtreeResolverFor(scope org.Scope) rbac.SubtreeResolverFunc {
 func (b *serverBuild) registerEncryptedColumns(_ context.Context, cipher *dbkit.Cipher) error {
 	// authn's own PII columns (email, phone, TOTP secrets) have their own
 	// cipher over the authn.pii_cipher_key material.
-	piiCipher, err := dbkit.NewCipher(b.cfg.AuthnPIICipherKey)
+	piiCipher, err := dbkit.NewCipher(b.cfg.Authn.PII_Cipher_Key)
 	if err != nil {
 		return fmt.Errorf("reference-app: build authn's PII cipher: %w", err)
 	}
@@ -105,7 +105,7 @@ func (b *serverBuild) registerEncryptedColumns(_ context.Context, cipher *dbkit.
 
 	// go/pki's LocalSigner private-key column, over the
 	// pki.local_key_cipher_key material.
-	pkiLocalKeyCipher, err := dbkit.NewCipher(b.cfg.PKILocalKeyCipherKey)
+	pkiLocalKeyCipher, err := dbkit.NewCipher(b.cfg.PKI.Local_Key_Cipher_Key)
 	if err != nil {
 		return fmt.Errorf("reference-app: build pki's local-key cipher: %w", err)
 	}
@@ -153,20 +153,20 @@ func registerModuleSerializers(cipher *dbkit.Cipher) error {
 // own constructor: the module owns its index column and canonical form, so
 // neither crosses this boundary as a hand-typed string. org's invitation
 // addresses and notification's verified contacts are made queryable by
-// SEPARATE HMAC keys -- reusing cfg.ConfigKey for both would be exactly the
-// AES-key-doubling-as-an-HMAC-key weakness dbkit warns against. One key
-// serves notification's email and phone indexers alike (authn's single
-// blind-index key precedent).
+// SEPARATE HMAC keys -- reusing cfg.Config.Cipher_Key for both would be
+// exactly the AES-key-doubling-as-an-HMAC-key weakness dbkit warns against.
+// One key serves notification's email and phone indexers alike (authn's
+// single blind-index key precedent).
 func buildModuleIndexers(cfg ServerConfig) (*dbkit.BlindIndexer, *dbkit.BlindIndexer, *dbkit.BlindIndexer, error) {
-	orgIndexer, err := org.NewEmailIndexer(cfg.OrgIndexKey)
+	orgIndexer, err := org.NewEmailIndexer(cfg.Org.Invitation_Email_Index_Key)
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("reference-app: build the org email indexer: %w", err)
 	}
-	contactEmailIndexer, err := notification.NewContactEmailIndexer(cfg.NotificationIndexKey)
+	contactEmailIndexer, err := notification.NewContactEmailIndexer(cfg.Notification.Contact_Index_Key)
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("reference-app: build the notification contact email indexer: %w", err)
 	}
-	contactPhoneIndexer, err := notification.NewContactPhoneIndexer(cfg.NotificationIndexKey)
+	contactPhoneIndexer, err := notification.NewContactPhoneIndexer(cfg.Notification.Contact_Index_Key)
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("reference-app: build the notification contact phone indexer: %w", err)
 	}
@@ -335,7 +335,7 @@ func (b *serverBuild) constructModules(ctx context.Context, deps speedapp.Module
 
 	authnOpts := []authn.Option{
 		authn.WithKeySource(b.pkiModule.Service()),
-		authn.WithBlindIndexKey(b.cfg.AuthnBlindIndexKey),
+		authn.WithBlindIndexKey(b.cfg.Authn.Blind_Index_Key),
 		authn.WithMembershipReader(b.memberships),
 		authn.WithDeploymentMode(b.cfg.DeploymentMode),
 		authn.WithSocialProviders(b.cfg.SocialProviders...),

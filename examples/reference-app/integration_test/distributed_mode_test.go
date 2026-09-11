@@ -742,7 +742,7 @@ func TestServer_DistributedMode_TwoReplicas_NotificationCrossesRealInfrastructur
 	baseEnv := scrubbedEnviron()
 	sharedEnv := append(append([]string(nil), baseEnv...),
 		"APP_DEPLOYMENT_MODE=distributed",
-		"APP_CONFIG_KEY=",
+		"APP_CONFIG__CIPHER_KEY=",
 		"APP_DB_PATH="+dbPath,
 		"APP_REDIS_ADDR="+redisAddr,
 		"APP_S3_ENDPOINT="+s3Endpoint,
@@ -1043,7 +1043,7 @@ func TestServer_DistributedMode_IncompleteComposition_FailsClosedAtBoot(t *testi
 			dbPath := filepath.Join(tmp, fmt.Sprintf("reference-app-negative-%d.db", i))
 			env := append(append([]string(nil), scrubbedEnviron()...),
 				"APP_DEPLOYMENT_MODE=distributed",
-				"APP_CONFIG_KEY=",
+				"APP_CONFIG__CIPHER_KEY=",
 				"APP_DB_PATH="+dbPath,
 				"PORT="+strconv.Itoa(freePort(t)),
 			)

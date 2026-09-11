@@ -3,8 +3,10 @@ package flowtests
 // apikey_flow_test.go is go/integration's API-key surface's
 // mandatory-first-consumer proof. It drives the module's own
 // spec-generated HTTP surface --
-// internal/app/server.go's integrationModule wiring, mounted through the generic
-// mountModuleRoutes loop exactly like every other module's fragment, gated
+// internal/app/modules.go's integrationModule wiring, mounted through the
+// engine's route registration over the registry's route seat exactly like
+// every other module's fragment (chain.Standard wraps the whole mounted
+// set), gated
 // by the integration entry of internal/app/demo/demo_subject.go's DemoRouteRules -- through the composed
 // HTTP stack: create (capturing the plaintext key, shown exactly once),
 // list (confirming it never reappears), rotate (confirming the predecessor

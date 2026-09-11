@@ -192,7 +192,7 @@ func TestServer_RealRedisEventBusComposition_SmileSimCompletionCrossesProcesses(
 		"APP_DEPLOYMENT_MODE=standalone",
 		"PORT="+strconv.Itoa(port),
 		"APP_DB_PATH="+dbPath,
-		"APP_CONFIG_KEY=",
+		"APP_CONFIG__CIPHER_KEY=",
 		"APP_REDIS_ADDR="+redisAddr,
 	)
 	child := bootReplica(t, bin, port, env)

@@ -80,7 +80,7 @@ func TestServer_DistributedMode_RepeatedSeededRestarts_DoNotTripTheRegisterBudge
 	baseEnv := scrubbedEnviron()
 	env := append(append([]string(nil), baseEnv...),
 		"APP_DEPLOYMENT_MODE=distributed",
-		"APP_CONFIG_KEY=",
+		"APP_CONFIG__CIPHER_KEY=",
 		"APP_DB_PATH="+dbPath,
 		"APP_REDIS_ADDR="+redisAddr,
 		"APP_S3_ENDPOINT="+s3Endpoint,

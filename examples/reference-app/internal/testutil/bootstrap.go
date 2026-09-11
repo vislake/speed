@@ -23,8 +23,10 @@ var typedBootstrapEnvNames = map[string]struct{}{
 }
 
 // bootstrapEnvNames is every variable the reference app's bootstrap surface
-// reads, exactly as its loader target's pins spell them (internal/app's
-// hostConfig, bootstrap.go).
+// reads (internal/app's bootstrap.go): the host fields' pins as they spell
+// them, and the six platform key materials' variables as the loader derives
+// them from the embedded declaration's key paths -- the path's dot spelled
+// as a double underscore under the APP_ prefix.
 var bootstrapEnvNames = []string{
 	"APP_DEPLOYMENT_MODE",
 	"PORT",
@@ -49,12 +51,12 @@ var bootstrapEnvNames = []string{
 	"APP_SMTP_PASSWORD",
 	"APP_SMS_GATEWAY_URL",
 	"APP_ROOT_KEY",
-	"APP_CONFIG_KEY",
-	"APP_ORG_INDEX_KEY",
-	"APP_NOTIFICATION_INDEX_KEY",
-	"APP_PKI_LOCAL_KEY_CIPHER_KEY",
-	"APP_AUTHN_BLIND_INDEX_KEY",
-	"APP_AUTHN_PII_CIPHER_KEY",
+	"APP_CONFIG__CIPHER_KEY",
+	"APP_ORG__INVITATION_EMAIL_INDEX_KEY",
+	"APP_NOTIFICATION__CONTACT_INDEX_KEY",
+	"APP_PKI__LOCAL_KEY_CIPHER_KEY",
+	"APP_AUTHN__BLIND_INDEX_KEY",
+	"APP_AUTHN__PII_CIPHER_KEY",
 	"APP_DEMO_USERS_PASSWORD",
 	"APP_DEMO_PLATFORM_STAFF_PASSWORD",
 	"APP_AI_GATEWAY_IMAGE_BASE_URL",
