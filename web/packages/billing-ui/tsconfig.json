@@ -22,18 +22,19 @@
     // sibling's source -- same pattern ui-kit, auth-ui and account-ui
     // use. Emitted dist/ keeps the bare specifiers, which consumers
     // resolve against the real published packages. Keep this in
-    // lockstep with what src/ and test-utils/ import. List order
+    // lockstep with what src/ and test-utils/ import (the workspace
+    // alias suite pins this section against the shared package map). List order
     // matters: "@speed/api-sdk/runtime" must be tried before its
     // "@speed/api-sdk" prefix (first match wins in paths).
     "jsx": "react-jsx",
     "paths": {
-      "@speed/i18n": ["../i18n/src/index.ts"],
-      "@speed/i18n/mui-locale": ["../i18n/src/mui-locale.ts"],
-      "@speed/tokens": ["../tokens/src/index.ts"],
-      "@speed/ui-kit": ["../ui-kit/src/index.ts"],
-      "@speed/api-client": ["../api-client/src/index.ts"],
       "@speed/api-sdk/runtime": ["../api-sdk/src/runtime.ts"],
-      "@speed/api-sdk": ["../api-sdk/src/index.ts"]
+      "@speed/api-sdk": ["../api-sdk/src/index.ts"],
+      "@speed/api-client": ["../api-client/src/index.ts"],
+      "@speed/i18n/mui-locale": ["../i18n/src/mui-locale.ts"],
+      "@speed/i18n": ["../i18n/src/index.ts"],
+      "@speed/tokens": ["../tokens/src/index.ts"],
+      "@speed/ui-kit": ["../ui-kit/src/index.ts"]
     }
   }
 }

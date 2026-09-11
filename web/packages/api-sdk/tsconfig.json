@@ -1,6 +1,11 @@
 {
   "extends": "../../tsconfig.base.json",
   "compilerOptions": {
+    // The runtime module's type-only import of @speed/api-client resolves
+    // to the sibling's source: its published types point into a dist/ that
+    // is never committed and not yet built in a fresh checkout. The
+    // workspace alias suite pins this section against the shared package
+    // map.
     "paths": {
       "@speed/api-client": ["../api-client/src/index.ts"]
     }

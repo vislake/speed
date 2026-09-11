@@ -14,6 +14,14 @@
  *    exactly the map, loaded through the module graph rather than
  *    pattern-matched as text, so a config cannot keep a hand-copied
  *    subset that drifts from the map;
+ *  - every package tsconfig paths section (the same cannot-import leg at
+ *    package depth) must map each entry through the map's projection for
+ *    that package, keep the map's order, cover every workspace specifier
+ *    the package's own compiled sources import (discovered through the
+ *    TypeScript parser), and hold no entry outside the map -- so a
+ *    target a move invalidated, a stale specifier, a broken subpath
+ *    order or a forgotten entry fails here instead of in a package's
+ *    standalone typecheck;
  *  - every package the workspace installs (web/packages/*) must be
  *    resolvable through the map, and every map entry must point at a
  *    file that exists -- a sibling added without a map entry, or an
@@ -61,6 +69,59 @@ const ALIAS_CONSUMERS = [
   'ui-kit',
 ]
 
+/**
+ * The packages whose tsconfig declares a paths section. Same vacuity
+ * pin as ALIAS_CONSUMERS: the sweep below resolves the list from the
+ * tsconfigs themselves, so a package that starts or stops declaring
+ * paths changes this list in the same commit.
+ */
+const TSCONFIG_PATHS_PACKAGES = [
+  'account-ui',
+  'api-sdk',
+  'auth-core',
+  'auth-ui',
+  'billing-ui',
+  'layout-kit',
+  'product-shell',
+  'tenancy-ui',
+  'ui-kit',
+]
+
+/**
+ * Every `@speed/*` module specifier a package's own compiled sources
+ * import, over the tsconfig's include set (src/ and test-utils/),
+ * through the TypeScript parser rather than pattern matching -- a
+ * specifier named only in a comment never counts.
+ */
+function importedSpeedSpecifiers(packageDir: string): Set<string> {
+  const specifiers = new Set<string>()
+  const walk = (dir: string): void => {
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      const path = join(dir, entry.name)
+      if (entry.isDirectory()) {
+        walk(path)
+        continue
+      }
+      if (!entry.name.endsWith('.ts') && !entry.name.endsWith('.tsx')) {
+        continue
+      }
+      const parsed = ts.preProcessFile(readFileSync(path, 'utf8'))
+      for (const imported of parsed.importedFiles) {
+        if (imported.fileName.startsWith('@speed/')) {
+          specifiers.add(imported.fileName)
+        }
+      }
+    }
+  }
+  for (const root of ['src', 'test-utils']) {
+    const dir = join(packageDir, root)
+    if (existsSync(dir)) {
+      walk(dir)
+    }
+  }
+  return specifiers
+}
+
 describe('the app tsconfig paths mirror the workspace package map', () => {
   it('equals the map projected for this app', () => {
     const tsconfigPath = join(appDir, 'tsconfig.json')
@@ -102,6 +163,65 @@ describe('every package alias list derives from the map', () => {
     // one less leg to prove, so the set it must reach is pinned: adding
     // or dropping a consumer edits this list in the same commit.
     expect(consumers).toEqual(ALIAS_CONSUMERS)
+  })
+})
+
+describe('every package tsconfig paths section mirrors the map', () => {
+  it('maps each entry through the map, in map order, covering the package imports', () => {
+    const swept: string[] = []
+    const mapOrder = SPEED_PACKAGE_MAP.map((item) => item.specifier)
+    for (const entry of readdirSync(packagesDir, { withFileTypes: true })) {
+      if (!entry.isDirectory()) continue
+      const packageDir = join(packagesDir, entry.name)
+      const tsconfigPath = join(packageDir, 'tsconfig.json')
+      if (!existsSync(tsconfigPath)) continue
+      const parsed = ts.parseConfigFileTextToJson(
+        tsconfigPath,
+        readFileSync(tsconfigPath, 'utf8'),
+      )
+      const paths = (
+        parsed.config as
+          | { compilerOptions?: { paths?: Record<string, string[]> } }
+          | undefined
+      )?.compilerOptions?.paths
+      if (paths === undefined) continue
+      swept.push(entry.name)
+
+      // Every entry's target is the map's projection for this package's
+      // depth, and every entry names a map specifier -- a target a move
+      // invalidated, or a specifier the map does not know, fails here.
+      const projected = speedTsconfigPaths(packageDir)
+      for (const [specifier, targets] of Object.entries(paths)) {
+        expect(targets, `${entry.name}: ${specifier}`).toEqual(
+          projected[specifier],
+        )
+      }
+
+      // The entries keep the map's relative order: paths resolution is
+      // first-match-wins, so a subpath below its prefix could never
+      // resolve to its own file.
+      const positions = Object.keys(paths).map((specifier) =>
+        mapOrder.indexOf(specifier),
+      )
+      for (const position of positions) {
+        expect(position, `${entry.name}: unknown specifier`).toBeGreaterThanOrEqual(0)
+      }
+      expect(positions, `${entry.name}: order`).toEqual(
+        [...positions].sort((a, b) => a - b),
+      )
+
+      // Every specifier the package's own sources import has an entry:
+      // tsconfig cannot import the map, so a newly imported sibling
+      // without its entry would otherwise fail only that package's
+      // standalone typecheck (or resolve against an unbuilt dist/).
+      for (const imported of importedSpeedSpecifiers(packageDir)) {
+        expect(
+          Object.hasOwn(paths, imported),
+          `${entry.name} imports ${imported} without a paths entry`,
+        ).toBe(true)
+      }
+    }
+    expect(swept).toEqual(TSCONFIG_PATHS_PACKAGES)
   })
 })
 
