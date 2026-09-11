@@ -180,8 +180,8 @@ func (s *TenantService) SetStatus(ctx context.Context, tenantID string, patch Te
 
 // recordAudit emits admin.tenant.status_changed. It is a no-op (not an
 // error) while the host has not attached the emitter's bus -- the
-// publish itself is skipped (emitBestEffort's own guard); the record's
-// construction above it is pure.
+// publish itself is skipped (emitTenantStatusChangeAudit's own guard);
+// the record's construction above it is pure.
 //
 // The caller-supplied actor (built by handler.go's callerUserID from the
 // operator's verified Principal user id alone) is resolved against the
@@ -190,7 +190,7 @@ func (s *TenantService) SetStatus(ctx context.Context, tenantID string, patch Te
 // comment has the full policy, including what stays id-only and why. A
 // publish failure is Warn-logged and swallowed, never returned: the
 // ledger write already committed by the time this runs
-// (emitBestEffort's own contract).
+// (emitTenantStatusChangeAudit's own contract).
 func (s *TenantService) recordAudit(ctx context.Context, actor pkgcore.Actor, tenantID string, patch TenantPatch) {
 	after := map[string]any{}
 	if patch.Status != nil {
@@ -199,9 +199,8 @@ func (s *TenantService) recordAudit(ctx context.Context, actor pkgcore.Actor, te
 	if patch.DisplayName != nil {
 		after["display_name"] = *patch.DisplayName
 	}
-	s.emitter.emitBestEffort(
+	s.emitter.emitTenantStatusChangeAudit(
 		pkgcore.WithActor(ctx, s.emitter.resolveActor(ctx, actor)),
-		"admin failed to record a tenant status-change audit event",
 		[]any{"tenant_id", tenantID},
 		audit.Input{
 			Action: AuditActionTenantStatusChanged,

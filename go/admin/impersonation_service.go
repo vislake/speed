@@ -478,8 +478,8 @@ func (s *ImpersonationService) Lookup(ctx context.Context, id string) (*Imperson
 // (End), so surfacing an audit failure as the caller's own error would
 // report a failure that did not happen -- matching go/pki's
 // Handler.recordAudit and notes' recordNoteCreatedAudit, and carried by
-// the emitter's emitBestEffort. The publish is likewise skipped while the
-// emitter carries no bus (the pre-Register window).
+// the emitter's emitImpersonationAudit. The publish is likewise skipped
+// while the emitter carries no bus (the pre-Register window).
 //
 // The started event's after map is where the reason lives: Start records
 // {target_tenant_id, reason, expires_at} there -- the operator's
@@ -497,8 +497,7 @@ func (s *ImpersonationService) recordAudit(ctx context.Context, action string, o
 	if after != nil {
 		diff = &audit.Diff{After: after}
 	}
-	s.emitter.emitBestEffort(auditCtx,
-		"admin failed to record an impersonation audit event",
+	s.emitter.emitImpersonationAudit(auditCtx,
 		[]any{"grant_id", grantID, "action", action},
 		audit.Input{
 			Action:   action,

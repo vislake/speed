@@ -21,8 +21,9 @@ import (
 // has the bus but not the catalog it publishes against.
 //
 // The zero value is the pre-Register state -- no seats attached -- which
-// emitBestEffort tolerates by skipping the publish entirely, the same
-// pre-Register tolerance every emitting service's own docs state.
+// the emitXxxAudit wrappers tolerate by skipping the publish entirely,
+// the same pre-Register tolerance every emitting service's own docs
+// state.
 type auditEmitter struct {
 	bus      pkgcore.EventBus
 	actions  pkgcore.AuditActionRegistrar
@@ -52,29 +53,64 @@ func (e *auditEmitter) resolveActor(ctx context.Context, a pkgcore.Actor) pkgcor
 	return resolveActorName(ctx, e.authnSvc, a)
 }
 
-// emitBestEffort publishes in through dbkit's audited Emit and reports a
-// failure the one way a post-hoc record may: a Warn carrying logMsg, the
-// caller's own attrs and the error, and nothing else -- never a returned
-// error. Every caller records metadata of an operation that has already
-// durably committed and been answered (a ledger write, an impersonation
-// grant, a completed export), so a lost record changes nothing about the
-// operation's legitimacy and there is nothing left to refuse; that is
-// audit.Emit's own caller-half contract, the skip-with-alert pole, and
-// this method is where this module honors it in one place.
+// The three emitXxxAudit wrappers below are the emitter's whole surface
+// for a post-hoc record -- one per record family. Each publishes in
+// through dbkit's audited Emit (the shared publish skeleton) and reports
+// a failure the one way a post-hoc record may: a Warn carrying the
+// family's own message constant, the caller's own attrs and the error,
+// and nothing else -- never a returned error. Every caller records
+// metadata of an operation that has already durably committed and been
+// answered (a ledger write, an impersonation grant, a completed export),
+// so a lost record changes nothing about the operation's legitimacy and
+// there is nothing left to refuse; that is audit.Emit's own caller-half
+// contract, the skip-with-alert pole, and these wrappers are where this
+// module honors it in one place.
 //
 // attrs is the caller's per-record log context (the resource's own
-// identifier, the action); the message itself stays a constant per call
-// site, never a concatenation.
+// identifier, the action). The message is each family's own constant,
+// written as a string literal at its Warn call: the structured logger's
+// message must be statically constant (the call shape
+// tools/semgrep_rules/non-constant-log-message.yml checks), so the
+// wrappers take no message parameter.
 //
 // The publish is skipped entirely while no bus is attached -- the
 // pre-Register window and the in-package unit fixtures that attach a
 // subset of the seats. Nothing is skipped silently once a bus exists: a
 // failed publish always Warns before returning.
-func (e *auditEmitter) emitBestEffort(ctx context.Context, logMsg string, attrs []any, in audit.Input) {
+func (e *auditEmitter) emitTenantStatusChangeAudit(ctx context.Context, attrs []any, in audit.Input) {
+	if err := e.publish(ctx, in); err != nil {
+		obs.FromContext(ctx).Warn("admin failed to record a tenant status-change audit event",
+			append(attrs, "error", err)...)
+	}
+}
+
+// emitExportAudit carries admin.audit_export records
+// (ExportService.recordAudit) under emitTenantStatusChangeAudit's own
+// contract, with its own message constant.
+func (e *auditEmitter) emitExportAudit(ctx context.Context, attrs []any, in audit.Input) {
+	if err := e.publish(ctx, in); err != nil {
+		obs.FromContext(ctx).Warn("admin failed to record an audit-export audit event",
+			append(attrs, "error", err)...)
+	}
+}
+
+// emitImpersonationAudit carries admin.impersonation.* records
+// (ImpersonationService.recordAudit) under emitTenantStatusChangeAudit's
+// own contract, with its own message constant.
+func (e *auditEmitter) emitImpersonationAudit(ctx context.Context, attrs []any, in audit.Input) {
+	if err := e.publish(ctx, in); err != nil {
+		obs.FromContext(ctx).Warn("admin failed to record an impersonation audit event",
+			append(attrs, "error", err)...)
+	}
+}
+
+// publish runs the audited publish all three wrappers share: skipped
+// while no bus is attached -- the pre-Register window and the in-package
+// unit fixtures that attach a subset of the seats -- and otherwise
+// audit.Emit's own error, handed straight back for the wrapper's Warn.
+func (e *auditEmitter) publish(ctx context.Context, in audit.Input) error {
 	if e.bus == nil {
-		return
+		return nil
 	}
-	if err := audit.Emit(ctx, e.bus, e.actions, in); err != nil {
-		obs.FromContext(ctx).Warn(logMsg, append(attrs, "error", err)...)
-	}
+	return audit.Emit(ctx, e.bus, e.actions, in)
 }

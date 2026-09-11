@@ -294,8 +294,7 @@ func (s *ExportService) recordAudit(ctx context.Context, tenantID pkgcore.Tenant
 		after["share_id"] = result.Delivery.ShareID
 		after["share_expires_at"] = result.Delivery.ExpiresAt
 	}
-	s.emitter.emitBestEffort(ctx,
-		"admin failed to record an audit-export audit event",
+	s.emitter.emitExportAudit(ctx,
 		[]any{"tenant_id", tenantID},
 		audit.Input{
 			Action:   AuditActionAuditExport,
