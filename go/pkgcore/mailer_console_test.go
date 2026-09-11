@@ -193,6 +193,9 @@ func TestConsoleMailer_RejectsInvalidMail(t *testing.T) {
 		{"a control character in From", func(m *Mail) { m.From = "ops@example.com\x0b" }},
 		{"a control character in To", func(m *Mail) { m.To = []string{"ada@example.com\x7f"} }},
 		{"a control character in ReplyTo", func(m *Mail) { m.ReplyTo = "ops@example.com\u0085" }},
+		{"a From that is not an address", func(m *Mail) { m.From = "ops" }},
+		{"a recipient that is not an address", func(m *Mail) { m.To = []string{"ada@"} }},
+		{"a ReplyTo that is not an address", func(m *Mail) { m.ReplyTo = "reply-to" }},
 		{"no body at all", func(m *Mail) { m.Text = ""; m.HTML = "" }},
 	}
 

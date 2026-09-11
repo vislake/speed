@@ -110,10 +110,66 @@ func TestValidateMail_SubjectKeepsTheLineBreakOnlyRule(t *testing.T) {
 	}
 }
 
+// TestValidateMail_RejectsAddressesThatDoNotParse pins the structural half
+// of the address rule: the three address fields -- From, every To entry and
+// the optional ReplyTo -- must each parse as one address through
+// net/mail.ParseAddress. A value that is not even address-shaped would
+// otherwise travel verbatim into the MAIL FROM/RCPT TO commands and the raw
+// DATA headers, where no relay can make it deliverable. Each failure names
+// the field and never echoes the offending value.
+func TestValidateMail_RejectsAddressesThatDoNotParse(t *testing.T) {
+	t.Parallel()
+
+	valid := Mail{
+		From: "ops@example.com", To: []string{"ada@example.com"},
+		Subject: "valid", Text: "body",
+	}
+	tests := []struct {
+		name string
+		mut  func(*Mail)
+		want string
+		leak string
+	}{
+		{"a_bare_string_in_From", func(m *Mail) { m.From = "ops" }, "From is not a valid address", "ops"},
+		{"a_missing_at_in_From", func(m *Mail) { m.From = "ops.example.com" }, "From is not a valid address", "ops.example.com"},
+		{"an_empty_domain_in_From", func(m *Mail) { m.From = "ops@" }, "From is not a valid address", "ops@"},
+		{"an_empty_local_part_in_From", func(m *Mail) { m.From = "@example.com" }, "From is not a valid address", "@example.com"},
+		{"more_than_one_at_in_From", func(m *Mail) { m.From = "ops@@example.com" }, "From is not a valid address", "ops@@example.com"},
+		{"an_unclosed_angle_addr_in_From", func(m *Mail) { m.From = "Ada <ada@example.com" }, "From is not a valid address", "Ada <ada@example.com"},
+		{"a_bare_string_in_To", func(m *Mail) { m.To = []string{"ada"} }, "To contains an invalid address", "ada"},
+		{"adjacent_dots_in_the_domain_in_To", func(m *Mail) { m.To = []string{"ada@example..com"} }, "To contains an invalid address", "ada@example..com"},
+		{"two_addresses_in_one_To_entry", func(m *Mail) { m.To = []string{"ada@example.com, grace@example.com"} }, "To contains an invalid address", "ada@example.com, grace@example.com"},
+		{"a_bare_string_in_ReplyTo", func(m *Mail) { m.ReplyTo = "reply-to" }, "ReplyTo is not a valid address", "reply-to"},
+	}
+
+	for _, tt := range tests {
+		t.Run("rejects_"+tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			mail := valid
+			tt.mut(&mail)
+
+			err := validateMail(mail)
+			if !errors.Is(err, ErrInvalidMail) {
+				t.Fatalf("validateMail(%+v) = %v, want ErrInvalidMail", mail, err)
+			}
+			if !strings.Contains(err.Error(), tt.want) {
+				t.Errorf("error = %v, want it to say %q", err, tt.want)
+			}
+			if strings.Contains(err.Error(), tt.leak) {
+				t.Errorf("error = %v, want the offending value %q left out of the text", err, tt.leak)
+			}
+		})
+	}
+}
+
 // TestValidateMail_AcceptsAddressFormsTheContractAllows pins the accept side
-// of the address rule: the plain-address form, the name-and-address display
-// form the Mail documentation leaves to the caller, and a message whose
-// ReplyTo is left empty all pass validation.
+// of the address rule: forms the structural check must not over-reject. The
+// plain-address form, the name-and-address display form the Mail
+// documentation leaves to the caller, a plus-tagged local part, non-ASCII
+// and IDN forms, a domain without a dot -- everything net/mail.ParseAddress
+// itself accepts -- and a message whose ReplyTo is left empty all pass
+// validation.
 func TestValidateMail_AcceptsAddressFormsTheContractAllows(t *testing.T) {
 	t.Parallel()
 
@@ -128,6 +184,22 @@ func TestValidateMail_AcceptsAddressFormsTheContractAllows(t *testing.T) {
 		{
 			name: "display-name address forms",
 			mail: Mail{From: "Ada Lovelace <ada@example.com>", To: []string{"Grace Hopper <grace@example.com>"}, Subject: "display names", Text: "body"},
+		},
+		{
+			name: "a quoted display name",
+			mail: Mail{From: `"Ada Lovelace" <ada@example.com>`, To: []string{"Grace Hopper <grace@example.com>"}, Subject: "quoted display name", Text: "body"},
+		},
+		{
+			name: "a plus-tagged local part",
+			mail: Mail{From: "ops+notifications@example.com", To: []string{"ada+invoices@example.com"}, Subject: "plus tag", Text: "body"},
+		},
+		{
+			name: "an IDN domain and a non-ASCII local part",
+			mail: Mail{From: "ada@例子.公司", To: []string{"用户@example.com"}, Subject: "non-ASCII", Text: "body"},
+		},
+		{
+			name: "a domain without a dot, as the parser itself accepts it",
+			mail: Mail{From: "ops@example", To: []string{"ada@localhost"}, Subject: "dotless domain", Text: "body"},
 		},
 		{
 			name: "an empty ReplyTo",

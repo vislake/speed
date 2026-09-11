@@ -7,17 +7,20 @@ import (
 
 // ErrInvalidMail is returned by Mailer.Send when the message fails the rules
 // every implementation enforces: an empty From, no recipients, an empty
-// recipient, a control character inside an address field (From, a To entry or
-// ReplyTo), a newline inside the Subject, or neither body set. A Send that
-// returns it has not touched the wire. The offending value is deliberately
-// kept out of the error text, because a message may carry sensitive data.
+// recipient, an address field that does not parse as one address (From, a To
+// entry or the optional ReplyTo, per net/mail.ParseAddress), a control
+// character inside an address field, a newline inside the Subject, or neither
+// body set. A Send that returns it has not touched the wire. The offending
+// value is deliberately kept out of the error text, because a message may
+// carry sensitive data.
 var ErrInvalidMail = errors.New("pkgcore: invalid mail")
 
-// Mail is one outbound email message, already rendered by the caller. The
-// address fields hold plain addresses (name-and-address display forms are the
-// caller's job, and must not smuggle in control characters), no header field
-// may carry a line break, and the bodies are plain text and HTML alternatives
-// of the same content, at least one of which must be non-empty.
+// Mail is one outbound email message, already rendered by the caller. Each
+// address field holds one address -- a plain addr-spec or a name-and-address
+// display form -- which must parse as exactly one address
+// (net/mail.ParseAddress) and must not carry a control character; no header
+// field may carry a line break; and the bodies are plain text and HTML
+// alternatives of the same content, at least one of which must be non-empty.
 type Mail struct {
 	From    string
 	To      []string

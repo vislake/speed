@@ -507,6 +507,35 @@ func TestSMTPMailer_Send_ControlCharacterAddressesNeverReachTheWire(t *testing.T
 	}
 }
 
+// TestSMTPMailer_Send_AddressesThatDoNotParseNeverReachTheWire pins the
+// structural rule on the wire: a message whose From, a To entry or the
+// ReplyTo does not parse as one address fails with ErrInvalidMail before
+// anything is dialed, so the relay records no exchange at all. Without the
+// rule the values would travel verbatim into the MAIL FROM/RCPT TO commands
+// and the raw DATA headers, where the relay can only refuse them.
+func TestSMTPMailer_Send_AddressesThatDoNotParseNeverReachTheWire(t *testing.T) {
+	t.Parallel()
+
+	server := testutil.StartFakeSMTPServer(t, testutil.FakeSMTPOptions{})
+	mailer := mailerFor(t, server, SMTPTLSModeAuto, "", "")
+
+	mail := Mail{
+		From:    "ops",
+		To:      []string{"ada@example.com, grace@example.com"},
+		ReplyTo: "reply-to",
+		Subject: "addresses that do not parse",
+		Text:    "body",
+	}
+	err := mailer.Send(context.Background(), mail)
+	exchanges := server.Take()
+	if !errors.Is(err, ErrInvalidMail) {
+		t.Fatalf("Send() error = %v, want ErrInvalidMail before any dial; relay saw %#v", err, exchanges)
+	}
+	if len(exchanges) != 0 {
+		t.Errorf("relay recorded %d exchanges, want none: %#v", len(exchanges), exchanges)
+	}
+}
+
 // TestSMTPMailer_Send_CarriesADisplayNameAddressForm pins the accept side of
 // the address rule on the wire: the name-and-address display form the Mail
 // documentation leaves to the caller passes validation and travels through

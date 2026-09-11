@@ -30,9 +30,10 @@ import (
 // wired to expect exactly one connection, say) is safe to hand in.
 //
 // What AssertConforms checks, in order: every rule pkgcore.ErrInvalidMail
-// documents (empty From, no recipients, an empty recipient, a control
-// character in an address field -- From, a To entry or the optional ReplyTo --
-// a line break in a header field, and neither body set) is rejected by Send
+// documents (empty From, no recipients, an empty recipient, an address field
+// that does not parse as one address -- From, a To entry or the optional
+// ReplyTo -- a control character in an address field, a line break in a
+// header field, and neither body set) is rejected by Send
 // with an error satisfying errors.Is(err, pkgcore.ErrInvalidMail), before
 // anything implementation-specific about the message runs; a Send that begins on an
 // already-cancelled context fails with that context's error instead of the
@@ -69,6 +70,18 @@ func AssertConforms(t *testing.T, factory func() pkgcore.Mailer) {
 		{
 			name: "empty_recipient",
 			mail: pkgcore.Mail{From: "ops@example.com", To: []string{""}, Text: "body"},
+		},
+		{
+			name: "from_that_is_not_an_address",
+			mail: pkgcore.Mail{From: "ops", To: []string{"ada@example.com"}, Text: "body"},
+		},
+		{
+			name: "recipient_that_is_not_an_address",
+			mail: pkgcore.Mail{From: "ops@example.com", To: []string{"ada@"}, Text: "body"},
+		},
+		{
+			name: "reply_to_that_is_not_an_address",
+			mail: pkgcore.Mail{From: "ops@example.com", To: []string{"ada@example.com"}, ReplyTo: "reply-to", Text: "body"},
 		},
 		{
 			name: "header_field_with_a_line_break",
