@@ -4,8 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"sort"
-	"strings"
 	"time"
 
 	"github.com/vislake/speed/go/authn"
@@ -226,10 +224,13 @@ func (s *ExportService) Handle(ctx context.Context, job *jobs.Job, _ jobs.Progre
 	// Result -- the partial failure never reaches the queue as an error
 	// (see Handle's own doc comment for why that would amplify delivered
 	// dumps instead of alerting anyone). failureReason is empty on a full
-	// success and names the failing participants on a partial one.
+	// success and names the failing participants on a partial one, in the
+	// same vocabulary compliance's own export event uses
+	// (compliance.ParticipantFailureReason), so the two events an operator
+	// reads for one export agree.
 	failureReason := ""
 	if err != nil {
-		failureReason = auditExportFailureReason(result.Manifest)
+		failureReason = compliance.ParticipantFailureReason(result.Manifest.Errors)
 	}
 	s.recordAudit(ctx, job.TenantID, result, failureReason)
 
@@ -242,24 +243,6 @@ func (s *ExportService) Handle(ctx context.Context, job *jobs.Job, _ jobs.Progre
 		return jobs.Result{}, marshalErr
 	}
 	return jobs.Result{Data: encoded}, nil
-}
-
-// auditExportFailureReason renders the failure-reason text admin's own
-// admin.audit_export event carries for a partial export, naming the
-// participants whose Export callback failed -- the same vocabulary
-// compliance's own export event uses for its FailureReason
-// (compliance.exportFailureReason), so the two events an operator reads
-// for one export agree. Empty when the manifest carries no errors.
-func auditExportFailureReason(manifest compliance.ExportManifest) string {
-	if len(manifest.Errors) == 0 {
-		return ""
-	}
-	names := make([]string, 0, len(manifest.Errors))
-	for name := range manifest.Errors {
-		names = append(names, name)
-	}
-	sort.Strings(names)
-	return "participants failed: " + strings.Join(names, ", ")
 }
 
 // recordAudit emits admin.audit_export once a tenant's audit-event export
