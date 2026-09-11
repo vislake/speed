@@ -18,9 +18,9 @@ import (
 // the helper it belongs to.
 
 func TestCheckPreAuthIPLimit_FailsClosedWithoutALimiterBackend(t *testing.T) {
-	// Only a hand-built, zero-value *pkgcore.ComponentRegistry carries no KVStore
-	// (pkgcore.NewRegistry requires one), so this is the Service a host's
-	// wiring bug produces. The check must refuse rather than pass: it is
+	// Only a hand-built, zero-value *pkgcore.ComponentRegistry carries no
+	// KVStore, so this is the Service a host's wiring bug produces. The
+	// check must refuse rather than pass: it is
 	// these endpoints' only throttle, so a missing backend that read as
 	// "allow" would leave exactly the request volume it bounds ungoverned.
 	svc := &Service{}

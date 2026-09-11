@@ -99,9 +99,10 @@ func (s *schema) lookup(key string) (*schemaItem, bool) {
 //     semantics (ErrFeatureFlagDependencyCycle is reserved for genuine
 //     cycles; an unresolved dependency is folded into the same Attach
 //     failure class below, wrapping ErrSchemaConflict, because by the time
-//     Attach runs pkgcore.ValidateFeatureGraph has already rejected any
-//     unresolved dependency at Bootstrap -- reaching Attach with one means
-//     the registry was assembled outside Kernel.Bootstrap).
+//     Attach runs the assembly's Init stage has already rejected any
+//     unresolved dependency (pkgcore.ValidateFeatureGraph over the Features
+//     seat) -- reaching Attach with one means the registry was never driven
+//     through the assembly).
 //
 //   - the flags' dependency graph contains a cycle: pkgcore proves every
 //     dependency resolves, but proving the graph is acyclic is this

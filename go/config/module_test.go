@@ -22,13 +22,14 @@ import (
 // mount order, the change event, the audit action, the audited system
 // purpose), the Attach seam's guards (second attach, nil registry, nil
 // database, Sensitive declarations without a cipher), and -- the
-// consumer-side proof -- a Kernel.Bootstrap over a fake host module that
-// leaves a flag dependency unresolved, which must fail the bootstrap rather
-// than start a host with a flag graph that can never resolve.
+// consumer-side proof -- a componenttest.DeclareModules run over a fake
+// host module that leaves a flag dependency unresolved, which must fail the
+// declaration rather than start a host with a flag graph that can never
+// resolve.
 
 // fakeHostModule stands in for a consumer module that declares its own
 // configuration items and feature flags beside the config module's. It is
-// deliberately the smallest valid pkgcore.Module: nothing to migrate, no
+// deliberately the smallest valid module: nothing to migrate, no
 // locale resources, no spec fragment.
 type fakeHostModule struct {
 	name  string
@@ -163,7 +164,7 @@ func TestModule_Register_DeclaresTheSystemWritePurpose(t *testing.T) {
 	}
 }
 
-func TestKernelBootstrap_FailsOnAnUnresolvedFlagDependency(t *testing.T) {
+func TestDeclareModules_FailsOnAnUnresolvedFlagDependency(t *testing.T) {
 	// The consumer-side proof of the config module's schema contract: the
 	// module's schema is assembled from the registry's combined item and
 	// flag declarations at Attach time, so a host whose flag graph cannot
@@ -186,9 +187,9 @@ func TestKernelBootstrap_FailsOnAnUnresolvedFlagDependency(t *testing.T) {
 	}
 }
 
-func TestKernelBootstrap_AttachServesTheAssembledHostSchema(t *testing.T) {
+func TestDeclareAll_AttachServesTheAssembledHostSchema(t *testing.T) {
 	// The happy path of the same contract: a host module declaring items
-	// and a flag chain, bootstrapped beside the config module. The schema
+	// and a flag chain, declared beside the config module. The schema
 	// Attach folds is the registry's union -- items and flags owned by a
 	// different module -- and the service serves defaults, tenant overrides
 	// and dependency walks out of it.

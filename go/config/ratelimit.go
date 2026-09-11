@@ -53,10 +53,12 @@ const (
 )
 
 // errNoKVStore reports a Service that captured no KVStore at Attach: only a
-// hand-built, zero-value *pkgcore.Registry carries none (pkgcore.NewRegistry
-// panics on a nil store), and the rate-limit check treats it as a failure --
-// fail closed -- rather than skipping the check, because a check that
-// silently passed would leave exactly the volume abuse it bounds unguarded.
+// hand-built, zero-value *pkgcore.ComponentRegistry whose by-type context
+// carries none (the assembly always resolves one for a real composition)
+// leaves the Service without a store, and the rate-limit check treats that
+// as a failure -- fail closed -- rather than skipping the check, because a
+// check that silently passed would leave exactly the volume abuse it
+// bounds unguarded.
 var errNoKVStore = errors.New("config: the registry carries no KVStore, so the pre-auth rate-limit check cannot engage")
 
 // rateLimiter returns the Limiter the per-address check runs on, built over

@@ -92,8 +92,8 @@ type Service struct {
 	// kv is the registry's KVStore, captured at Attach: the backend the two
 	// pre-auth endpoints' per-address rate-limit budget is counted in
 	// (ratelimit.go). Nil only for a hand-built, zero-value
-	// *pkgcore.Registry (pkgcore.NewRegistry requires a store), and the
-	// check fails closed on that rather than skipping itself.
+	// *pkgcore.ComponentRegistry whose by-type context carries no KVStore;
+	// the check fails closed on that rather than skipping itself.
 	kv pkgcore.KVStore
 
 	// cipher is the host's cipher, nil when the host injected

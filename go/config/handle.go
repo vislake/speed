@@ -11,10 +11,10 @@ import (
 // capture in a wiring closure) long before the module's Service exists, and
 // read through once Attach has produced it. NewModule creates it, so
 // (*Module).Handle returns the same handle for the module's whole life --
-// before Bootstrap, between Register and Attach, and after Attach alike.
+// before the assembly, between Register and Attach, and after Attach alike.
 //
 // It exists because config's Service is only produced by Attach, which per
-// that method's own contract runs strictly after Kernel.Bootstrap returns,
+// that method's own contract runs strictly after the assembly returns,
 // while the modules that read config values through a seam -- org's and
 // authn's feature gates, compliance's export-delivery-expiry reader, and a
 // host's own adapters -- must already be constructed by then: a

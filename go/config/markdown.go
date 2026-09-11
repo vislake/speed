@@ -12,7 +12,7 @@ import (
 // tool: unlike
 // tools/gen_error_code_index.py's error-code index (statically greppable
 // from Go source alone), a live configuration schema only exists after a
-// real host has run Kernel.Bootstrap and Module.Attach -- there is no
+// real host has run the assembly and Module.Attach -- there is no
 // static source form to scan, since every module's ConfigItem/FeatureFlag
 // declarations only become one merged schema at Attach time. A host wanting
 // a generated docs/config-reference.md writes:
