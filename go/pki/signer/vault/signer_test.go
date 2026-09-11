@@ -288,7 +288,7 @@ func TestParseVaultSignatureEnvelope_RejectsEmptySignature(t *testing.T) {
 }
 
 // TestParseVaultSignatureEnvelope_ReturnsTheVersionAndSignature pins the
-// parse function's full contract now that the version is load-bearing: a
+// parse function's full contract, with the version load-bearing: a
 // well-formed envelope yields both the version it names and the decoded
 // signature bytes.
 func TestParseVaultSignatureEnvelope_ReturnsTheVersionAndSignature(t *testing.T) {

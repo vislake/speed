@@ -5,12 +5,11 @@ package pki_test
 // executed by `go test`, so a change to pki's public API that breaks the
 // documented usage fails the build rather than only rotting in prose.
 //
-// The examples together discharge the godoc `Example` obligation the X.509
-// layer carried while it had no real consumer, and retain it -- with a
-// narrowed narrative -- now that the layer does (the reference app's
-// AI-output attestation; go/pki/AGENTS.md's "X.509 layer: real consumer,
-// precise residuals" section records what the obligation covers today),
-// kept in step with the layer's growth:
+// The examples together discharge the godoc `Example` obligation for the
+// X.509 layer, whose real consumer is the reference app's AI-output
+// attestation; go/pki/AGENTS.md's "X.509 layer: real consumer, precise
+// residuals" section records what the obligation covers, and these
+// examples are kept in step with the layer's growth:
 //
 //   - Example covers the layer's full main path -- issue a root CA, an
 //     intermediate signed by the root, and an end-entity certificate

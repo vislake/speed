@@ -79,8 +79,8 @@
 // Known limitations records why) -- so the interaction details of a real
 // Vault's rotation policy (min_decryption_version handling above all, the
 // one Vault-side setting that can make a pinned sign request itself be
-// refused) remain to be verified against a real server by a future
-// integration tier. The envelope-mode names are not exposed to this hazard
+// refused) remain unverified here -- only a real Vault server can settle
+// them. The envelope-mode names are not exposed to this hazard
 // at all: an envelope keyRef is a ciphertext the caller holds, and
 // rotating WrappingKeyName merely makes OLD ciphertexts undecryptable (an
 // encrypt/decrypt failure, loud and visible), never a silent
