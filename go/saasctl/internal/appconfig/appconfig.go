@@ -204,7 +204,7 @@ const defaultSQLitePath = "app.db"
 
 // configKeyHexLength is the encoded length of the required 32-byte key (2
 // hex characters per byte): the loader enforces it for the generated app's
-// key-material fields, and the twin checks it for the same five variables
+// key-material fields, and the twin checks it for the same six variables
 // against its own source so a short or malformed key fails configuration
 // loading with a precise message rather than surfacing later as an opaque
 // NewCipher error.

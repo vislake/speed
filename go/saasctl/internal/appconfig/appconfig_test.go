@@ -12,7 +12,7 @@ import (
 )
 
 // envFromMap is a LookupEnv over a map, the test double every Load test
-// drives the five variables through.
+// drives its variables through.
 func envFromMap(env map[string]string) LookupEnv {
 	return func(key string) (string, bool) {
 		value, ok := env[key]
@@ -87,7 +87,7 @@ func TestLoadDefaultsResolveTheGeneratedProjectsOwnDefaults(t *testing.T) {
 }
 
 // TestLoadReadsSetVariables: each variable that carries a non-empty value
-// is parsed and recorded as from-env, with the five key variables decoding
+// is parsed and recorded as from-env, with the six key variables decoding
 // their hex into the 32 bytes they encode.
 func TestLoadReadsSetVariables(t *testing.T) {
 	configKeyHex := "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f"
@@ -338,7 +338,7 @@ func TestLoadReadsInfrastructureVariables(t *testing.T) {
 // default -- empty strings, S3UseSSL false, S3BucketLookup "auto",
 // SMTPPort 0 -- leaving every seam on its Preset default, and no field is
 // recorded as from-env: the same "empty counts as unset" contract the
-// original five variables already carry.
+// non-infrastructure variables already carry.
 // TestLoadReadsInfrastructureVariables above is what proves the wired
 // reading of the same fields.
 func TestLoadInfrastructureVariablesDefaultToUnwired(t *testing.T) {
