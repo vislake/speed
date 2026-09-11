@@ -126,7 +126,7 @@ name: docs-check
 #     pattern. Needs the pinned Go toolchain, no Docker.
 #   * markdown Go example compile/parse check: python3 tools/
 #     check_markdown_examples.py from the repository root. Every fenced
-#     ```go block in every AGENTS.md, go/*/README.md,
+#     ```go block in every AGENTS.md, go/**/README.md,
 #     web/packages/*/README.md, the root README.md and docs/adr/*.md is
 #     checked (docs/internal/** is deliberately excluded -- see the
 #     script's own module docstring for why): a block that opens with
@@ -173,7 +173,7 @@ name: docs-check
 #                                the theme submodule's pointer commit)
 #   .claude/**                  skill handbooks (standards documentation)
 #   **/AGENTS.md                per-module discipline docs (consumer-facing)
-#   go/*/README.md               package READMEs the markdown-example
+#   go/**/README.md              package READMEs the markdown-example
 #   web/packages/*/README.md     checker also scans (root README.md is
 #                                already covered by the CLAUDE.md/README.md
 #                                line below)
@@ -272,7 +272,7 @@ on:
       - docs/**
       - .claude/**
       - "**/AGENTS.md"
-      - go/*/README.md
+      - go/**/README.md
       - web/packages/*/README.md
       - "**/locales/**"
       - go/pkgcore/**
