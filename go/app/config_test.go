@@ -6,7 +6,6 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
-	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -15,49 +14,18 @@ import (
 	pkgconfig "github.com/vislake/speed/go/pkgcore/config"
 )
 
-// TestPlatformConfig_DeclaresExactlyThePlatformKeyPaths pins the declaration
-// two ways: its field names spell the six declared key paths character for
-// character (which is what the loader's key-path derivation reads), and the
-// loader's own verification accepts those paths against the type.
-func TestPlatformConfig_DeclaresExactlyThePlatformKeyPaths(t *testing.T) {
-	var paths []string
-	var walk func(reflect.Type, string)
-	walk = func(t2 reflect.Type, prefix string) {
-		for i := 0; i < t2.NumField(); i++ {
-			f := t2.Field(i)
-			name := prefix + strings.ToLower(f.Name)
-			if f.Type.Kind() == reflect.Struct {
-				walk(f.Type, name+".")
-				continue
-			}
-			if !strings.Contains(f.Tag.Get(pkgconfig.TagName), "derive") {
-				t.Errorf("field %s carries no derive tag option", name)
-			}
-			paths = append(paths, name)
-		}
-	}
-	walk(reflect.TypeOf(PlatformConfig{}), "")
-
-	if !slices.Equal(paths, platformKeyPaths) {
-		t.Fatalf("PlatformConfig field paths = %v, want the declared key paths %v", paths, platformKeyPaths)
-	}
-	if err := pkgconfig.Verify(&PlatformConfig{}, platformKeyPaths); err != nil {
-		t.Fatalf("the declaration does not bind its own key paths: %v", err)
-	}
-}
-
-// TestNew_LoadsTheHostTargetAndThePlatformKeyMaterial pins the configuration
+// TestNew_LoadsTheHostTargetAndTheDeclaredKeyMaterial pins the configuration
 // stage end to end: one loader fills the host's own key from the injected
-// environment and the platform material from the declared path's environment
-// spelling (the prefix, then the path with each nesting level marked by a
-// double underscore).
-func TestNew_LoadsTheHostTargetAndThePlatformKeyMaterial(t *testing.T) {
+// environment and resolves a declared component key from the declared path's
+// environment spelling (the prefix, then the path with each nesting level
+// marked by a double underscore), publishing the value as bootstrap material.
+func TestNew_LoadsTheHostTargetAndTheDeclaredKeyMaterial(t *testing.T) {
 	var host testHostConfig
 	opts := testBaseOptions(t, &host)
 
 	wantKey := testKey(0x77)
 	t.Setenv("TEST_PORT", "4321")
-	t.Setenv("TEST_AUTHN__BLIND_INDEX_KEY", hex.EncodeToString(wantKey))
+	t.Setenv("TEST_CONFIG__CIPHER_KEY", hex.EncodeToString(wantKey))
 
 	a, err := New(context.Background(), opts...)
 	if err != nil {
@@ -68,23 +36,20 @@ func TestNew_LoadsTheHostTargetAndThePlatformKeyMaterial(t *testing.T) {
 	if host.Port != "4321" {
 		t.Errorf("host Port = %q, want the injected TEST_PORT value", host.Port)
 	}
-	if !slices.Equal(host.Authn.Blind_Index_Key, wantKey) {
-		t.Errorf("loaded authn blind-index material does not equal the injected value")
-	}
-	if slices.Equal(host.Config.Cipher_Key, wantKey) {
-		t.Error("the config cipher material took the authn key's value")
+	material := materialOf(t, a)
+	if got, ok := material.Material(testCipherKeyPath); !ok || !slices.Equal(got, wantKey) {
+		t.Errorf("material %s = %x (present %v), want the injected value", testCipherKeyPath, got, ok)
 	}
 }
 
-// TestNew_TheHostTargetCannotShadowThePlatformKeyPaths pins the embedding
-// rule: the host target's platform field is skipped, so the loader's walk of
-// the host target cannot resolve a prefixed spelling of a platform key. A
-// host that forgot the skip tag would otherwise resolve each key twice, under
-// two different spellings, from the same environment.
-func TestNew_TheHostTargetCannotShadowThePlatformKeyPaths(t *testing.T) {
+// TestNew_DeclaredKeysAreNotReachableThroughHostStructSpellings pins the
+// declaration's own reading surface: a declared key resolves only from the
+// variable derived from its declared path, so a spelling a host struct would
+// have produced reaches nothing.
+func TestNew_DeclaredKeysAreNotReachableThroughHostStructSpellings(t *testing.T) {
 	var host testHostConfig
 	opts := testBaseOptions(t, &host)
-	defaultKey := slices.Clone(host.Config.Cipher_Key)
+	tableKey, _ := testDevDefaults()[testCipherKeyPath]
 
 	t.Setenv("TEST_PLATFORMCONFIG__CONFIG__CIPHER_KEY", hex.EncodeToString(testKey(0x99)))
 
@@ -94,15 +59,16 @@ func TestNew_TheHostTargetCannotShadowThePlatformKeyPaths(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = a.Close(context.Background()) })
 
-	if !slices.Equal(host.Config.Cipher_Key, defaultKey) {
-		t.Error("a prefixed spelling of the platform path reached the platform key material; the host target's platform field must stay skipped")
+	got, ok := materialOf(t, a).Material(testCipherKeyPath)
+	if !ok || !slices.Equal(got, tableKey) {
+		t.Error("a prefixed struct spelling of the declared path reached the key material; only the declared path's own spelling may")
 	}
 }
 
 // TestNew_DerivesKeyMaterialFromTheRootKey pins the derivation wiring: with a
-// root key and the platform derivation installed, material no source supplies
-// explicitly resolves to the platform composition's answer for the field's
-// declared path.
+// root key and the platform derivation installed, a declared key no source
+// supplies explicitly resolves to the platform composition's answer for its
+// declared path -- the derivation outranks the declared defaults table.
 func TestNew_DerivesKeyMaterialFromTheRootKey(t *testing.T) {
 	var host testHostConfig
 	rootKey := testKey(0xAB)
@@ -114,9 +80,6 @@ func TestNew_DerivesKeyMaterialFromTheRootKey(t *testing.T) {
 		),
 		WithDatabase(testDatabaseSpec(t)),
 	}
-	host.Config.Cipher_Key = nil
-	host.Authn.Blind_Index_Key = nil
-	host.Authn.PII_Cipher_Key = nil
 
 	a, err := New(context.Background(), opts...)
 	if err != nil {
@@ -124,21 +87,56 @@ func TestNew_DerivesKeyMaterialFromTheRootKey(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = a.Close(context.Background()) })
 
-	for _, tc := range []struct {
-		path string
-		got  []byte
-	}{
-		{"config.cipher_key", host.Config.Cipher_Key},
-		{"authn.blind_index_key", host.Authn.Blind_Index_Key},
-		{"authn.pii_cipher_key", host.Authn.PII_Cipher_Key},
-	} {
-		want, err := dbkit.DeriveBootstrapKey(rootKey, tc.path)
-		if err != nil {
-			t.Fatalf("derive the expectation for %s: %v", tc.path, err)
-		}
-		if !slices.Equal(tc.got, want) {
-			t.Errorf("material at %s was not derived from the root key", tc.path)
-		}
+	material := materialOf(t, a)
+	want, err := dbkit.DeriveBootstrapKey(rootKey, testCipherKeyPath)
+	if err != nil {
+		t.Fatalf("derive the expectation for %s: %v", testCipherKeyPath, err)
+	}
+	if got, ok := material.Material(testCipherKeyPath); !ok || !slices.Equal(got, want) {
+		t.Errorf("material at %s was not derived from the root key", testCipherKeyPath)
+	}
+}
+
+// TestNew_RefusesAMissingCipherMaterial pins the infrastructure step's
+// refusal when nothing supplies the key the platform cipher is built from:
+// the error names the declared path, and it fails before the database opens.
+func TestNew_RefusesAMissingCipherMaterial(t *testing.T) {
+	var host testHostConfig
+	_, err := New(context.Background(),
+		// An empty table: with no environment variable, no root key and no
+		// table entry, the declared key resolves to nothing.
+		testConfigOption(&host, ConfigDevDefaults(nil)),
+		WithDatabase(testDatabaseSpec(t)),
+	)
+	if err == nil {
+		t.Fatal("New() with no cipher material error = nil, want a refusal")
+	}
+	if !strings.Contains(err.Error(), testCipherKeyPath) {
+		t.Fatalf("refusal = %v, want it to name the declared key path %q", err, testCipherKeyPath)
+	}
+}
+
+// TestNew_RefusesAMalformedPlatformCipher pins how a bad material is
+// reported: the declared defaults table's own entry is validated where it is
+// read, the refusal names the declared key path and the table, and the boot
+// never reaches the database.
+func TestNew_RefusesAMalformedPlatformCipher(t *testing.T) {
+	var host testHostConfig
+	_, err := New(context.Background(),
+		testConfigOption(&host, ConfigDevDefaults(map[string][]byte{testCipherKeyPath: []byte("too short")})),
+		WithDatabase(testDatabaseSpec(t)),
+	)
+	if err == nil {
+		t.Fatal("New() with a malformed platform cipher error = nil, want a refusal")
+	}
+	if !strings.Contains(err.Error(), "config.cipher_key") {
+		t.Fatalf("cipher refusal does not name the declared key path: %v", err)
+	}
+	if !strings.Contains(err.Error(), "declared defaults table") {
+		t.Fatalf("cipher refusal does not name the table the entry came from: %v", err)
+	}
+	if !errors.Is(err, pkgconfig.ErrInvalidValue) {
+		t.Fatalf("cipher refusal = %v, want it to wrap config.ErrInvalidValue", err)
 	}
 }
 
@@ -147,7 +145,6 @@ func TestNew_DerivesKeyMaterialFromTheRootKey(t *testing.T) {
 // one the error names.
 func TestNew_RefusesAMalformedRootKeyVariable(t *testing.T) {
 	var host testHostConfig
-	host.PlatformConfig = testPlatformConfig()
 	opts := []Option{
 		testConfigOption(&host, ConfigRootKeyEnv("TEST_ROOT_KEY")),
 		WithDatabase(testDatabaseSpec(t)),
@@ -164,8 +161,8 @@ func TestNew_RefusesAMalformedRootKeyVariable(t *testing.T) {
 }
 
 // TestNew_LoadsFromAConfigFile pins the file source: a config file spells the
-// same dotted key paths the flag and environment sources do, for both
-// targets.
+// same dotted key paths the flag and environment sources do, for both the
+// host's own keys and the declared keys.
 func TestNew_LoadsFromAConfigFile(t *testing.T) {
 	var host testHostConfig
 	fileKey := testKey(0x5A)
@@ -188,8 +185,8 @@ func TestNew_LoadsFromAConfigFile(t *testing.T) {
 	if host.Port != "7777" {
 		t.Errorf("host Port = %q, want the config file's value", host.Port)
 	}
-	if !slices.Equal(host.Config.Cipher_Key, fileKey) {
-		t.Error("the config file's cipher material did not reach the platform target")
+	if got, ok := materialOf(t, a).Material(testCipherKeyPath); !ok || !slices.Equal(got, fileKey) {
+		t.Error("the config file's cipher material did not reach the declared key")
 	}
 }
 
@@ -203,7 +200,6 @@ func TestNew_RefusesAnUnreadableConfigFile(t *testing.T) {
 		t.Fatalf("write the config file: %v", err)
 	}
 
-	host.PlatformConfig = testPlatformConfig()
 	_, err := New(context.Background(),
 		testConfigOption(&host, ConfigFile(path)),
 		WithDatabase(testDatabaseSpec(t)),
@@ -217,7 +213,6 @@ func TestNew_RefusesAnUnreadableConfigFile(t *testing.T) {
 // wires it: the highest source (the command line) beats the environment.
 func TestNew_FlagsWinOverTheEnvironment(t *testing.T) {
 	var host testHostConfig
-	host.PlatformConfig = testPlatformConfig()
 	opts := []Option{
 		testConfigOption(&host, ConfigArgs([]string{"--port=9999"})),
 		WithDatabase(testDatabaseSpec(t)),
@@ -242,7 +237,7 @@ func TestWithConfig_KeepsTheLoaderOptionsInOrder(t *testing.T) {
 	var host testHostConfig
 	cfg := &engineConfig{}
 	WithConfig(
-		ConfigSpec{Host: &host, Platform: &host.PlatformConfig},
+		ConfigSpec{Host: &host},
 		ConfigArgs([]string{"--port=1111"}),
 		ConfigArgs([]string{"--port=2222"}),
 	)(cfg)

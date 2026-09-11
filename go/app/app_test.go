@@ -10,13 +10,8 @@ import (
 
 	"gorm.io/gorm"
 
-	"github.com/vislake/speed/go/dbkit"
 	"github.com/vislake/speed/go/pkgcore"
 )
-
-// testTokenKey is a bootstrap key the host target binds: the fixtures use it
-// where a declared key must pass the binding check.
-var testTokenKey = pkgcore.BootstrapKey{Key: "token", Format: "string"}
 
 // TestNew_RunsTheAssemblyStagesInOrder pins the engine's fixed order as the
 // host feels it: the pre-database callback before any module is constructed,
@@ -29,9 +24,9 @@ func TestNew_RunsTheAssemblyStagesInOrder(t *testing.T) {
 	worker := &testWorker{}
 
 	a, err := New(context.Background(), append(testBaseOptions(t, &host),
-		WithPreDB(func(_ context.Context, cipher *dbkit.Cipher) error {
-			if cipher == nil {
-				t.Error("the pre-database callback received a nil cipher")
+		WithPreDB(func(_ context.Context, deps PreDBDeps) error {
+			if deps.Cipher == nil || deps.Material == nil {
+				t.Errorf("the pre-database callback received deps %+v, want the platform cipher and the bootstrap material", deps)
 			}
 			record("pre-db")
 			return nil
@@ -126,7 +121,7 @@ func TestNew_RequiresConfigAndDatabase(t *testing.T) {
 
 	var host testHostConfig
 	_, err := New(context.Background(), WithConfig(
-		ConfigSpec{Host: &host, Platform: &host.PlatformConfig},
+		ConfigSpec{Host: &host},
 		testConfigOptions()...,
 	))
 	if err == nil || !strings.Contains(err.Error(), "WithDatabase is required") {
@@ -134,25 +129,15 @@ func TestNew_RequiresConfigAndDatabase(t *testing.T) {
 	}
 }
 
-// TestNew_RefusesAnIncompleteConfigSpec pins the two target refusals the
-// configuration stage names.
-func TestNew_RefusesAnIncompleteConfigSpec(t *testing.T) {
-	var host testHostConfig
-
+// TestNew_RefusesAMissingConfigHost pins the configuration stage's target
+// refusal.
+func TestNew_RefusesAMissingConfigHost(t *testing.T) {
 	_, err := New(context.Background(),
-		WithConfig(ConfigSpec{Platform: &host.PlatformConfig}, testConfigOptions()...),
+		WithConfig(ConfigSpec{}, testConfigOptions()...),
 		WithDatabase(testDatabaseSpec(t)),
 	)
 	if err == nil || !strings.Contains(err.Error(), "ConfigSpec.Host") {
 		t.Fatalf("New() with a nil Host error = %v, want one naming ConfigSpec.Host", err)
-	}
-
-	_, err = New(context.Background(),
-		WithConfig(ConfigSpec{Host: &host}, testConfigOptions()...),
-		WithDatabase(testDatabaseSpec(t)),
-	)
-	if err == nil || !strings.Contains(err.Error(), "ConfigSpec.Platform") {
-		t.Fatalf("New() with a nil Platform error = %v, want one naming ConfigSpec.Platform", err)
 	}
 }
 
@@ -203,40 +188,6 @@ func TestNew_RollsBackALateStageFailure(t *testing.T) {
 	}
 }
 
-// TestVerifyBinding_RefusesAnUnboundDeclaredKey pins the schema half of the
-// bootstrap binding: a key declared on the module Registry's bootstrap seat
-// that maps onto no field of either configuration target fails the boot,
-// naming the key.
-func TestVerifyBinding_RefusesAnUnboundDeclaredKey(t *testing.T) {
-	host := testHostConfig{PlatformConfig: testPlatformConfig()}
-
-	reg := pkgcore.NewRegistry(pkgcore.NewMemoryEventBus(), pkgcore.NewMemoryKVStore(), pkgcore.NewConsoleMailer())
-	if err := reg.Bootstrap.Add(pkgcore.BootstrapKey{Key: "probe.token", Format: "string"}); err != nil {
-		t.Fatalf("Bootstrap.Add() = %v", err)
-	}
-
-	err := verifyBinding(&ConfigSpec{Host: &host, Platform: &host.PlatformConfig}, reg)
-	if err == nil {
-		t.Fatal("verifyBinding() with an unbound declared key = nil, want a binding refusal")
-	}
-	if !strings.Contains(err.Error(), "probe.token") {
-		t.Fatalf("binding refusal does not name the declared key: %v", err)
-	}
-	if !errors.Is(err, pkgcore.ErrInvalidBootstrapKey) && !strings.Contains(err.Error(), "maps onto no field") {
-		t.Fatalf("binding refusal does not explain the missing field: %v", err)
-	}
-
-	// The negative half: the same declaration with a key the host target
-	// binds passes.
-	bound := pkgcore.NewRegistry(pkgcore.NewMemoryEventBus(), pkgcore.NewMemoryKVStore(), pkgcore.NewConsoleMailer())
-	if err := bound.Bootstrap.Add(testTokenKey); err != nil {
-		t.Fatalf("Bootstrap.Add() = %v", err)
-	}
-	if err := verifyBinding(&ConfigSpec{Host: &host, Platform: &host.PlatformConfig}, bound); err != nil {
-		t.Fatalf("verifyBinding() with a bound declared key = %v, want nil", err)
-	}
-}
-
 // TestWithoutBackgroundWorkers_SkipsStartButStillCloses pins the explicit
 // gate: the worker never starts this process's background work, and the
 // ordered shutdown still closes it.
@@ -283,26 +234,6 @@ func TestClose_IsIdempotent(t *testing.T) {
 	}
 	if _, closes := worker.counts(); closes != 1 {
 		t.Fatalf("worker Close calls = %d, want exactly 1", closes)
-	}
-}
-
-// TestNew_RefusesAMalformedPlatformCipher pins where the platform cipher is
-// built and how a bad material is reported: the infrastructure stage refuses
-// it, naming the declared key path the material belongs to.
-func TestNew_RefusesAMalformedPlatformCipher(t *testing.T) {
-	var host testHostConfig
-	opts := testBaseOptions(t, &host)
-	host.Config.Cipher_Key = []byte("too short")
-
-	_, err := New(context.Background(), opts...)
-	if err == nil {
-		t.Fatal("New() with a malformed platform cipher error = nil, want a refusal")
-	}
-	if !strings.Contains(err.Error(), "config.cipher_key") {
-		t.Fatalf("cipher refusal does not name the declared key path: %v", err)
-	}
-	if !errors.Is(err, dbkit.ErrInvalidKeySize) {
-		t.Fatalf("cipher refusal = %v, want it to wrap dbkit.ErrInvalidKeySize", err)
 	}
 }
 

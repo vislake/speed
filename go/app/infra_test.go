@@ -14,21 +14,29 @@ import (
 // TestNew_RunsPreDBBeforeTheDatabaseIsOpen pins the ordering constraint the
 // callback exists for: it runs after the platform cipher is built and before
 // dbkit.Open touches the DSN, so GORM never parses a model whose serializer
-// has not been registered yet.
+// has not been registered yet. It also pins the callback's bootstrap-material
+// channel: the resolved material a module's serializers and indexers are
+// built from is available before the database opens, the same source
+// WithModules receives.
 func TestNew_RunsPreDBBeforeTheDatabaseIsOpen(t *testing.T) {
-	host := testHostConfig{PlatformConfig: testPlatformConfig()}
+	host := testHostConfig{}
 	spec := testDatabaseSpec(t)
 	var preDBCipher *dbkit.Cipher
+	var preDBMaterial *pkgcore.BootstrapMaterial
 	var moduleCipher *dbkit.Cipher
 
 	_, err := New(context.Background(),
-		WithConfig(ConfigSpec{Host: &host, Platform: &host.PlatformConfig}, testConfigOptions()...),
+		WithConfig(ConfigSpec{Host: &host}, testConfigOptions()...),
 		WithDatabase(spec),
-		WithPreDB(func(_ context.Context, cipher *dbkit.Cipher) error {
-			if cipher == nil {
+		WithPreDB(func(_ context.Context, deps PreDBDeps) error {
+			if deps.Cipher == nil {
 				t.Error("the pre-database callback received a nil cipher")
 			}
-			preDBCipher = cipher
+			if deps.Material == nil {
+				t.Error("the pre-database callback received no bootstrap material")
+			}
+			preDBCipher = deps.Cipher
+			preDBMaterial = deps.Material
 			if _, statErr := os.Stat(spec.DSN); !errors.Is(statErr, os.ErrNotExist) {
 				t.Errorf("the database file exists during pre-db (stat error %v), want the callback to run before Open", statErr)
 			}
@@ -38,6 +46,9 @@ func TestNew_RunsPreDBBeforeTheDatabaseIsOpen(t *testing.T) {
 			moduleCipher = deps.Cipher
 			if _, statErr := os.Stat(spec.DSN); statErr != nil {
 				t.Errorf("the database file is missing during module construction: %v", statErr)
+			}
+			if deps.Material == nil {
+				t.Error("WithModules received no bootstrap material")
 			}
 			return nil, nil
 		}),
@@ -50,6 +61,9 @@ func TestNew_RunsPreDBBeforeTheDatabaseIsOpen(t *testing.T) {
 	}
 	if preDBCipher == nil || preDBCipher != moduleCipher {
 		t.Error("WithPreDB and WithModules received different ciphers, want one platform cipher for both")
+	}
+	if _, ok := preDBMaterial.Material(testCipherKeyPath); !ok {
+		t.Errorf("the pre-database callback's material carries no %s, want the declared key resolved", testCipherKeyPath)
 	}
 }
 
@@ -132,10 +146,10 @@ func TestNew_RefusesAModuleRegistrationError(t *testing.T) {
 // TestNew_RefusesAnUnknownDialect pins the dialect refusal: an unrecognized
 // dialect never reaches the driver, it fails the infrastructure stage.
 func TestNew_RefusesAnUnknownDialect(t *testing.T) {
-	host := testHostConfig{PlatformConfig: testPlatformConfig()}
+	host := testHostConfig{}
 
 	_, err := New(context.Background(),
-		WithConfig(ConfigSpec{Host: &host, Platform: &host.PlatformConfig}, testConfigOptions()...),
+		WithConfig(ConfigSpec{Host: &host}, testConfigOptions()...),
 		WithDatabase(DatabaseSpec{Dialect: "oracle", DSN: "anywhere"}),
 	)
 	if err == nil {
@@ -150,13 +164,13 @@ func TestNew_RefusesAnUnknownDialect(t *testing.T) {
 // fields reaching dbkit.Open: a capture scope naming a model that cannot be
 // captured is refused by Open, which never happens if the spec never arrives.
 func TestNew_HandsTheAuditCaptureScopeToOpen(t *testing.T) {
-	host := testHostConfig{PlatformConfig: testPlatformConfig()}
+	host := testHostConfig{}
 	spec := testDatabaseSpec(t)
 	spec.AuditBus = pkgcore.NewMemoryEventBus()
 	spec.AuditModels = []any{&struct{ NotAuditable string }{}} // deliberately not Auditable
 
 	_, err := New(context.Background(),
-		WithConfig(ConfigSpec{Host: &host, Platform: &host.PlatformConfig}, testConfigOptions()...),
+		WithConfig(ConfigSpec{Host: &host}, testConfigOptions()...),
 		WithDatabase(spec),
 	)
 	if err == nil {

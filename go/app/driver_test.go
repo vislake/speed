@@ -52,17 +52,16 @@ func stageRecorderComponent(name string, log *[]string) pkgcore.Component {
 	}
 }
 
-// driverLoadSpec returns a load spec over the test fixtures' host target:
-// the composition the tests Put selects the components they registered, and
-// the binding verification has the fixtures' targets to bind against.
+// driverLoadSpec returns a load spec over the test fixtures' host target: the
+// composition the tests Put selects the components they registered, and the
+// loader's options carry the fixtures' declared defaults table.
 func driverLoadSpec(t *testing.T, host *testHostConfig) LoadSpec {
 	t.Helper()
-	*host = testHostConfig{PlatformConfig: testPlatformConfig()}
+	*host = testHostConfig{}
 	return LoadSpec{
-		Host:     host,
-		Platform: &host.PlatformConfig,
-		Options:  testConfigOptions(),
-		Args:     []string{},
+		Host:    host,
+		Options: testConfigOptions(),
+		Args:    []string{},
 	}
 }
 

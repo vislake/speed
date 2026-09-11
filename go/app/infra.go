@@ -51,15 +51,31 @@ func WithDatabase(spec DatabaseSpec) Option {
 // named serializer while it parses the schema, so a module's encrypted-column
 // serializers and blind indexers have to be in place before the connection
 // that will parse those models exists. The callback receives the platform
-// cipher built from the config.cipher_key material; a host whose modules need
-// further ciphers or indexers builds them from its own configuration target
-// (the same pointer it handed to WithConfig) inside this callback.
-func WithPreDB(fn func(ctx context.Context, cipher *dbkit.Cipher) error) Option {
+// cipher built from the config.cipher_key material, and the assembly's
+// resolved bootstrap material, so the ciphers and indexers of keys a
+// component declares -- authn's PII cipher, pki's local-key cipher -- are
+// built from the very resolutions every other consumer reads.
+func WithPreDB(fn func(ctx context.Context, deps PreDBDeps) error) Option {
 	return func(c *engineConfig) { c.preDB = fn }
 }
 
-// ModuleDeps is what a WithModules callback receives: the opened database and
-// the platform cipher, both ready for module construction.
+// PreDBDeps is what a WithPreDB callback receives: the platform cipher and
+// the assembly's resolved bootstrap material, both ready before the database
+// opens.
+type PreDBDeps struct {
+	// Cipher is the platform cipher built from the config.cipher_key
+	// material.
+	Cipher *dbkit.Cipher
+
+	// Material is the assembly's resolved bootstrap material: every
+	// registered component's declared keys, addressed by declared key path
+	// (Material returns the []byte of a hexkey declaration).
+	Material *pkgcore.BootstrapMaterial
+}
+
+// ModuleDeps is what a WithModules callback receives: the opened database,
+// the platform cipher and the resolved bootstrap material, all ready for
+// module construction.
 type ModuleDeps struct {
 	// DB is the database dbkit.Open returned, already carrying the tenant
 	// scoping and soft-delete plugins and any write-capture wiring the
@@ -69,6 +85,10 @@ type ModuleDeps struct {
 	// Cipher is the platform cipher built from the config.cipher_key
 	// material, the same instance WithPreDB received.
 	Cipher *dbkit.Cipher
+
+	// Material is the assembly's resolved bootstrap material, the same
+	// source WithPreDB received: the declared keys' values by key path.
+	Material *pkgcore.BootstrapMaterial
 }
 
 // WithModules registers the callback stage 3 runs to construct the module

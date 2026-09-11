@@ -31,14 +31,13 @@ import (
 // variable the ambient environment might carry.
 const testEnvPrefix = "TEST_"
 
-// testHostConfig is a minimal host configuration target: the platform key
-// material embedded and skipped -- the engine loads that value as its own
-// target, which keeps the six declared key paths unprefixed -- beside one
-// host key of its own.
+// testHostConfig is a minimal host configuration target: the host's own keys,
+// resolved by the loader. Declared bootstrap keys are deliberately absent
+// from it -- a declaration is resolved off the component that makes it, with
+// no host struct field behind it.
 type testHostConfig struct {
-	PlatformConfig `config:"-"`
-	Port           string `config:"env=TEST_PORT"`
-	Token          string `config:"env=TEST_TOKEN"`
+	Port  string `config:"env=TEST_PORT"`
+	Token string `config:"env=TEST_TOKEN"`
 }
 
 // testKey returns a distinct 32-byte key material for seed; every material a
@@ -51,22 +50,33 @@ func testKey(seed byte) []byte {
 	return b
 }
 
-// testPlatformConfig returns a PlatformConfig with all six materials
-// pre-filled: the loader's struct-default source, which is what a test
-// assembles a boot with when the key material itself is not under test.
-func testPlatformConfig() PlatformConfig {
-	return PlatformConfig{
-		Authn: PlatformAuthnKeyMaterial{
-			Blind_Index_Key: testKey(0x10),
-			PII_Cipher_Key:  testKey(0x20),
-		},
-		Config: PlatformConfigKeyMaterial{Cipher_Key: testKey(0x30)},
-		Notification: PlatformNotificationKeyMaterial{
-			Contact_Index_Key: testKey(0x40),
-		},
-		Org: PlatformOrgKeyMaterial{Invitation_Email_Index_Key: testKey(0x50)},
-		PKI: PlatformPKIKeyMaterial{Local_Key_Cipher_Key: testKey(0x60)},
+// The declared bootstrap key the app package's own tests resolve. It is not
+// a fixture: the go/config component declares config.cipher_key, and the
+// package's own kernel tests import go/config, so this test binary's
+// registration carries the real declaration -- the same shape a consumer
+// gets by importing the module packages whose components declare their keys.
+// The engine's infrastructure step builds its platform cipher from that key,
+// so a binary whose registration carried no such declaration could not
+// assemble (the infrastructure step reports it, naming the path).
+const testCipherKeyPath = "config.cipher_key"
+
+// testDevDefaults returns the declared defaults table the declared keys fall
+// back to: a recognizable 32-byte material per key, the shape a host's
+// documented non-secret development defaults take.
+func testDevDefaults() map[string][]byte {
+	return map[string][]byte{
+		testCipherKeyPath: testKey(0x30),
 	}
+}
+
+// materialOf reads the bootstrap material an assembled application published.
+func materialOf(t *testing.T, a *Application) *pkgcore.BootstrapMaterial {
+	t.Helper()
+	material, err := pkgcore.Get[*pkgcore.BootstrapMaterial](a.reg)
+	if err != nil {
+		t.Fatalf("read the published bootstrap material: %v", err)
+	}
+	return material
 }
 
 // testDatabaseSpec returns a DatabaseSpec pointing at a fresh SQLite file
@@ -81,30 +91,33 @@ func testDatabaseSpec(t *testing.T) DatabaseSpec {
 
 // testConfigOptions returns the loader options every test's configuration
 // stage runs with: no process arguments (the test binary owns flags of its
-// own) and the test's environment prefix.
+// own), the test's environment prefix, and the fixture declared defaults
+// table the registered keys fall back to. A test that needs the table empty
+// passes ConfigDevDefaults(nil) later in the same list.
 func testConfigOptions() []ConfigOption {
 	return []ConfigOption{
 		ConfigArgs([]string{}),
 		ConfigEnvPrefix(testEnvPrefix),
+		ConfigDevDefaults(testDevDefaults()),
 	}
 }
 
 // testConfigOption returns the WithConfig option a test boots with: the host
-// target, the platform key material embedded in it, the test's loader options
-// and whatever extra loader options the test's subject needs.
+// target, the test's loader options and whatever extra loader options the
+// test's subject needs.
 func testConfigOption(host *testHostConfig, extra ...ConfigOption) Option {
 	return WithConfig(
-		ConfigSpec{Host: host, Platform: &host.PlatformConfig},
+		ConfigSpec{Host: host},
 		append(testConfigOptions(), extra...)...,
 	)
 }
 
-// testBaseOptions returns the option set a bare test boot assembles with:
-// the host target carrying prefilled platform material plus db, and nothing
-// else. Tests append the options their subject needs.
+// testBaseOptions returns the option set a bare test boot assembles with: the
+// host target plus db, and nothing else. Tests append the options their
+// subject needs.
 func testBaseOptions(t *testing.T, host *testHostConfig) []Option {
 	t.Helper()
-	*host = testHostConfig{PlatformConfig: testPlatformConfig()}
+	*host = testHostConfig{}
 	return []Option{
 		testConfigOption(host),
 		WithDatabase(testDatabaseSpec(t)),

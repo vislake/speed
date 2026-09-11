@@ -1,7 +1,9 @@
 package app
 
 import (
+	"bytes"
 	"context"
+	"encoding/hex"
 	"errors"
 	"os"
 	"path/filepath"
@@ -72,15 +74,13 @@ func TestLoad_TheFiveSourcesLayInOrder(t *testing.T) {
 	t.Setenv("TEST_COMPOSITION__COMPONENTS__PROBE__TOKEN", "from-env")
 
 	var host testHostConfig
-	host.PlatformConfig = testPlatformConfig()
 	reg := loaderTestRegistry(t, probeComponent("probe"))
 	override := pkgcore.ComponentConfig{}.With("components", pkgcore.ComponentConfig{}.
 		With("probe", pkgcore.ComponentConfig{}.With("token", "from-code")))
 	reg.Put(CompositionOverrides{Config: override})
 
 	spec := LoadSpec{
-		Host:     &host,
-		Platform: &host.PlatformConfig,
+		Host: &host,
 		Options: append(testConfigOptions(),
 			ConfigFile(filePath),
 			ConfigArgs([]string{"--composition.components.probe.token=from-flag"}),
@@ -109,14 +109,12 @@ func TestLoad_TheFiveSourcesLayInOrder(t *testing.T) {
 // observability component.
 func TestLoad_BuiltinDefaultsStandWhenNothingSuppliesValues(t *testing.T) {
 	var host testHostConfig
-	host.PlatformConfig = testPlatformConfig()
 	reg := loaderTestRegistry(t)
 
 	if err := Load(context.Background(), reg, LoadSpec{
-		Host:     &host,
-		Platform: &host.PlatformConfig,
-		Options:  testConfigOptions(),
-		Args:     []string{},
+		Host:    &host,
+		Options: testConfigOptions(),
+		Args:    []string{},
 	}); err != nil {
 		t.Fatalf("Load() error = %v", err)
 	}
@@ -142,14 +140,12 @@ func TestLoad_ReadsTheQ8EnvSpelling(t *testing.T) {
 	t.Setenv("TEST_COMPOSITION__COMPONENTS__MAILER_SMTP__PORT", "587")
 
 	var host testHostConfig
-	host.PlatformConfig = testPlatformConfig()
 	reg := loaderTestRegistry(t)
 
 	if err := Load(context.Background(), reg, LoadSpec{
-		Host:     &host,
-		Platform: &host.PlatformConfig,
-		Options:  testConfigOptions(),
-		Args:     []string{},
+		Host:    &host,
+		Options: testConfigOptions(),
+		Args:    []string{},
 	}); err != nil {
 		t.Fatalf("Load() error = %v", err)
 	}
@@ -171,7 +167,6 @@ func TestLoad_ReadsTheQ8EnvSpelling(t *testing.T) {
 // probe.
 func TestLoad_ReadsTheQ8FlagSpelling(t *testing.T) {
 	var host testHostConfig
-	host.PlatformConfig = testPlatformConfig()
 	reg := loaderTestRegistry(t, probeComponent("mailer"))
 
 	args := []string{
@@ -180,10 +175,9 @@ func TestLoad_ReadsTheQ8FlagSpelling(t *testing.T) {
 		"--composition.components.mailer=false",
 	}
 	if err := Load(context.Background(), reg, LoadSpec{
-		Host:     &host,
-		Platform: &host.PlatformConfig,
-		Options:  testConfigOptions(),
-		Args:     args,
+		Host:    &host,
+		Options: testConfigOptions(),
+		Args:    args,
 	}); err != nil {
 		t.Fatalf("Load() error = %v", err)
 	}
@@ -204,25 +198,24 @@ func TestLoad_ReadsTheQ8FlagSpelling(t *testing.T) {
 
 // TestLoad_ResolvesBootstrapMaterial pins the material source: every
 // registered component's declared key resolves through the loader's own
-// chain -- the environment's spelling for the host's own key, the platform
-// target's prefilled material for a declared platform path -- and is
-// published by key path and by derivation purpose.
+// chain -- a text value from the environment's spelling of the declared
+// path, key material from its own variable or the declared defaults table --
+// and is published by key path and by derivation purpose.
 func TestLoad_ResolvesBootstrapMaterial(t *testing.T) {
 	t.Setenv("TEST_TOKEN", "host-token-value")
 
 	var host testHostConfig
-	host.PlatformConfig = testPlatformConfig()
-	wantKey := host.Authn.Blind_Index_Key
+	wantKey := testKey(0x77)
+	t.Setenv("TEST_PROBE__BLIND_INDEX_KEY", hex.EncodeToString(wantKey))
 	reg := loaderTestRegistry(t, probeComponent("probe",
 		pkgcore.BootstrapKey{Key: "token", Format: "string"},
-		pkgcore.BootstrapKey{Key: "authn.blind_index_key", Format: "hexkey"},
+		pkgcore.BootstrapKey{Key: "probe.blind_index_key", Format: "hexkey"},
 	))
 
 	if err := Load(context.Background(), reg, LoadSpec{
-		Host:     &host,
-		Platform: &host.PlatformConfig,
-		Options:  testConfigOptions(),
-		Args:     []string{},
+		Host:    &host,
+		Options: testConfigOptions(),
+		Args:    []string{},
 	}); err != nil {
 		t.Fatalf("Load() error = %v", err)
 	}
@@ -232,16 +225,13 @@ func TestLoad_ResolvesBootstrapMaterial(t *testing.T) {
 		t.Fatalf("read the published material source: %v", err)
 	}
 	if value, ok := material.Value("token"); !ok || value != "host-token-value" {
-		t.Errorf("material token = %v (present %v), want the host target's resolved value", value, ok)
+		t.Errorf("material token = %v (present %v), want the environment's resolved value", value, ok)
 	}
-	key, ok := material.Material("authn.blind_index_key")
-	if !ok || len(key) != len(wantKey) {
-		t.Fatalf("material authn.blind_index_key = %d bytes (present %v), want the platform target's prefilled material", len(key), ok)
+	if key, ok := material.Material("probe.blind_index_key"); !ok || !bytes.Equal(key, wantKey) {
+		t.Errorf("material probe.blind_index_key = %x (present %v), want the injected value", key, ok)
 	}
-	for i := range key {
-		if key[i] != wantKey[i] {
-			t.Fatalf("material authn.blind_index_key byte %d = %d, want %d", i, key[i], wantKey[i])
-		}
+	if key, ok := material.Material(testCipherKeyPath); !ok || !bytes.Equal(key, testDevDefaults()[testCipherKeyPath]) {
+		t.Errorf("material %s = %x (present %v), want the declared defaults table's value", testCipherKeyPath, key, ok)
 	}
 	purpose, err := pkgcore.BootstrapKeyPurpose("token")
 	if err != nil {
@@ -252,53 +242,171 @@ func TestLoad_ResolvesBootstrapMaterial(t *testing.T) {
 	}
 }
 
-// TestLoad_RefusesAnUnboundDeclaredKey pins the binding verification's
-// four-element failure: the stage, the declaring component, the unbound key
-// and the remedy, all named.
-func TestLoad_RefusesAnUnboundDeclaredKey(t *testing.T) {
+// TestLoad_LeavesAnUnresolvedDeclaredKeyAbsent pins the semantic the
+// declaration removed the binding check for: a declared key no source
+// supplies and no table entry stands for is not a failure -- the assembly
+// publishes no value for it, and the consumer that needs it reports the
+// missing material itself.
+func TestLoad_LeavesAnUnresolvedDeclaredKeyAbsent(t *testing.T) {
 	var host testHostConfig
-	host.PlatformConfig = testPlatformConfig()
 	reg := loaderTestRegistry(t, probeComponent("probe",
 		pkgcore.BootstrapKey{Key: "probe.unbound", Format: "string"},
 	))
 
-	err := Load(context.Background(), reg, LoadSpec{
-		Host:     &host,
-		Platform: &host.PlatformConfig,
-		Options:  testConfigOptions(),
-		Args:     []string{},
-	})
-	if err == nil {
-		t.Fatal("Load() with an unbound declared key error = nil, want a binding refusal")
+	if err := Load(context.Background(), reg, LoadSpec{
+		Host:    &host,
+		Options: testConfigOptions(),
+		Args:    []string{},
+	}); err != nil {
+		t.Fatalf("Load() error = %v, want a declaration with no supplied value to resolve to nothing", err)
 	}
-	for _, fragment := range []string{"stage prepare", `component "probe"`, "probe.unbound", "add a field for that key path"} {
-		if !strings.Contains(err.Error(), fragment) {
-			t.Errorf("binding refusal misses %q: %v", fragment, err)
-		}
+
+	material, err := pkgcore.BootstrapMaterialOf(reg)
+	if err != nil {
+		t.Fatalf("read the published material source: %v", err)
+	}
+	if value, ok := material.Value("probe.unbound"); ok {
+		t.Errorf("material probe.unbound = %v, want the key absent: no source supplied it", value)
 	}
 }
 
 // TestLoad_RefusesAnInvalidDeclaredKeyPath pins the declaration-shape
 // failure: a key path with an empty segment is refused, naming the declaring
-// component.
+// component, and the legacy purpose error stays in the chain.
 func TestLoad_RefusesAnInvalidDeclaredKeyPath(t *testing.T) {
 	var host testHostConfig
-	host.PlatformConfig = testPlatformConfig()
 	reg := loaderTestRegistry(t, probeComponent("probe",
 		pkgcore.BootstrapKey{Key: "probe..double", Format: "string"},
 	))
 
 	err := Load(context.Background(), reg, LoadSpec{
-		Host:     &host,
-		Platform: &host.PlatformConfig,
-		Options:  testConfigOptions(),
-		Args:     []string{},
+		Host:    &host,
+		Options: testConfigOptions(),
+		Args:    []string{},
 	})
 	if err == nil || !strings.Contains(err.Error(), "probe..double") {
 		t.Fatalf("Load() with an invalid declared key path error = %v, want one naming the path", err)
 	}
 	if !errors.Is(err, pkgcore.ErrInvalidBootstrapKeyPath) {
 		t.Fatalf("refusal = %v, want it to wrap pkgcore.ErrInvalidBootstrapKeyPath", err)
+	}
+	for _, fragment := range []string{"stage prepare", `component "probe"`} {
+		if !strings.Contains(err.Error(), fragment) {
+			t.Errorf("refusal misses %q: %v", fragment, err)
+		}
+	}
+}
+
+// TestLoad_RefusesAnUnknownDeclaredFormat pins the format closed set's
+// four-element failure: the stage, the declaring component, the offending
+// format and the accepted set.
+func TestLoad_RefusesAnUnknownDeclaredFormat(t *testing.T) {
+	var host testHostConfig
+	reg := loaderTestRegistry(t, probeComponent("probe",
+		pkgcore.BootstrapKey{Key: "probe.timeout", Format: "duration"},
+	))
+
+	err := Load(context.Background(), reg, LoadSpec{
+		Host:    &host,
+		Options: testConfigOptions(),
+		Args:    []string{},
+	})
+	if err == nil {
+		t.Fatal("Load() with an unknown declared format error = nil, want a refusal")
+	}
+	for _, fragment := range []string{"stage prepare", `component "probe"`, `"duration"`, `"hexkey"`} {
+		if !strings.Contains(err.Error(), fragment) {
+			t.Errorf("format refusal misses %q: %v", fragment, err)
+		}
+	}
+}
+
+// TestLoad_RefusesASensitiveDeclarationWithoutADescription pins the pairing
+// rule the Component world had never enforced before the loader reads its
+// declarations: a secret key whose contract is unwritten is refused, naming
+// the component.
+func TestLoad_RefusesASensitiveDeclarationWithoutADescription(t *testing.T) {
+	var host testHostConfig
+	reg := loaderTestRegistry(t, probeComponent("probe",
+		pkgcore.BootstrapKey{Key: "probe.secret", Format: "string", Sensitive: true},
+	))
+
+	err := Load(context.Background(), reg, LoadSpec{
+		Host:    &host,
+		Options: testConfigOptions(),
+		Args:    []string{},
+	})
+	if err == nil {
+		t.Fatal("Load() with a Sensitive declaration and no Description error = nil, want a refusal")
+	}
+	for _, fragment := range []string{"stage prepare", `component "probe"`, "probe.secret", "Sensitive", "Description"} {
+		if !strings.Contains(err.Error(), fragment) {
+			t.Errorf("pairing refusal misses %q: %v", fragment, err)
+		}
+	}
+}
+
+// TestLoad_MergesIdenticalDeclarationsAcrossComponents pins the transition
+// bridge's shape: a wrapper carries its module descriptor's own declarations,
+// so the same declaration arrives twice, and two identical declarations are
+// one declaration.
+func TestLoad_MergesIdenticalDeclarationsAcrossComponents(t *testing.T) {
+	var host testHostConfig
+	decl := pkgcore.BootstrapKey{Key: "probe.shared", Format: "string"}
+	t.Setenv("TEST_PROBE__SHARED", "shared-value")
+	reg := loaderTestRegistry(t,
+		probeComponent("probe", decl),
+		probeComponent("probe.wrapper", decl),
+	)
+
+	if err := Load(context.Background(), reg, LoadSpec{
+		Host:    &host,
+		Options: testConfigOptions(),
+		Args:    []string{},
+	}); err != nil {
+		t.Fatalf("Load() with one declaration carried twice error = %v, want it merged", err)
+	}
+
+	material, err := pkgcore.BootstrapMaterialOf(reg)
+	if err != nil {
+		t.Fatalf("read the published material source: %v", err)
+	}
+	if value, ok := material.Value("probe.shared"); !ok || value != "shared-value" {
+		t.Errorf("material probe.shared = %v (present %v), want the merged declaration resolved", value, ok)
+	}
+	count := 0
+	for _, path := range material.KeyPaths() {
+		if path == "probe.shared" {
+			count++
+		}
+	}
+	if count != 1 {
+		t.Errorf("material key paths = %v, want the merged key once", material.KeyPaths())
+	}
+}
+
+// TestLoad_RefusesConflictingDeclarations pins the other half of the merge
+// rule: one key path two components declare differently has no single
+// resolution, so the load names both components.
+func TestLoad_RefusesConflictingDeclarations(t *testing.T) {
+	var host testHostConfig
+	reg := loaderTestRegistry(t,
+		probeComponent("probe", pkgcore.BootstrapKey{Key: "probe.shared", Format: "string", Description: "one reading"}),
+		probeComponent("probe.wrapper", pkgcore.BootstrapKey{Key: "probe.shared", Format: "string", Description: "another reading"}),
+	)
+
+	err := Load(context.Background(), reg, LoadSpec{
+		Host:    &host,
+		Options: testConfigOptions(),
+		Args:    []string{},
+	})
+	if err == nil {
+		t.Fatal("Load() with two differing declarations of one key error = nil, want a refusal")
+	}
+	for _, fragment := range []string{"stage prepare", `component "probe"`, `component "probe.wrapper"`, "probe.shared"} {
+		if !strings.Contains(err.Error(), fragment) {
+			t.Errorf("conflict refusal misses %q: %v", fragment, err)
+		}
 	}
 }
 
@@ -317,14 +425,12 @@ func TestLoad_RequiresAHostTarget(t *testing.T) {
 func TestLoad_RefusesABadCompositionValue(t *testing.T) {
 	t.Setenv("TEST_COMPOSITION__STRICT", "not-a-bool")
 	var host testHostConfig
-	host.PlatformConfig = testPlatformConfig()
 	reg := loaderTestRegistry(t)
 
 	err := Load(context.Background(), reg, LoadSpec{
-		Host:     &host,
-		Platform: &host.PlatformConfig,
-		Options:  testConfigOptions(),
-		Args:     []string{},
+		Host:    &host,
+		Options: testConfigOptions(),
+		Args:    []string{},
 	})
 	if err == nil || !strings.Contains(err.Error(), "strict") {
 		t.Fatalf("Load() with a malformed strict value error = %v, want one naming the key", err)

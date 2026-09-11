@@ -160,19 +160,35 @@ func (asm *transitionAssembly) build(ctx context.Context) error {
 	// Prelude, configuration: the same loader invocation the engine loader
 	// performs, so the host's option values (which may depend on loaded
 	// configuration) and the drive's own load agree by construction.
-	if err := loadConfiguration(cfg); err != nil {
+	loader, err := loadConfiguration(cfg)
+	if err != nil {
+		return err
+	}
+
+	// Prelude, declarations: the component registry exists before anything
+	// is constructed, and the registered components' declared bootstrap keys
+	// resolve over it now -- the drive's own Load re-resolves the same
+	// declarations through the same loader chain and publishes them -- because
+	// the platform cipher the infrastructure step builds comes from that
+	// material, before any component's Prepare callback exists to read it from
+	// the registry.
+	reg := pkgcore.NewComponentRegistry()
+	asm.reg = reg
+	asm.app.reg = reg
+	material, err := resolveBootstrapMaterial(loader, reg)
+	if err != nil {
 		return err
 	}
 
 	// Prelude, infrastructure: the platform cipher, the host's pre-database
 	// callback, then the database itself.
-	if err := asm.openInfrastructure(ctx); err != nil {
+	if err := asm.openInfrastructure(ctx, material); err != nil {
 		return err
 	}
 
 	// Prelude, modules: the host's callback constructs the module set over
-	// the open database and the platform cipher.
-	modules, err := asm.constructModules(ctx)
+	// the open database, the platform cipher and the resolved material.
+	modules, err := asm.constructModules(ctx, material)
 	if err != nil {
 		return err
 	}
@@ -184,19 +200,19 @@ func (asm *transitionAssembly) build(ctx context.Context) error {
 		return err
 	}
 
-	// The component registry: seeded from the global registration (the
-	// engine's own components included), then the seam values, the wrapped
-	// module set, the host steps and the HTTP and worker components.
+	// The component registry: the prelude's registry -- the global
+	// registration, seeded when it was created -- plus the seam values, the
+	// wrapped module set, the host steps and the HTTP and worker components.
 	if err := asm.buildRegistry(modules); err != nil {
 		return err
 	}
 
-	// The drive: the engine loader (configuration targets, composition
-	// configuration, bootstrap material) and the seven stages.
+	// The drive: the engine loader (the host configuration target, the
+	// composition configuration, the bootstrap material) and the seven
+	// stages.
 	return Assemble(ctx, asm.reg, LoadSpec{
-		Host:     cfg.configSpec.Host,
-		Platform: cfg.configSpec.Platform,
-		Options:  cfg.configOptions,
+		Host:    cfg.configSpec.Host,
+		Options: cfg.configOptions,
 	})
 }
 
@@ -218,18 +234,28 @@ func (asm *transitionAssembly) releasePrelude(ctx context.Context) error {
 	return errors.Join(errs...)
 }
 
-// openInfrastructure is the old infrastructure stage: the platform cipher,
-// the host's pre-database callback, then the database itself.
-func (asm *transitionAssembly) openInfrastructure(ctx context.Context) error {
+// platformCipherKeyPath is the declared bootstrap key path the engine builds
+// its platform cipher from: the config component's declaration, resolved on
+// the same chain every other declared key takes.
+const platformCipherKeyPath = "config.cipher_key"
+
+// openInfrastructure is the old infrastructure stage: the platform cipher
+// (built from the resolved bootstrap material), the host's pre-database
+// callback, then the database itself.
+func (asm *transitionAssembly) openInfrastructure(ctx context.Context, material *pkgcore.BootstrapMaterial) error {
 	cfg := asm.cfg
-	cipher, err := dbkit.NewCipher(cfg.configSpec.Platform.Config.Cipher_Key)
+	cipherKey, resolved := material.Material(platformCipherKeyPath)
+	if !resolved {
+		return fmt.Errorf("app: the bootstrap material resolved no value for %q, the key the platform cipher is built from; supply it on the loader chain (an explicit source, the root-key derivation, or the declared defaults table)", platformCipherKeyPath)
+	}
+	cipher, err := dbkit.NewCipher(cipherKey)
 	if err != nil {
 		return fmt.Errorf("app: build the platform cipher from the key material at %q: %w", platformCipherKeyPath, err)
 	}
 	asm.app.cipher = cipher
 
 	if cfg.preDB != nil {
-		if preDBErr := cfg.preDB(ctx, cipher); preDBErr != nil {
+		if preDBErr := cfg.preDB(ctx, PreDBDeps{Cipher: cipher, Material: material}); preDBErr != nil {
 			return fmt.Errorf("app: pre-database callback: %w", preDBErr)
 		}
 	}
@@ -249,11 +275,11 @@ func (asm *transitionAssembly) openInfrastructure(ctx context.Context) error {
 
 // constructModules runs the WithModules callback. No callback means no
 // modules -- a legitimate set for a host that composes nothing.
-func (asm *transitionAssembly) constructModules(ctx context.Context) ([]pkgcore.Module, error) {
+func (asm *transitionAssembly) constructModules(ctx context.Context, material *pkgcore.BootstrapMaterial) ([]pkgcore.Module, error) {
 	if asm.cfg.modules == nil {
 		return nil, nil
 	}
-	modules, err := asm.cfg.modules(ctx, ModuleDeps{DB: asm.app.db, Cipher: asm.app.cipher})
+	modules, err := asm.cfg.modules(ctx, ModuleDeps{DB: asm.app.db, Cipher: asm.app.cipher, Material: material})
 	if err != nil {
 		return nil, fmt.Errorf("app: construct the module set: %w", err)
 	}
@@ -286,13 +312,13 @@ func (asm *transitionAssembly) httpComponent() pkgcore.Component {
 	return component
 }
 
-// buildRegistry creates the component registry and registers everything the
-// transition assembly contributes: the resolved seam values into the by-type
-// context, the database and kernel components, the wrapped module set, the
-// host steps and the HTTP and worker components, plus the composition
-// override that selects exactly this component set.
+// buildRegistry registers everything the transition assembly contributes into
+// the prelude's component registry: the resolved seam values into the
+// by-type context, the database and kernel components, the wrapped module
+// set, the host steps and the HTTP and worker components, plus the
+// composition override that selects exactly this component set.
 func (asm *transitionAssembly) buildRegistry(modules []pkgcore.Module) error {
-	reg := pkgcore.NewComponentRegistry()
+	reg := asm.reg
 
 	// The resolved seams join the by-type context so the assembly's seats
 	// (the Events seat's bus lookup, in particular) reach the same values the
@@ -304,8 +330,6 @@ func (asm *transitionAssembly) buildRegistry(modules []pkgcore.Module) error {
 	putSeamValue(reg, asm.view.ObjectStore())
 	putSeamValue(reg, asm.view.Locales())
 
-	asm.reg = reg
-	asm.app.reg = reg
 	asm.app.registry = buildLegacyRegistryView(asm.view, reg)
 
 	wrapped, err := wrapLegacyModules(modules, asm.app.registry, reg)
@@ -390,19 +414,14 @@ func (asm *transitionAssembly) kernelComponent() pkgcore.Component {
 }
 
 // postBootstrapComponent maps the host's post-bootstrap hook onto a step
-// component. It verifies the bootstrap-key binding first -- the wrapped
-// modules declared on the binding seat during their Init callbacks, which
-// have all run by this component's turn, and the host's hook is the first
-// consumer -- and then runs the hook.
+// component: the wrapped modules have declared by this component's turn, so
+// the hook is the first consumer to see the complete declaration set.
 func (asm *transitionAssembly) postBootstrapComponent() pkgcore.Component {
 	cfg := asm.cfg
 	return pkgcore.Component{
 		Name: legacyComponentPrefix + "post_bootstrap",
 		New:  newTransitionMarker,
 		Init: func(ctx context.Context, _ *pkgcore.ComponentRegistry, _ any) error {
-			if err := verifyBinding(cfg.configSpec, asm.app.registry); err != nil {
-				return err
-			}
 			if cfg.hooks.PostBootstrap != nil {
 				if err := cfg.hooks.PostBootstrap(ctx, asm.app); err != nil {
 					return fmt.Errorf("app: PostBootstrap hook: %w", err)

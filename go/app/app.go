@@ -6,7 +6,6 @@ import (
 	"os/signal"
 	"syscall"
 
-	"github.com/vislake/speed/go/dbkit"
 	"github.com/vislake/speed/go/pkgcore"
 )
 
@@ -31,7 +30,7 @@ type engineConfig struct {
 	configOptions []ConfigOption
 
 	databaseSpec *DatabaseSpec
-	preDB        func(ctx context.Context, cipher *dbkit.Cipher) error
+	preDB        func(ctx context.Context, deps PreDBDeps) error
 	modules      func(ctx context.Context, deps ModuleDeps) ([]pkgcore.Module, error)
 
 	kernelOptions []pkgcore.KernelOption

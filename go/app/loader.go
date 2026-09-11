@@ -19,45 +19,42 @@ import (
 //
 // The loader does three things, in order:
 //
-//  1. It loads the host's configuration target and the platform key-material
-//     target through one pkgcore/config Loader -- the same options, the same
-//     sources, one pass each -- so a value can never resolve differently for
-//     the two halves.
+//  1. It loads the host's configuration target through a pkgcore/config
+//     Loader -- the same options and the same sources the declared bootstrap
+//     keys resolve on -- so a host key and a declared key can never resolve
+//     differently for one assembly.
 //  2. It resolves the composition configuration from its five sources
 //     (builtin defaults, project file, environment, command line and the
 //     host's code override) and publishes it, with the host's configuration
-//     targets, into the registry.
+//     target, into the registry.
 //  3. It resolves every registered component's declared BootstrapKeys on the
-//     same loader chain, verifies that each declared key binds the host's
-//     configuration targets, and publishes the results as the assembly's
-//     by-purpose BootstrapMaterial source. A declared key that binds nothing
-//     fails the load, naming the stage, the declaring component, the reason
-//     and the remedy -- before any component is constructed.
+//     same loader chain -- through the declaration-driven entry, with no
+//     host struct field behind them -- and publishes the results as the
+//     assembly's by-key-path BootstrapMaterial source. A declaration that is
+//     not resolvable as one schema fails the load, naming the stage, the
+//     declaring component, the reason and the remedy -- before any component
+//     is constructed.
 //
 // The loader is engine-provided and runs unconditionally: no composition can
 // deselect it, because nothing can be chosen before it has run.
 
 // LoadSpec names what the loader loads: the host's bootstrap configuration
-// target, the platform key material's target, and the pkgcore/config options
-// the load runs with. It is the configuration half of an assembly that the
-// engine, not the host's option set, carries -- the new-world spelling of
-// what ConfigSpec wires for the transition adapters.
+// target and the pkgcore/config options the load runs with. It is the
+// configuration half of an assembly that the engine, not the host's option
+// set, carries -- the new-world spelling of what ConfigSpec wires for the
+// transition adapters. The declared bootstrap keys are not named here: the
+// loader reads them off the registered components, and their values resolve
+// on the same chain into the published BootstrapMaterial.
 type LoadSpec struct {
 	// Host is the host's bootstrap configuration target: a non-nil pointer
 	// to the struct the loader fills with the host's own keys. Required.
 	Host any
 
-	// Platform is the platform key material's target, typically
-	// `*PlatformConfig` or a value of that type embedded unskipped in the
-	// host's own target. Optional: nil loads and verifies the host target
-	// alone, which is the shape of a host that declares every bootstrap key
-	// path on its own target.
-	Platform *PlatformConfig
-
 	// Options are the loader options the load runs with -- the same set
 	// ConfigOption names (ConfigFile, ConfigArgs, ConfigEnvPrefix,
-	// ConfigRootKey, ConfigRootKeyEnv, ConfigKeyDerivation). They are
-	// required: the engine ships no implicit source configuration.
+	// ConfigRootKey, ConfigRootKeyEnv, ConfigKeyDerivation,
+	// ConfigDevDefaults). They are required: the engine ships no implicit
+	// source configuration.
 	Options []ConfigOption
 
 	// Args are the command-line arguments the composition layer's component
@@ -115,11 +112,6 @@ func Load(ctx context.Context, reg *pkgcore.ComponentRegistry, spec LoadSpec) er
 	if err := loader.Load(spec.Host); err != nil {
 		return fmt.Errorf("app: load the host configuration: %w", err)
 	}
-	if spec.Platform != nil {
-		if err := loader.Load(spec.Platform); err != nil {
-			return fmt.Errorf("app: load the platform key material: %w", err)
-		}
-	}
 
 	composition, err := loadComposition(loader, reg, spec.Args)
 	if err != nil {
@@ -127,12 +119,9 @@ func Load(ctx context.Context, reg *pkgcore.ComponentRegistry, spec LoadSpec) er
 	}
 
 	reg.Put(spec.Host)
-	if spec.Platform != nil && !sameTarget(spec.Host, spec.Platform) {
-		reg.Put(spec.Platform)
-	}
 	reg.Put(composition)
 
-	material, err := resolveBootstrapMaterial(reg, spec)
+	material, err := resolveBootstrapMaterial(loader, reg)
 	if err != nil {
 		return err
 	}
@@ -141,55 +130,107 @@ func Load(ctx context.Context, reg *pkgcore.ComponentRegistry, spec LoadSpec) er
 }
 
 // resolveBootstrapMaterial resolves every registered component's declared
-// bootstrap keys and proves each one binds the host's configuration targets.
-// The binding check is the loader's own reading of the declaration's
-// contract: a declared key path is a value the loader must be able to
-// resolve, so one that maps onto no field of the host target or of the
-// platform target is a key whose contract is silently unreachable -- the
-// component's wiring reads material no source can ever supply -- and it
-// fails the load, naming the stage, the declaring component, the reason and
-// the remedy.
-func resolveBootstrapMaterial(reg *pkgcore.ComponentRegistry, spec LoadSpec) (*pkgcore.BootstrapMaterial, error) {
-	var entries []pkgcore.BootstrapMaterialEntry
+// bootstrap keys on loader's own source chain and publishes the results as
+// the assembly's by-key-path material source. The declarations are read
+// straight off the components -- there is no host struct field behind a
+// declared key, so nothing binds it and nothing can fail to bind -- and a
+// declaration whose value no source supplies simply resolves to nothing,
+// which leaves the consumer that needs it to report the missing material
+// itself.
+//
+// What does fail here, before anything is constructed, is a declaration set
+// that cannot be resolved as one schema: a malformed key path, a format
+// outside the closed set, a Sensitive key with no Description, or two
+// components declaring one key path differently. Every problem names the
+// stage, the declaring component, the reason and the remedy.
+func resolveBootstrapMaterial(loader *pkgconfig.Loader, reg *pkgcore.ComponentRegistry) (*pkgcore.BootstrapMaterial, error) {
+	decls, problems := declaredBootstrapKeys(reg)
+	if len(problems) > 0 {
+		return nil, fmt.Errorf(
+			"app: the bootstrap key declarations of the registered components must be resolvable (stage prepare): %w",
+			errors.Join(problems...))
+	}
+
+	values, err := loader.ResolveDeclarations(decls)
+	if err != nil {
+		return nil, fmt.Errorf("app: resolve the declared bootstrap keys (stage prepare): %w", err)
+	}
+
+	entries := make([]pkgcore.BootstrapMaterialEntry, 0, len(decls))
+	for _, decl := range decls {
+		value, resolved := values[decl.Key]
+		if !resolved {
+			continue
+		}
+		entries = append(entries, pkgcore.BootstrapMaterialEntry{KeyPath: decl.Key, Value: value})
+	}
+	return pkgcore.NewBootstrapMaterial(entries), nil
+}
+
+// declaredFormats is the closed set of declaration formats the engine accepts,
+// spelled with the resolver's own constants. It guards the declarations of
+// components whose descriptors never passed the legacy seat's validation
+// (validateBootstrapKey), so a typo fails the assembly naming the component
+// rather than the resolver.
+var declaredFormats = map[string]struct{}{
+	pkgconfig.FormatString: {},
+	pkgconfig.FormatInt:    {},
+	pkgconfig.FormatBool:   {},
+	pkgconfig.FormatHexKey: {},
+}
+
+// declaredBootstrapKeys collects every registered component's BootstrapKeys,
+// in registration order, as the resolver's declaration list, validating each
+// declaration on the way. A key path two components declare identically --
+// the shape the transition bridge's wrappers produce, since a wrapper carries
+// its module descriptor's own declarations -- is one declaration and is
+// collapsed; one declared differently is a conflict, because one key path has
+// one resolution per assembly and which component's declaration won would be
+// undecidable. The returned problems are the assembly's own, ready to be
+// joined into the stage-prepare refusal.
+func declaredBootstrapKeys(reg *pkgcore.ComponentRegistry) ([]pkgconfig.Declaration, []error) {
+	var decls []pkgconfig.Declaration
 	var problems []error
+	owner := make(map[string]string)                 // key path -> first declaring component name
+	content := make(map[string]pkgcore.BootstrapKey) // key path -> first declaration
+
 	for _, c := range pkgcore.RegisteredComponents(reg) {
+		component := fmt.Sprintf("component %q", c.Name)
 		for _, key := range c.BootstrapKeys {
-			component := fmt.Sprintf("component %q", c.Name)
 			if _, err := pkgcore.BootstrapKeyPurpose(key.Key); err != nil {
 				problems = append(problems, fmt.Errorf(
 					"%s declares an invalid bootstrap key path for its %q key: %w; give the declaration a non-empty dotted path with no empty segment",
 					component, key.Key, err))
 				continue
 			}
-			value, bound := lookupDeclaredKey(spec, key.Key)
-			if !bound {
+			if _, known := declaredFormats[key.Format]; !known {
 				problems = append(problems, fmt.Errorf(
-					"%s declares bootstrap key %q, which maps onto no field of the host configuration target or of the platform key target; add a field for that key path to the host's configuration target (or embed the platform key-material declaration that carries it)",
+					"%s declares bootstrap key %q with format %q, want one of %q, %q, %q or %q; correct the component's declaration",
+					component, key.Key, key.Format,
+					pkgconfig.FormatString, pkgconfig.FormatInt, pkgconfig.FormatBool, pkgconfig.FormatHexKey))
+				continue
+			}
+			if key.Sensitive && key.Description == "" {
+				problems = append(problems, fmt.Errorf(
+					"%s declares bootstrap key %q as Sensitive but carries no Description; a secret key's contract cannot be left unwritten",
 					component, key.Key))
 				continue
 			}
-			entries = append(entries, pkgcore.BootstrapMaterialEntry{KeyPath: key.Key, Value: value})
+			if first, seen := owner[key.Key]; seen {
+				if content[key.Key] == key {
+					continue // one declaration, carried twice
+				}
+				problems = append(problems, fmt.Errorf(
+					"%s declares bootstrap key %q differently from %s; one key path has one declaration",
+					component, key.Key, first))
+				continue
+			}
+			owner[key.Key] = component
+			content[key.Key] = key
+			decls = append(decls, pkgconfig.Declaration{Key: key.Key, Format: key.Format})
 		}
 	}
-	if len(problems) > 0 {
-		return nil, fmt.Errorf(
-			"app: the configuration targets must bind every bootstrap key the registered components declared (stage prepare): %w",
-			errors.Join(problems...))
-	}
-	return pkgcore.NewBootstrapMaterial(entries), nil
-}
-
-// lookupDeclaredKey reads the resolved value of one declared key path from
-// the host target, then the platform target: Verify proves the path is bound
-// and Lookup reads what it resolved to.
-func lookupDeclaredKey(spec LoadSpec, keyPath string) (any, bool) {
-	if pkgconfig.Verify(spec.Host, []string{keyPath}) == nil {
-		return pkgconfig.Lookup(spec.Host, keyPath)
-	}
-	if spec.Platform != nil && pkgconfig.Verify(spec.Platform, []string{keyPath}) == nil {
-		return pkgconfig.Lookup(spec.Platform, keyPath)
-	}
-	return nil, false
+	return decls, problems
 }
 
 // componentConfigOf reads one component's resolved configuration block out
@@ -233,14 +274,6 @@ func decodeComponentConfig(reg *pkgcore.ComponentRegistry, name string, target a
 func isNonNilPointer(v any) bool {
 	rv := reflect.ValueOf(v)
 	return rv.Kind() == reflect.Pointer && !rv.IsNil()
-}
-
-// sameTarget reports whether two configuration targets are the same pointer,
-// the shape a host passing one value as both its own target and the platform
-// target would have (in which case the loader publishes it once).
-func sameTarget(a, b any) bool {
-	ra, rb := reflect.ValueOf(a), reflect.ValueOf(b)
-	return ra.Kind() == reflect.Pointer && rb.Kind() == reflect.Pointer && ra.Pointer() == rb.Pointer()
 }
 
 // processArgs returns the process's own command-line arguments, the default

@@ -39,11 +39,9 @@ func (exampleFailingResolver) Resolve(*http.Request) (pkgcore.TenantID, error) {
 
 // ExampleNew assembles a whole application from the engine's option list and
 // serves one request through the composed handler: the host's configuration
-// target (its own key beside the embedded platform key material, skipped by
-// the loader because the engine loads that value as its own target), the
-// database to open and migrate, and one hand-written route mounted beside the
-// module routes. A host that wants the engine to listen and drain as well
-// calls Run with the same options and a WithHTTP address.
+// target, the database to open and migrate, and one hand-written route
+// mounted beside the module routes. A host that wants the engine to listen
+// and drain as well calls Run with the same options and a WithHTTP address.
 func ExampleNew() {
 	dir, err := os.MkdirTemp("", "app-example")
 	if err != nil {
@@ -52,21 +50,28 @@ func ExampleNew() {
 	}
 	defer func() { _ = os.RemoveAll(dir) }()
 
-	// The host's configuration target: its own keys, plus the platform key
-	// material embedded and skipped (config:"-") so the six declared key
-	// paths stay unprefixed.
+	// The host's configuration target: the host's own keys, one field per
+	// variable. The bootstrap keys of the components this binary carries are
+	// declared on the components themselves -- a declaration needs no host
+	// field -- and resolve on the same loader chain.
 	type hostConfig struct {
-		app.PlatformConfig `config:"-"`
-		Port               string `config:"env=EXAMPLE_PORT"`
+		Port string `config:"env=EXAMPLE_PORT"`
 	}
 	host := hostConfig{Port: "8080"}
-	// The one key material the engine consumes itself: its platform cipher.
-	host.Config.Cipher_Key = make([]byte, 32)
 
 	a, err := app.New(context.Background(),
 		app.WithConfig(
-			app.ConfigSpec{Host: &host, Platform: &host.PlatformConfig},
+			app.ConfigSpec{Host: &host},
 			app.ConfigArgs([]string{}),
+			// The declared defaults table stands in for a component key no
+			// source supplies: here the config component's declared
+			// config.cipher_key, which the engine's infrastructure step
+			// builds its platform cipher from. A real deployment supplies it
+			// from its environment, a config file or the root-key derivation
+			// instead.
+			app.ConfigDevDefaults(map[string][]byte{
+				"config.cipher_key": make([]byte, 32),
+			}),
 		),
 		app.WithDatabase(app.DatabaseSpec{
 			Dialect: dbkit.DialectSQLite,
@@ -109,6 +114,16 @@ func ExampleAssemble() {
 	reg := pkgcore.NewComponentRegistry()
 	if err := reg.Register(pkgcore.Component{
 		Name: "clock",
+		// The component declares the bootstrap key it consumes; the engine's
+		// loader resolves it on its source chain and publishes the result as
+		// the assembly's bootstrap material, which the component (or any
+		// later consumer) reads by the declared path.
+		BootstrapKeys: []pkgcore.BootstrapKey{{
+			Key:         "clock.secret",
+			Format:      "hexkey",
+			Sensitive:   true,
+			Description: "the key material the clock stamps its ticks with",
+		}},
 		New: func(context.Context, *pkgcore.ComponentRegistry, pkgcore.ComponentConfig) (any, error) {
 			return &clock{}, nil
 		},
@@ -121,18 +136,25 @@ func ExampleAssemble() {
 
 	spec := app.LoadSpec{
 		Host: &host,
-		// The registered config component declares config.cipher_key, so the
-		// platform key target must bind that path: PlatformConfig is the
-		// platform's normative declaration of the key material the module
-		// descriptors declare.
-		Platform: &app.PlatformConfig{},
-		Options:  []app.ConfigOption{app.ConfigArgs([]string{})},
+		Options: []app.ConfigOption{
+			app.ConfigArgs([]string{}),
+			// A declared key with no source falls back to the declared
+			// defaults table; without an entry it is left unresolved, and a
+			// consumer that needs it says so itself.
+			app.ConfigDevDefaults(map[string][]byte{"clock.secret": make([]byte, 32)}),
+		},
 	}
 	if err := app.Assemble(context.Background(), reg, spec); err != nil {
 		fmt.Println("assemble:", err)
 		return
 	}
-	fmt.Println("assembled; clock port", host.Port)
+	material, err := pkgcore.BootstrapMaterialOf(reg)
+	if err != nil {
+		fmt.Println("material:", err)
+		return
+	}
+	_, declared := material.Material("clock.secret")
+	fmt.Println("assembled; clock port", host.Port, "declared key resolved:", declared)
 	if err := app.Shutdown(context.Background(), reg); err != nil {
 		fmt.Println("shutdown:", err)
 		return
@@ -140,7 +162,7 @@ func ExampleAssemble() {
 	fmt.Println("shut down cleanly")
 
 	// Output:
-	// assembled; clock port 8080
+	// assembled; clock port 8080 declared key resolved: true
 	// shut down cleanly
 }
 

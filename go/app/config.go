@@ -4,130 +4,29 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/vislake/speed/go/pkgcore"
 	pkgconfig "github.com/vislake/speed/go/pkgcore/config"
 )
 
-// PlatformConfig is the platform's normative declaration of its bootstrap key
-// material: the six keys the platform module components declare as their
-// BootstrapKeys, each nested under its module's own key-path segment, so the
-// declaration's field paths are character for character the dotted key paths
-// the modules declare (authn.blind_index_key, config.cipher_key and so on).
+// config.go carries the configuration stage's outward face: the spec naming
+// the host's own bootstrap target, the loader options the one load runs with,
+// and the named constructors for them.
 //
-// A host holds it -- typically by embedding it in its own configuration
-// target -- and tags the embedding config:"-" so the loader's walk of the
-// host's target skips it. The engine loads it as its own target, which is
-// what keeps the six keys at their declared top-level paths: an embedded
-// struct the loader walked would contribute its type name as a leading key
-// segment and the keys would resolve under a prefixed spelling instead.
-//
-// Every field carries the loader's derive tag alone. The declaration pins no
-// environment variable names and no defaults: a host resolves its own
-// development defaults by pre-filling the fields before load (the loader only
-// writes what a source actually supplied, so a pre-filled 32-byte value
-// stands when nothing else does), and the environment spelling is the
-// loader's own derivation from the declared path -- with ConfigEnvPrefix
-// ("APP_"), config.cipher_key reads APP_CONFIG__CIPHER_KEY, while a config
-// file entry is spelled config.cipher_key exactly as declared.
-//
-// The engine consumes the config.cipher_key material itself (it builds the
-// platform cipher WithPreDB and WithModules receive); the other five keys are
-// the host's to hand to whichever module constructor declares a use for them.
-// A key the host never consults stays inert -- the declaration exists so no
-// host restates any of the six, and so a platform key added later arrives
-// through this struct rather than through every host's own target.
-type PlatformConfig struct {
-	// Authn carries the two key materials go/authn declares.
-	Authn PlatformAuthnKeyMaterial
-	// Config carries the key material the config module declares.
-	Config PlatformConfigKeyMaterial
-	// Notification carries the key material go/notification declares.
-	Notification PlatformNotificationKeyMaterial
-	// Org carries the key material go/org declares.
-	Org PlatformOrgKeyMaterial
-	// PKI carries the key material go/pki declares.
-	PKI PlatformPKIKeyMaterial
-}
-
-// PlatformAuthnKeyMaterial declares the authn.blind_index_key and
-// authn.pii_cipher_key key materials: the HMAC key authn indexes its
-// encrypted login identifiers under, and the AES key sealing the PII columns
-// themselves. They are separate secrets on purpose -- an AES key never
-// doubles as an HMAC key.
-type PlatformAuthnKeyMaterial struct {
-	//nolint:staticcheck // the field name must lowercase to the declared bootstrap key path authn.blind_index_key.
-	Blind_Index_Key []byte `config:"derive"`
-	//nolint:staticcheck // the field name must lowercase to the declared bootstrap key path authn.pii_cipher_key.
-	PII_Cipher_Key []byte `config:"derive"`
-}
-
-// PlatformConfigKeyMaterial declares the config.cipher_key key material: the
-// AES key the config module seals every Sensitive dynamic-configuration value
-// with, and the platform cipher the engine builds for the host's serializers.
-type PlatformConfigKeyMaterial struct {
-	//nolint:staticcheck // the field name must lowercase to the declared bootstrap key path config.cipher_key.
-	Cipher_Key []byte `config:"derive"`
-}
-
-// PlatformNotificationKeyMaterial declares the notification.contact_index_key
-// key material: the HMAC key the notification module's blind indexers index
-// its encrypted contact addresses with. One key serves both indexers, whose
-// canonical forms are disjoint.
-type PlatformNotificationKeyMaterial struct {
-	//nolint:staticcheck // the field name must lowercase to the declared bootstrap key path notification.contact_index_key.
-	Contact_Index_Key []byte `config:"derive"`
-}
-
-// PlatformOrgKeyMaterial declares the org.invitation_email_index_key key
-// material: the HMAC key org's blind indexer indexes invitation email
-// addresses with.
-type PlatformOrgKeyMaterial struct {
-	//nolint:staticcheck // the field name must lowercase to the declared bootstrap key path org.invitation_email_index_key.
-	Invitation_Email_Index_Key []byte `config:"derive"`
-}
-
-// PlatformPKIKeyMaterial declares the pki.local_key_cipher_key key material:
-// the AES key sealing go/pki's local signer private-key column.
-type PlatformPKIKeyMaterial struct {
-	//nolint:staticcheck // the field name must lowercase to the declared bootstrap key path pki.local_key_cipher_key.
-	Local_Key_Cipher_Key []byte `config:"derive"`
-}
-
-// platformKeyPaths lists the declared bootstrap key paths PlatformConfig
-// declares, in declaration order. A boot verifies its own declaration against
-// this list, so a field that stops mapping onto its declared path fails the
-// assembly rather than silently resolving nothing.
-var platformKeyPaths = []string{
-	"authn.blind_index_key",
-	"authn.pii_cipher_key",
-	"config.cipher_key",
-	"notification.contact_index_key",
-	"org.invitation_email_index_key",
-	"pki.local_key_cipher_key",
-}
-
-// platformCipherKeyPath is the declared path of the material the engine
-// builds its platform cipher from; it names the key in the refusal a
-// malformed value produces.
-const platformCipherKeyPath = "config.cipher_key"
+// The bootstrap-key declarations of the composed modules need no counterpart
+// here. The engine's loader reads them off the registered components and
+// resolves them through the declaration-driven entry (loader.go), so a key a
+// component declares -- the platform key material included -- needs no field
+// on any host or engine struct: a declaration is resolved where it is made.
 
 // ConfigSpec names what the configuration stage loads: Host is the host's own
-// bootstrap target (any non-nil pointer to a struct), and Platform is the
-// platform key material's target, typically the PlatformConfig value embedded
-// in the host's configuration struct.
-//
-// Both targets are loaded by one loader through the engine's own load
-// orchestration: the same options, the same sources, the same single pass
-// over them, so a value can never resolve differently for the two halves.
+// bootstrap target (any non-nil pointer to a struct), resolved through the
+// engine's own load orchestration -- the same options and the same sources
+// the declared bootstrap keys resolve on, so a host key and a declared key can
+// never resolve differently for one assembly.
 type ConfigSpec struct {
 	// Host is the host's bootstrap target: a non-nil pointer to the struct
 	// the loader fills with the host's own keys (its port, its database
 	// path, its switches). Required.
 	Host any
-
-	// Platform is the platform key material's target. Required, and loaded
-	// as its own target so the six declared key paths stay unprefixed.
-	Platform *PlatformConfig
 }
 
 // ConfigOption customises the loader the configuration stage builds. It is an
@@ -135,18 +34,19 @@ type ConfigSpec struct {
 // options directly as well as through the named constructors below.
 type ConfigOption = pkgconfig.Option
 
-// WithConfig declares the configuration the engine loads in stage 1, the
-// loader options the load runs with, and is required -- an assembly with no
-// configuration target has nothing to bind the modules' declared bootstrap
-// keys against.
+// WithConfig declares the configuration the engine loads in stage 1 and the
+// loader options the load runs with, and is required: the host's own keys
+// resolve from it, and the declared bootstrap keys of the composed components
+// resolve on the same chain -- the same options, the same sources, one pass
+// each -- so the two halves cannot disagree.
 //
 // A host whose option values depend on the loaded configuration (the database
 // DSN, the listen address, the kernel's seam composition) resolves them with
 // its own loader pass before New and hands the same target over here: the load
 // this option drives re-resolves the identical sources into the same struct
-// and is idempotent, so the two passes cannot disagree, while the binding
-// verification and the platform key material the load produces stay on the
-// engine's side.
+// and is idempotent, so the two passes cannot disagree, while the declared
+// keys' resolution and the published bootstrap material stay on the engine's
+// side.
 func WithConfig(spec ConfigSpec, opts ...ConfigOption) Option {
 	return func(c *engineConfig) {
 		s := spec
@@ -176,9 +76,9 @@ func ConfigArgs(args []string) ConfigOption { return pkgconfig.WithArgs(args) }
 // paths or flag spellings.
 func ConfigEnvPrefix(prefix string) ConfigOption { return pkgconfig.WithEnvPrefix(prefix) }
 
-// ConfigRootKey installs the 32-byte root secret every derive-tagged field's
-// material is derived from when no source supplies that field explicitly. A
-// nil or empty key configures none.
+// ConfigRootKey installs the 32-byte root secret every declared key material
+// is derived from when no source supplies that key explicitly. A nil or empty
+// key configures none.
 func ConfigRootKey(key []byte) ConfigOption { return pkgconfig.WithRootKey(key) }
 
 // ConfigRootKeyEnv names the environment variable holding the root secret as
@@ -186,65 +86,43 @@ func ConfigRootKey(key []byte) ConfigOption { return pkgconfig.WithRootKey(key) 
 // derives from it. An unset or empty variable configures no root key.
 func ConfigRootKeyEnv(name string) ConfigOption { return pkgconfig.WithRootKeyEnv(name) }
 
-// ConfigKeyDerivation installs the function derive-tagged material is derived
-// with, called once per field the source chain leaves to derivation with the
-// root key and the field's declared key path. The platform composition a host
-// wires is dbkit.DeriveBootstrapKey; the loader itself knows nothing about
-// how a root key becomes material.
+// ConfigKeyDerivation installs the function declared key material is derived
+// with, called once per key the source chain leaves to derivation with the
+// root key and the declared key path. The platform composition a host wires
+// is dbkit.DeriveBootstrapKey; the loader itself knows nothing about how a
+// root key becomes material.
 func ConfigKeyDerivation(fn func(rootKey []byte, keyPath string) ([]byte, error)) ConfigOption {
 	return pkgconfig.WithKeyDerivation(fn)
 }
 
-// loadConfiguration is stage 1: the host's target and the platform key
-// material, resolved once through one loader. It refuses a spec that names
-// neither target, and it proves its own declaration binds the six key paths
-// it promises, so a declaration that stopped mapping onto a field fails the
-// boot instead of resolving nothing.
-func loadConfiguration(cfg *engineConfig) error {
+// ConfigDevDefaults installs the declared defaults table: the values a
+// declared hexkey key falls back to when neither an explicit source
+// (flag, environment, config file) nor the root-key derivation supplies it,
+// addressed by declared key path. It is the assembling party's documented
+// development convenience -- a host passing its own recognizable non-secret
+// dev keys -- and the engine's own zero-setup dev path is exactly such a
+// table; a deployment taking its key material from a secret store passes
+// none, and a declared key then resolves to nothing until a source supplies
+// it.
+func ConfigDevDefaults(defaults map[string][]byte) ConfigOption {
+	return pkgconfig.WithDevDefaults(defaults)
+}
+
+// loadConfiguration is stage 1: the host's own bootstrap target, resolved
+// through one loader whose options the later passes reuse. The loader it
+// returns is the same chain the declared bootstrap keys resolve on -- the
+// assembly's own load and the transition prelude's both build it from the
+// same options -- so a host key and a declared key can never resolve
+// differently for one assembly.
+func loadConfiguration(cfg *engineConfig) (*pkgconfig.Loader, error) {
 	spec := cfg.configSpec
 	if spec.Host == nil {
-		return errors.New("app: ConfigSpec.Host must be the host's non-nil configuration target")
-	}
-	if spec.Platform == nil {
-		return errors.New("app: ConfigSpec.Platform must be the non-nil *PlatformConfig carrying the platform key material")
+		return nil, errors.New("app: ConfigSpec.Host must be the host's non-nil configuration target")
 	}
 
 	loader := pkgconfig.New(cfg.configOptions...)
 	if err := loader.Load(spec.Host); err != nil {
-		return fmt.Errorf("app: load the host configuration: %w", err)
+		return nil, fmt.Errorf("app: load the host configuration: %w", err)
 	}
-	if err := loader.Load(spec.Platform); err != nil {
-		return fmt.Errorf("app: load the platform key material: %w", err)
-	}
-	if err := pkgconfig.Verify(spec.Platform, platformKeyPaths); err != nil {
-		return fmt.Errorf("app: the platform key declaration must bind every key it declares: %w", err)
-	}
-	return nil
-}
-
-// verifyBinding is the schema half of stage 4: every bootstrap key declared
-// on the registry's bootstrap seat must map onto a field of one of the host's
-// two configuration targets. A declared key that binds to nothing is a key
-// whose contract is silently unreachable -- its wiring reads a value no
-// source can ever supply -- so it fails the boot, naming every such key. The
-// seat carries the host's own declarations; each component's statically
-// declared BootstrapKeys are bound against the same targets by the loader's
-// stage-prepare check, before anything is constructed.
-func verifyBinding(spec *ConfigSpec, reg *pkgcore.Registry) error {
-	declared := reg.Bootstrap.Keys()
-	var missing []error
-	for _, key := range declared {
-		if pkgconfig.Verify(spec.Host, []string{key.Key}) == nil {
-			continue
-		}
-		if pkgconfig.Verify(spec.Platform, []string{key.Key}) == nil {
-			continue
-		}
-		missing = append(missing, fmt.Errorf("%w: declared bootstrap key %q maps onto no field of the host configuration target or of the platform key target",
-			pkgconfig.ErrInvalidTarget, key.Key))
-	}
-	if len(missing) == 0 {
-		return nil
-	}
-	return fmt.Errorf("app: the configuration targets must bind every bootstrap key the composed modules declared: %w", errors.Join(missing...))
+	return loader, nil
 }
