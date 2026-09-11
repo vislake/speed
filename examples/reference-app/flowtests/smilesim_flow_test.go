@@ -59,7 +59,7 @@ package flowtests
 // job's final state) still pass deterministically. A busy_timeout pragma
 // does not cure it: the immediate-`SQLITE_BUSY` failure is a
 // deterministic property of the gate's transaction shape, pinned in
-// isolation by go/dbkit/dialect/sqlite/busy_timeout_test.go's
+// isolation by go/dbkit/dialect/sqlite/dialect_sqlite_test.go's
 // read-then-write-upgrade test. Whether a given run actually hits the
 // collision is scheduling-dependent, and a WARN-free run does not mean
 // the failure mode is gone. The WARN stays by design: removing it would

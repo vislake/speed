@@ -403,10 +403,10 @@ func TestServerConfigFrom_CompleteSMTPCarriesTheTargetWithoutBuildingAMailer(t *
 		t.Fatalf("serverConfigFrom with a complete APP_SMTP_* composition: %v", err)
 	}
 	if cfg.Mailer != nil {
-		t.Error("Mailer is non-nil with a complete APP_SMTP_* composition, want the host to pre-build nothing: BuildServer composes \"mailer.smtp\" through the preset channel from the SMTP fields")
+		t.Error("Mailer is non-nil with a complete APP_SMTP_* composition, want the host to pre-build nothing: BuildServer composes \"mailer.smtp\" through the composition channel from the SMTP fields")
 	}
 	if cfg.SMTPHost != "smtp.example.test" || cfg.SMTPPort != 587 || cfg.SMTPUsername != "mailer@example.test" || cfg.SMTPPassword != "smtp-password" || cfg.SMTPReplyTo != "support@example.test" {
-		t.Errorf("SMTP target = %s:%d user=%q reply-to=%q, want the complete APP_SMTP_* group carried through for the preset channel",
+		t.Errorf("SMTP target = %s:%d user=%q reply-to=%q, want the complete APP_SMTP_* group carried through for the composition channel",
 			cfg.SMTPHost, cfg.SMTPPort, cfg.SMTPUsername, cfg.SMTPReplyTo)
 	}
 }

@@ -198,8 +198,8 @@ type hostConfig struct {
 	// APP_S3_ENDPOINT/APP_S3_BUCKET/APP_S3_ACCESS_KEY/APP_S3_SECRET_KEY: the
 	// four variables that together point the "objectstore" seam at the
 	// registered "objectstore.s3" implementation -- BuildServer overrides
-	// that one preset entry with these values, and the registration builds
-	// the S3-compatible store from them. All four are
+	// that one composition entry with these values, and the component
+	// builds the S3-compatible store from them. All four are
 	// required together -- the transform fails loudly when only some of them
 	// are set, rather than silently falling back to the builtin local-directory default
 	// default, since a partially named S3 target is far more likely a typo than
@@ -257,9 +257,9 @@ type hostConfig struct {
 	// APP_SMTP_HOST/APP_SMTP_PORT/APP_SMTP_USERNAME/APP_SMTP_PASSWORD/
 	// APP_SMTP_REPLY_TO: the
 	// variables that together point the "mailer" seam at the registered
-	// "mailer.smtp" implementation -- BuildServer overrides that one preset
-	// entry with these values, and the registration builds the SMTP Mailer
-	// from them. Host and port are required together, for the same
+	// "mailer.smtp" implementation -- BuildServer overrides that one
+	// composition entry with these values, and the component builds the
+	// SMTP Mailer from them. Host and port are required together, for the same
 	// fail-loud-on-partial-config reason the S3 group gives; username and
 	// password are optional -- SMTP AUTH activates only when a username is set
 	// (pkgcore.SMTPConfig.Username's own doc comment). All unset -- the default
@@ -702,9 +702,9 @@ func serverConfigFrom(hc hostConfig) (ServerConfig, error) {
 		FailSelfServiceProvision: newProvisionFailureInjector(failProvisionCount),
 	}
 	// The SMTP target itself needs no further resolution here: BuildServer
-	// names "mailer.smtp" in the preset entry the resolved SMTPHost group
-	// overrides and hands the four values over as that entry's Config -- the
-	// registration builds the mailer, the host pre-builds nothing (the
+	// names "mailer.smtp" in the composition entry the resolved SMTPHost
+	// group overrides and hands the four values over as that entry's
+	// configuration -- the component builds the mailer, the host pre-builds nothing (the
 	// ServerConfig.SMTPHost doc comment and BuildServer's composition-options
 	// comment carry the full split).
 	return cfg, nil

@@ -6,7 +6,7 @@ This document only *describes* the commands a human operator runs. Nothing in th
 
 ## Breaking change: environment variable prefix renamed `SPEED_` → `APP_`
 
-Every environment variable name this app's own bootstrap code declares and reads was renamed from a `SPEED_` prefix to an `APP_` prefix — a pure rename, this consumer app's own naming convention rather than any framework-level requirement, with no behavior change otherwise. An existing `fly secrets` set or a previously-deployed `fly.toml` `[env]` block still using the old `SPEED_*` names will simply have no effect on the next deploy: those variables are no longer read, and every affected setting falls back to its documented default (or, if you run distributed mode, `the assembly`'s capability validation fails and names the missing seam). Re-set your secrets and `[env]` values under the new names before redeploying:
+Every environment variable name this app's own bootstrap code declares and reads was renamed from a `SPEED_` prefix to an `APP_` prefix — a pure rename, this consumer app's own naming convention rather than any framework-level requirement, with no behavior change otherwise. An existing `fly secrets` set or a previously-deployed `fly.toml` `[env]` block still using the old `SPEED_*` names will simply have no effect on the next deploy: those variables are no longer read, and every affected setting falls back to its documented default (or, if you run distributed mode, the assembly's capability validation fails and names the missing seam). Re-set your secrets and `[env]` values under the new names before redeploying:
 
 | Old name | New name |
 |---|---|

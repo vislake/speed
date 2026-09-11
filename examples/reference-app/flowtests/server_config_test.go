@@ -540,7 +540,7 @@ func deriveDeclaredKeyMaterial(t *testing.T, rootKey []byte, keyPath string) []b
 // sites alike so neither can drift apart from the wiring; Equal's returned
 // column is never executed against a database here, which is exactly why
 // each module's own suite pins its constant to the real migrated column
-// (go/org/email_index_column_drift_test.go,
+// (go/org/invitation_test.go,
 // go/notification/address_index_column_test.go)).
 // pki.local_key_cipher_key, authn.blind_index_key and authn.pii_cipher_key
 // are proven together by a real register-then-login round trip through the
@@ -791,8 +791,8 @@ func TestConfigFromEnv_PartialInfrastructureCompositionsAreRefused(t *testing.T)
 // success half of the SMTP wiring: with both variables set and a
 // parseable port, ConfigFromEnv carries the host, the credentials and the
 // optional reply-to as the
-// resolved SMTP target fields -- the values BuildServer hands the preset
-// channel -- and pre-builds no Mailer of its own.
+// resolved SMTP target fields -- the values BuildServer hands the
+// composition channel -- and pre-builds no Mailer of its own.
 func TestConfigFromEnv_CompleteSMTPComposition_CarriesTheTarget(t *testing.T) {
 	testutil.ClearBootstrapEnv(t)
 	t.Setenv("APP_SMTP_HOST", "smtp.example.com")
@@ -806,7 +806,7 @@ func TestConfigFromEnv_CompleteSMTPComposition_CarriesTheTarget(t *testing.T) {
 		t.Fatalf("ConfigFromEnv: %v", err)
 	}
 	if cfg.Mailer != nil {
-		t.Error("Mailer non-nil, want ConfigFromEnv to pre-build nothing: BuildServer composes \"mailer.smtp\" through the preset channel from the SMTP fields")
+		t.Error("Mailer non-nil, want ConfigFromEnv to pre-build nothing: BuildServer composes \"mailer.smtp\" through the composition channel from the SMTP fields")
 	}
 	if cfg.SMTPHost != "smtp.example.com" || cfg.SMTPPort != 587 || cfg.SMTPUsername != "mailer@example.com" || cfg.SMTPPassword != "smtp-secret" || cfg.SMTPReplyTo != "support@example.com" {
 		t.Errorf("SMTP target = %s:%d user=%q reply-to=%q, want the complete APP_SMTP_* group carried through", cfg.SMTPHost, cfg.SMTPPort, cfg.SMTPUsername, cfg.SMTPReplyTo)

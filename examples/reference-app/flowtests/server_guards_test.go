@@ -438,7 +438,7 @@ func TestBuildServer_DistributedDeploymentMode_NoSMSGateway_FailsClosed(t *testi
 	}
 }
 
-// TestBuildServer_SMTPAndS3Compositions_ResolveThroughThePresetChannel pins
+// TestBuildServer_SMTPAndS3Compositions_ResolveThroughTheCompositionChannel pins
 // the channel this app routes its two string-expressible seam compositions
 // through -- the APP_SMTP_* and APP_S3_* groups -- by reading the
 // assembly's own startup line naming the selected components. With those
@@ -458,7 +458,7 @@ func TestBuildServer_DistributedDeploymentMode_NoSMSGateway_FailsClosed(t *testi
 // ground pkgcore's own assembly tests stand on). Neither composition dials
 // anything at boot: mailer.smtp dials per message and the S3 client is
 // constructed lazily, so this test needs no Docker and touches no network.
-func TestBuildServer_SMTPAndS3Compositions_ResolveThroughThePresetChannel(t *testing.T) {
+func TestBuildServer_SMTPAndS3Compositions_ResolveThroughTheCompositionChannel(t *testing.T) {
 	var buf bytes.Buffer
 	previous := slog.Default()
 	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelInfo})))

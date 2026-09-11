@@ -56,7 +56,8 @@ package referenceapp_test
 // reconstructed shape (capitalized map keys, envelope TenantID), which an
 // in-process test could never exercise. A third bus instance publishes
 // the warm-up markers, mirroring pkgcore's own integration-tier pattern
-// (go/pkgcore/integration_test/redis_eventbus_test.go, whose helpers this
+// (go/pkgcore/eventbus/redis/integration_test/eventbus_test.go, whose
+// helpers this
 // file copies line for line by the same cross-module convention that
 // pkgcore's container lifecycle follows go/jobs's).
 //
