@@ -74,7 +74,10 @@ unified version: each module is tagged with the subdirectory-prefix
 form `go/<module>/vX.Y.Z`, and the whole plan — every module, every
 package, the same version — is derived at runtime by the release
 coordinator (`tools/release/lockstep-release.py`), which exits 0 only
-when the plan is consistent: version syntax, no existing tags, the
+when the plan is consistent: version syntax, every same-version tag
+checked — module tags and the repo root tag — where existing tags warn
+(`[warn]` line) rather than fail, marking a partially completed release
+whose re-dispatch the publish side recovers, the
 `go.work` module list and the directory tree agreeing in both
 directions, the npm versions uniform, the changesets fixed group
 covering exactly the packages that exist. Scripted verification is
@@ -83,10 +86,15 @@ the step humans get wrong; the reference app is excluded from the
 release set by design — it is the repository's consumer module, the
 proof shape, never a deliverable. The release workflow
 (`release.yml`) runs this verification and the coordinator's own
-self-tests on manual dispatch. No publish credential is wired, so the
-pipeline verifies and cannot publish: the read-only design keeps
-verification honest before real publishing has anything to push.
-Locally, `task release:plan VERSION=vX.Y.Z` runs the same check.
+self-tests in its `verify` job on manual dispatch; a `publish` job then
+performs the real release for a verified version — it pushes this
+version's module tags and the repository root tag, and publishes every
+`@speed` package under `web/packages` to the GitHub Packages registry,
+with the write permissions (`contents`, `packages`) held by that job
+alone and every step idempotent over a re-run (existing tags skipped,
+an already-published version probed and skipped). Publishing to
+npmjs.org stays deferred. Locally, `task release:plan VERSION=vX.Y.Z`
+runs the same check.
 
 ## The CI matrix
 

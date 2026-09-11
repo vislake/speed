@@ -56,15 +56,19 @@ upgrade` 一步把消费方 `go.mod` 里的 speed requires 改写到目标版
 多模块发布机制由 Go 规则与统一版本共同决定:每个模块打子目录前缀
 形态的 tag `go/<module>/vX.Y.Z`,整个计划——每个模块、每个包、同
 一版本——由发布协调器(`tools/release/lockstep-release.py`)运行时
-推导,只有计划一致才退出 0:版本语法合规、无既有 tag、`go.work`
-模块表与目录树双向完备、npm 版本统一、changesets fixed 组恰好覆盖
+推导,只有计划一致才退出 0:版本语法合规;同版本既有 tag 的检查
+——存在只出 `[warn]`(未完成发布的重跑指纹),绝不失败;`go.work`
+模块表与目录树双向完备;npm 版本统一;changesets fixed 组恰好覆盖
 现存包。脚本化验证不可谈判,因为手工给多模块发布打 tag 正是人最容
 易出错的那一步;reference app 按设计排除在发布集之外——它是仓库
 的消费方模块、证明形态,从来不是交付物。发布工作流
-(`release.yml`)手动触发时跑这套验证与协调器自带测试。任何发布凭
-据都没有接线,所以流水线只验证、发不了——只读设计让真实发布有东
-西可推之前,验证先保持诚实。本地用 `task release:plan VERSION=vX.Y.Z`
-跑同一检查。
+(`release.yml`)手动触发时,`verify` 作业跑这套验证与协调器自带测
+试;`publish` 作业随后对已验证版本执行真实发布——推送该版本的模
+块 tag 与仓库根 tag,并把 `web/packages` 下每个 `@speed` 包发布到
+GitHub Packages registry;写权限(`contents`、`packages`)只挂在该
+作业上,每一步对重跑幂等(既有 tag 跳过,已发布版本经 registry 探
+测跳过)。npmjs.org 发布仍延期。本地用
+`task release:plan VERSION=vX.Y.Z` 跑同一检查。
 
 ## CI 矩阵
 
