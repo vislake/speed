@@ -773,10 +773,10 @@ var secretShapePatterns = []secretShapePattern{
 // (token, access_token) at the two anchors that decide through this list
 // -- heading a bare query string, and mid-string after a '&' in a bare
 // form body -- so a name forgotten on either side of the pair fails the
-// row that spells it. The concrete drift this table guards (clientsecret
-// and sessionkey missing here while the alternation kept matching them)
-// failed exactly those head-anchor rows, which is how the backstop is
-// meant to work. Names not rowed at an anchor stay covered on URL-shaped
+// row that spells it: a compact spelling missing from this list while
+// the alternation keeps matching it fails exactly those head-anchor
+// rows, which is how the backstop is meant to work. Names not rowed at
+// an anchor stay covered on URL-shaped
 // text through the gate's '://' and '?' branches, which open without
 // consulting this list.
 var querySecretParamNames = []string{
