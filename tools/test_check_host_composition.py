@@ -9,13 +9,17 @@ conventions. Run directly:
 The real tree passes the gate clean, so these planted fixtures are the
 rules' living proof, in the same shape as the sibling checker suites:
 
-  * a host that merely USES the kernel (imports the platform module) stays
-    silent -- the positive side, proving the gate is not simply firing on
-    everything;
+  * a host that merely USES the kernel (imports the platform module and
+    assembles through the engine's options) stays silent -- the positive
+    side, proving the gate is not simply firing on everything;
   * a forked declaration of a shared identifier in either host fires,
     while a test file's own use of the identifiers does not;
   * a re-grown kernel sentinel in a non-test file fires, while the same
-    text in a test file stays silent.
+    text in a test file stays silent;
+  * a re-issued engine-owned assembly call (pkgcore.NewKernel, dbkit.Open,
+    http.NewServeMux, chain.Chain under any alias, obs.Init, ...) in a
+    non-test file fires, while the sanctioned engine options and the same
+    text in a test file stay silent.
 """
 
 from __future__ import annotations
@@ -118,6 +122,105 @@ class NoForkRules(unittest.TestCase):
                 "examples/reference-app/flowtests/probe_test.go": (
                     "package flowtests\n\n"
                     "func TestProbe(t *testing.T) { mux.HandleFunc(\"/healthz\", h) }\n"
+                ),
+            }
+        )
+        self.assertEqual(m.scan(root), [])
+
+
+class EngineOwnedCallRules(unittest.TestCase):
+    def test_engine_owned_call_in_a_non_test_file_fires(self):
+        root = make_tree(
+            {
+                "go/saasctl/internal/template/project/cmd/server/server.go": (
+                    "package main\n\n"
+                    "func boot() {\n"
+                    "\treg, _ := pkgcore.NewKernel(opts...).Bootstrap(ctx, mods...)\n"
+                    "\t_ = dbkit.Open(ctx, dbkit.Options{})\n"
+                    "\tmux := http.NewServeMux()\n"
+                    "\t_ = signal.NotifyContext(ctx, syscall.SIGINT)\n"
+                    "\t_ = obs.Init(ctx)\n"
+                    "\t_ = reg\n"
+                    "}\n"
+                ),
+            }
+        )
+        findings = m.scan(root)
+        for label in (
+            "pkgcore.NewKernel",
+            ".Bootstrap(",
+            "dbkit.Open",
+            "http.NewServeMux",
+            "signal.NotifyContext",
+            "obs.Init",
+        ):
+            self.assertTrue(
+                any(f"calls {label}" in f for f in findings), (label, findings)
+            )
+
+    def test_chain_entry_point_fires_under_every_alias(self):
+        root = make_tree(
+            {
+                "examples/reference-app/internal/app/server.go": (
+                    "package app\n\n"
+                    "import speedchain \"github.com/vislake/speed/go/app/chain\"\n\n"
+                    "func chain() { _, _ = speedchain.Chain(speedchain.Config{}) }\n"
+                ),
+                "go/saasctl/internal/template/project/selection/authn/server.go": (
+                    "package main\n\n"
+                    "func chain() { _, _ = chain.Chain(chain.Config{}) }\n"
+                ),
+            }
+        )
+        findings = m.scan(root)
+        self.assertEqual(
+            sum("calls chain.Chain" in f for f in findings), 2, findings
+        )
+
+    def test_the_engine_options_stay_silent(self):
+        root = make_tree(
+            {
+                "go/saasctl/internal/template/project/selection/authn/server.go": (
+                    "package main\n\n"
+                    "import speedchain \"github.com/vislake/speed/go/app/chain\"\n\n"
+                    "func boot() {\n"
+                    "\topts := []speedapp.Option{\n"
+                    "\t\tspeedapp.WithKernelOptions(pkgcore.WithDeploymentMode(mode)),\n"
+                    "\t\tspeedapp.WithDatabase(speedapp.DatabaseSpec{Dialect: dbkit.DialectSQLite}),\n"
+                    "\t\tspeedapp.WithHooks(speedapp.Hooks{PostBootstrap: attach}),\n"
+                    "\t}\n"
+                    "\t_ = speedchain.Standard(reg, verifier, mux)\n"
+                    "\t_ = opts\n"
+                    "}\n"
+                ),
+            }
+        )
+        self.assertEqual(m.scan(root), [])
+
+    def test_a_longer_package_name_ending_in_the_selector_stays_silent(self):
+        root = make_tree(
+            {
+                "examples/reference-app/internal/app/server.go": (
+                    "package app\n\n"
+                    "func boot() {\n"
+                    "\t_ = myobs.Init(ctx)\n"
+                    "\t_ = xpkgcore.NewKernel()\n"
+                    "}\n"
+                ),
+            }
+        )
+        self.assertEqual(m.scan(root), [])
+
+    def test_engine_owned_calls_in_a_test_file_stay_silent(self):
+        root = make_tree(
+            {
+                "examples/reference-app/flowtests/probe_test.go": (
+                    "package flowtests\n\n"
+                    "func TestProbe(t *testing.T) {\n"
+                    "\t_ = pkgcore.NewKernel()\n"
+                    "\tmux := http.NewServeMux()\n"
+                    "\t_ = mux\n"
+                    "}\n"
                 ),
             }
         )
