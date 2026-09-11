@@ -85,8 +85,8 @@ func Example() {
 
 // exampleTenantStatuses stands in for the store a real
 // tenancy.TenantStatusResolver implementation would consult -- go/admin's
-// own tenant ledger (D3/D4) is this seam's first real implementer,
-// entirely on admin's side of the module boundary.
+// own tenant ledger is this seam's first real implementer, entirely on
+// admin's side of the module boundary.
 type exampleTenantStatuses map[pkgcore.TenantID]tenancy.TenantStatus
 
 // Status implements tenancy.TenantStatusResolver. A tenant absent from
@@ -100,8 +100,8 @@ func (s exampleTenantStatuses) Status(_ context.Context, tenant pkgcore.TenantID
 	return tenancy.TenantStatusActive, nil
 }
 
-// ExampleWithTenantStatusResolver demonstrates D4: wiring a
-// TenantStatusResolver gives a suspended tenant's status real teeth --
+// ExampleWithTenantStatusResolver demonstrates what wiring a
+// TenantStatusResolver buys: a suspended tenant's status gets real teeth --
 // every request against it is refused with the coded ErrTenantSuspended
 // error, never merely recorded somewhere no request pipeline consults.
 // Leaving WithTenantStatusResolver off entirely (as every earlier example

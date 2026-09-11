@@ -401,8 +401,8 @@ func (s *stubStatusResolver) Status(_ context.Context, tenant pkgcore.TenantID) 
 	return TenantStatusActive, nil
 }
 
-// TestMiddleware_NoTenantStatusResolver_BehaviorUnchanged pins D4's
-// central compatibility contract: a host that never calls
+// TestMiddleware_NoTenantStatusResolver_BehaviorUnchanged pins the resolver
+// seam's central compatibility contract: a host that never calls
 // WithTenantStatusResolver sees exactly the baseline Middleware behavior,
 // unchanged -- a resolved tenant's request proceeds regardless of
 // whatever status it might have anywhere else in the system, because
@@ -447,9 +447,9 @@ func TestMiddleware_TenantStatusResolver_ActiveTenant_Proceeds(t *testing.T) {
 }
 
 // TestMiddleware_TenantStatusResolver_SuspendedTenant_RefusesWithCodedError
-// is D4's core enforcement proof: a suspended tenant's request never
-// reaches the handler and is refused with the coded ErrTenantSuspended
-// error, never a bare HTTP status with no code.
+// is the resolver seam's core enforcement proof: a suspended tenant's
+// request never reaches the handler and is refused with the coded
+// ErrTenantSuspended error, never a bare HTTP status with no code.
 func TestMiddleware_TenantStatusResolver_SuspendedTenant_RefusesWithCodedError(t *testing.T) {
 	handler := &recordingHandler{}
 	resolver := &stubStatusResolver{statuses: map[pkgcore.TenantID]TenantStatus{"acme": TenantStatusSuspended}}
