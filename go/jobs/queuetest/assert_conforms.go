@@ -297,11 +297,13 @@ func AssertConforms(t *testing.T, factory func() Runnable) {
 		// a different priority returns the FIRST Job -- never a second,
 		// independently-executing copy -- while the surviving Job keeps the
 		// first call's priority (per-priority delivery semantics are not
-		// traded away for dedupe). This is the regression asynq.Queue had
-		// against its own three priority queues, whose TaskID-uniqueness is
-		// scoped per queue; StandaloneQueue dedupes on one (tenant, key)
-		// index with priority as a column on the one row, so it already
-		// held. Enqueue is deliberately sequential here -- deterministic on
+		// traded away for dedupe). This is the regression asynq.Queue's
+		// own three priority queues invite: TaskID-uniqueness there is
+		// scoped per queue, which the keyed path answers by probing all
+		// three before inserting; StandaloneQueue dedupes on one
+		// (tenant, key) index with priority as a column on the one row,
+		// so it holds by construction. Enqueue is deliberately sequential
+		// here -- deterministic on
 		// both implementations; the concurrent leg lives in the same-queue
 		// subtest above.
 		first, err := q.Enqueue(context.Background(), base, jobs.WithPriority(jobs.PriorityHigh))
