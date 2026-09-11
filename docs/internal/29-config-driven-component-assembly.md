@@ -150,8 +150,8 @@ func (r *ComponentRegistry) Put(v any)
 func Get[T any](r *ComponentRegistry) (T, error) // 泛型不可为方法，保持自由函数
 
 // 声明席（共 10 席）：**写入仅限 Init 阶段**（构造期与 Init 之后的写入均被拒绝
-//   并点名阶段——声明由此冻结）；**读取自 Init 起开放**（供收尾校验与 Init 后的
-//   全目录校验）。Routes、Config、Features、Permissions、Jobs、
+//   并点名阶段——声明由此冻结）；**读取任意时刻合法**（Init 前为空集，冻结后
+//   只读——收尾校验与 Init 后的全目录校验即靠它）。Routes、Config、Features、Permissions、Jobs、
 //   Notifications、Events、AuditActions、Retention、Schedules
 // 注意：启动期密钥材料（BootstrapKeys）与系统用途（SystemPurposes）是描述符静态
 //   字段——二者先于席门禁存在，不经席位。
@@ -211,7 +211,7 @@ classDiagram
         +注册信息（名→描述符）
         +组装信息（选中集合，按拓扑序）
         +Put(v) / Get~T~() 按类型
-        +10 个声明席（写仅限 Init；读自 Init 起开放）
+        +10 个声明席（写仅限 Init；读任意时刻合法，Init 前为空集）
         +Prepare / Construct / Verify / Init / Start / Stop / Close(ctx)
     }
     class Config {
@@ -346,7 +346,7 @@ sequenceDiagram
 
 - 能进构造图的是**值**（`New` 产物，如 pki 的 `Service()`）；进不了的是**运行时服务**（需等声明齐备后构建，如 config/rbac 的 Service）——后者在 `Init` 阶段 `Put` 发布。
 - 需要运行时服务的组件依赖**提供者的产物**获得次序保证；取值发生在使用时刻 `Get`——此时提供者的 `Init` 已在拓扑序中执行过。
-- 声明席的**写入**仅在 Init 开放：构造期与 Init 之后的写入均被拒绝并点名阶段——“构造 ≠ 声明”由阶段门禁保证；**读取**自 Init 起开放（冻结后只读）。
+- 声明席的**写入**仅在 Init 开放：构造期与 Init 之后的写入均被拒绝并点名阶段——“构造 ≠ 声明”由阶段门禁保证；**读取**任意时刻合法（Init 前为空集，冻结后只读）。
 
 ## 6 组合配置
 
@@ -565,7 +565,7 @@ func (r *ComponentRegistry) Register(c Component) error
 
 func (r *ComponentRegistry) Put(v any)
 func Get[T any](r *ComponentRegistry) (T, error)
-// 声明席（写仅限 Init；读自 Init 起开放；共 10 席）：Routes、Config、Features、
+// 声明席（写仅限 Init；读任意时刻合法——Init 前为空集；共 10 席）：Routes、Config、Features、
 //   Permissions、Jobs、Notifications、Events、AuditActions、Retention、Schedules
 
 func (r *ComponentRegistry) Prepare(ctx context.Context) error   // 阶段 0
