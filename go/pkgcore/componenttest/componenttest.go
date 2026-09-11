@@ -8,6 +8,7 @@
 package componenttest
 
 import (
+	"embed"
 	"errors"
 	"fmt"
 	"reflect"
@@ -35,6 +36,8 @@ var componentNamePattern = regexp.MustCompile(`^[a-z][a-z0-9_-]*(\.[a-z][a-z0-9_
 //   - a component implementing a module is named after it: the name equals
 //     the module name (single-implementation modules) or extends it with a
 //     dot segment ("mailer.smtp" for module "mailer");
+//   - a component carrying a migration set declares the module the set
+//     belongs to, because the ledger keys a set by its module;
 //   - ConfigSchema is nil or a pointer to a struct that decodes an empty
 //     configuration cleanly, the form the assembly decodes a component's
 //     configuration block with;
@@ -53,6 +56,11 @@ func WellFormed(c pkgcore.Component) error {
 		problems = append(problems, fmt.Sprintf("the name %q does not follow the component naming convention: lowercase dot-separated segments of letters, digits, underscores and hyphens (\"authn\", \"mailer.smtp\", \"ai-gateway\")", c.Name))
 	case c.Module != "" && c.Name != c.Module && !strings.HasPrefix(c.Name, c.Module+"."):
 		problems = append(problems, fmt.Sprintf("the name %q does not reflect the module %q it implements; a component of a module is named after it (\"authn\" for module \"authn\") or extends it with a dot segment (\"mailer.smtp\" for module \"mailer\")", c.Name, c.Module))
+	}
+
+	var zeroFS embed.FS
+	if c.Migrations != zeroFS && c.Module == "" {
+		problems = append(problems, "the component carries a migration set but declares no module; the migration ledger keys a set by the module it belongs to, and the assembly refuses a migration-carrying component with no module")
 	}
 
 	if c.New == nil {

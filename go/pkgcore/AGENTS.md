@@ -100,7 +100,7 @@ A tenth name, `kv.postgres`, is registered by `kv/postgres`'s own `init()` (see 
 | Signature | Purpose |
 |---|---|
 | `func GlobalComponents() []Component` | A snapshot of the package-level global registration, in registration order: every component an imported package self-registered, plus any the host added. This is the enumeration a binary's golden component roster is pinned against (`unittest/components_test.go`); which of those components an application is made of stays a configuration question, answered per assembly by the registry |
-| `func Asset struct { Name string; Migrations, Locales embed.FS; OpenAPISpec []byte }`, `func Assets(*ComponentRegistry) []Asset` | The selected components' embedded assets in dependency order -- the sets a database component applies in Verify and a host merges (locales, OpenAPI) |
+| `func Asset struct { Name, Module string; Migrations, Locales embed.FS; OpenAPISpec []byte }`, `func Assets(*ComponentRegistry) []Asset` | The selected components' embedded assets in dependency order -- the sets a database component applies in Verify (a migration set keyed by the `Module` its component implements, which the assembly requires and never lets two selected sets share) and a host merges (locales, OpenAPI) |
 
 Built-in component roster (the components this module's own packages self-register; the components of every other module ship with that module's packages):
 

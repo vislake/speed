@@ -1058,6 +1058,11 @@ func MemberNames(r *ComponentRegistry, module string) []string {
 type Asset struct {
 	// Name is the owning component's name.
 	Name string
+	// Module is the owning component's module name (Component.Module): the
+	// key a migration ledger records the component's Migrations set under,
+	// so the log stays stable when a host renames or overrides the
+	// component. Empty for a component implementing no module.
+	Module string
 	// Migrations is the component's versioned SQL migration set, one
 	// subdirectory per dialect; the zero value means the component carries
 	// none.
@@ -1072,9 +1077,10 @@ type Asset struct {
 
 // Assets returns the embedded assets of every selected component that
 // carries at least one, in dependency order. A database component applies
-// the Migrations sets during the Verify stage; Locales merge into the
-// message catalog and OpenAPISpec fragments merge into the application
-// specification through the host's own steps.
+// the Migrations sets during the Verify stage, each keyed by its owning
+// component's Module; Locales merge into the message catalog and
+// OpenAPISpec fragments merge into the application specification through
+// the host's own steps.
 func Assets(r *ComponentRegistry) []Asset {
 	var zeroFS embed.FS
 	var assets []Asset
@@ -1085,6 +1091,7 @@ func Assets(r *ComponentRegistry) []Asset {
 		}
 		assets = append(assets, Asset{
 			Name:        c.Name,
+			Module:      c.Module,
 			Migrations:  c.Migrations,
 			Locales:     c.Locales,
 			OpenAPISpec: c.OpenAPISpec,

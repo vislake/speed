@@ -258,7 +258,8 @@ func appendUnique(names []string, name string) []string {
 // validateSelection runs the per-component validations in selection order:
 // the configuration block against the component's ConfigSchema, the
 // declared capabilities against the deployment mode, and the embedded
-// assets.
+// assets -- then the set-level checks over the selected whole, the locale
+// resources and the migration sets.
 func (r *ComponentRegistry) validateSelection(draft *assemblyDraft, mode DeploymentMode) error {
 	selected := make([]*selection, 0, len(draft.order))
 	for _, name := range draft.order {
@@ -274,7 +275,10 @@ func (r *ComponentRegistry) validateSelection(draft *assemblyDraft, mode Deploym
 		}
 		selected = append(selected, sel)
 	}
-	return validateLocaleAssets(selected)
+	if err := validateLocaleAssets(selected); err != nil {
+		return err
+	}
+	return validateMigrationLedgerKeys(selected)
 }
 
 // validateConfigBlock strictly decodes a component's configuration block
@@ -325,12 +329,16 @@ func validateComponentCapabilities(c Component, mode DeploymentMode) error {
 var supportedDialects = []string{"postgres", "sqlite"}
 
 // validateComponentAssets validates a component's embedded assets -- the
-// migration set's shape and dialects, the OpenAPI fragment's parseability --
-// and, over the whole set for the locales, key-set parity and the catalog's
-// language coverage. All of it runs before anything is constructed.
+// migration set's ownership and shape, the OpenAPI fragment's parseability
+// -- and, over the whole set for the locales, key-set parity and the
+// catalog's language coverage. All of it runs before anything is
+// constructed.
 func validateComponentAssets(c Component) error {
 	var zeroFS embed.FS
 	if c.Migrations != zeroFS {
+		if c.Module == "" {
+			return fmt.Errorf("%w (stage prepare): component %q: the component carries a migration set but declares no module; a migration set's ledger key is the module it belongs to, because a component name can be prefixed or overridden by a host while the module name cannot", ErrInvalidAsset, c.Name)
+		}
 		if err := validateMigrations(c.Migrations); err != nil {
 			return fmt.Errorf("%w (stage prepare): component %q: %w", ErrInvalidAsset, c.Name, err)
 		}
@@ -434,6 +442,31 @@ func validateLocaleAssets(selected []*selection) error {
 		if err := builder.AddModule(sel.component.Name, sel.component.Locales); err != nil {
 			return fmt.Errorf("%w (stage prepare): component %q: locale resources: %w", ErrInvalidAsset, sel.name, err)
 		}
+	}
+	return nil
+}
+
+// validateMigrationLedgerKeys enforces the migration ledger's one-set-per-key
+// contract over the selected whole: a set is recorded under the module its
+// component implements (Asset.Module), so two selected components
+// implementing the same module must not both carry a set -- the second
+// would collide with the first under one ledger key and never apply. Every
+// carrier reaching this check has already passed validateComponentAssets, so
+// its Module is non-empty; a directory-style module's members may share the
+// module as long as at most one of them carries the set. Components outside
+// the selection are not checked: only the selected set's assets are applied.
+func validateMigrationLedgerKeys(selected []*selection) error {
+	var zeroFS embed.FS
+	owner := make(map[string]string)
+	for _, sel := range selected {
+		if sel.component.Migrations == zeroFS {
+			continue
+		}
+		module := sel.component.Module
+		if first, ok := owner[module]; ok {
+			return fmt.Errorf("%w (stage prepare): components %q and %q both carry a migration set and both implement module %q, whose single ledger key admits one set; select one carrier per module or merge the sets into the module's own component", ErrInvalidAsset, first, sel.component.Name, module)
+		}
+		owner[module] = sel.component.Name
 	}
 	return nil
 }

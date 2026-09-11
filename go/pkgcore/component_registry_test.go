@@ -859,6 +859,7 @@ func TestAssetsCollectsOnlyCarriersInPlanOrder(t *testing.T) {
 	ctx := context.Background()
 	withAssets := Component{
 		Name:        "locgood",
+		Module:      "locgood",
 		Migrations:  migrations.FS,
 		Locales:     locales.FS,
 		OpenAPISpec: []byte("openapi: 3.0.3\ninfo:\n  title: fixture\n"),
@@ -884,6 +885,9 @@ func TestAssetsCollectsOnlyCarriersInPlanOrder(t *testing.T) {
 	}
 	if assets[0].Name != "locgood" {
 		t.Errorf("Assets()[0].Name = %q, want locgood", assets[0].Name)
+	}
+	if assets[0].Module != "locgood" {
+		t.Errorf("Assets()[0].Module = %q, want locgood: the migration set's ledger key is the module the component implements", assets[0].Module)
 	}
 	if assets[0].Migrations == (embed.FS{}) || assets[0].Locales == (embed.FS{}) || len(assets[0].OpenAPISpec) == 0 {
 		t.Errorf("Assets()[0] = %+v, want all three assets carried", assets[0])

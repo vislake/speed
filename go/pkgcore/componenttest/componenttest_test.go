@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/vislake/speed/go/pkgcore"
+	"github.com/vislake/speed/go/pkgcore/internal/componentfixtures/migrations"
 )
 
 type fixtureSchema struct {
@@ -59,6 +60,14 @@ func TestWellFormedAcceptsAValidDescriptor(t *testing.T) {
 	if err := WellFormed(hyphenated); err != nil {
 		t.Errorf("WellFormed(%q) = %v, want nil", hyphenated.Name, err)
 	}
+
+	// A migration-carrying component satisfies the contract by declaring the
+	// module its set is ledged under.
+	migrating := validComponent()
+	migrating.Migrations = migrations.FS
+	if err := WellFormed(migrating); err != nil {
+		t.Errorf("WellFormed(migrating) = %v, want nil", err)
+	}
 }
 
 func TestWellFormedRejects(t *testing.T) {
@@ -93,6 +102,17 @@ func TestWellFormedRejects(t *testing.T) {
 				return c
 			},
 			want: []string{`module "thingmaker"`, "named after it"},
+		},
+		{
+			name: "migration carrier without a module",
+			make: func() pkgcore.Component {
+				c := validComponent()
+				c.Module = ""
+				c.Name = "thingmaker.seed"
+				c.Migrations = migrations.FS
+				return c
+			},
+			want: []string{"carries a migration set but declares no module"},
 		},
 		{
 			name: "missing New",

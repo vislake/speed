@@ -412,6 +412,7 @@ func TestValidateMigrations(t *testing.T) {
 func TestPrepareAssetValidation(t *testing.T) {
 	t.Run("bad migration shape through a component", func(t *testing.T) {
 		c := plainComponent("asm.asset.badmig", &asmTokenA{})
+		c.Module = "asm.asset.badmig"
 		c.Migrations = locales.FS // a locale pair: files at the FS root
 		_, err := prepareAssembly(t, []Component{c}, configEntry{key: "asm.asset.badmig", value: nil})
 		if !errors.Is(err, ErrInvalidAsset) {
@@ -469,11 +470,63 @@ func TestPrepareAssetValidation(t *testing.T) {
 		// no-dot rule for message-shipping names requires until the
 		// catalog itself grows component-name support.
 		c := plainComponent("locgood", &asmTokenA{})
+		c.Module = "locgood"
 		c.Migrations = migrations.FS
 		c.Locales = locales.FS
 		c.OpenAPISpec = []byte("openapi: 3.0.3\ninfo:\n  title: fixture\n")
 		if _, err := prepareAssembly(t, []Component{c}, configEntry{key: "locgood", value: nil}); err != nil {
 			t.Fatalf("Prepare with well-formed assets = %v, want nil", err)
+		}
+	})
+
+	t.Run("migration carrier without a module", func(t *testing.T) {
+		c := plainComponent("asm.asset.nomodule", &asmTokenA{})
+		c.Migrations = migrations.FS
+		_, err := prepareAssembly(t, []Component{c}, configEntry{key: "asm.asset.nomodule", value: nil})
+		if !errors.Is(err, ErrInvalidAsset) {
+			t.Fatalf("Prepare = %v, want ErrInvalidAsset", err)
+		}
+		for _, want := range []string{"stage prepare", `"asm.asset.nomodule"`, "carries a migration set but declares no module"} {
+			if !strings.Contains(err.Error(), want) {
+				t.Errorf("error %q does not carry %q", err, want)
+			}
+		}
+	})
+
+	t.Run("one ledger key admits one migration set", func(t *testing.T) {
+		// Two members of one module both carrying a set: the ledger keys
+		// both by "signer", so the second could never record or apply.
+		local := plainComponent("signer.local", &asmTokenA{})
+		local.Module = "signer"
+		local.Migrations = migrations.FS
+		vault := plainComponent("signer.vault", &asmTokenB{})
+		vault.Module = "signer"
+		vault.Migrations = migrations.FS
+		_, err := prepareAssembly(t, []Component{local, vault},
+			configEntry{key: "signer.local", value: nil},
+			configEntry{key: "signer.vault", value: nil},
+		)
+		if !errors.Is(err, ErrInvalidAsset) {
+			t.Fatalf("Prepare = %v, want ErrInvalidAsset", err)
+		}
+		for _, want := range []string{"stage prepare", `"signer.local"`, `"signer.vault"`, `"signer"`} {
+			if !strings.Contains(err.Error(), want) {
+				t.Errorf("error %q does not carry %q", err, want)
+			}
+		}
+
+		// One carrier and one migration-free member of the same module is
+		// the directory-style shape the ledger does admit.
+		carrier := plainComponent("signer.local", &asmTokenA{})
+		carrier.Module = "signer"
+		carrier.Migrations = migrations.FS
+		member := plainComponent("signer.vault", &asmTokenB{})
+		member.Module = "signer"
+		if _, err := prepareAssembly(t, []Component{carrier, member},
+			configEntry{key: "signer.local", value: nil},
+			configEntry{key: "signer.vault", value: nil},
+		); err != nil {
+			t.Fatalf("Prepare with one carrier and one migration-free member = %v, want nil", err)
 		}
 	})
 }
