@@ -14,9 +14,8 @@ import (
 // It exists as its own fixture, distinct from Widget, deliberately: Widget
 // is load-bearing for many existing, unrelated tests (audit capture's own
 // field-set assertions, migration tests), so retrofitting two new columns
-// onto it would ripple into tests this round has no business touching —
-// exactly the precedent IDAndTenantOnlyMarker already set for the same
-// reason.
+// onto it would ripple into unrelated tests — the same precedent
+// IDAndTenantOnlyMarker set for the same reason.
 type SoftDeletableWidget struct {
 	ID        string     `gorm:"primaryKey;size:26"`
 	TenantID  string     `gorm:"primaryKey;size:26;not null"`
@@ -60,7 +59,7 @@ func (w SoftDeletableWidget) AuditResourceType() string { return "soft_deletable
 // connection, with no separate migration files to keep in sync.
 //
 // The partial unique index on (tenant_id, name) WHERE deleted_at IS NULL is
-// this round's adjudicated answer to the unique-index interaction
+// the deliberate answer to the unique-index interaction
 // docs/internal/04-data-and-tenancy.md's §4 names as a design decision
 // every soft-deletable model must make explicitly: a soft-deleted row is
 // still a real row and still occupies a plain unique constraint, so a name
@@ -69,7 +68,7 @@ func (w SoftDeletableWidget) AuditResourceType() string { return "soft_deletable
 // soft-delete, once the prior row's deleted_at is no longer NULL — is a
 // real, working, dual-dialect-safe option; the alternative ("accept no
 // reuse until hard-deleted") remains legitimate for a model that wants it,
-// and this fixture takes no position on which a future caller should pick,
+// and this fixture takes no position on which answer a caller should pick,
 // only that the choice must be made deliberately. See soft_delete_unique_index_test.go
 // and go/dbkit/AGENTS.md's "Soft deletion" section for the general guidance
 // this proof backs.

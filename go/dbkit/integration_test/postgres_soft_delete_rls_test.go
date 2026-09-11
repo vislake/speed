@@ -15,7 +15,8 @@ import (
 )
 
 // TestRepository_PostgresRLS_SoftDeletedRowStillTenantFilteredCorrectly is
-// this round's RLS proof, per docs/internal/04-data-and-tenancy.md's
+// the RLS proof for the delete-semantics rule in
+// docs/internal/04-data-and-tenancy.md's
 // delete-semantics section (§4): a soft-deleted row is, to PostgreSQL RLS,
 // just an ordinary row, and tenant_id filtering keeps applying to it
 // exactly as before — a claim this test verifies against a real restricted

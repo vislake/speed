@@ -182,16 +182,16 @@ func openIDAndTenantOnlyMarkerDB(t *testing.T, ctx context.Context, dsn string) 
 // TestPostgresRepository_Update_IDAndTenantIDOnlyModel_SucceedsAsNoOp is the
 // PostgreSQL counterpart of dbkit's own
 // TestRepository_Update_IDAndTenantIDOnlyModel_SucceedsAsNoOp
-// (repository_test.go, parent package): the regression test for the bug
-// where Update on a TenantScoped model whose only fields are ID and
-// TenantID silently returned dbkit.ErrRecordNotFound even though the row
-// genuinely existed and was genuinely owned by the calling tenant. Root
-// cause: gorm's Update callback computes its SET clause by excluding
-// every primary-key column, so when T has no non-key column at all that
-// clause comes back empty and gorm's own callback returns before
-// executing any SQL, leaving RowsAffected at its zero value regardless of
-// whether the row exists — confirmed identical on SQLite and PostgreSQL.
-// This test proves the fix holds against a real PostgreSQL server, with
+// (repository_test.go, parent package): Update on a TenantScoped model whose
+// only fields are ID and TenantID must succeed as a no-op against a row that
+// exists and is owned by the calling tenant, never return
+// dbkit.ErrRecordNotFound. The reason it needs its own handling: gorm's
+// Update callback computes its SET clause by excluding every primary-key
+// column, so when T has no non-key column at all that clause comes back
+// empty and gorm's own callback returns before executing any SQL, leaving
+// RowsAffected at its zero value regardless of whether the row exists — the
+// same shape on SQLite and PostgreSQL.
+// This test proves the contract holds against a real PostgreSQL server, with
 // PostgreSQL's own wire protocol, placeholder syntax, and
 // error-translation path, not just SQLite's — the same reason
 // TestPostgresTenantIsolation above exists alongside the parent package's

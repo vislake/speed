@@ -49,10 +49,10 @@ import (
 // dbkit today has no wiring that would ever cause a production connection
 // to run AS a restricted role with app.current_tenant set to anything — the
 // "layer 3" backstop the doc comment describes is not yet connected to
-// anything upstream of it. See this test's summary in the review report for
-// the concrete follow-up this implies (a per-request/per-transaction
-// SET LOCAL app.current_tenant + a restricted, non-BYPASSRLS application
-// database role, wired into dbkit.Open or a transaction-scoped helper).
+// anything upstream of it. The concrete follow-up this implies is a
+// per-request/per-transaction SET LOCAL app.current_tenant + a restricted,
+// non-BYPASSRLS application database role, wired into dbkit.Open or a
+// transaction-scoped helper.
 func TestPostgresRowLevelSecurity_DefenseInDepthBelowDbkit(t *testing.T) {
 	ctx := context.Background()
 	pgContainer := startPostgresContainer(t, ctx)

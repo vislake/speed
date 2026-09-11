@@ -10,8 +10,8 @@ import "github.com/vislake/speed/go/pkgcore"
 // T IS the primary key, that computed SET clause is empty and gorm's own
 // callback returns before executing any SQL, leaving RowsAffected at its
 // zero value regardless of whether the row exists. See Repository's Update
-// doc comment in repository.go for the full explanation and the fix this
-// fixture guards, and dbkit's AGENTS.md for the public-facing summary.
+// doc comment in repository.go for the full explanation this fixture
+// guards, and dbkit's AGENTS.md for the public-facing summary.
 //
 // It is shared, like Widget, between dbkit's unit tier (repository_test.go,
 // package dbkit) and its integration tier

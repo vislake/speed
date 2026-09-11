@@ -27,16 +27,15 @@ import (
 // connections TestMigrationRegistry_Apply_ConcurrentReplicas drives
 // concurrently against the same fresh schema, simulating that many
 // distributed-mode replicas each calling MigrationRegistry.Apply against the
-// same shared database at first boot (dbkit-tenancy P2-1).
+// same shared database at first boot.
 //
 // The race this test targets -- two replicas' "already applied?" checks
 // both seeing false for the same not-yet-applied file before either's
 // CREATE TABLE commits -- has a narrow window: one network round trip to
-// the same local Postgres container. A small replica count made the
-// pre-fix reproduction flaky while writing this test (occasionally every
-// replica happened to serialize through PostgreSQL's own catalog locking
-// without ever overlapping); this count reproduced the duplicate-object
-// failure on every pre-fix run tried while writing it.
+// the same local Postgres container. A small replica count can leave every
+// replica serializing through PostgreSQL's own catalog locking without any
+// overlap, so the count is deliberately high enough that the uncoordinated
+// shape collides reliably.
 const migrationLockReplicaCount = 20
 
 // migrationLockFakeModule is a minimal pkgcore.Module, local to this file,
@@ -59,16 +58,14 @@ func (m migrationLockFakeModule) Register(*pkgcore.ComponentRegistry) error { re
 
 // isDuplicateObjectError reports whether err is (or wraps) a PostgreSQL
 // error in the "two concurrent sessions tried to create the same object"
-// family -- the exact failure shape dbkit-tenancy P2-1 describes for two
-// replicas' uncoordinated Apply calls racing the same not-yet-applied
-// migration file. Three distinct SQLSTATEs surface it in this codebase's
-// own testing, all treated the same way here:
+// family -- the failure two replicas' uncoordinated Apply calls produce
+// when racing the same not-yet-applied migration file. Three distinct
+// SQLSTATEs surface it, all treated the same way here:
 //
 //   - 42P07 "duplicate_table" -- CREATE TABLE racing itself directly.
 //   - 42710 "duplicate_object" -- a handful of other DDL object kinds use
 //     this code instead of 42P07.
-//   - 23505 "unique_violation" -- the shape this test's own pre-fix run
-//     actually reproduced: concurrent CREATE TABLE statements for a
+//   - 23505 "unique_violation" -- concurrent CREATE TABLE statements for a
 //     brand-new relation each insert a matching row into PostgreSQL's own
 //     pg_type catalog as part of creating the table's row type, and two
 //     concurrent inserts for the same type name collide on
@@ -93,12 +90,12 @@ func isDuplicateObjectError(err error) bool {
 }
 
 // TestMigrationRegistry_Apply_ConcurrentReplicas_PostgreSQL_NoDuplicateObjectFailure
-// is the Docker-backed regression for dbkit-tenancy P2-1: migrations.go's
-// applyModule had no cross-process coordination, so a real multi-replica
-// distributed-mode first boot -- N processes each calling Apply against the
-// same shared PostgreSQL database at the same time -- could race its own
-// "already applied?" check against another replica's identical check for
-// the same file, and the loser's CREATE TABLE then failed with a
+// pins the multi-replica first-boot contract: N processes each calling
+// Apply against the same shared PostgreSQL database at the same time must
+// all succeed with exactly one convergent set of applied rows. Without
+// migrations.go's cross-process coordination (the advisory lock Apply
+// takes), two replicas could race their own "already applied?" checks for
+// the same file and the loser's CREATE TABLE would fail with a
 // duplicate-object error, failing that replica's boot outright.
 //
 // This test drives migrationLockReplicaCount real, independent
@@ -108,13 +105,9 @@ func isDuplicateObjectError(err error) bool {
 // so their first statements land as close together as real concurrent
 // process starts would, and asserts every one of them succeeds with no
 // duplicate-object error anywhere, and that exactly one convergent set of
-// rows lands (never N copies, never a partial set).
-//
-// Run against the pre-fix migrations.go (no advisory-lock coordination)
-// while writing this test, this reproduced the duplicate-object failure on
-// every attempt with this replica count; see AGENTS.md's "MigrationRegistry"
-// section and migrations.go's own Apply doc comment for the fix this test
-// now pins.
+// rows lands (never N copies, never a partial set). See AGENTS.md's
+// "MigrationRegistry" section and migrations.go's own Apply doc comment for
+// the coordination under test.
 func TestMigrationRegistry_Apply_ConcurrentReplicas_PostgreSQL_NoDuplicateObjectFailure(t *testing.T) {
 	ctx := context.Background()
 	pgContainer := startPostgresContainer(t, ctx)

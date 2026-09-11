@@ -339,11 +339,10 @@ func TestSQLiteBusyTimeout_ContendingWriterWaitsThenSucceeds(t *testing.T) {
 // bounded wait from a zero timeout, where the write would fail instantly.
 //
 // Like the other tests here, this pins contract semantics rather than a
-// regression: the driver's implicit default supplied the same bounded wait
-// before this change declared it, so the test passes on pre-change code and
-// fails only if the bounded wait itself is gone — an immediate busy error,
-// which takes the driver default and this package's parameter both
-// disappearing.
+// regression: the driver's implicit default supplies the same bounded wait,
+// so the test fails only if the bounded wait itself is gone — an immediate
+// busy error, which takes the driver default and this package's parameter
+// both disappearing.
 func TestSQLiteBusyTimeout_HoldBeyondTheTimeoutFailsBounded(t *testing.T) {
 	dsn := filepath.Join(t.TempDir(), "busy-timeout-bounded.db")
 	a := openBusyTimeoutDB(t, dsn)
@@ -402,8 +401,7 @@ func TestSQLiteBusyTimeout_HoldBeyondTheTimeoutFailsBounded(t *testing.T) {
 // This boundary holds regardless of any busy_timeout setting — SQLite's
 // deadlock avoidance never consults the busy handler for an upgrade — so
 // the test pins a database semantic and the accuracy of the doc comment
-// that records it, not this change's own behavior: it passed before the
-// default was declared and would pass under any timeout value.
+// that records it, not any particular timeout value.
 func TestSQLiteBusyTimeout_ReadThenWriteUpgradeDoesNotWait(t *testing.T) {
 	dsn := filepath.Join(t.TempDir(), "busy-timeout-upgrade.db")
 	a := openBusyTimeoutDB(t, dsn)
