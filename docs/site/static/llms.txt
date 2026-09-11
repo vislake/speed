@@ -75,7 +75,7 @@ with a `/zh-cn/` prefix, listed once here rather than duplicated per language.
 ## Module documentation (go/ — repository assets, per-module discipline)
 
 - [pkgcore](https://raw.githubusercontent.com/vislake/speed/main/go/pkgcore/AGENTS.md): the
-  dependency floor — Module/Registry/Kernel wiring, seam registries, the merged i18n
+  dependency floor — Module/Registry/Kernel wiring, implementation registries, the merged i18n
   catalog.
 - [dbkit](https://raw.githubusercontent.com/vislake/speed/main/go/dbkit/AGENTS.md): dual-dialect
   `*gorm.DB` wrapper, the mandatory generic Repository[T], migrations, field encryption,
@@ -99,7 +99,7 @@ with a `/zh-cn/` prefix, listed once here rather than duplicated per language.
 - [org](https://raw.githubusercontent.com/vislake/speed/main/go/org/AGENTS.md): a tenant's
   organization tree, memberships and invitations.
 - [storage](https://raw.githubusercontent.com/vislake/speed/main/go/storage/AGENTS.md): tenant
-  object storage lifecycle over the ObjectStore seam.
+  object storage lifecycle over the ObjectStore module.
 - [notification](https://raw.githubusercontent.com/vislake/speed/main/go/notification/AGENTS.md):
   the platform's messaging surface — type registry, inbox, consent-verified delivery.
 - [billing](https://raw.githubusercontent.com/vislake/speed/main/go/billing/AGENTS.md): plans,
@@ -118,7 +118,7 @@ with a `/zh-cn/` prefix, listed once here rather than duplicated per language.
   operations-console backend — tenant ledger, impersonation, cross-tenant search.
 - [app](https://raw.githubusercontent.com/vislake/speed/main/go/app/AGENTS.md): the application
   assembly layer — the loader, the seven-stage component drive, the fixed middleware chain
-  and the no-import seam bridges every host composes through.
+  and the no-import bridges every host composes through.
 - [saasctl](https://raw.githubusercontent.com/vislake/speed/main/go/saasctl/AGENTS.md): the
   consumer-facing CLI (`new`, `upgrade`, `db migrate`, `config print`).
 
