@@ -125,28 +125,28 @@
 - **面**：`go/dbkit` 新增导出函数 `FitColumnValue(v, maxRunes) (fitted, cut)`——写入边界的列拟合：先把非法 UTF-8 连续段净化为 U+FFFD，再按 rune 截断到列宽，并报告是否发生截断。既有导出符号无变化：被替换的私有实现（dbkit/audit、jobs、sharing、integration 各自的截断副本）均为未导出面，删除不构成消费者可见破坏。
 - **消费者影响**：无破坏、无升级动作；自带写入边界截断的消费者可改调该共享实现（rune 界）。按字节界的截断（metering 的 `truncateError`）是不同契约，保持模块自有；authn 的 `truncateToColumnWidth`（宽度内不做清化）同样保持原语义。
 - **登记理由**：公共符号面新增，按"宿主可见面变更须带 `!BREAKING` footer 或登记本清单"的纪律登记（本轮为纯新增，不带 footer）。
-- **出处**：`9be64217`（`refactor(dbkit): export the write-boundary column fit`）+ `8c69f8e2`（`refactor(jobs): consolidate the column upgrades and the descriptive-text fit`）+ `0ad8822e` / `29148005`（sharing / integration 改调共享实现）。
+- **出处**：`abe5e5bc`（`refactor(dbkit): export the write-boundary column fit`）+ `a8c8023f`（`refactor(jobs): consolidate the column upgrades and the descriptive-text fit`）+ `1494bf2f` / `9ecb2423`（sharing / integration 改调共享实现）。
 
 ### 5.5. pkgcore 新增可选依赖读取 `GetOptional`（非破坏，新增面登记）
 
 - **面**：`go/pkgcore` 新增导出函数 `GetOptional[T any](r *ComponentRegistry) (T, bool, error)`——by-type 上下文的可选依赖读取：无匹配 put 值返回 `(zero, false, nil)`（缺失是事实、不是错误），恰一个匹配返回值与 `true`，其余错误（`ErrAmbiguousProvider` 包装、单匹配的转换失败）原样带回。既有导出符号与 `Get` 语义均无变化。
 - **消费者影响**：无破坏、无升级动作；可选依赖消费点可改调该读取（缺失走 `ok == false` 分支、其余错误按调用方自身契约处理），与既有"缺失即跳过、其余错误上抛"写法行为一致。本轮已收敛 rbac/org/config/billing/pki/authn 六个模块组件构造与 go/app 组合配置读取共 12 处；`err == nil` 形态的"任何错误都按缺失"探测点（含 examples 与 saasctl 模板）当时维持原样，其后经语义裁定完成迁移，行为收紧见 §5.8。
 - **登记理由**：公共符号面新增，按"宿主可见面变更须带 `!BREAKING` footer 或登记本清单"的纪律登记（本轮为纯新增，不带 footer）。
-- **出处**：`0d9d3070`（`refactor(pkgcore): add the optional-dependency reading of the by-type context`）+ `0d8d1d6e`（`refactor(rbac,org,config,billing,pki,authn,app): read optional dependencies through GetOptional`）。
+- **出处**：`578ca10e`（`refactor(pkgcore): add the optional-dependency reading of the by-type context`）+ `4784d92a`（`refactor(rbac,org,config,billing,pki,authn,app): read optional dependencies through GetOptional`）。
 
 ### 5.6. billing：PreDeduct 补上幂等键的类型校验（行为收紧）
 
 - **面**：`go/billing` 的 `CreditService.PreDeduct`（导出方法）在 `IdempotencyKey` 已经命名一条非 `Deduct` 类型的 `credit_transaction` 行时，由"静默把该行当作自己的既有预留返回"改为拒绝，返回编码冲突 `billing.idempotency_key_collision`（`ErrIdempotencyKeyCollision`）；键命名自身先前 Deduct 行的重试行为不变。函数签名不变。
 - **消费者影响**：把 PreDeduct 的幂等键与其他类型的行（Grant、Expire、无键行的生成 UUID）撞用的调用方——键构造本身就已出错——从此收到明确冲突，而不是拿回一条并非自己预留的行；键唯一的正常调用方无感知。`Expire` 一侧的同类校验早已存在，本轮只是把两侧统一到同一核心。
 - **替代路径**：无（同签名行为修正）；核对自身幂等键不跨类型复用即可。
-- **出处**：`4a446745`（`refactor(billing): share the keyed deduction core of PreDeduct and Expire`）。
+- **出处**：`0217045a`（`refactor(billing): share the keyed deduction core of PreDeduct and Expire`）。
 
 ### 5.7. billing/gateway：alipay 公钥解析接受 X.509 证书（行为放宽登记）
 
 - **面**：`go/billing/gateway/alipay` 的导出函数 `ParsePublicKeyPEM` 与 `Config.AlipayPublicKeyPEM` 的接受面，由"仅 PKIX 公钥 PEM"放宽为"PKIX 公钥或 X.509 证书 PEM"（证书取其中携带的 RSA 公钥），与 `wechat.ParsePublicKeyPEM` 早已接受的两种形态一致。函数签名不变；PKIX 输入的行为逐字节不变。
 - **消费者影响**：无破坏、无升级动作；此前把平台公钥证书的内容填进 `alipay_public_key_pem` 会在启动时解析失败，现在按证书内公钥正常启用（与 Alipay 证书模式下"支付宝公钥证书"即平台公钥的事实一致）。
 - **登记理由**：宿主可见面（配置接受面）的行为放宽，按"宿主可见面变更须带 `!BREAKING` footer 或登记本清单"的纪律登记（非破坏，不带 footer）。
-- **出处**：`52c96731`（`refactor(billing/gateway): share the provider helpers in the gateway root`）。
+- **出处**：`0904e8e4`（`refactor(billing/gateway): share the provider helpers in the gateway root`）。
 
 ### 5.8. 可选依赖读取全面改走 `GetOptional` 错误传播 + 交付歧义在 plan 期拒绝（行为收紧）
 
@@ -156,7 +156,14 @@
 - **消费者影响**：误装配（同一 token 被两个选中组件同时交付，或宿主对同一 token 重复 `Put`）此前被静默按缺失处理——可选依赖不接、pkgcore sugar 读法取 nil；现在**构造期**（读点）与 **plan 期**（声明面）分别显式失败，即为"误装配从静默按缺失变为装配期失败"。正确装配的组合零行为变化：缺失仍走各站点文档化默认、命中仍同值。宿主直接 `Put` 的重复值不在组件声明面内、plan 不可见，仍为读时条件；pkgcore 五个 sugar 读法（`KVStore()`/`Mailer()`/`ObjectStore()`/`Locales()`/`EventBus()`）的 nil-for-absent 公共契约不变。
 - **替代路径**：无（行为收紧）；按错误信息取消其一（组件选择或宿主 Put）即可修复。
 - **登记理由**：宿主可见的装配契约行为收紧（此前可启动的误装配组合现在拒绝启动），按"宿主可见面变更须带 `!BREAKING` footer 或登记本清单"的纪律**双轨**登记（四个收紧提交均带 `!BREAKING` footer，先例同 §5.2）。
-- **出处**：`da8d6c62`（`fix(pkgcore)!: refuse a token delivered by two selected components`）+ `2ae8a125`（`refactor(sharing,ai-gateway,notification,integration,admin,compliance,jobs)!: propagate optional dependency read errors`）+ `cfa6f7e1`（`refactor(saasctl)!: propagate the optional SMS sender read in the templates`）+ `3b719310`（`refactor(reference-app)!: propagate optional dependency read errors in host wiring`）。
+- **出处**：`453ba35e`（`fix(pkgcore)!: refuse a token delivered by two selected components`）+ `69651edb`（`refactor(sharing,ai-gateway,notification,integration,admin,compliance,jobs)!: propagate optional dependency read errors`）+ `760a73db`（`refactor(saasctl)!: propagate the optional SMS sender read in the templates`）+ `58ffd7e3`（`refactor(reference-app)!: propagate optional dependency read errors in host wiring`）。
+
+### 5.9. admin 新增账本全量读取 `TenantService.ListAllRows`（非破坏，新增面登记）
+
+- **面**：`go/admin` 新增导出方法 `TenantService.ListAllRows(ctx) ([]Tenant, error)`——租户账本的全量读取：分页走完 `TenantRepository.List` 的全部游标页，而不是发一次调用（单次调用在上限处静默截断）。既有导出符号无变化：此前的逐页拼装散在各跨租户读取内（未导出面），收敛到该方法不构成消费者可见破坏。
+- **消费者影响**：无破坏、无升级动作；需要"平台已知全部租户"作为候选列表的跨租户读取（用量看板、跨租户审计、发送记录检索）此前各自在单次 `List` 的上限处静默截断，现在一次调用即得全量。
+- **登记理由**：公共符号面新增，按"宿主可见面变更须带 `!BREAKING` footer 或登记本清单"的纪律登记（本轮为纯新增，不带 footer）。
+- **出处**：`68bd691b`（`refactor(admin): fan cross-tenant ledger reads out through one walk`）。
 
 ### 5.9. notification：联系人 SMS 的身份 locale 改为渲染实际 locale（行为修正）
 
@@ -196,11 +203,21 @@
 
 ## 8. 附录：2026-09 以来全部 `!` 提交
 
-以下为 `git log --grep '!:'`（2026-09-01 起，含本清单所在收口轮）的完整清单，供 release note 逐条改写使用：
+以下为 `git log origin/main --grep '!:' --oneline`（2026-09-01 起）的完整清单，供 release note 逐条改写使用：
 
 | sha | 一句话 |
 |---|---|
+| `58ffd7e3` | reference-app 宿主接线的可选依赖读取改错误传播（§5.8） |
+| `760a73db` | saasctl 模板的 SMS sender 读取改错误传播（§5.8） |
+| `69651edb` | 七个模块组件构造的可选依赖读取改错误传播（§5.8） |
+| `453ba35e` | plan 期拒绝同一 token 被多组件交付（§5.8） |
+| `0c7a61a8` | notification 永久传输失败哨兵改挂 pkgcore（ErrTransportPermanent 移除） |
+| `0a62299d` | pki RootCAParams / IntermediateCAParams 合并为 CAParams |
+| `09fffdc9` | billing ExpireInput 并入 PreDeductInput |
 | `a92adfb6` | 三条 integration 腿与三处运行时文案迁到组件面（本轮） |
+| `53a824b8` | reference-app 选用模块自身描述符（去宿主拷贝面） |
+| `91ffde15` | config/rbac 快照服务改在 Start 补齐（不再发布 Provides token） |
+| `12c1ef4f` | pkgcore 每条 Provides 声明钉到构造期交付 |
 | `4c9464e2` | dbkit 迁移账本按组件实现的模块名存键（§5.2） |
 | `11e9b11a` | 内核/module 注册表/preset 机制退役（F 本体，§4） |
 | `c02a1ad3` | app 过渡组装面退役（23 符号，§3.2） |
