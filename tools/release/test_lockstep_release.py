@@ -36,7 +36,7 @@ What the suite proves (M0 exit-condition evidence):
     in line order; a consumer-shaped go.mod is left alone; an untidy or
     mismatched replace raises UncleanableReplaceError.
   * The CLI gates: usage errors exit 2, --apply without the escape hatch
-    exits 3 with the M4/v1.0 refusal, and a version any of whose tags
+    exits 3 with the deferred-legs refusal, and a version any of whose tags
     already exist -- module tags go/<module>/<version> or the repo root
     tag (the bare version) -- passes with a [warn] line: the recovery
     path a re-dispatch of a partially completed release needs (the Go
@@ -740,7 +740,7 @@ class CliGateTest(unittest.TestCase):
         self.assertIn("refused", err)
         self.assertIn("v1.0", err)
         self.assertIn("M4", err)
-        self.assertIn("no publish credential", err)
+        self.assertIn("release.yml", err)
 
 
 class SandboxProofTest(unittest.TestCase):
@@ -842,8 +842,8 @@ class SandboxProofTest(unittest.TestCase):
                 "--allow-local-tag-creation",
             )
             self.assertEqual(rc, 0, err)
-            self.assertIn("NOT done by this M0 round", out)
-            self.assertIn("no publish credential", out)
+            self.assertIn("NOT done by this gated apply mode", out)
+            self.assertIn("release.yml", out)
             expected = self.expected_sandbox_tags(sb)
             actual = sorted(rel.list_existing_tags(sb))
             self.assertEqual(actual, expected)

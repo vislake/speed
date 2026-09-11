@@ -73,11 +73,13 @@ Modes:
 
 What this script does not do:
 
-  * push tags, create the GitHub Release, or touch any publish credential
-    (none is wired anywhere in this repository);
-  * run the web/ changesets flow (web/.changeset is bootstrapped -- fixed
-    group over every package -- but no changeset entry exists and nothing
-    version-bumps or publishes);
+  * push tags or create the GitHub Release: the tag push and the npm
+    publish to GitHub Packages ride .github/workflows/release.yml's
+    publish job (a manual dispatch); the GitHub Release object itself
+    stays deferred (release.yml's header is the authority on the split);
+  * run the web/ changesets version bump (web/.changeset is bootstrapped
+    -- fixed group over every package -- but no changeset entry exists);
+    the publish step itself is release.yml's;
   * edit any module go.mod or web package.json version field: the tree
     stays in its pre-release transition state (sibling replace lines and
     0.0.0 / zero pseudo-versions);
@@ -755,14 +757,19 @@ def create_local_tags(
 
 def print_apply_not_done() -> None:
     """State plainly what the gated apply mode does not do."""
-    print("NOT done by this M0 round -- each item waits for the v1.0 "
-          "release at M4 (docs/internal/18-cicd.md, release.yml header):")
-    print("  - pushing these tags or creating the GitHub Release; no publish "
-          "credential exists anywhere in this repository")
-    print("  - the web/ changesets bump and npm publish (web/.changeset is "
-          "bootstrapped only)")
+    print("NOT done by this gated apply mode (the real release rides "
+          ".github/workflows/release.yml's publish job on dispatch; "
+          "release.yml's header is the authority):")
+    print("  - pushing these tags or creating the GitHub Release: the "
+          "publish job pushes the tag set; the Release object stays "
+          "deferred")
+    print("  - the web/ changesets version bump and npm publish: the "
+          "publish job publishes every package to GitHub Packages; the "
+          "changesets-driven bump (web/.changeset is bootstrapped only) "
+          "is not wired")
     print("  - the first-release go.mod replace cleanup (the engine ships "
-          "fixture-tested; the live tree keeps its transition state)")
+          "fixture-tested; the release commit prepared before dispatch "
+          "applies it)")
     print("  - artifacts: multi-arch images, goreleaser binaries, the merged "
           "speed.yaml, SBOMs, scaffold-verify")
 
@@ -920,10 +927,11 @@ def main(argv: list[str] | None = None) -> int:
         epilog=(
             "This is the command behind the root Taskfile.yml's release:plan "
             "task and behind .github/workflows/release.yml (its offline "
-            "verification steps). Real publishing -- pushing tags, npm "
-            "publish, artifacts, the GitHub Release -- is scheduled for the "
-            "v1.0 release at M4; until then no mode of this script touches "
-            "anything outside the repository's own tree."
+            "verification steps). Real publishing -- pushing tags and the "
+            "npm publish to GitHub Packages -- rides that workflow's publish "
+            "job on manual dispatch; artifacts and the GitHub Release stay "
+            "deferred (release.yml's header lists the split). No mode of "
+            "this script touches anything outside the repository's own tree."
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
@@ -987,16 +995,16 @@ def main(argv: list[str] | None = None) -> int:
         return 2
 
     if args.apply and not args.allow_local_tag_creation:
-        print("error: --apply is refused: nothing in this repository may "
-              "publish for real yet. Real publishing -- pushing tags, the "
-              "web/ changesets bump and npm publish, artifacts, the GitHub "
-              "Release -- is scheduled for the v1.0 release at M4, and "
-              ".github/workflows/release.yml wires no publish credential, "
-              "so this M0 round cannot publish by construction. Re-run "
-              "without --apply for the offline verification plan, or pass "
-              "--allow-local-tag-creation to create LOCAL, never-pushed "
-              "tags only (deliberate exercise of the tag-creation half "
-              "against a scratch checkout).", file=sys.stderr)
+        print("error: --apply is refused: real publishing is not this "
+              "script's job. The tag push and the npm publish to GitHub "
+              "Packages ride .github/workflows/release.yml's publish job "
+              "on manual dispatch, and the changesets bump, the GitHub "
+              "Release and the artifact legs stay deferred until v1.0 "
+              "(M4). Re-run without --apply for the offline verification "
+              "plan, or pass --allow-local-tag-creation to create LOCAL, "
+              "never-pushed tags only (deliberate exercise of the "
+              "tag-creation half against a scratch checkout).",
+              file=sys.stderr)
         return 3
 
     preflight_lines: list[str] = []

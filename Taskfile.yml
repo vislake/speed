@@ -558,7 +558,7 @@ tasks:
       - python3 tools/new_module.py '{{.NAME}}' --description '{{.DESCRIPTION}}' --design-doc '{{.DESIGN_DOC}}'
 
   release:plan:
-    desc: Verify the lockstep release plan for one version, offline (M0 round).
+    desc: Verify the lockstep release plan for one version, offline.
     # Wraps tools/release/lockstep-release.py's default verification mode
     # -- the offline verification half of the lockstep release machinery.
     # The coordinator derives the publishable set at runtime (go.work +
@@ -566,8 +566,9 @@ tasks:
     # when the plan is consistent; nothing is tagged, written or
     # published. Pass the version as a CLI var:
     #   task release:plan VERSION=v1.2.0
-    # Real publishing is not wired; .github/workflows/release.yml runs
-    # this same verification on its version input.
+    # .github/workflows/release.yml runs this same verification on its
+    # version input, and its publish job carries the real release (tag
+    # pushes and the npm publish to GitHub Packages).
     cmds:
       # Quoted for the same reason as new:module: a malformed VERSION reaches
       # the script whole and fails there with its own message (exit 2).

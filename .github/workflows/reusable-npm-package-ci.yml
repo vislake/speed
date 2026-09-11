@@ -78,8 +78,9 @@ name: npm-package-ci
 #     registerNamespace validates coverage and identical key sets at
 #     registration).
 #   * Storybook component previews: no package ships a preview harness.
-#   * publint publish-shape validation and changesets wiring: no @speed/*
-#     package is published yet, and no release machinery is wired.
+#   * publint publish-shape validation and changesets-driven versioning:
+#     neither is wired; package publishing itself rides
+#     .github/workflows/release.yml's dispatch-driven publish job.
 #
 # jobs.timeout-minutes bounds every run; the caller additionally cancels
 # stale runs via concurrency.
