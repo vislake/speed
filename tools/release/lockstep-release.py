@@ -724,9 +724,10 @@ def print_plan(
         print("Dry run: nothing was tagged, written or published, and no "
               "network was touched. The tree keeps its pre-release "
               "transition state (go.mod replace lines, 0.0.0 and zero "
-              "pseudo-versions) until the first real release at M4 (v1.0), "
-              "which is when tags are pushed, the web/ packages are bumped "
-              "and published, and the first-release replace cleanup runs.")
+              "pseudo-versions). The release workflow's unwired halves "
+              "are the changesets bump and the GitHub Release; its wired "
+              "halves -- tag pushes and npm publishes to GitHub Packages "
+              "-- ride every release dispatch.")
     print()
     print(f"{len(go_modules)} Go modules + {len(npm_packages)} packages "
           f"-> {version}")
