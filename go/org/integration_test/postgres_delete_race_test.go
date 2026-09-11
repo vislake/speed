@@ -472,7 +472,7 @@ func TestDeleteSubtreeEventIDs_MoveInDuringCascade_NoUnderCount_Postgres(t *test
 // had not touched yet at guard time, so Add can commit a membership into
 // the window between the guard's read and the cascade's eventual sweep of
 // the descendant: the membership survives bound to a row the cascade then
-// mark-deleted. This is the same TOCTOU family the member-guard round closed
+// mark-deleted. This is the same TOCTOU family memberGuardFor closes
 // for the deleted node itself, still open for its descendants -- and exactly
 // the window SQLite's whole-file locking papered over (a second writer parks
 // at the file lock before its guard-relevant statements run), which is why

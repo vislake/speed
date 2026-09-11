@@ -1911,7 +1911,7 @@ func TestTreeService_ConcurrentCreateChildAndDelete_NeverOrphansAChild(t *testin
 
 		if createErr == nil && deleteErr == nil {
 			t.Fatalf("round %d: CreateChild AND Delete(parent) both succeeded -- "+
-				"the child now lives under a soft-deleted parent (the D1 orphan)", round)
+				"the child now lives under a soft-deleted parent", round)
 		}
 		assertNoOrphans(t, db, ctx, fmt.Sprintf("round %d", round))
 	}
@@ -1922,7 +1922,7 @@ func TestTreeService_ConcurrentCreateChildAndDelete_NeverOrphansAChild(t *testin
 // swapping two
 // subtrees' positions under each other's own current parent -- racing for
 // real over many rounds, each followed by assertNoOrphans. Move's rewrite
-// now runs as one transaction with lockLiveNode locking the moved node and
+// runs as one transaction with lockLiveNode locking the moved node and
 // the target parent before either is trusted, so two overlapping Moves
 // serialize on whichever row they lock first rather than mixing per-row
 // last-writer-wins; a real PostgreSQL deadlock between two such calls
@@ -2182,9 +2182,9 @@ func TestTreeService_ConcurrentMoveAndCreateChild_InteriorDescendant_TreeInvaria
 // Unlike the interior-descendant Move case above, this one is a wide-open
 // TOCTOU gap with no locking on either side of the unguarded shape, so it
 // reproduces reliably on plain SQLite. The lock makes both sides serialize
-// on the identical lockLiveNode lock: tree.go's Delete now runs the members
+// on the identical lockLiveNode lock: tree.go's Delete runs the members
 // check inside the same transaction that locks the node being deleted
-// (memberGuardFor), and membership.go's MemberService.ensure now takes that
+// (memberGuardFor), and membership.go's MemberService.ensure takes that
 // same lock before creating the membership, so every interleaving resolves
 // to one of two consistent outcomes -- Add wins and the membership commits
 // against a node Delete's own re-check then correctly refuses to remove, or

@@ -51,13 +51,13 @@ func (s *ScopeService) DescendantIDs(ctx context.Context, nodeID string) ([]stri
 // the caller's request.
 //
 // TreeService.Delete refuses to delete a node with LIVE members bound inside
-// it, but that guard alone no longer makes a dangling row impossible in
-// band: MemberService.Restore (membership.go) can reintroduce exactly this
-// state without touching a table directly. Its own doc comment records why
+// it, but a dangling row is still possible in band: MemberService.Restore
+// (membership.go) can reintroduce exactly this state without touching a
+// table directly. Its own doc comment records why
 // -- it deliberately does not re-validate the restored row against Add's
 // rules, "the tenant's node still existing" among them -- so the ordinary
 // remove-then-delete-then-restore sequence (remove a membership at node A,
-// which the members guard no longer sees; delete node A; restore the earlier
+// which the members guard does not see; delete node A; restore the earlier
 // membership) leaves an active row whose NodeID names a node that is now
 // mark-deleted, with no table written behind org's back anywhere in the
 // sequence. This method's fail-closed reading is what keeps that reachable

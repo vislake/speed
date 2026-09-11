@@ -571,13 +571,13 @@ func (r *Repository) deleteLeaf(ctx context.Context, nodeID string, guard func(t
 // leaving it live under what this call just made a dead parent: the same
 // corruption, confirmed the same way against a real PostgreSQL server
 // (integration_test/postgres_concurrency_test.go). lockLiveNode's touch is
-// still the transaction's first statement; only its read-back (for the
-// prefix) is new, and a read after one's own lock is safe -- see
-// lockLiveNode's own doc comment.
+// the transaction's first statement; its read-back (for the prefix) follows
+// the lock, and a read after one's own lock is safe -- see lockLiveNode's
+// own doc comment.
 //
 // The statement is a plain Updates against a TenantScoped model, so the
-// isolation plugin injects the tenant filter here exactly as it did for the
-// Delete this replaces. The added "deleted_at IS NULL" leaves an
+// isolation plugin injects the tenant filter here exactly as it does for any
+// tenant-scoped statement. The "deleted_at IS NULL" clause leaves an
 // already-soft-deleted descendant (from some earlier, independent
 // mark-delete) untouched rather than re-stamping its deleted_at/deleted_by
 // with this call's own attribution.
@@ -595,8 +595,8 @@ func (r *Repository) deleteLeaf(ctx context.Context, nodeID string, guard func(t
 // target row, which nothing here has touched at that point, so Add could
 // commit a membership in the gap between the guard's read and the cascade's
 // eventual sweep of that row, leaving the membership bound to a row the
-// cascade then mark-deleted (the identical dangling-membership TOCTOU the
-// member-guard round closed for the deleted node itself, still open for its
+// cascade then mark-deleted (the identical dangling-membership TOCTOU
+// memberGuardFor closes for the deleted node itself, still open for its
 // descendants). Once lockSubtree holds every subtree row, an Add to any of
 // them either already committed (its membership visible to the guard's
 // read, which runs afterward) or is blocked behind this transaction's own
@@ -611,21 +611,16 @@ func (r *Repository) deleteLeaf(ctx context.Context, nodeID string, guard func(t
 //
 // # Why the id set is captured via lockSubtree, not a plain Find
 //
-// An earlier version of this method captured deletedIDs with one plain,
-// unlocked "path LIKE prefix%" Find issued right after nodeID's own lock,
-// on the theory that locking nodeID alone already closes the gap before the
-// mark-delete UPDATE that follows. That is exactly the same reasoning
-// lockSubtree's own doc comment (above) already recorded as insufficient
-// for Move's rewrite loop, and it fails deleteSubtree for the identical
-// reason: locking nodeID does nothing to serialize against a concurrent
-// writer of an INTERIOR descendant, since CreateChild/Move/Restore lock
-// only the row they act on (a descendant's own id, or the parent a new
-// child attaches under) and never nodeID itself unless that row happens to
-// BE nodeID. Both directions are genuine, and both are proven
-// deterministically -- never by wall-clock luck -- against a real
+// Locking nodeID alone does not close the gap before the mark-delete UPDATE
+// that follows: a concurrent writer of an INTERIOR descendant -- CreateChild,
+// Move or Restore, each locking only the row it acts on (a descendant's own
+// id, or the parent a new child attaches under) and never nodeID itself
+// unless that row happens to BE nodeID -- is not serialized by it. The same
+// reasoning lockSubtree's own doc comment records for Move's rewrite loop
+// applies to deleteSubtree unchanged. Both directions are genuine, and both
+// are proven deterministically -- never by wall-clock luck -- against a real
 // PostgreSQL server by the row-lock orchestration in
-// integration_test/postgres_delete_race_test.go, whose two tests fail on
-// the plain-Find shape and pass on this one:
+// integration_test/postgres_delete_race_test.go:
 //
 //   - Move-OUT over-count. A concurrent Move carries an interior descendant
 //     OUT of the subtree and commits while the cascade's mark-delete UPDATE
@@ -654,7 +649,7 @@ func (r *Repository) deleteLeaf(ctx context.Context, nodeID string, guard func(t
 // delete has returned, and the event's DeletedNodeIds equals the set of
 // rows the mark-delete actually matched.
 //
-// The fix is the one lockSubtree already applies to Move: lock every
+// The mechanism is the one lockSubtree applies to Move: lock every
 // currently-live row matching prefix, to a fixed point, before trusting the
 // set is complete. Once every row is locked by this transaction,
 // CreateChild's lockLiveNode(parentID) and Move's own
@@ -663,10 +658,10 @@ func (r *Repository) deleteLeaf(ctx context.Context, nodeID string, guard func(t
 // reflects the result) or block behind this transaction entirely -- so the
 // exact row set lockSubtree returns is what the mark-delete UPDATE below is
 // guaranteed to match too, closing both directions of the race. The set is
-// still read strictly BEFORE the UPDATE (reading afterward would see
-// nothing, the auto-scope plugin hiding a row the moment its deleted_at is
-// set), but now under a lock that survives until this transaction ends
-// rather than a snapshot two statements could drift out from under.
+// read strictly BEFORE the UPDATE (reading afterward would see nothing, the
+// auto-scope plugin hiding a row the moment its deleted_at is set), under a
+// lock that survives until this transaction ends rather than a snapshot two
+// statements could drift out from under.
 func (r *Repository) deleteSubtree(ctx context.Context, nodeID string, guard func(tx *gorm.DB, prefix string) error) (int64, []string, error) {
 	now := time.Now()
 	deletedBy := softDeleteActor(ctx)

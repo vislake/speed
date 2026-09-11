@@ -16,7 +16,7 @@ import "net/http"
 //
 // Structural nesting note (the same technique as FeatureGate and Scope):
 // the signature is built from stdlib types only, so a host's own resolver
-// -- eventually backed by authn's verified access-token claims -- satisfies
+// -- typically backed by authn's verified access-token claims -- satisfies
 // this interface without org importing authn or authn importing org.
 type SubjectResolver interface {
 	// Subject reports r's authenticated caller's user id. ok is false when

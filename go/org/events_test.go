@@ -456,9 +456,8 @@ func TestPublishEvent_NoHost_IsSafe(t *testing.T) {
 	publishEvent(tenantCtx("tenant-a"), nil, EventNodeCreated, NodeCreated{NodeID: "n-1"})
 }
 
-// TestTreeService_PublishesNodeEvents closes the loop B1 left open: the three
-// org.node.* declarations now have a publisher, and each carries the payload
-// its EventDecl names.
+// TestTreeService_PublishesNodeEvents pins that every org.node.* declaration
+// has a publisher and carries the payload its EventDecl names.
 func TestTreeService_PublishesNodeEvents(t *testing.T) {
 	m, host := newTestModule(t)
 	ctx := tenantCtx("tenant-a")

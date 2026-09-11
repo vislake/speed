@@ -489,7 +489,7 @@ func (s *TreeService) Rename(ctx context.Context, nodeID, name string) (*OrgNode
 // # Concurrent Move || Move, Move || CreateChild, Move || Delete
 //
 // Two overlapping Moves serialize on whichever row they both lock first
-// (the earlier one's moved-node lock, or its new-parent lock, or now any
+// (the earlier one's moved-node lock, or its new-parent lock, or any
 // descendant lockSubtree takes, blocking the later one's attempt at the
 // same row) and each observes the other's committed result once unblocked
 // -- outcome equal to some serial order of the two, never a mix of both. A
@@ -498,10 +498,10 @@ func (s *TreeService) Rename(ctx context.Context, nodeID, name string) (*OrgNode
 // lockLiveNode/touchLockByID primitive, so the two calls serialize on that
 // row exactly the same way, and whichever runs second re-reads the row's
 // current Path after acquiring the lock -- never the stale one read before
-// it blocked. A concurrent Delete of the moved node, an ancestor, or now any
+// it blocked. A concurrent Delete of the moved node, an ancestor, or any
 // descendant is likewise a writer of one of the same rows this call locks,
-// and is now inside this same locking discipline rather than racing it as a
-// wholly independent, unguarded statement.
+// inside this same locking discipline rather than racing it as a wholly
+// independent, unguarded statement.
 //
 // # Deadlock, honestly
 //
@@ -664,7 +664,7 @@ func (s *TreeService) publishCreated(ctx context.Context, node OrgNode) {
 // Both paths are a single statement inside a single transaction, so a node
 // cannot be orphaned by a child arriving between a "does it have children?"
 // check and the delete itself -- see Repository.deleteLeaf for why that check
-// lives inside the transaction rather than ahead of it. Both now ALSO take
+// lives inside the transaction rather than ahead of it. Both also take
 // lockLiveNode's own lock on nodeID as their transaction's first statement,
 // before the bulk LIKE-prefix scan runs, closing the cross-operation window
 // a concurrent CreateChild, Move or Restore locking this SAME node could
@@ -707,18 +707,17 @@ func (s *TreeService) publishCreated(ctx context.Context, node OrgNode) {
 //
 // # The members check runs INSIDE the same locked transaction, not before it
 //
-// The original shape here ran the roster check (then named assertNoMembers)
-// as its own separate, unlocked read entirely BEFORE deleteLeaf/deleteSubtree
-// ever opened their own transaction -- a plain "check, then act" pair with a
-// real, unguarded window in between: a concurrent MemberService.Add binding a
-// fresh membership to any node of the subtree in that gap would sail through
-// (the check already ran and found nothing) while the cascade proceeded to
-// soft-delete the whole subtree regardless, leaving that just-created
-// membership bound to a now-invisible row -- confirmed reproducible against
-// a real, plain SQLite database (no PostgreSQL-specific timing needed: this
-// was a wide-open gap on both dialects, since the two reads/writes involved
-// share no lock at all). memberGuardFor below closes it by moving the check
-// inside deleteLeaf/deleteSubtree's own transaction, run right after nodeID's
+// A roster check run as its own separate, unlocked read entirely BEFORE
+// deleteLeaf/deleteSubtree open their own transaction would be a plain
+// "check, then act" pair with a real, unguarded window in between: a
+// concurrent MemberService.Add binding a fresh membership to any node of the
+// subtree in that gap would sail through (the check already having run and
+// found nothing) while the cascade proceeded to soft-delete the whole
+// subtree regardless, leaving that just-created membership bound to an
+// invisible row -- reproducible against a real, plain SQLite database, no
+// PostgreSQL-specific timing needed: the two reads/writes involved share no
+// lock at all. memberGuardFor below runs the check inside
+// deleteLeaf/deleteSubtree's own transaction instead, right after nodeID's
 // lock succeeds and the current prefix is derived -- deleteLeaf runs it
 // strictly before its own mark-delete statement, deleteSubtree only AFTER
 // lockSubtree has locked every row of the subtree (see deleteSubtree's doc
@@ -727,13 +726,13 @@ func (s *TreeService) publishCreated(ctx context.Context, node OrgNode) {
 // touched at guard time) -- so it sees either a membership already committed
 // before this transaction's own lock was taken (and refuses), or nothing yet,
 // in which case a concurrent Add attempting to bind under one of these SAME
-// rows is forced through the other half of this fix: MemberService.ensure
-// (membership.go) now takes the identical lockLiveNode lock on its target
-// node before creating the membership, so it either already committed (and
-// this transaction's own read, above, sees it) or blocks behind this
-// transaction and, once it resumes, correctly discovers the node it wanted
-// is now mark-deleted and refuses with ErrNodeNotFound instead of completing
-// a dangling insert.
+// rows is forced through the other half of the locking discipline:
+// MemberService.ensure (membership.go) takes the identical lockLiveNode lock
+// on its target node before creating the membership, so it either already
+// committed (and this transaction's own read, above, sees it) or blocks
+// behind this transaction and, once it resumes, correctly discovers the node
+// it wanted is by then mark-deleted and refuses with ErrNodeNotFound instead
+// of completing a dangling insert.
 func (s *TreeService) Delete(ctx context.Context, nodeID string, cascade bool) error {
 	node, err := s.Get(ctx, nodeID)
 	if err != nil {
