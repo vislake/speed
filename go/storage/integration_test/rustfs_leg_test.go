@@ -45,33 +45,21 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
-	"fmt"
 	"io"
 	"testing"
-	"time"
 
 	"github.com/minio/minio-go/v7"
-	"github.com/minio/minio-go/v7/pkg/credentials"
-	"github.com/testcontainers/testcontainers-go"
-	"github.com/testcontainers/testcontainers-go/wait"
 
 	"github.com/vislake/speed/go/jobs"
 	"github.com/vislake/speed/go/pkgcore"
 	"github.com/vislake/speed/go/pkgcore/apperr"
 	"github.com/vislake/speed/go/pkgcore/componenttest"
 	"github.com/vislake/speed/go/pkgcore/objectstore/s3"
+	"github.com/vislake/speed/go/pkgcore/rustfstest"
 	"github.com/vislake/speed/go/storage"
 	"github.com/vislake/speed/go/storage/internal/testutil"
 	"github.com/vislake/speed/go/storage/migrations"
 )
-
-// rustfsImage pins the RustFS image this leg runs against to the same
-// release tag pkgcore's own ObjectStore tier uses, so both tiers exercise
-// the same server behavior. RustFS (https://github.com/rustfs/rustfs) has
-// no dedicated testcontainers-go module the way MinIO did (tcminio), so
-// the container is started through testcontainers' own generic
-// ContainerRequest instead -- see startRustfsStore below.
-const rustfsImage = "rustfs/rustfs:1.0.0-rc.5"
 
 // noopQueue is the do-nothing jobs.Queue this leg's module gets, mirroring
 // the unit tier's stubQueue: the module requires that a queue EXISTS for
@@ -92,70 +80,24 @@ var _ jobs.Queue = noopQueue{}
 // startRustfsStore starts a disposable RustFS container, creates a fresh
 // bucket on it, and returns an S3-backed ObjectStore pointed at that
 // bucket, the raw client (for the independent assertions this file's
-// header promises) and the bucket name. The container is terminated via
-// t.Cleanup on test completion, pass or fail. The bucket is created here
-// rather than by the store: provisioning a bucket is a hosting operation,
-// and s3.NewObjectStore deliberately never provisions its own. The shape
-// mirrors go/pkgcore/objectstore/s3/integration_test's own
-// startRustfsObjectStore helper; the raw client is the addition this leg
-// needs.
+// header promises) and the bucket name. The container comes from
+// go/pkgcore/rustfstest and is terminated via t.Cleanup on test
+// completion, pass or fail. The bucket is created here rather than by the
+// store: provisioning a bucket is a hosting operation, and
+// s3.NewObjectStore deliberately never provisions its own. The raw client
+// is the addition this leg needs beyond the store.
 func startRustfsStore(t *testing.T, ctx context.Context) (pkgcore.ObjectStore, *minio.Client, string) {
 	t.Helper()
 
-	req := testcontainers.ContainerRequest{
-		Image:        rustfsImage,
-		ExposedPorts: []string{"9000/tcp"},
-		Env: map[string]string{
-			"RUSTFS_ACCESS_KEY":     "rustfsadmin",
-			"RUSTFS_SECRET_KEY":     "rustfsadmin",
-			"RUSTFS_ADDRESS":        ":9000",
-			"RUSTFS_CONSOLE_ENABLE": "false",
-		},
-		Cmd:        []string{"/data"},
-		WaitingFor: wait.ForHTTP("/health").WithPort("9000/tcp").WithStartupTimeout(60 * time.Second),
-	}
-	container, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
-		ContainerRequest: req,
-		Started:          true,
-	})
-	if err != nil {
-		t.Fatalf("start rustfs testcontainer: %v", err)
-	}
-	t.Cleanup(func() {
-		if terminateErr := testcontainers.TerminateContainer(container); terminateErr != nil {
-			t.Errorf("terminate rustfs testcontainer: %v", terminateErr)
-		}
-	})
-
-	host, err := container.Host(ctx)
-	if err != nil {
-		t.Fatalf("rustfs testcontainer host: %v", err)
-	}
-	mappedPort, err := container.MappedPort(ctx, "9000/tcp")
-	if err != nil {
-		t.Fatalf("rustfs testcontainer mapped port: %v", err)
-	}
-	endpoint := fmt.Sprintf("%s:%s", host, mappedPort.Port())
-
 	const bucket = "objects"
-	const accessKey = "rustfsadmin"
-	const secretKey = "rustfsadmin"
-	client, err := minio.New(endpoint, &minio.Options{
-		Creds:  credentials.NewStaticV4(accessKey, secretKey, ""),
-		Secure: false,
-	})
-	if err != nil {
-		t.Fatalf("build a minio-go client for %q: %v", endpoint, err)
-	}
-	if err := client.MakeBucket(ctx, bucket, minio.MakeBucketOptions{}); err != nil {
-		t.Fatalf("create bucket %q on the rustfs testcontainer: %v", bucket, err)
-	}
-
+	endpoint := rustfstest.Start(t, ctx)
+	client := rustfstest.NewClient(t, endpoint)
+	rustfstest.CreateBucket(t, ctx, client, bucket)
 	return s3.NewObjectStore(s3.Config{
 		Endpoint:  endpoint,
 		Bucket:    bucket,
-		AccessKey: accessKey,
-		SecretKey: secretKey,
+		AccessKey: rustfstest.AccessKey,
+		SecretKey: rustfstest.SecretKey,
 	}), client, bucket
 }
 

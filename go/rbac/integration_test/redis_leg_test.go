@@ -28,8 +28,7 @@ package rbac_test
 // and the peer serves the revoked grant until its TTL. The spy assertion
 // below pins the shape the recovery is written against.
 //
-// Container lifecycle follows go/config/integration_test/redis_leg_test.go,
-// which follows go/pkgcore/integration_test's startRedisClient.
+// Container lifecycle comes from go/pkgcore/redistest.
 
 import (
 	"context"
@@ -37,12 +36,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/redis/go-redis/v9"
-	"github.com/testcontainers/testcontainers-go"
-	tcredis "github.com/testcontainers/testcontainers-go/modules/redis"
-
 	"github.com/vislake/speed/go/pkgcore"
 	eventbusredis "github.com/vislake/speed/go/pkgcore/eventbus/redis"
+	"github.com/vislake/speed/go/pkgcore/redistest"
 	"github.com/vislake/speed/go/rbac"
 )
 
@@ -52,36 +48,6 @@ import (
 // than assume the delivery landed with the publish.
 const convergenceDeadline = 10 * time.Second
 
-// startRedisClient starts a disposable Redis 7 container and returns a
-// go-redis client connected to it; both are torn down through t.Cleanup.
-// The two replicas of a test share this one client -- they are two bus
-// instances over the same server, exactly as two processes would be.
-func startRedisClient(t *testing.T, ctx context.Context) *redis.Client {
-	t.Helper()
-
-	container, err := tcredis.Run(ctx, "redis:7-alpine")
-	if err != nil {
-		t.Fatalf("start redis testcontainer: %v", err)
-	}
-	t.Cleanup(func() {
-		if terminateErr := testcontainers.TerminateContainer(container); terminateErr != nil {
-			t.Errorf("terminate redis testcontainer: %v", terminateErr)
-		}
-	})
-
-	uri, err := container.ConnectionString(ctx)
-	if err != nil {
-		t.Fatalf("redis testcontainer connection string: %v", err)
-	}
-	options, err := redis.ParseURL(uri)
-	if err != nil {
-		t.Fatalf("redis.ParseURL(%q): %v", uri, err)
-	}
-	client := redis.NewClient(options)
-	t.Cleanup(func() { _ = client.Close() })
-	return client
-}
-
 // replicas returns the two Services of one test: each over its own
 // RedisEventBus, sharing the PostgreSQL connection the way two replicas
 // share a database. The peer bus is returned too, so a test can subscribe
@@ -90,7 +56,7 @@ func replicas(t *testing.T, ctx context.Context) (writer, peer *rbac.Service, wr
 	t.Helper()
 
 	db := openRBACPostgres(t, ctx, startPostgresContainer(t, ctx))
-	client := startRedisClient(t, ctx)
+	client := redistest.Client(t, ctx)
 	writerBus = eventbusredis.NewEventBus(client)
 	peerBus = eventbusredis.NewEventBus(client)
 	t.Cleanup(func() {

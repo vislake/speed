@@ -1,5 +1,18 @@
 //go:build integration
 
+// Package redis_test holds go/pkgcore/eventbus/redis's integration tier:
+// tests that exercise EventBus against a real Redis server. It is physically
+// separate from the package's unit tests (all of which live in package
+// redis itself, one file per source file, per the backend coding standard's
+// testing layout rule) and carries the "integration" build tag: a plain
+// "go test ./..." never compiles or runs anything in this directory; it is
+// invoked explicitly with "go test -tags=integration ./...", the same
+// layout-and-build-tag convention go/jobs/integration_test follows.
+//
+// Every test here spins up its own disposable Redis container through
+// go/pkgcore/redistest and requires a working Docker (or
+// Docker-API-compatible) daemon; there is no fallback or
+// skip-on-missing-Docker path.
 package redis_test
 
 // Integration tests for eventbusredis.NewEventBus: two bus instances sharing
@@ -24,6 +37,7 @@ import (
 	"github.com/vislake/speed/go/pkgcore"
 	eventbusredis "github.com/vislake/speed/go/pkgcore/eventbus/redis"
 	"github.com/vislake/speed/go/pkgcore/eventbustest"
+	"github.com/vislake/speed/go/pkgcore/redistest"
 )
 
 // invoicePaid is the concrete payload type used across these tests: a plain
@@ -172,7 +186,7 @@ func streamKey(eventType string) string {
 // delivered locally.
 func TestEventBus_DeliversExactlyOnceLocallyAndRemotely(t *testing.T) {
 	ctx := context.Background()
-	client := startRedisClient(t, ctx)
+	client := redistest.Client(t, ctx)
 	busA := eventbusredis.NewEventBus(client)
 	busB := eventbusredis.NewEventBus(client)
 	t.Cleanup(func() {
@@ -256,7 +270,7 @@ func TestEventBus_DeliversExactlyOnceLocallyAndRemotely(t *testing.T) {
 // stream-per-type design.
 func TestEventBus_RoutesEachTypeOnItsOwnStream(t *testing.T) {
 	ctx := context.Background()
-	client := startRedisClient(t, ctx)
+	client := redistest.Client(t, ctx)
 	busA := eventbusredis.NewEventBus(client)
 	busB := eventbusredis.NewEventBus(client)
 	t.Cleanup(func() {
@@ -317,7 +331,7 @@ func TestEventBus_RoutesEachTypeOnItsOwnStream(t *testing.T) {
 // handler ever sees it, and the bus keeps working for events that do encode.
 func TestEventBus_NonJSONPayload_FailsBeforeAnythingIsDelivered(t *testing.T) {
 	ctx := context.Background()
-	client := startRedisClient(t, ctx)
+	client := redistest.Client(t, ctx)
 	busA := eventbusredis.NewEventBus(client)
 	busB := eventbusredis.NewEventBus(client)
 	t.Cleanup(func() {
@@ -368,7 +382,7 @@ func TestEventBus_NonJSONPayload_FailsBeforeAnythingIsDelivered(t *testing.T) {
 // delivered to the handlers that follow the panicking one.
 func TestEventBus_PanickingRemoteHandler_DoesNotWedgeTheReader(t *testing.T) {
 	ctx := context.Background()
-	client := startRedisClient(t, ctx)
+	client := redistest.Client(t, ctx)
 	busA := eventbusredis.NewEventBus(client)
 	busB := eventbusredis.NewEventBus(client)
 	t.Cleanup(func() {
@@ -411,7 +425,7 @@ func TestEventBus_PanickingRemoteHandler_DoesNotWedgeTheReader(t *testing.T) {
 // deployment.
 func TestEventBus_Close_StopsPublishAndRemoteDelivery(t *testing.T) {
 	ctx := context.Background()
-	client := startRedisClient(t, ctx)
+	client := redistest.Client(t, ctx)
 	busA := eventbusredis.NewEventBus(client)
 	busB := eventbusredis.NewEventBus(client)
 	t.Cleanup(func() {
@@ -454,7 +468,7 @@ func TestEventBus_Close_StopsPublishAndRemoteDelivery(t *testing.T) {
 // consumer group was created.
 func TestEventBus_SubscribersNeverCatchUpOnHistory(t *testing.T) {
 	ctx := context.Background()
-	client := startRedisClient(t, ctx)
+	client := redistest.Client(t, ctx)
 	busA := eventbusredis.NewEventBus(client)
 	busB := eventbusredis.NewEventBus(client)
 	t.Cleanup(func() {
@@ -524,7 +538,7 @@ func TestEventBus_SubscribersNeverCatchUpOnHistory(t *testing.T) {
 // after the removal would be lost for this subscriber.
 func TestEventBus_ReaderRecoversFromALostGroup(t *testing.T) {
 	ctx := context.Background()
-	client := startRedisClient(t, ctx)
+	client := redistest.Client(t, ctx)
 	busA := eventbusredis.NewEventBus(client) // publisher only: subscribes no handler
 	busB := eventbusredis.NewEventBus(client)
 	t.Cleanup(func() {
@@ -595,7 +609,7 @@ func TestEventBus_ReaderRecoversFromALostGroup(t *testing.T) {
 // DESTROY / DEL recipe for that case.)
 func TestEventBus_Close_LastReaderLeavesNothingBehind(t *testing.T) {
 	ctx := context.Background()
-	client := startRedisClient(t, ctx)
+	client := redistest.Client(t, ctx)
 	busA := eventbusredis.NewEventBus(client) // publisher only: subscribes no handler
 	busB := eventbusredis.NewEventBus(client)
 	t.Cleanup(func() {
@@ -633,7 +647,7 @@ func TestEventBus_Close_LastReaderLeavesNothingBehind(t *testing.T) {
 // keeps delivering after the other instance closed.
 func TestEventBus_Close_SparesAPeerGroup(t *testing.T) {
 	ctx := context.Background()
-	client := startRedisClient(t, ctx)
+	client := redistest.Client(t, ctx)
 	busA := eventbusredis.NewEventBus(client) // publisher only: subscribes no handler
 	busB := eventbusredis.NewEventBus(client)
 	busC := eventbusredis.NewEventBus(client)
@@ -693,7 +707,7 @@ func TestEventBus_Close_SparesAPeerGroup(t *testing.T) {
 // manages an EventBus's lifetime.
 func TestEventBus_ConformsToEventBusContract(t *testing.T) {
 	ctx := context.Background()
-	client := startRedisClient(t, ctx)
+	client := redistest.Client(t, ctx)
 
 	// The caps argument is this implementation's declaration — the component
 	// descriptor (component.go) declares MultiReplicaSafe | SurvivesRestart,

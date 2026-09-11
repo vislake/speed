@@ -36,10 +36,8 @@ package notification_test
 // type's delivery needs none of the tier's senders; that is exactly the
 // isolation a distributed-delivery proof wants.
 //
-// The disposable-container lifecycle is the shape every Redis-backed tier
-// in this workspace shares (the same shape go/pkgcore/integration_test's
-// startRedisClient uses): one container per test file, torn down through
-// t.Cleanup.
+// The disposable-container lifecycle comes from go/pkgcore/redistest: one
+// container per test, torn down through t.Cleanup.
 
 import (
 	"context"
@@ -49,9 +47,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/redis/go-redis/v9"
-	"github.com/testcontainers/testcontainers-go"
-	tcredis "github.com/testcontainers/testcontainers-go/modules/redis"
 	"gorm.io/gorm"
 
 	"github.com/vislake/speed/go/jobs"
@@ -62,6 +57,7 @@ import (
 	"github.com/vislake/speed/go/pkgcore"
 	"github.com/vislake/speed/go/pkgcore/componenttest"
 	eventbusredis "github.com/vislake/speed/go/pkgcore/eventbus/redis"
+	"github.com/vislake/speed/go/pkgcore/redistest"
 )
 
 // convergenceDeadline bounds every wait for a remote delivery. Redis
@@ -69,36 +65,6 @@ import (
 // stream entry -- so assertions on the far side of the bus poll rather
 // than assume the delivery landed with the publish.
 const convergenceDeadline = 10 * time.Second
-
-// startRedisClient starts a disposable Redis 7 container and returns a
-// go-redis client connected to it; both are torn down through t.Cleanup.
-// The two replicas of a test share this one client -- they are two bus
-// instances over the same server, exactly as two processes would be.
-func startRedisClient(t *testing.T, ctx context.Context) *redis.Client {
-	t.Helper()
-
-	container, err := tcredis.Run(ctx, "redis:7-alpine")
-	if err != nil {
-		t.Fatalf("start redis testcontainer: %v", err)
-	}
-	t.Cleanup(func() {
-		if terminateErr := testcontainers.TerminateContainer(container); terminateErr != nil {
-			t.Errorf("terminate redis testcontainer: %v", terminateErr)
-		}
-	})
-
-	uri, err := container.ConnectionString(ctx)
-	if err != nil {
-		t.Fatalf("redis testcontainer connection string: %v", err)
-	}
-	options, err := redis.ParseURL(uri)
-	if err != nil {
-		t.Fatalf("redis.ParseURL(%q): %v", uri, err)
-	}
-	client := redis.NewClient(options)
-	t.Cleanup(func() { _ = client.Close() })
-	return client
-}
 
 // eventSpy records every Event a bus delivers to it, so a test can assert
 // on the wire shape the remote side actually receives.
@@ -252,7 +218,7 @@ func TestRedisBus_DeliveredInbox_AnnouncesAcrossReplicas(t *testing.T) {
 	db := testutil.NewSQLite(t, "notification", migrations.FS)
 	registerContactSerializer()
 
-	client := startRedisClient(t, ctx)
+	client := redistest.Client(t, ctx)
 	writerBus := eventbusredis.NewEventBus(client)
 	peerBus := eventbusredis.NewEventBus(client)
 	t.Cleanup(func() {

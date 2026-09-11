@@ -26,6 +26,7 @@ import (
 
 	"github.com/vislake/speed/go/pkgcore"
 	eventbusredis "github.com/vislake/speed/go/pkgcore/eventbus/redis"
+	"github.com/vislake/speed/go/pkgcore/redistest"
 )
 
 // TestEventBus_DeclaredSurvivesRestart_CommittedStateSurvivesServerRestart
@@ -43,7 +44,7 @@ import (
 // deployment.
 func TestEventBus_DeclaredSurvivesRestart_CommittedStateSurvivesServerRestart(t *testing.T) {
 	ctx := context.Background()
-	container, client := startRedisPersistent(t, ctx)
+	container, client := redistest.Persistent(t, ctx)
 
 	const eventType = "eventbus_redis_test.survives-restart"
 	publisher := eventbusredis.NewEventBus(client)
@@ -107,7 +108,7 @@ func TestEventBus_DeclaredSurvivesRestart_CommittedStateSurvivesServerRestart(t 
 	if err := container.Start(ctx); err != nil {
 		t.Fatalf("restart redis container: %v", err)
 	}
-	waitForRedisReady(t, ctx, client)
+	redistest.WaitReady(t, ctx, client)
 
 	// The committed stream state must still be there. These are the
 	// assertions that fail against an unpersisted server: its restart drops

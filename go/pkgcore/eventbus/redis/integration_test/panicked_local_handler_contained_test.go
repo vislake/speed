@@ -24,6 +24,7 @@ import (
 
 	"github.com/vislake/speed/go/pkgcore"
 	eventbusredis "github.com/vislake/speed/go/pkgcore/eventbus/redis"
+	"github.com/vislake/speed/go/pkgcore/redistest"
 )
 
 // TestEventBus_PanickingLocalHandler_ContainedSiblingsRun pins the
@@ -35,7 +36,7 @@ import (
 // so the test died at the panic and the sibling never ran.
 func TestEventBus_PanickingLocalHandler_ContainedSiblingsRun(t *testing.T) {
 	ctx := context.Background()
-	client := startRedisClient(t, ctx)
+	client := redistest.Client(t, ctx)
 	bus := eventbusredis.NewEventBus(client)
 	t.Cleanup(bus.Close)
 

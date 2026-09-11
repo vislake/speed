@@ -86,10 +86,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/redis/go-redis/v9"
-	"github.com/testcontainers/testcontainers-go"
-	tcredis "github.com/testcontainers/testcontainers-go/modules/redis"
-
 	"github.com/vislake/speed/go/dbkit"
 	"github.com/vislake/speed/go/dbkit/audit"
 
@@ -101,38 +97,8 @@ import (
 	_ "github.com/vislake/speed/go/dbkit/dialect/sqlite"
 	"github.com/vislake/speed/go/pkgcore"
 	eventbusredis "github.com/vislake/speed/go/pkgcore/eventbus/redis"
+	"github.com/vislake/speed/go/pkgcore/redistest"
 )
-
-// startRedisClient starts a disposable Redis 7 container and returns a
-// go-redis client connected to it, both already cleaned up via t.Cleanup
-// on test completion (pass or fail). A copy of
-// go/pkgcore/integration_test/redis_container_test.go's helper of the same
-// name, which this test could not import.
-func startRedisClient(t *testing.T, ctx context.Context) *redis.Client {
-	t.Helper()
-
-	container, err := tcredis.Run(ctx, "redis:7-alpine")
-	if err != nil {
-		t.Fatalf("start redis testcontainer: %v", err)
-	}
-	t.Cleanup(func() {
-		if terminateErr := testcontainers.TerminateContainer(container); terminateErr != nil {
-			t.Errorf("terminate redis testcontainer: %v", terminateErr)
-		}
-	})
-
-	uri, err := container.ConnectionString(ctx)
-	if err != nil {
-		t.Fatalf("redis testcontainer connection string: %v", err)
-	}
-	options, err := redis.ParseURL(uri)
-	if err != nil {
-		t.Fatalf("redis.ParseURL(%q): %v", uri, err)
-	}
-	client := redis.NewClient(options)
-	t.Cleanup(func() { client.Close() })
-	return client
-}
 
 // eventRecorder accumulates what one bus instance's handlers saw, for
 // later count and content assertions. Handlers run on different goroutines
@@ -350,7 +316,7 @@ func TestServer_RealRedisEventBusComposition_NotesAuditEventCrossesProcesses(t *
 	// the observer and warmer here, and the app's own bus in the child
 	// process, which connects to the same host:port through
 	// APP_REDIS_ADDR.
-	client := startRedisClient(t, ctx)
+	client := redistest.Client(t, ctx)
 	redisAddr := client.Options().Addr // "host:port", reachable from this process
 
 	// The observer: subscribed to the audit stream and provably consuming

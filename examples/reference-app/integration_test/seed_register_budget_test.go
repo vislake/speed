@@ -49,12 +49,13 @@ import (
 	"testing"
 
 	"github.com/vislake/speed/go/pkgcore"
+	"github.com/vislake/speed/go/pkgcore/redistest"
 )
 
 func TestServer_DistributedMode_RepeatedSeededRestarts_DoNotTripTheRegisterBudget(t *testing.T) {
 	ctx := context.Background()
 
-	redisClient := startRedisClient(t, ctx)
+	redisClient := redistest.Client(t, ctx)
 	redisAddr := redisClient.Options().Addr
 	s3Endpoint, s3Bucket, s3AccessKey, s3SecretKey := startRustfsStore(t, ctx)
 	smtpAddr, _ := mailhogEndpoints(t, ctx)

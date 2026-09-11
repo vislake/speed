@@ -7,10 +7,10 @@
 // redis_eventbus_composition_test.go (same build tag, same
 // "go test -tags=integration ./..." invocation, no skip-on-missing-Docker
 // fallback) and reuses several of that file's helpers directly
-// (startRedisClient, eventually, moduleRoot, apiClient, demoAccessToken,
+// (eventually, moduleRoot, apiClient, demoAccessToken,
 // testNote/testListNotesResponse, and the acmeTenantID/demoUserHdr/
 // demoOwner/demoOwnerEmail/demoUsersPassword constants) rather than
-// duplicating them.
+// duplicating them -- the Redis client comes from go/pkgcore/redistest.
 //
 // TWO real server processes, not one: both built from the SAME "go build
 // ./cmd/server" binary, both run with APP_DEPLOYMENT_MODE=distributed,
@@ -188,22 +188,13 @@ import (
 	"testing"
 	"time"
 
-	"github.com/minio/minio-go/v7"
-	"github.com/minio/minio-go/v7/pkg/credentials"
 	"github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/wait"
 
 	"github.com/vislake/speed/go/notification"
+	"github.com/vislake/speed/go/pkgcore/redistest"
+	"github.com/vislake/speed/go/pkgcore/rustfstest"
 )
-
-// rustfsImage pins the same RustFS release go/storage's and go/pkgcore's own
-// RustFS integration legs run against, so every tier in this repository
-// exercises the same server behavior. RustFS (https://github.com/rustfs/rustfs)
-// has no dedicated testcontainers-go module the way MinIO did (tcminio), so
-// the container is started through testcontainers' own generic
-// ContainerRequest instead -- the identical shape mailhogEndpoints below
-// already uses for an image with no dedicated module.
-const rustfsImage = "rustfs/rustfs:1.0.0-rc.5"
 
 // mailhogImage is a real SMTP catcher: Mailpit exposes a plaintext SMTP
 // listener (port 1025, no auth required) and an HTTP API (port 8025) that
@@ -271,64 +262,17 @@ type notifMessages struct {
 // startRustfsStore starts a disposable RustFS container and creates a fresh
 // bucket on it, returning the endpoint (host:port, no scheme -- what
 // objectstore/s3.Config.Endpoint and this file's APP_S3_ENDPOINT both
-// want), the bucket name and the credentials. Copied from
-// go/storage/integration_test/rustfs_leg_test.go's startRustfsStore, adapted
-// to hand back raw configuration this file passes to two SUBPROCESSES as
-// environment variables, rather than constructing a pkgcore.ObjectStore
-// directly the way the module-level test does.
+// want), the bucket name and the credentials. The container comes from
+// go/pkgcore/rustfstest; the raw configuration is what this file passes to
+// two SUBPROCESSES as environment variables, rather than constructing a
+// pkgcore.ObjectStore directly the way a module-level test does.
 func startRustfsStore(t *testing.T, ctx context.Context) (endpoint, bucket, accessKey, secretKey string) {
 	t.Helper()
 
-	const rustfsAccessKey = "rustfsadmin"
-	const rustfsSecretKey = "rustfsadmin"
-	req := testcontainers.ContainerRequest{
-		Image:        rustfsImage,
-		ExposedPorts: []string{"9000/tcp"},
-		Env: map[string]string{
-			"RUSTFS_ACCESS_KEY":     rustfsAccessKey,
-			"RUSTFS_SECRET_KEY":     rustfsSecretKey,
-			"RUSTFS_ADDRESS":        ":9000",
-			"RUSTFS_CONSOLE_ENABLE": "false",
-		},
-		Cmd:        []string{"/data"},
-		WaitingFor: wait.ForHTTP("/health").WithPort("9000/tcp").WithStartupTimeout(60 * time.Second),
-	}
-	container, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
-		ContainerRequest: req,
-		Started:          true,
-	})
-	if err != nil {
-		t.Fatalf("start rustfs testcontainer: %v", err)
-	}
-	t.Cleanup(func() {
-		if terminateErr := testcontainers.TerminateContainer(container); terminateErr != nil {
-			t.Errorf("terminate rustfs testcontainer: %v", terminateErr)
-		}
-	})
-
-	host, err := container.Host(ctx)
-	if err != nil {
-		t.Fatalf("rustfs testcontainer host: %v", err)
-	}
-	mappedPort, err := container.MappedPort(ctx, "9000/tcp")
-	if err != nil {
-		t.Fatalf("rustfs testcontainer mapped port: %v", err)
-	}
-	endpoint = net.JoinHostPort(host, mappedPort.Port())
-
 	const bucketName = "reference-app-distributed"
-	client, err := minio.New(endpoint, &minio.Options{
-		Creds:  credentials.NewStaticV4(rustfsAccessKey, rustfsSecretKey, ""),
-		Secure: false,
-	})
-	if err != nil {
-		t.Fatalf("build a minio-go client for %q: %v", endpoint, err)
-	}
-	if err := client.MakeBucket(ctx, bucketName, minio.MakeBucketOptions{}); err != nil {
-		t.Fatalf("create bucket %q on the rustfs testcontainer: %v", bucketName, err)
-	}
-
-	return endpoint, bucketName, rustfsAccessKey, rustfsSecretKey
+	endpoint = rustfstest.Start(t, ctx)
+	rustfstest.CreateBucket(t, ctx, rustfstest.NewClient(t, endpoint), bucketName)
+	return endpoint, bucketName, rustfstest.AccessKey, rustfstest.SecretKey
 }
 
 // mailhogEndpoints starts a disposable MailHog container and returns the
@@ -714,7 +658,7 @@ func openInboxStream(t *testing.T, baseURL, accessToken, userIDHeader string) *s
 func TestServer_DistributedMode_TwoReplicas_NotificationCrossesRealInfrastructure(t *testing.T) {
 	ctx := context.Background()
 
-	redisClient := startRedisClient(t, ctx)
+	redisClient := redistest.Client(t, ctx)
 	redisAddr := redisClient.Options().Addr
 	s3Endpoint, s3Bucket, s3AccessKey, s3SecretKey := startRustfsStore(t, ctx)
 	smtpAddr, mailhogAPI := mailhogEndpoints(t, ctx)

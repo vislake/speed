@@ -15,8 +15,7 @@ package config_test
 // map shape (events.go's itemChangedFromWire), which is exactly what the
 // peer's cache invalidation runs on.
 //
-// Container lifecycle follows go/pkgcore/integration_test/
-// redis_container_test.go's startRedisClient almost line for line.
+// Container lifecycle comes from go/pkgcore/redistest.
 
 import (
 	"context"
@@ -27,44 +26,12 @@ import (
 	"time"
 
 	"github.com/redis/go-redis/v9"
-	"github.com/testcontainers/testcontainers-go"
-	tcredis "github.com/testcontainers/testcontainers-go/modules/redis"
 
 	"github.com/vislake/speed/go/config"
 	"github.com/vislake/speed/go/pkgcore"
 	eventbusredis "github.com/vislake/speed/go/pkgcore/eventbus/redis"
+	"github.com/vislake/speed/go/pkgcore/redistest"
 )
-
-// startRedisClient starts a disposable Redis 7 container and returns a
-// go-redis client connected to it; the client and the container are torn
-// down through t.Cleanup. Both replicas in a test share this one client
-// (they are two bus instances over the same server, like two processes
-// over one Redis).
-func startRedisClient(t *testing.T, ctx context.Context) *redis.Client {
-	t.Helper()
-
-	container, err := tcredis.Run(ctx, "redis:7-alpine")
-	if err != nil {
-		t.Fatalf("start redis testcontainer: %v", err)
-	}
-	t.Cleanup(func() {
-		if terminateErr := testcontainers.TerminateContainer(container); terminateErr != nil {
-			t.Errorf("terminate redis testcontainer: %v", terminateErr)
-		}
-	})
-
-	uri, err := container.ConnectionString(ctx)
-	if err != nil {
-		t.Fatalf("redis testcontainer connection string: %v", err)
-	}
-	options, err := redis.ParseURL(uri)
-	if err != nil {
-		t.Fatalf("redis.ParseURL(%q): %v", uri, err)
-	}
-	client := redis.NewClient(options)
-	t.Cleanup(func() { client.Close() })
-	return client
-}
 
 // newRedisPeerPair returns the two replicas of one test: two Services,
 // each attached over its own RedisEventBus, sharing the PostgreSQL
@@ -257,7 +224,7 @@ func changedTo(key, newValue string) func(pkgcore.Event) bool {
 // B would serve the stale value until this test's deadline.
 func TestRedisBus_RemoteSet_ConvergesThePeer(t *testing.T) {
 	ctx := context.Background()
-	client := startRedisClient(t, ctx)
+	client := redistest.Client(t, ctx)
 	svcA, svcB, busA, busB := newRedisPeerPair(t, ctx, client)
 
 	// The spy rides the receiving bus: svcA publishes through busA, whose
@@ -323,7 +290,7 @@ func TestRedisBus_RemoteSet_ConvergesThePeer(t *testing.T) {
 // database in process.
 func TestRedisBus_RemoteSensitiveChange_CarriesOnlyTheMarker(t *testing.T) {
 	ctx := context.Background()
-	client := startRedisClient(t, ctx)
+	client := redistest.Client(t, ctx)
 	svcA, svcB, busA, busB := newRedisPeerPair(t, ctx, client)
 
 	spy := newRemoteEventSpy()

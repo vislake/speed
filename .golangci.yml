@@ -181,6 +181,14 @@ linters:
           # concrete *redis.Client by design, so the driver cannot exist
           # without the import; it is exempted per file, and every other
           # file under go/pkgcore/unittest stays under the ban.
+          # redistest is the third: the package every module's integration
+          # tier builds its disposable Redis fixture through, shipping the
+          # container plumbing (start, client, independent-client pair,
+          # pinned-port restart variant, readiness probe) and therefore
+          # importing the concrete client the same way the implementation
+          # packages do. It is a test-only surface business code never
+          # reaches, and it is exactly why no consuming tier needs its own
+          # go-redis import for the fixture any longer.
           files:
             - "**/go/**"
             - "!**/go/pkgcore/eventbus/redis/**"
@@ -188,6 +196,7 @@ linters:
             - "!**/go/jobs/queue/asynq/**"
             - "!**/go/pkgcore/eventbustest/*_test.go"
             - "!**/go/pkgcore/unittest/factory_registration_test.go"
+            - "!**/go/pkgcore/redistest/**"
           list-mode: lax
           deny:
             - pkg: github.com/redis/go-redis
@@ -195,9 +204,17 @@ linters:
             - pkg: github.com/go-redis/redis
               desc: "legacy go-redis module path (archived) -- same ban as github.com/redis/go-redis"
         minio-only-in-pkgcore:
+          # One module-internal exemption beyond the implementation itself:
+          # rustfstest ships the disposable RustFS container every
+          # S3-backed tier's fixture runs on and builds a minio-go client
+          # for it (see go/pkgcore/AGENTS.md). It is a test-only surface
+          # business code never reaches, and it is exactly why no
+          # consuming tier needs its own minio import for the fixture any
+          # longer.
           files:
             - "**/go/**"
             - "!**/go/pkgcore/objectstore/s3/**"
+            - "!**/go/pkgcore/rustfstest/**"
           list-mode: lax
           deny:
             - pkg: github.com/minio/minio-go

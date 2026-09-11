@@ -34,6 +34,7 @@ import (
 
 	"github.com/vislake/speed/go/pkgcore"
 	eventbusredis "github.com/vislake/speed/go/pkgcore/eventbus/redis"
+	"github.com/vislake/speed/go/pkgcore/redistest"
 )
 
 // precreateReaderGroup makes the consumer group bus's reader will create on
@@ -81,7 +82,7 @@ func precreateReaderGroup(t *testing.T, ctx context.Context, client *redis.Clien
 // are delivered normally.
 func TestEventBus_ReaderAdoptsAPreexistingGroup(t *testing.T) {
 	ctx := context.Background()
-	client := startRedisClient(t, ctx)
+	client := redistest.Client(t, ctx)
 	busA := eventbusredis.NewEventBus(client) // publisher only: subscribes no handler
 	busB := eventbusredis.NewEventBus(client)
 	t.Cleanup(func() {
@@ -140,7 +141,7 @@ func TestEventBus_ReaderAdoptsAPreexistingGroup(t *testing.T) {
 // so the two-reader marker handshake below times out.
 func TestEventBus_AdoptedGroupCoexistsWithLaterReaders(t *testing.T) {
 	ctx := context.Background()
-	client := startRedisClient(t, ctx)
+	client := redistest.Client(t, ctx)
 	busA := eventbusredis.NewEventBus(client) // publisher only: subscribes no handler
 	busB := eventbusredis.NewEventBus(client)
 	busC := eventbusredis.NewEventBus(client)

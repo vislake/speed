@@ -1,5 +1,18 @@
 //go:build integration
 
+// Package redis_test holds go/pkgcore/kv/redis's integration tier: tests
+// that exercise KVStore against a real Redis server. It is physically
+// separate from the package's unit tests (all of which live in package
+// redis itself, one file per source file, per the backend coding standard's
+// testing layout rule) and carries the "integration" build tag: a plain
+// "go test ./..." never compiles or runs anything in this directory; it is
+// invoked explicitly with "go test -tags=integration ./...", the same
+// layout-and-build-tag convention go/jobs/integration_test follows.
+//
+// Every test here spins up its own disposable Redis container through
+// go/pkgcore/redistest and requires a working Docker (or
+// Docker-API-compatible) daemon; there is no fallback or
+// skip-on-missing-Docker path.
 package redis_test
 
 // Integration tests for kvredis.NewKVStore: each test drives the store
@@ -21,11 +34,12 @@ import (
 	"github.com/vislake/speed/go/pkgcore"
 	kvredis "github.com/vislake/speed/go/pkgcore/kv/redis"
 	"github.com/vislake/speed/go/pkgcore/kvstoretest"
+	"github.com/vislake/speed/go/pkgcore/redistest"
 )
 
 func TestKVStore_SetGetDelete(t *testing.T) {
 	ctx := context.Background()
-	kv := kvredis.NewKVStore(startRedisClient(t, ctx))
+	kv := kvredis.NewKVStore(redistest.Client(t, ctx))
 
 	value, found, err := kv.Get(ctx, "billing:invoice:1042")
 	if err != nil {
@@ -59,7 +73,7 @@ func TestKVStore_SetGetDelete(t *testing.T) {
 
 func TestKVStore_SetWithTTL_ExpiresTheKey(t *testing.T) {
 	ctx := context.Background()
-	client := startRedisClient(t, ctx)
+	client := redistest.Client(t, ctx)
 	kv := kvredis.NewKVStore(client)
 
 	const key = "session:u-1"
@@ -84,7 +98,7 @@ func TestKVStore_SetWithTTL_ExpiresTheKey(t *testing.T) {
 
 func TestKVStore_SetWithNonPositiveTTL_StoresForever_AndClearsAnExistingExpiry(t *testing.T) {
 	ctx := context.Background()
-	client := startRedisClient(t, ctx)
+	client := redistest.Client(t, ctx)
 	kv := kvredis.NewKVStore(client)
 
 	const key = "config:retry-limit"
@@ -112,7 +126,7 @@ func TestKVStore_SetWithNonPositiveTTL_StoresForever_AndClearsAnExistingExpiry(t
 
 func TestKVStore_IncrByFloat_StartsMissingKeysAtZeroWithoutAnExpiry(t *testing.T) {
 	ctx := context.Background()
-	client := startRedisClient(t, ctx)
+	client := redistest.Client(t, ctx)
 	kv := kvredis.NewKVStore(client)
 
 	const key = "quota:acme:credits"
@@ -149,7 +163,7 @@ func TestKVStore_IncrByFloat_StartsMissingKeysAtZeroWithoutAnExpiry(t *testing.T
 
 func TestKVStore_IncrByFloat_KeepsALiveKeysExpiry(t *testing.T) {
 	ctx := context.Background()
-	client := startRedisClient(t, ctx)
+	client := redistest.Client(t, ctx)
 	kv := kvredis.NewKVStore(client)
 
 	const key = "quota:acme:monthly"
@@ -193,7 +207,7 @@ func TestKVStore_IncrByFloat_KeepsALiveKeysExpiry(t *testing.T) {
 // paths agree on what a given ttl means.
 func TestKVStore_IncrByFloatWithTTL_SubMillisecondTTLStillExpiresTheKey(t *testing.T) {
 	ctx := context.Background()
-	client := startRedisClient(t, ctx)
+	client := redistest.Client(t, ctx)
 	kv := kvredis.NewKVStore(client)
 
 	const key = "kvstoretest:incr-ttl-submillisecond"
@@ -232,7 +246,7 @@ func TestKVStore_IncrByFloatWithTTL_SubMillisecondTTLStillExpiresTheKey(t *testi
 
 func TestKVStore_IncrByFloat_NonNumericValueFailsAndStaysUntouched(t *testing.T) {
 	ctx := context.Background()
-	kv := kvredis.NewKVStore(startRedisClient(t, ctx))
+	kv := kvredis.NewKVStore(redistest.Client(t, ctx))
 
 	tests := []struct {
 		name  string
@@ -269,7 +283,7 @@ func TestKVStore_IncrByFloat_NonNumericValueFailsAndStaysUntouched(t *testing.T)
 
 func TestKVStore_CompareAndSwap(t *testing.T) {
 	ctx := context.Background()
-	kv := kvredis.NewKVStore(startRedisClient(t, ctx))
+	kv := kvredis.NewKVStore(redistest.Client(t, ctx))
 
 	// Set-if-absent: a missing key matches the empty expectation, whether it
 	// is nil or a zero-length slice.
@@ -320,7 +334,7 @@ func TestKVStore_CompareAndSwap(t *testing.T) {
 
 func TestKVStore_CompareAndSwap_NeverChangesTheKeysExpiry(t *testing.T) {
 	ctx := context.Background()
-	client := startRedisClient(t, ctx)
+	client := redistest.Client(t, ctx)
 	kv := kvredis.NewKVStore(client)
 
 	const key = "lock:acme:lease"
@@ -352,7 +366,7 @@ func TestKVStore_CompareAndSwap_NeverChangesTheKeysExpiry(t *testing.T) {
 
 func TestKVStore_CarriesBinaryValues(t *testing.T) {
 	ctx := context.Background()
-	kv := kvredis.NewKVStore(startRedisClient(t, ctx))
+	kv := kvredis.NewKVStore(redistest.Client(t, ctx))
 
 	const key = "crypto:blob"
 	blob := []byte{0x00, 0x01, 0xff, 0xfe, 0x00}
@@ -376,7 +390,7 @@ func TestKVStore_CarriesBinaryValues(t *testing.T) {
 
 func TestKVStore_ConcurrentIncrementsLoseNoUpdates(t *testing.T) {
 	ctx := context.Background()
-	kv := kvredis.NewKVStore(startRedisClient(t, ctx))
+	kv := kvredis.NewKVStore(redistest.Client(t, ctx))
 
 	const (
 		key        = "quota:acme:counter"
@@ -429,7 +443,7 @@ func TestKVStore_ConcurrentIncrementsLoseNoUpdates(t *testing.T) {
 // cleanup is needed here.
 func TestKVStore_ConformsToKVStoreContract(t *testing.T) {
 	ctx := context.Background()
-	clientA, clientB := startRedisClientPair(t, ctx)
+	clientA, clientB := redistest.ClientPair(t, ctx)
 
 	// The caps argument is this implementation's declaration — the component
 	// descriptor (component.go) declares MultiReplicaSafe | SurvivesRestart,
@@ -457,7 +471,7 @@ func TestKVStore_ConformsToKVStoreContract(t *testing.T) {
 // read fails only if the data is genuinely gone.
 func TestKVStore_DeclaredSurvivesRestart_ProvenAgainstContainerRestart(t *testing.T) {
 	ctx := context.Background()
-	container, client := startRedisPersistent(t, ctx)
+	container, client := redistest.Persistent(t, ctx)
 
 	// The caps argument carries the declaration this protocol verifies (the
 	// same bits the component descriptor declares and component_test.go pins
@@ -483,6 +497,6 @@ func TestKVStore_DeclaredSurvivesRestart_ProvenAgainstContainerRestart(t *testin
 			if err := container.Start(ctx); err != nil {
 				t.Fatalf("restart redis container: %v", err)
 			}
-			waitForRedisReady(t, ctx, client)
+			redistest.WaitReady(t, ctx, client)
 		})
 }

@@ -62,12 +62,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/minio/minio-go/v7"
-	"github.com/minio/minio-go/v7/pkg/credentials"
 	"github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/wait"
 
 	"github.com/vislake/speed/go/dbkit"
+	"github.com/vislake/speed/go/pkgcore/redistest"
+	"github.com/vislake/speed/go/pkgcore/rustfstest"
 	"github.com/vislake/speed/go/saasctl/internal/db"
 	newcmd "github.com/vislake/speed/go/saasctl/internal/new"
 )
@@ -83,19 +83,14 @@ import (
 // recorded under module names.
 var scaffoldLedgerModules = []string{"authn", "config", "org", "pki", "rbac"}
 
-// rustfsImage and mailpitImage pin the exact same images
+// mailpitImage pins the exact same image
 // examples/reference-app/integration_test/distributed_mode_test.go uses, so
-// this tier and that one exercise identical server behavior; redisImage
-// mirrors that file's own Redis pin too. Keeping all three pins in sync
-// across the two files is a matter of code review, the same way this
-// repository already keeps several other Docker-backed tiers' pins in
-// step deliberately (this file's own header has the full reasoning for why
-// one shared pin set matters here).
-const (
-	redisImage   = "redis:7-alpine"
-	rustfsImage  = "rustfs/rustfs:1.0.0-rc.5"
-	mailpitImage = "axllent/mailpit:v1.31"
-)
+// this tier and that one exercise identical server behavior. Keeping the
+// pins in sync across the two files is a matter of code review, the same
+// way this repository already keeps several other Docker-backed tiers'
+// pins in step deliberately (this file's own header has the full reasoning
+// for why one shared pin set matters here).
+const mailpitImage = "axllent/mailpit:v1.31"
 
 // TestScaffoldNewProject_AuthnOrgRbac_BootsInBothDeploymentModes is this
 // file's one test: materialize the authn+org+rbac selection for real
@@ -385,92 +380,20 @@ func freePort(t *testing.T) int {
 // "host:port" address, exactly the shape APP_REDIS_ADDR wants.
 func startRedis(t *testing.T, ctx context.Context) string {
 	t.Helper()
-	req := testcontainers.ContainerRequest{
-		Image:        redisImage,
-		ExposedPorts: []string{"6379/tcp"},
-		WaitingFor:   wait.ForListeningPort("6379/tcp"),
-	}
-	container, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
-		ContainerRequest: req,
-		Started:          true,
-	})
-	if err != nil {
-		t.Fatalf("start redis testcontainer: %v", err)
-	}
-	t.Cleanup(func() {
-		if terminateErr := testcontainers.TerminateContainer(container); terminateErr != nil {
-			t.Errorf("terminate redis testcontainer: %v", terminateErr)
-		}
-	})
-	host, err := container.Host(ctx)
-	if err != nil {
-		t.Fatalf("redis testcontainer host: %v", err)
-	}
-	mappedPort, err := container.MappedPort(ctx, "6379/tcp")
-	if err != nil {
-		t.Fatalf("redis testcontainer mapped port: %v", err)
-	}
-	return net.JoinHostPort(host, mappedPort.Port())
+	return redistest.Addr(t, ctx, redistest.Start(t, ctx))
 }
 
 // startRustfsStore starts a disposable RustFS container and creates a
 // fresh bucket named bucketPrefix on it, returning the endpoint
-// (host:port, no scheme), the bucket name and the credentials -- the
-// identical shape distributed_mode_test.go's own startRustfsStore uses,
-// duplicated here (rather than shared) because that helper lives in the
-// reference app's own module and this test cannot import it.
+// (host:port, no scheme), the bucket name and the credentials, through
+// go/pkgcore/rustfstest's container fixture -- the same shape the
+// reference app's own distributed tier uses against the same server.
 func startRustfsStore(t *testing.T, ctx context.Context, bucketPrefix string) (endpoint, bucket, accessKey, secretKey string) {
 	t.Helper()
 
-	const rustfsAccessKey = "rustfsadmin"
-	const rustfsSecretKey = "rustfsadmin"
-	req := testcontainers.ContainerRequest{
-		Image:        rustfsImage,
-		ExposedPorts: []string{"9000/tcp"},
-		Env: map[string]string{
-			"RUSTFS_ACCESS_KEY":     rustfsAccessKey,
-			"RUSTFS_SECRET_KEY":     rustfsSecretKey,
-			"RUSTFS_ADDRESS":        ":9000",
-			"RUSTFS_CONSOLE_ENABLE": "false",
-		},
-		WaitingFor: wait.ForHTTP("/health").WithPort("9000/tcp").WithStartupTimeout(60 * time.Second),
-	}
-	container, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
-		ContainerRequest: req,
-		Started:          true,
-	})
-	if err != nil {
-		t.Fatalf("start rustfs testcontainer: %v", err)
-	}
-	t.Cleanup(func() {
-		if terminateErr := testcontainers.TerminateContainer(container); terminateErr != nil {
-			t.Errorf("terminate rustfs testcontainer: %v", terminateErr)
-		}
-	})
-
-	host, err := container.Host(ctx)
-	if err != nil {
-		t.Fatalf("rustfs testcontainer host: %v", err)
-	}
-	mappedPort, err := container.MappedPort(ctx, "9000/tcp")
-	if err != nil {
-		t.Fatalf("rustfs testcontainer mapped port: %v", err)
-	}
-	endpoint = net.JoinHostPort(host, mappedPort.Port())
-
-	bucketName := bucketPrefix
-	client, err := minio.New(endpoint, &minio.Options{
-		Creds:  credentials.NewStaticV4(rustfsAccessKey, rustfsSecretKey, ""),
-		Secure: false,
-	})
-	if err != nil {
-		t.Fatalf("build a minio-go client for %q: %v", endpoint, err)
-	}
-	if err := client.MakeBucket(ctx, bucketName, minio.MakeBucketOptions{}); err != nil {
-		t.Fatalf("create bucket %q on the rustfs testcontainer: %v", bucketName, err)
-	}
-
-	return endpoint, bucketName, rustfsAccessKey, rustfsSecretKey
+	endpoint = rustfstest.Start(t, ctx)
+	rustfstest.CreateBucket(t, ctx, rustfstest.NewClient(t, endpoint), bucketPrefix)
+	return endpoint, bucketPrefix, rustfstest.AccessKey, rustfstest.SecretKey
 }
 
 // startMailpit starts a disposable Mailpit container and returns its SMTP

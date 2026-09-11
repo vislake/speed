@@ -10,12 +10,13 @@
 // "go test -tags=integration ./...". This mirrors go/dbkit/integration_test
 // and go/tenancy/tenancytest/integration_test's identical convention --
 // see dbkit's postgres_tenant_isolation_test.go for the pattern this file
-// follows almost line for line, with Redis (github.com/testcontainers/
-// testcontainers-go/modules/redis) in place of Postgres.
+// follows almost line for line, with a Redis container in place of
+// Postgres.
 //
-// Every test here spins up its own disposable Redis container and requires
-// a working Docker (or Docker-API-compatible) daemon; there is no fallback
-// or skip-on-missing-Docker path, matching dbkit's own integration tier.
+// Every test here spins up its own disposable Redis container through
+// go/pkgcore/redistest and requires a working Docker (or
+// Docker-API-compatible) daemon; there is no fallback or
+// skip-on-missing-Docker path, matching dbkit's own integration tier.
 package jobs_test
 
 import (
@@ -24,33 +25,22 @@ import (
 	"time"
 
 	asynqlib "github.com/hibiken/asynq"
-	"github.com/testcontainers/testcontainers-go"
-	tcredis "github.com/testcontainers/testcontainers-go/modules/redis"
 
 	"github.com/vislake/speed/go/jobs"
 	"github.com/vislake/speed/go/jobs/queue/asynq"
 	"github.com/vislake/speed/go/pkgcore"
+	"github.com/vislake/speed/go/pkgcore/redistest"
 )
 
 // startRedisContainer starts a disposable Redis 7 container and returns an
 // asynqlib.RedisConnOpt connected to it, already terminated via t.Cleanup
 // on test completion (pass or fail), so no container ever leaks past its
-// owning test -- the same lifecycle dbkit's startPostgresContainer gives
-// its own containers.
+// owning test -- go/pkgcore/redistest's container lifecycle, wrapped in
+// the one adaptation asynq needs.
 func startRedisContainer(t *testing.T, ctx context.Context) asynqlib.RedisConnOpt {
 	t.Helper()
 
-	container, err := tcredis.Run(ctx, "redis:7-alpine")
-	if err != nil {
-		t.Fatalf("start redis testcontainer: %v", err)
-	}
-	t.Cleanup(func() {
-		if terminateErr := testcontainers.TerminateContainer(container); terminateErr != nil {
-			t.Errorf("terminate redis testcontainer: %v", terminateErr)
-		}
-	})
-
-	uri, err := container.ConnectionString(ctx)
+	uri, err := redistest.Start(t, ctx).ConnectionString(ctx)
 	if err != nil {
 		t.Fatalf("redis testcontainer connection string: %v", err)
 	}

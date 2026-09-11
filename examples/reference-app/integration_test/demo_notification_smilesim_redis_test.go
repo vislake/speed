@@ -15,10 +15,10 @@
 // It lives in package referenceapp_test alongside
 // redis_eventbus_composition_test.go (same build tag, same
 // "go test -tags=integration ./..." invocation, no skip-on-missing-Docker
-// fallback) and reuses that file's startRedisClient/moduleRoot/apiClient
-// and this directory's own freePort/scrubbedEnviron/bootReplica/
-// stopGracefully/replica helpers (distributed_mode_test.go) rather than
-// duplicating them.
+// fallback) and reuses that file's moduleRoot/apiClient helpers (the Redis
+// client comes from go/pkgcore/redistest) and this directory's own
+// freePort/scrubbedEnviron/bootReplica/stopGracefully/replica helpers
+// (distributed_mode_test.go) rather than duplicating them.
 //
 // # Why this test does not drive the real AI-image pipeline
 //
@@ -77,6 +77,7 @@ import (
 	"github.com/vislake/speed/examples/reference-app/internal/smilesim"
 	"github.com/vislake/speed/go/pkgcore"
 	eventbusredis "github.com/vislake/speed/go/pkgcore/eventbus/redis"
+	"github.com/vislake/speed/go/pkgcore/redistest"
 )
 
 // The reference app's own constants, hardcoded here with a note that they
@@ -170,7 +171,7 @@ func warmUpChildSmileSimSubscription(t *testing.T, publisher *eventbusredis.Even
 func TestServer_RealRedisEventBusComposition_SmileSimCompletionCrossesProcesses(t *testing.T) {
 	ctx := context.Background()
 
-	client := startRedisClient(t, ctx)
+	client := redistest.Client(t, ctx)
 	redisAddr := client.Options().Addr
 
 	publisher := eventbusredis.NewEventBus(client)

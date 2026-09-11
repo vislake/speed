@@ -21,6 +21,7 @@ import (
 
 	"github.com/vislake/speed/go/pkgcore"
 	eventbusredis "github.com/vislake/speed/go/pkgcore/eventbus/redis"
+	"github.com/vislake/speed/go/pkgcore/redistest"
 )
 
 // TestEventBus_PanickingRemoteHandler_EntryLeftPendingInTheGroup pins that
@@ -30,7 +31,7 @@ import (
 // entries to the healthy handler that follows the panicking one.
 func TestEventBus_PanickingRemoteHandler_EntryLeftPendingInTheGroup(t *testing.T) {
 	ctx := context.Background()
-	client := startRedisClient(t, ctx)
+	client := redistest.Client(t, ctx)
 	busA := eventbusredis.NewEventBus(client)
 	busB := eventbusredis.NewEventBus(client)
 	t.Cleanup(func() {
