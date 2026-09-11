@@ -23,7 +23,12 @@ rules' living proof, in the same shape as the sibling checker suites:
   * a re-issued engine-owned assembly call (pkgcore.NewKernel, dbkit.Open,
     http.NewServeMux, chain.Chain under any alias, obs.Init, ...) in a
     non-test file fires, while the sanctioned register-and-Assemble shape
-    and the same text in a test file stay silent.
+    and the same text in a test file stay silent;
+  * a host's Go test-support packages (internal/testutil,
+    internal/apptest) are exempt from the sentinel and call-ban scans the
+    way test files are, while the same calls from any other path fire, a
+    declaration fork inside one still fires, and an import of one from
+    production code fires too -- the exemption's premise check.
 """
 
 from __future__ import annotations
@@ -413,6 +418,133 @@ class AllowedFileRules(unittest.TestCase):
             self.assertTrue(
                 any(f"calls {label}" in f for f in findings), (label, findings)
             )
+
+
+class TestSupportPackageRules(unittest.TestCase):
+    """A host's Go test-support packages (internal/testutil,
+    internal/apptest) carry no _test.go suffix but are the same testing
+    surface, so the sentinel and call-ban scans skip them. The boundary
+    holds in every direction: the same calls fire from any other path, a
+    declaration fork inside one still fires, and importing one from
+    production code fires -- that import is exactly what breaks the
+    premise the exemption rests on."""
+
+    def test_a_testutil_helper_may_open_its_own_database(self):
+        # The shape internal/testutil/selfservice.go carries: the helper
+        # polls the app's database through a connection of its own.
+        root = make_tree(
+            {
+                "examples/reference-app/internal/testutil/selfservice.go": (
+                    "package testutil\n\n"
+                    "func WaitForRow(t *testing.T, sqlitePath string) {\n"
+                    "\tpollDB, err := dbkit.Open(ctx, dbkit.Options{})\n"
+                    "\t_ = pollDB\n"
+                    "\t_ = err\n"
+                    "}\n"
+                ),
+            }
+        )
+        self.assertEqual(m.scan(root), [])
+
+    def test_an_apptest_helper_may_build_its_own_server_face(self):
+        # Test-support helpers build throwaway muxes and serve them; the
+        # sentinel scan must not read that as a re-grown kernel.
+        root = make_tree(
+            {
+                "examples/reference-app/internal/apptest/server.go": (
+                    "package apptest\n\n"
+                    "func serve() {\n"
+                    "\tmux := http.NewServeMux()\n"
+                    "\tmux.HandleFunc(\"/healthz\", h)\n"
+                    "\tsrv.ListenAndServe()\n"
+                    "}\n"
+                ),
+            }
+        )
+        self.assertEqual(m.scan(root), [])
+
+    def test_the_same_calls_from_an_ordinary_path_still_fire(self):
+        root = make_tree(
+            {
+                "examples/reference-app/internal/app/serve.go": (
+                    "package app\n\n"
+                    "func boot(ctx context.Context) {\n"
+                    "\t_, _ = dbkit.Open(ctx, dbkit.Options{})\n"
+                    "}\n"
+                ),
+            }
+        )
+        findings = m.scan(root)
+        self.assertTrue(
+            any("calls dbkit.Open" in f for f in findings), findings
+        )
+
+    def test_a_declaration_fork_inside_a_test_support_package_still_fires(self):
+        root = make_tree(
+            {
+                "examples/reference-app/internal/testutil/auth.go": (
+                    "package testutil\n\n"
+                    "const AuthnAPIPath = \"/api/v1/authn\"\n"
+                ),
+            }
+        )
+        findings = m.scan(root)
+        # Only the declaration fires: the sentinel scan is what the
+        # package is exempt from, though the path literal sits right
+        # there on the same line.
+        self.assertEqual(len(findings), 1, findings)
+        self.assertIn("declares AuthnAPIPath", findings[0])
+
+    def test_importing_a_test_support_package_from_production_code_fires(self):
+        root = make_tree(
+            {
+                "examples/reference-app/internal/app/bootstrap.go": (
+                    "package app\n\n"
+                    "import (\n"
+                    '\t"github.com/vislake/speed/examples/reference-app'
+                    '/internal/testutil"\n'
+                    ")\n"
+                ),
+                "examples/reference-app/internal/notes/handler.go": (
+                    "package notes\n\n"
+                    "import (\n"
+                    '\t"github.com/vislake/speed/examples/reference-app'
+                    '/internal/apptest"\n'
+                    ")\n"
+                ),
+            }
+        )
+        findings = m.scan(root)
+        self.assertTrue(
+            any("imports internal/testutil" in f for f in findings), findings
+        )
+        self.assertTrue(
+            any("imports internal/apptest" in f for f in findings), findings
+        )
+
+    def test_test_files_and_test_support_packages_may_import_each_other(self):
+        root = make_tree(
+            {
+                "examples/reference-app/flowtests/probe_test.go": (
+                    "package flowtests\n\n"
+                    "import (\n"
+                    '\t"github.com/vislake/speed/examples/reference-app'
+                    '/internal/testutil"\n'
+                    ")\n"
+                ),
+                # apptest imports testutil in the real tree: both sides
+                # are test-support packages, so the import stays inside
+                # the testing surface.
+                "examples/reference-app/internal/apptest/auth.go": (
+                    "package apptest\n\n"
+                    "import (\n"
+                    '\t"github.com/vislake/speed/examples/reference-app'
+                    '/internal/testutil"\n'
+                    ")\n"
+                ),
+            }
+        )
+        self.assertEqual(m.scan(root), [])
 
 
 if __name__ == "__main__":

@@ -43,9 +43,17 @@ this gate checks is the no-fork half, in three layers:
 Test files are deliberately exempt from the sentinel and call-ban scans:
 tests build throwaway muxes, fake servers and their own mini-kernels on
 purpose, and the discipline this protects is the production
-composition's. The declaration scan still covers every file, tests
-included -- a test re-declaring a kernel identifier is a name collision
-waiting to become a fork.
+composition's. Go test-support packages (a host tree's internal/testutil
+and internal/apptest) are the same testing surface in a different file
+shape: their files carry no _test.go suffix, but their helpers exist to
+serve the tree's tests -- opening a throwaway database and building a
+mini-kernel is their job -- and every importer of them is a test file or
+another test-support package. That premise is a maintenance invariant,
+not an assumption: an import of either package from any other file is
+itself a finding, so production code cannot hide under the exemption.
+The declaration scan still covers every file, tests and test-support
+packages included -- a test re-declaring a kernel identifier is a name
+collision waiting to become a fork.
 
 Scan scope: all .go files under the two host trees; .claude/,
 node_modules/ and vendor/ are skipped.
@@ -243,6 +251,22 @@ HOST_COMPOSITION_CALL_BANS = (
     ("obs.Init", r"(?<![A-Za-z0-9_.])obs\.Init\(", "tree", ()),
 )
 
+# Go test-support packages inside the host trees: test-only helper
+# packages whose files carry no _test.go suffix. The exemption they get
+# from the sentinel and call-ban scans (see the module docstring) rests
+# on the premise that every importer is a *_test.go file or another
+# test-support package -- true of both trees today, and enforced in the
+# other direction by the import check in scan(). A file matches when its
+# path carries one of these segment pairs.
+TEST_SUPPORT_PACKAGE_DIRS = ("internal/testutil", "internal/apptest")
+
+# The quoted import path of a test-support package: a file outside the
+# testing surface carrying one has imported the package, breaking the
+# premise above. Matched in path form; the string-literals residue the
+# sibling checkers document applies (a literal spelling the same path
+# would read as an import, conservatively).
+TEST_SUPPORT_IMPORT_RE = re.compile(r'"[^"]*/internal/(testutil|apptest)"')
+
 # Directory names the scans never descend into.
 SKIP_DIRS = {".git", ".claude", "node_modules", "vendor", "__pycache__"}
 
@@ -284,6 +308,19 @@ def is_test_file(rel: pathlib.Path) -> bool:
     return rel.name.endswith("_test.go")
 
 
+def in_test_support_package(rel: pathlib.Path) -> bool:
+    """Whether rel belongs to a host tree's Go test-support package: a
+    path carrying the segment pair internal/testutil or internal/apptest.
+    The sentinel and call-ban exemption these files get rests on the
+    premise recorded at TEST_SUPPORT_PACKAGE_DIRS, which the import
+    check in scan() enforces whenever it breaks."""
+    parts = rel.parts
+    return any(
+        "/".join(parts[i:i + 2]) in TEST_SUPPORT_PACKAGE_DIRS
+        for i in range(len(parts) - 1)
+    )
+
+
 def scan(root: pathlib.Path) -> list[str]:
     """The no-fork rules: no shared identifier declared, and no kernel
     sentinel or engine-owned assembly call used, outside the platform
@@ -315,7 +352,10 @@ def scan(root: pathlib.Path) -> list[str]:
                             "function, or keep this symbol host-specific "
                             "under a host-specific name"
                         )
-                if is_test_file(rel):
+                # Test files and test-support package files are the same
+                # testing surface -- both are exempt from the two scans
+                # below (see the module docstring).
+                if is_test_file(rel) or in_test_support_package(rel):
                     continue
                 for sentinel, allowed in HOST_COMPOSITION_SENTINELS:
                     if rel_str in allowed:
@@ -345,6 +385,20 @@ def scan(root: pathlib.Path) -> list[str]:
                             "RunAssembly/Assemble, instead of re-issuing "
                             "the call here"
                         )
+                import_match = TEST_SUPPORT_IMPORT_RE.search(line)
+                if import_match:
+                    findings.append(
+                        f"{rel_str}:{line_no}: imports "
+                        f"internal/{import_match.group(1)}, a test-support "
+                        "package whose sentinel and call-ban exemption "
+                        "assumes every importer is a *_test.go file or "
+                        "another test-support package; importing it from "
+                        "production code makes it production code under a "
+                        "test-only exemption. Move the importer into the "
+                        "test surface, or drop the package from "
+                        "TEST_SUPPORT_PACKAGE_DIRS and let the scans "
+                        "cover it"
+                    )
     return findings
 
 
