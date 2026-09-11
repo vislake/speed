@@ -29,14 +29,16 @@ const (
 	// ReadHeaderTimeout bounds how long the server waits to receive a
 	// request's headers before aborting the connection -- protects
 	// against slow-header (Slowloris-style) connections that trickle
-	// bytes to hold a socket open indefinitely. ServeUntilShutdown
-	// applies it to the http.Server it builds.
+	// bytes to hold a socket open indefinitely. The engine's HTTP face
+	// applies it to the http.Server it composes, and ServeUntilShutdown
+	// applies it to the one it builds.
 	ReadHeaderTimeout = 5 * time.Second
 
 	// ShutdownTimeout bounds how long graceful shutdown waits for
-	// in-flight requests to finish before giving up; ServeUntilShutdown
-	// applies it to srv.Shutdown, and a host draining a job queue should
-	// use it to bound that drain too.
+	// in-flight requests to finish before giving up, and bounds the
+	// background worker's own drain the same way; the engine's ordered
+	// shutdown applies it to both steps, and ServeUntilShutdown applies
+	// it to its srv.Shutdown.
 	ShutdownTimeout = 10 * time.Second
 )
 
@@ -136,6 +138,13 @@ func RegisterMountedRoutes(reg *pkgcore.Registry) {
 // one: every request gets a span and is counted here, including ones the
 // inner chain goes on to reject with 401/403, which matters for spotting
 // a flood of them.
+//
+// This function is the pre-engine shape of the serve-and-drain lifecycle:
+// Run owns the same sequence for an application assembled through the
+// engine (obs.Init first, obs.Middleware at the same position, the same
+// timeouts, the same graceful drain), and it stays exported for hosts that
+// still compose by hand. It is superseded by Run and is removed once both
+// of this module's mandatory consumers serve through the engine.
 func ServeUntilShutdown(ctx, baseCtx context.Context, handler http.Handler, addr, appName, deploymentMode string) error {
 	instrumented := obs.Middleware(handler)
 

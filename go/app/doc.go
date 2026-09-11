@@ -1,57 +1,62 @@
-// Package app is the speed platform's composition toolkit: the
-// host-neutral assembly every application's own boot code is built from.
+// Package app is the speed platform's application assembly layer: the
+// structure every application's own boot code is built from.
 //
 // A speed application composes platform modules into one binary -- its own
-// route table, its own module set, its own bootstrap configuration -- and
-// underneath that host-specific half every application recomposes the same
-// few things, each of which lives in this module so the knowledge is
-// written once instead of per host:
+// module set, its own bootstrap values, its own route table -- and that half
+// is the host's. Everything else is the same in every application, and it
+// lives in this module so the knowledge is written once instead of per host:
 //
-//   - this package (go/app): the host *kernel* -- authn's mount-path
-//     constant, the serve/read-header/shutdown timeouts, the pre-auth
-//     allowlist set (PreAuthAllowlist), the mounted-route label seed
-//     (RegisterMountedRoutes) and the serve-and-drain lifecycle
-//     (ServeUntilShutdown). Its dependency closure is deliberately
-//     minimal (pkgcore, tenancy, config, observability), because every
-//     composition carries it -- the smallest generated project's main.go
-//     calls ServeUntilShutdown.
-//   - go/app/chain: the fixed middleware chain -- the order authn then
-//     the optional impersonation decorator then tenancy with the pre-auth
-//     allowlist, with the authn subtree and the admin route dispatched
-//     around it by structure -- assembled by chain.Chain. Its closure is
-//     bounded by the chain's own participants (authn included); it
-//     imports no module a chain-bearing host does not already have.
+//   - this package (go/app): the assembly engine. New resolves the host's
+//     configuration, builds the platform cipher, opens and migrates the
+//     database, constructs and bootstraps the module set, runs the host's
+//     attach and wiring hooks, composes the HTTP face and starts the
+//     background worker -- in one fixed order, rolling back what it built
+//     when a stage fails. Run is New plus signal handling, listening and the
+//     ordered drain. The host-neutral kernel primitives the engine and its
+//     two consumers share -- authn's mount-path constant, the serve timeouts,
+//     the pre-auth allowlist set (PreAuthAllowlist), the mounted-route label
+//     seed (RegisterMountedRoutes) -- live beside it in the same package.
+//   - go/app/chain: the fixed middleware chain -- the order authn then the
+//     optional impersonation decorator then tenancy with the pre-auth
+//     allowlist, with the authn subtree and the admin route dispatched around
+//     it by structure -- assembled by chain.Chain. Its closure is bounded by
+//     the chain's own participants (authn included); it imports no module a
+//     chain-bearing host does not already have.
 //   - go/app/bridges: the no-import seam bridges that hand one module's
 //     concrete service to another module's structurally-typed seam
 //     (billing/metering onto ai-gateway's two seams, the config module's
 //     lazy handle onto org's and authn's feature gates and onto sharing's
-//     tenant-config reader). Separate so only hosts that wire those
-//     modules pay for them.
+//     tenant-config reader). Separate so only hosts that wire those modules
+//     pay for them.
 //
-// What this module deliberately is not:
+// The boundary the module holds itself to:
 //
-//   - Not a framework. It holds no policy defaults, keeps no state, and
-//     wraps no host in a lifecycle of its own: every exported function is
-//     a pure assembly step the host calls from its own boot sequence, and
-//     a host remains free to assemble any of it by hand -- the functions
-//     encode the composition every host needs, not a required entry
-//     point.
-//   - Not an infrastructure compositor. It constructs no EventBus,
-//     KVStore, Mailer or ObjectStore implementation, ships no deployment
-//     mode, and selects no preset; which implementations a process runs
-//     is the assembling application's decision, wired through pkgcore's
-//     kernel options. The repository's depguard configuration enforces
-//     this mechanically: this module sits under go/, so the
-//     concrete-infrastructure import bans apply to it exactly as they do
-//     to every business module.
-//   - Not a business domain. It owns no tables, publishes no events, and
-//     declares no permissions; it exists so domain modules never have to
-//     know about each other's concrete types and hosts never have to
-//     restate the composition order. docs/internal/01-architecture.md
-//     records it as the module discipline's explicit exception: a
-//     composition-tools module with no domain of its own.
+//   - Structure belongs here: the assembly order, the seam wiring, the HTTP
+//     face and the lifecycle.
+//   - Policy belongs to the host: which modules compose the application,
+//     which values they are configured with, which seeds they write, which
+//     keys the host's own target declares. The engine ships no implicit
+//     default -- a configuration target and a database are named or the
+//     assembly fails, and a value the host does not supply stays unset.
+//   - Infrastructure implementations are not constructed here. It builds no
+//     EventBus, KVStore, Mailer or ObjectStore -- which implementation a
+//     process runs is the assembling application's decision, wired through
+//     pkgcore's kernel options; the repository's depguard configuration
+//     enforces this mechanically, because this module sits under go/ exactly
+//     as every business module does. The database driver is the one
+//     exception the shape forces: dbkit.Open is the only sanctioned way to
+//     obtain the handle the engine and its modules share, and the dialect
+//     package itself is still imported by the host.
+//   - No business domain: no tables, no routes, no permissions, no events,
+//     no pkgcore.Module implementation. A host's own modules never depend on
+//     this one; docs/internal/01-architecture.md records the module as the
+//     module discipline's explicit exception on those terms.
 //
-// The reference application (examples/reference-app) and the project
-// skeleton `saasctl new` materializes both compose through this module;
-// they are its two mandatory consumers.
+// The last two points leave one visible seam: the platform key material
+// (PlatformConfig) and the pre-database callback, where the host registers
+// the serializers and indexers its modules' encrypted columns need before the
+// connection exists.
+//
+// The reference application (examples/reference-app) and the project skeleton
+// `saasctl new` materializes are this module's two mandatory consumers.
 package app
