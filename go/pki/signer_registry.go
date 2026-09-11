@@ -10,17 +10,17 @@ import (
 
 // SignerRegistry is the package-level pkgcore.SeamRegistry[Signer] every
 // host resolves a named Signer implementation through, mirroring the
-// database/sql driver-registration pattern pkgcore's own
-// EventBusRegistry/KVStoreRegistry/MailerRegistry/ObjectStoreRegistry
-// already follow (pre-populated in go/pkgcore's eventbus_memory.go,
-// kv_memory.go, mailer_registry.go and objectstore_registry.go) -- and the exact
+// database/sql driver-registration pattern pkgcore's own built-in seam
+// components already follow (self-registered from go/pkgcore's
+// eventbus_memory.go, kv_memory.go, mailer_console.go, mailer_smtp.go and
+// objectstore_local.go) -- and the exact
 // mechanism the KMS-backed providers follow too: go/pki/signer/vault and
 // go/pki/signer/kmsaws each register themselves under a name
 // ("signer.vault", "signer.aws-kms") from their own init(), the same shape
 // go/pkgcore's own eventbus/redis, kv/redis and objectstore/s3
 // registrations establish. A host that never imports a provider subpackage
-// never resolves that name, and resolving an unimported one at Bootstrap
-// time fails with pkgcore.ErrUnknownImplementation naming it -- the
+// never resolves that name, and resolving an unimported one fails with
+// pkgcore.ErrUnknownImplementation naming it -- the
 // "unknown driver" cost database/sql's own drivers accept, spelled out for
 // the built-in seams' own registries.
 //
@@ -37,8 +37,8 @@ import (
 //
 // Both exist, deliberately, for two different callers -- the identical
 // shape pkgcore itself keeps WithEventBus/WithKVStore/WithMailer/
-// WithObjectStore (direct injection) alongside EventBusRegistry and friends
-// (name-based, Preset-style resolution):
+// WithObjectStore (direct injection) alongside the name-based seam
+// registries:
 //
 //   - WithSigner is for a caller that already holds a concrete Signer
 //     value -- typically a *LocalSigner built over the same *gorm.DB the
@@ -46,7 +46,7 @@ import (
 //     other Signer constructed however the caller likes. No name lookup,
 //     no Config adaptation: the caller already did the wiring.
 //   - SignerRegistry is for composing a Signer by name plus a flat
-//     pkgcore.Config -- the shape a Preset, a config file, or an
+//     pkgcore.Config -- the shape a config file or an
 //     environment-driven bootstrap naturally produces, without the caller
 //     writing any Go construction code. A host wiring go/pki through such
 //     a mechanism calls SignerRegistry.Build(name, cfg) and passes the
@@ -150,11 +150,11 @@ func localSignerFromConfig(cfg pkgcore.Config) (Signer, error) {
 // BuildSignerRequiring resolves the Signer registered under name exactly as
 // SignerRegistry.Build does, and refuses the resolution when the
 // registration's declared Capability cannot satisfy required -- the
-// pki-local half of the capability comparison pkgcore.Kernel.Bootstrap
-// performs for its own four built-in seams (EventBus, KVStore, Mailer,
-// ObjectStore), which has no knowledge of this registry or of pki.Signer
-// (go/pkgcore/capability.go's KeyNeverLeavesBoundary doc comment records
-// that boundary). The comparison is truthful only here, at the registry
+// pki-local half of the capability comparison the assembly performs for
+// its selected components (go/pkgcore/component_assembly.go's
+// validateComponentCapabilities), which has no knowledge of this registry
+// or of pki.Signer (go/pkgcore/capability.go's KeyNeverLeavesBoundary doc
+// comment records that boundary). The comparison is truthful only here, at the registry
 // resolution: a registration's Capability is fixed at Register time and
 // returned alongside the constructed value, while a Signer injected
 // directly through Module.WithSigner carries no capability declaration at
@@ -168,15 +168,16 @@ func localSignerFromConfig(cfg pkgcore.Config) (Signer, error) {
 // signer that decrypts key material into this process's memory.
 //
 // The resolution is constructed before the capability is compared, exactly
-// like pkgcore.Bootstrap's own resolve-then-validate machinery
-// (go/pkgcore/registry.go's validateSeamCapability): a registration's New
+// like the assembly's own construct-then-validate machinery
+// (go/pkgcore/component_assembly.go's validateComponentCapabilities): a
+// registration's New
 // is this registry's only outward channel for its declared Capability, so
 // the comparison cannot precede construction through the public API. The
 // constructed value is discarded on refusal -- never returned, never
 // wired, never signed with.
 //
 // The returned error wraps pkgcore.ErrCapabilityUnsatisfied, the identical
-// sentinel Kernel.Bootstrap's own capability refusal wraps, so a caller
+// sentinel the assembly's own capability refusal wraps, so a caller
 // that already treats that sentinel as "the assembly cannot run as
 // declared" needs no new error vocabulary for the pki tier.
 func BuildSignerRequiring(name string, cfg pkgcore.Config, required pkgcore.Capability) (Signer, error) {

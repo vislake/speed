@@ -1,7 +1,7 @@
 // Package pki owns key material that needs a lifecycle: signing keys and
 // X.509 certificates, from generation through rotation to revocation. It
 // sits above dbkit and tenancy and below authn in the module dependency
-// graph, and it implements pkgcore.Module like every other business module.
+// graph, and it carries the module contract like every other business module.
 //
 // # Two layers
 //

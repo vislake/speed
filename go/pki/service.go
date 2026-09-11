@@ -181,7 +181,7 @@ func NewService(signer Signer, signerName string, signingKeys *SigningKeyReposit
 // through the same handler as the remote one means there is a single
 // invalidation code path to get right rather than two that could drift.
 //
-// Called from Module.Register, which -- per pkgcore.Module's own contract
+// Called from Module.Register, which -- per the module contract's own rule
 // -- performs no I/O: this is a plain field assignment plus a subscription
 // registration, exactly like go/storage's serviceHost.attach.
 func (s *Service) attachBus(reg *pkgcore.ComponentRegistry) {

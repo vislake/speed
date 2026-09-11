@@ -165,11 +165,12 @@ func component() pkgcore.Component {
 // zero-external-dependency one, beside the vault and kmsaws providers that
 // register their own names from their subpackages; the seam registration of
 // the same name (signer_registry.go) stays the name-based path for a
-// Preset-shaped caller.
+// flat-config caller.
 //
 // Requires the database (its *gorm.DB product) and builds the signer over
-// that shared connection -- not the second connection the flat seam adapter
-// must open for itself, because a flat Config cannot carry a *gorm.DB.
+// that shared connection -- not the second connection the registry entry's
+// own constructor must open for itself, because a flat Config cannot carry
+// a *gorm.DB.
 // Provides (*Signer)(nil), the contract a consumer's token resolves through.
 // Capabilities are deliberately 0, the same non-declaration the seam
 // registration records: LocalSigner decrypts the private key into this
@@ -184,7 +185,7 @@ var signerLocalComponent = pkgcore.Component{
 	Module:       "signer",
 	Provides:     []any{(*Signer)(nil)},
 	Capabilities: 0,
-	ConfigSchema: nil, // the shared connection replaces the adapter's dialect/dsn pair
+	ConfigSchema: nil, // the shared connection replaces the registry entry's dialect/dsn pair
 	Requires:     []pkgcore.Requirement{{Token: (*gorm.DB)(nil)}},
 	New: func(_ context.Context, reg *pkgcore.ComponentRegistry, _ pkgcore.ComponentConfig) (any, error) {
 		db, err := pkgcore.Get[*gorm.DB](reg)

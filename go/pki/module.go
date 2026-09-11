@@ -13,7 +13,7 @@ import (
 	"github.com/vislake/speed/go/pki/migrations"
 )
 
-// moduleName is pki's pkgcore.Module.Name(), and the key
+// moduleName is pki's module name (the value Name() answers), and the key
 // dbkit.MigrationRegistry.Register builds its dependency graph on.
 const moduleName = "pki"
 
@@ -247,14 +247,15 @@ var configItemDecls = []pkgcore.ConfigItem{
 	},
 }
 
-// Module implements pkgcore.Module for go/pki.
+// Module carries the module contract for go/pki.
 //
 // # Wiring
 //
-// A host constructs one with NewModule and hands it to Kernel.Bootstrap.
-// Constructing a Module performs no I/O: db is opened and migrated by the
-// host before Register is ever called, exactly like every other module in
-// this codebase.
+// A host constructs one with NewModule -- directly, or as the product of
+// the module's component descriptor -- and its Register runs inside the
+// assembly's Init stage. Constructing a Module performs no I/O: db is
+// opened and migrated by the host before Register is ever called, exactly
+// like every other module in this codebase.
 //
 // # Default Signer
 //
@@ -431,20 +432,20 @@ func (m *Module) CA() *CAService { return m.ca }
 // Signer returns the module's configured Signer.
 func (m *Module) Signer() Signer { return m.signer }
 
-// Name implements pkgcore.Module.
+// Name implements the module contract.
 func (m *Module) Name() string { return moduleName }
 
-// DependsOn implements pkgcore.Module: nothing. pki sits above dbkit and
-// tenancy in the module dependency graph, but neither is a pkgcore.Module
-// -- they are libraries the host wires, and DependsOn enumerates only
-// modules in the bootstrap set.
+// DependsOn implements the module contract: nothing. pki sits above dbkit
+// and tenancy in the module dependency graph, but neither carries a module
+// contract -- they are libraries the host wires, and DependsOn enumerates
+// only modules in the assembly's component set.
 func (m *Module) DependsOn() []string { return nil }
 
-// Migrations implements pkgcore.Module.
+// Migrations implements the module contract.
 func (m *Module) Migrations() embed.FS { return migrations.FS }
 
-// Locales implements pkgcore.Module: the descriptions of pki's error codes,
-// in both supported languages with identical id sets.
+// Locales implements the module contract: the descriptions of pki's error
+// codes, in both supported languages with identical id sets.
 func (m *Module) Locales() embed.FS { return locales.FS }
 
 // apiPath is the common prefix pki's HTTP routes are mounted at (see
@@ -480,14 +481,14 @@ var bootstrapKeyDecl = pkgcore.BootstrapKey{
 //go:embed api/openapi.yaml
 var openAPISpecYAML []byte
 
-// OpenAPISpec implements pkgcore.Module: pki's own OpenAPI fragment,
+// OpenAPISpec implements the module contract: pki's own OpenAPI fragment,
 // embedded from api/openapi.yaml -- the single source of this module's HTTP
 // surface, with Handler implementing the api package's generated
 // ServerInterface (see handler.go) so the spec and its implementation
 // cannot drift.
 func (m *Module) OpenAPISpec() []byte { return openAPISpecYAML }
 
-// Register implements pkgcore.Module. Per the interface's own contract it
+// Register implements the module contract. Per that contract's own rule it
 // only declares and wires -- no database call, no outbound call, nothing
 // that touches m.db.
 //

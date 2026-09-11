@@ -53,7 +53,7 @@ const DefaultExpiryScanWindow = time.Hour
 const expiryScanKeyPrefix = "pki.expiry_scan:"
 
 // expiryScanSchedule is the module's declaration of the expiry scan on the
-// pkgcore.Registry.Schedules seat: one platform-wide task per window,
+// ComponentRegistry's Schedules seat: one platform-wide task per window,
 // under the standard sentinel tenant, at the service's configured scan
 // window (WithExpiryScanWindow included) and keyed with the same prefix
 // and the same window derivation the manual EnqueueExpiryScan path uses
@@ -116,7 +116,7 @@ const platformScanTenantID = pkgcore.TenantID("_pki_platform_scan")
 // already advanced.
 //
 // The scan's default schedule is the module's own: whenever a queue is
-// wired, Register declares the task on the pkgcore.Registry.Schedules seat
+// wired, Register declares the task on the ComponentRegistry's Schedules seat
 // (Service.expiryScanSchedule, a platform-scope declaration at the
 // service's configured window), so a host that runs a jobs.Scheduler over
 // the finished registry runs the scan without writing a schedule point of

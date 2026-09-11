@@ -20,8 +20,8 @@ import (
 // TestInit_RegistersSignerLocalOnTheSharedRegistry proves this package's
 // init() lands "signer.local" on SignerRegistry with the capability
 // LocalSigner actually has (none), mirroring
-// go/pkgcore/objectstore/s3/register_test.go's identical assertion for its
-// own built-in.
+// go/pkgcore/objectstore/s3/component_test.go's descriptor assertions for
+// its own built-in.
 func TestInit_RegistersSignerLocalOnTheSharedRegistry(t *testing.T) {
 	registerLocalKeySerializer()
 	dsn := "file:signer_registry_init_test?mode=memory&cache=shared"
@@ -187,8 +187,8 @@ func registerSignerCapabilityTestNames() error {
 // of the vault/kmsaws envelope names) under a KeyNeverLeavesBoundary
 // requirement must fail, wrapping pkgcore.ErrCapabilityUnsatisfied with an
 // error that names the signer and the missing capability -- the shape
-// pkgcore.Kernel.Bootstrap's own validateSeamCapability refusal takes for
-// its four built-in seams.
+// the assembly's own validateComponentCapabilities refusal takes for the
+// selected components.
 func TestBuildSignerRequiring_RefusesARegistrationLackingTheRequiredCapability(t *testing.T) {
 	if err := registerSignerCapabilityTestNames(); err != nil {
 		t.Fatalf("register capability-test names: %v", err)

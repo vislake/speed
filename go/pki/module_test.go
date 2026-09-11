@@ -18,7 +18,7 @@ func TestModule_Identity(t *testing.T) {
 		t.Errorf("Name() = %q, want %q", got, moduleName)
 	}
 	if got := m.DependsOn(); got != nil {
-		t.Errorf("DependsOn() = %v, want nil -- pki depends on no other pkgcore.Module in the bootstrap set", got)
+		t.Errorf("DependsOn() = %v, want nil -- pki depends on no other module in the assembly's component set", got)
 	}
 	if got := m.OpenAPISpec(); len(got) == 0 {
 		t.Errorf("OpenAPISpec() = %v, want the embedded api/openapi.yaml bytes -- the module's HTTP surface", got)
@@ -79,8 +79,8 @@ func TestModule_Migrations_ExposesBothDialectsAtTheEmbedRoot(t *testing.T) {
 
 // TestModule_Locales_ShipsBothLanguages pins the i18n rule at the module
 // boundary: exactly the two languages the catalog serves, no more and no
-// fewer, since Kernel.Bootstrap rejects a module that ships a file for a
-// language the others do not.
+// fewer, since the host's catalog merge rejects a module that ships a file
+// for a language the others do not.
 func TestModule_Locales_ShipsBothLanguages(t *testing.T) {
 	entries, err := NewModule(nil).Locales().ReadDir(".")
 	if err != nil {
@@ -266,8 +266,8 @@ func TestModule_Register_CoexistsWithAnotherModule(t *testing.T) {
 }
 
 // TestModule_Register_PerformsNoIO calls Register with a nil database,
-// which is what pkgcore.Module's "it only declares" contract requires to be
-// safe: any database call inside Register would panic here.
+// which is what the module contract's "it only declares" rule requires to
+// be safe: any database call inside Register would panic here.
 func TestModule_Register_PerformsNoIO(t *testing.T) {
 	m := NewModule(nil)
 	reg := componenttest.NewRegistry()
@@ -325,7 +325,7 @@ func assertContainsAll(t *testing.T, got []string, want []string) {
 	}
 }
 
-// neighbourModule is a minimal second pkgcore.Module, used only to prove
+// neighbourModule is a minimal second module, used only to prove
 // pki bootstraps correctly alongside another module's own declarations.
 type neighbourModule struct{}
 

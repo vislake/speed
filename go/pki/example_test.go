@@ -632,8 +632,8 @@ func ExampleSignerRegistry() {
 // it wires resolves its signer through: BuildSignerRequiring behaves exactly
 // like pki.SignerRegistry.Build, and additionally refuses a resolution whose
 // registration's declared capability cannot satisfy the requirement -- the
-// comparison pkgcore.Kernel.Bootstrap performs for its own four built-in
-// seams but has no knowledge of for pki.Signer (signer_registry.go's
+// comparison the assembly performs for its selected components but has no
+// knowledge of for pki.Signer (signer_registry.go's
 // BuildSignerRequiring doc comment, and go/pki/AGENTS.md's Known
 // limitations, have the full account). "signer.local" does not declare the
 // capability -- LocalSigner decrypts key material into process memory to

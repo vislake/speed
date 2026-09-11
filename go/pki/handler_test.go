@@ -301,9 +301,9 @@ func TestHandler_PkiGetAuthorityCrl_ServesTheStoredDocument(t *testing.T) {
 }
 
 // fakeAuditActionRegistrar is a minimal pkgcore.AuditActionRegistrar,
-// mirroring the memory-backed one pkgcore.NewRegistry builds internally --
-// this file needs its own because it wires Handler directly rather than
-// through Module.Register/Bootstrap.
+// mirroring the memory-backed one pkgcore.NewComponentRegistry builds
+// internally -- this file needs its own because it wires Handler directly
+// rather than through Module.Register and the assembly.
 type fakeAuditActionRegistrar struct {
 	actions []string
 }

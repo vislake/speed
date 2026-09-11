@@ -239,7 +239,7 @@ const DefaultCRLRegenerateWindow = time.Hour
 const crlRegenerateKeyPrefix = "pki.crl_regenerate:"
 
 // crlRegenerateSchedule is the module's declaration of CRL regeneration on
-// the pkgcore.Registry.Schedules seat: one platform-wide task per window,
+// the ComponentRegistry's Schedules seat: one platform-wide task per window,
 // under the CRL task's own sentinel tenant, at the service's configured
 // regeneration window and keyed with the same prefix and the same window
 // derivation the manual EnqueueCRLRegenerate path uses

@@ -13,8 +13,8 @@ import (
 // init() lands both "signer.vault" (Capabilities: none) and
 // "signer.vault-direct" (Capabilities: KeyNeverLeavesBoundary) on
 // pki.SignerRegistry -- mirroring
-// go/pkgcore/objectstore/s3/register_test.go's identical assertion for its
-// own built-in.
+// go/pkgcore/objectstore/s3/component_test.go's descriptor assertions for
+// its own built-in.
 func TestInit_RegistersBothNamesOnTheSharedRegistry(t *testing.T) {
 	cfg := pkgcore.Config{"address": "https://vault.example.com:8200", "token": "t", "wrapping_key_name": "wrap"}
 
@@ -42,10 +42,10 @@ func TestInit_RegistersBothNamesOnTheSharedRegistry(t *testing.T) {
 }
 
 // TestInit_EmptyConfigRequiresConfig mirrors
-// go/pkgcore/objectstore/s3/register_test.go's identical assertion: this
-// seam has no safe default address or token, so an empty Config fails with
-// pkgcore.ErrMissingSeamConfig rather than silently building an unusable
-// signer.
+// go/pkgcore/objectstore/s3/fromconfig_test.go's identical error assertion:
+// this seam has no safe default address or token, so an empty Config fails
+// with pkgcore.ErrMissingSeamConfig rather than silently building an
+// unusable signer.
 func TestInit_EmptyConfigRequiresConfig(t *testing.T) {
 	if _, _, err := pki.SignerRegistry.Build("signer.vault", pkgcore.Config{}); err == nil {
 		t.Error("Build() with an empty Config succeeded, want ErrMissingSeamConfig")
