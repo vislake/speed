@@ -59,10 +59,15 @@ func component() pkgcore.Component {
 			// selected db component's product.
 			{Token: (*gorm.DB)(nil)},
 		},
-		// The construction product is the *Module; the *Aggregator it
-		// exposes is the usage reading billing's UsageReader token resolves
-		// against.
-		Provides:     []any{(*Module)(nil), (*Aggregator)(nil)},
+		// The construction deliveries are the *Module plus the *Aggregator
+		// it exposes -- the usage reading billing's UsageReader token
+		// resolves against; NewModule builds the Aggregator eagerly, so New
+		// puts it alongside its own returned product and the declaration
+		// delivers in full.
+		Provides: []any{(*Module)(nil), (*Aggregator)(nil)},
+		// metering's state is its rows in the deployment's shared database
+		// and the shared event bus, so several replicas may run it at once.
+		Capabilities: pkgcore.MultiReplicaSafe,
 		ConfigSchema: (*componentConfig)(nil),
 		Migrations:   migrations.FS,
 		Locales:      locales.FS,
@@ -103,7 +108,13 @@ func component() pkgcore.Component {
 			if c.OutboxRetention != 0 {
 				opts = append(opts, WithOutboxRetention(c.OutboxRetention))
 			}
-			return NewModule(db, opts...), nil
+			m := NewModule(db, opts...)
+			// The Aggregator is a construction value (NewModule builds it
+			// eagerly), so it is one of this component's construction-time
+			// deliveries: put it so the declared token resolves for every
+			// consumer, exactly as the Module product does.
+			reg.Put(m.Aggregator())
+			return m, nil
 		},
 		Init: func(_ context.Context, reg *pkgcore.ComponentRegistry, instance any) error {
 			m, ok := instance.(*Module)

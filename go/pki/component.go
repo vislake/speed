@@ -64,10 +64,16 @@ func component() pkgcore.Component {
 			// unavailable, the shape WithQueue documents.
 			{Token: (*jobs.Queue)(nil), Optional: true},
 		},
-		// The construction product is the *Module; the *Service baked into
-		// it is the signing-key lifecycle authn's own structurally declared
-		// KeySource token resolves against.
-		Provides:      []any{(*Module)(nil), (*Service)(nil)},
+		// The construction deliveries are the *Module plus the *Service
+		// baked into it -- the signing-key lifecycle authn's own
+		// structurally declared KeySource token resolves against; both are
+		// constructed in NewModule, so New puts the Service alongside its
+		// own returned product and the declaration delivers in full.
+		Provides: []any{(*Module)(nil), (*Service)(nil)},
+		// pki's state is its platform rows in the deployment's shared
+		// database and the shared event bus, so several replicas may run it
+		// at once.
+		Capabilities:  pkgcore.MultiReplicaSafe,
 		ConfigSchema:  (*componentConfig)(nil),
 		BootstrapKeys: []pkgcore.BootstrapKey{bootstrapKeyDecl},
 		Migrations:    migrations.FS,
@@ -106,7 +112,13 @@ func component() pkgcore.Component {
 			default:
 				return nil, err
 			}
-			return NewModule(db, opts...), nil
+			m := NewModule(db, opts...)
+			// The Service is a construction value (NewModule builds it
+			// eagerly), so it is one of this component's construction-time
+			// deliveries: put it so the declared token resolves for every
+			// consumer, exactly as the Module product does.
+			reg.Put(m.Service())
+			return m, nil
 		},
 		Init: func(_ context.Context, reg *pkgcore.ComponentRegistry, instance any) error {
 			m, ok := instance.(*Module)
