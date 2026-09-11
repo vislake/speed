@@ -125,7 +125,7 @@ return app.RunAssembly(ctx, spec, extraComponents...)
 |---|---|
 | 项目文件 | `composition: {…}`——`mailer.smtp` 读作 `mailer_smtp` |
 | 环境 | `APP_COMPOSITION__COMPONENTS__MAILER_SMTP__…` |
-| 命令行 | `--composition.mailer.smtp.…` |
+| 命令行 | `--composition.components.mailer.smtp.…` |
 
 文本来源里拼成 `false`(或 `true`)的选中值读作布尔。没有来源供给
 的键保持未设——除内置层(standalone 部署默认与默认参与的

@@ -146,7 +146,7 @@ line:
 |---|---|
 | project file | `composition: {…}` — `mailer.smtp` reads as `mailer_smtp` |
 | environment | `APP_COMPOSITION__COMPONENTS__MAILER_SMTP__…` |
-| command line | `--composition.mailer.smtp.…` |
+| command line | `--composition.components.mailer.smtp.…` |
 
 A selection value spelled `false` (or `true`) in a text source reads as
 its boolean. A key no source supplies stays unset — the loader ships no
