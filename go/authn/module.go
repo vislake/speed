@@ -1136,4 +1136,3 @@ func socialCredentialItems() []pkgcore.ConfigItem {
 	}
 	return items
 }
-
