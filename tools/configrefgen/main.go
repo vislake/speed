@@ -83,9 +83,10 @@ func run(args []string) int {
 		fmt.Fprintln(os.Stderr, "configrefgen:", err)
 		return 2
 	}
-	// The schema host's Kernel.Bootstrap announces its seam composition and
-	// its SurvivesRestart warnings on slog.Default; this command is a
-	// deterministic doc generator, not a boot, so those banners are noise.
+	// The assembly announces its own steps on slog.Default (component
+	// auto-selection, lifecycle banners); this command is a deterministic
+	// doc generator, not a boot, so those lines are noise. Only errors
+	// reach stderr.
 	slog.SetDefault(slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError})))
 
 	root := *repoRoot

@@ -2,7 +2,8 @@ package main
 
 // document.go assembles the reference document: the dynamic layer (the frozen
 // schema snapshot, from config.Service.Describe) and the bootstrap layer (the
-// platform modules' own bootstrap-key declarations, reg.Bootstrap), plus the
+// platform modules' own bootstrap-key declarations, their component
+// descriptors' BootstrapKeys), plus the
 // rendering of the committed outputs and the documentation site's copy of the
 // reference. Every output derives from the same assembled facts so the
 // Markdown table, the machine-readable JSON and the site page agree, mirroring
@@ -369,7 +370,7 @@ func renderDynamicRow(it referenceItem) string {
 }
 
 // dynamicIntro is the dynamic section's lead text.
-const dynamicIntro = "The dynamic layer holds the configuration an operator edits at runtime, served by the `go/config` module: every module declares the items and feature flags it owns during `Register` (`reg.Config.Add` / `reg.Features.Add`), and `config.Module.Attach` freezes them into one schema the moment Bootstrap returns. Values live in the shared `configs` table (platform data, keyed by `(key, scope, tenant_id)`) under two scope tiers: a **system** row is platform-wide (writing one requires an audited system context), a **tenant** row overrides it for one tenant, and a read resolves tenant row -> system row -> the schema default. Scope is a property of the row, not of the key: every key below may hold a row at either tier. A key with no default and no row at any reachable scope has no value to serve (`config.item_unset`). Writes publish `config.item.changed` (with `[redacted]` markers in both value slots for a Sensitive item) and produce an audit record.\n\n" +
+const dynamicIntro = "The dynamic layer holds the configuration an operator edits at runtime, served by the `go/config` module: every module declares the items and feature flags it owns during `Register` (`reg.Config.Add` / `reg.Features.Add`), and `config.Module.Attach` freezes them into one schema once every module's declaration turn has ended. Values live in the shared `configs` table (platform data, keyed by `(key, scope, tenant_id)`) under two scope tiers: a **system** row is platform-wide (writing one requires an audited system context), a **tenant** row overrides it for one tenant, and a read resolves tenant row -> system row -> the schema default. Scope is a property of the row, not of the key: every key below may hold a row at either tier. A key with no default and no row at any reachable scope has no value to serve (`config.item_unset`). Writes publish `config.item.changed` (with `[redacted]` markers in both value slots for a Sensitive item) and produce an audit record.\n\n" +
 	"Sensitive items are encrypted at rest: the `configs` table stores `base64(ciphertext)` sealed by the host's `dbkit.Cipher` key, never plaintext, and are never served on the public endpoint, whose rows are exactly the items marked Public below (`/api/v1/config/public`, `config.PathPublic`). A Sensitive item's default is redacted in this very table (the `[redacted]` marker), because this document is a committed artifact a secret's plaintext has no more business crossing than the event bus."
 
 // dynamicFooter is the dynamic section's closing text.

@@ -57,7 +57,8 @@ relative to the repository root:
 - The dynamic layer: `config.Service.Describe()` over the frozen schema
   of the composed host — the modules' own `reg.Config` / `reg.Features`
   declarations, never a hand-kept list.
-- The bootstrap layer: `reg.Bootstrap.Keys()` — the modules' own
+- The bootstrap layer: the composed components' descriptors
+  (`pkgcore.Component.BootstrapKeys`) — the modules' own
   `pkgcore.BootstrapKey` declarations.
 - `docs/config.example.yaml` (hand-written source): loaded through the
   real `pkgcore/config` loader by the unit suite; the JSON twin is

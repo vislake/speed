@@ -14,6 +14,8 @@ go 1.26.0
 // carries.
 replace github.com/vislake/speed/go/pkgcore => ../../go/pkgcore
 
+replace github.com/vislake/speed/go/app => ../../go/app
+
 replace github.com/vislake/speed/go/dbkit => ../../go/dbkit
 
 replace github.com/vislake/speed/go/observability => ../../go/observability
@@ -44,17 +46,19 @@ require (
 	github.com/knadh/koanf/parsers/yaml v1.1.1
 	github.com/knadh/koanf/providers/file v1.2.1
 	github.com/knadh/koanf/v2 v2.3.6
-	github.com/vislake/speed/go/authn v0.0.0-00010101000000-000000000000
+	github.com/vislake/speed/go/app v0.0.1
+	github.com/vislake/speed/go/authn v0.0.1
 	github.com/vislake/speed/go/compliance v0.0.0-00010101000000-000000000000
 	github.com/vislake/speed/go/config v0.0.1
 	github.com/vislake/speed/go/dbkit v0.0.1
 	github.com/vislake/speed/go/jobs v0.0.1
-	github.com/vislake/speed/go/metering v0.0.0-00010101000000-000000000000
+	github.com/vislake/speed/go/metering v0.0.1
 	github.com/vislake/speed/go/notification v0.0.0-00010101000000-000000000000
-	github.com/vislake/speed/go/org v0.0.0-00010101000000-000000000000
+	github.com/vislake/speed/go/org v0.0.1
 	github.com/vislake/speed/go/pkgcore v0.0.1
 	github.com/vislake/speed/go/pki v0.0.0-00010101000000-000000000000
 	github.com/vislake/speed/go/sharing v0.0.1
+	gorm.io/gorm v1.31.2
 )
 
 require (
@@ -103,7 +107,6 @@ require (
 	golang.org/x/text v0.41.0 // indirect
 	gorm.io/datatypes v1.2.7 // indirect
 	gorm.io/driver/mysql v1.5.6 // indirect
-	gorm.io/gorm v1.31.2 // indirect
 	modernc.org/libc v1.22.5 // indirect
 	modernc.org/mathutil v1.5.0 // indirect
 	modernc.org/memory v1.5.0 // indirect
