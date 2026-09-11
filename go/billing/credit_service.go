@@ -246,10 +246,14 @@ type PreDeductInput struct {
 // database transaction, so a failed reservation leaves no trace to clean
 // up.
 //
-// A retried call with the same IdempotencyKey (the row already exists,
-// whatever its current Status) returns that existing row rather than
-// erroring or reserving a second time -- PreDeduct is itself idempotent
-// under retry.
+// A retried call with the same IdempotencyKey returns its own earlier
+// reservation -- the existing row, whatever its current Status -- rather
+// than erroring or reserving a second time: PreDeduct is itself idempotent
+// under retry. Only a Deduct row counts as that earlier reservation; the
+// ledger's row-ID namespace is shared across every row type, so a key that
+// names a row of another kind (a Grant, an Expire, or an unkeyed row's
+// generated UUID) is refused with ErrIdempotencyKeyCollision rather than
+// reported as a successful reservation it was not.
 //
 // Keeping a reservation settleable is the caller's obligation: the module
 // performs no library-side reclamation of stuck pending reservations -- a
@@ -276,8 +280,8 @@ func (s *CreditService) PreDeduct(ctx context.Context, in PreDeductInput) (*Cred
 	}
 
 	var result *CreditTransaction
-	// reserved is set true only inside the fresh-insert branch below --
-	// never on the idempotent-retry branch that finds an already-existing
+	// reserved is set true only by keyedInsertOrFetch's fresh-insert branch
+	// -- never on its idempotent-retry branch that finds an already-existing
 	// row. This is what lets the audit.Emit call after the transaction
 	// commits fire exactly once per genuine reservation, never a second
 	// time for a retried call that reserved nothing new: an audit record
@@ -294,61 +298,9 @@ func (s *CreditService) PreDeduct(ctx context.Context, in PreDeductInput) (*Cred
 			Amount: in.Amount,
 			Reason: in.Reason,
 		}
-		// The insert runs as ON CONFLICT DO NOTHING and reports a duplicate
-		// (id, tenant_id) as inserted==false with NO error (see
-		// insertIdempotent's own doc comment for why that matters): the
-		// transaction stays healthy, and the read-back below -- the
-		// idempotent retry's answer -- runs on it either way. The insert
-		// must never raise a unique-violation error: on PostgreSQL the
-		// violation aborts the whole transaction (SQLSTATE 25P02), the
-		// read-back could not run on it, and a retried PreDeduct whose
-		// first attempt had already committed would return an error
-		// instead of its own earlier reservation -- the money path failing
-		// on the one dialect SQLite's tolerance of a failed statement
-		// inside a transaction never exposes (proven against real
-		// PostgreSQL by
-		// go/billing/integration_test/postgres_credit_transactions_test.go).
-		inserted, insertErr := s.transactions.insertIdempotent(ctx, session, row)
-		if insertErr != nil {
-			return insertErr
-		}
-		if inserted {
-			if err := s.ensureBalance(session, tenant); err != nil {
-				return err
-			}
-			ok, err := applyBalanceDelta(session, string(tenant), -in.Amount, in.Amount, s.now())
-			if err != nil {
-				return err
-			}
-			if !ok {
-				return ErrInsufficientCredits.WithParam("amount", in.Amount)
-			}
-			result = row
-			reserved = true
-			resultBalance = s.readBalanceForAudit(ctx, session, string(tenant))
-			return nil
-		}
-		// Idempotent retry: a row for this IdempotencyKey already exists --
-		// the transaction is still healthy (nothing aborted), so read the
-		// existing row back on it and return that instead of erroring or
-		// reserving a second time.
-		existing, err := s.findTransaction(session, in.IdempotencyKey)
-		if err != nil {
-			return err
-		}
-		if existing == nil {
-			// The conflicting row vanished between the no-op insert and
-			// this read-back -- only a concurrent deleter could do that,
-			// and nothing in this module deletes credit-transaction rows
-			// (the ledger is append-only; this repository offers no Delete
-			// at all). Unreachable in practice, but never silently swallow
-			// it into a nil result: the honest answer is a coded error a
-			// caller can retry on, exactly like go/metering's own
-			// errOutboxConflictRowVanished corner.
-			return errCreditLedgerRowVanished
-		}
-		result = existing
-		return nil
+		var err error
+		result, reserved, resultBalance, err = s.keyedInsertOrFetch(ctx, session, row, -in.Amount, in.Amount)
+		return err
 	})
 	if txErr != nil {
 		return nil, txErr
@@ -646,13 +598,10 @@ func (s *CreditService) Expire(ctx context.Context, in PreDeductInput) (*CreditT
 		}
 
 		// Keyed: the row's ID is the caller's own deterministic key, and
-		// the insert runs as ON CONFLICT DO NOTHING -- reporting a
-		// duplicate as inserted==false with NO error (see
-		// insertIdempotent's own doc comment for why that matters on
-		// PostgreSQL): the transaction stays healthy, and the retry's
-		// read-back below runs on it either way. The balance CAS runs only
-		// on the fresh-insert branch -- never on the retry branch, whose
-		// deduction already happened inside its first call's transaction.
+		// the insert runs through keyedInsertOrFetch's ON CONFLICT DO
+		// NOTHING core -- the balance CAS runs only on its fresh-insert
+		// branch, never on the retry branch, whose deduction already
+		// happened inside its first call's transaction.
 		row := &CreditTransaction{
 			ID:     in.IdempotencyKey,
 			Type:   string(CreditTransactionExpire),
@@ -660,58 +609,9 @@ func (s *CreditService) Expire(ctx context.Context, in PreDeductInput) (*CreditT
 			Amount: in.Amount,
 			Reason: in.Reason,
 		}
-		inserted, insertErr := s.transactions.insertIdempotent(ctx, session, row)
-		if insertErr != nil {
-			return insertErr
-		}
-		if inserted {
-			if err := s.ensureBalance(session, tenant); err != nil {
-				return err
-			}
-			ok, err := applyBalanceDelta(session, string(tenant), -in.Amount, 0, s.now())
-			if err != nil {
-				return err
-			}
-			if !ok {
-				// The guard refused, so the whole transaction rolls back --
-				// this call's own just-inserted row included: the key is
-				// not burned, and a later, better-funded run with the same
-				// key is a fresh attempt again.
-				return ErrInsufficientCredits.WithParam("amount", in.Amount)
-			}
-			result = row
-			expired = true
-			resultBalance = s.readBalanceForAudit(ctx, session, string(tenant))
-			return nil
-		}
-
-		// Idempotent retry: a row for this IdempotencyKey already exists --
-		// the transaction is still healthy (nothing aborted), so read the
-		// existing row back and decide whether it is this retry's own
-		// earlier run. Only an expire row can be: the ledger's row-ID
-		// namespace is shared across every row type, and reporting a
-		// different kind's row as a successful expiry would be the wrong
-		// answer, so any other kind is refused loudly
-		// (ErrIdempotencyKeyCollision) rather than guessed at.
-		existing, err := s.findTransaction(session, in.IdempotencyKey)
-		if err != nil {
-			return err
-		}
-		if existing == nil {
-			// The conflicting row vanished between the no-op insert and
-			// this read-back -- the same unreachable-in-practice corner
-			// PreDeduct's reserve half documents for its own read-back
-			// (nothing in this module deletes credit-transaction rows, and
-			// a retry would get the correct outcome either way).
-			return errCreditLedgerRowVanished
-		}
-		if existing.Type != string(CreditTransactionExpire) {
-			return ErrIdempotencyKeyCollision.
-				WithParam("idempotency_key", in.IdempotencyKey).
-				WithParam("type", existing.Type)
-		}
-		result = existing
-		return nil
+		var err error
+		result, expired, resultBalance, err = s.keyedInsertOrFetch(ctx, session, row, -in.Amount, 0)
+		return err
 	})
 	if txErr != nil {
 		return nil, txErr
@@ -720,6 +620,88 @@ func (s *CreditService) Expire(ctx context.Context, in PreDeductInput) (*CreditT
 		s.emitCreditAudit(ctx, AuditActionCreditExpire, tenant, result.ID, result.Amount, result.Reason, resultBalance)
 	}
 	return result, nil
+}
+
+// keyedInsertOrFetch is the shared keyed-deduction core PreDeduct's reserve
+// half and Expire's keyed branch both run. row carries the caller's kind of
+// deduction (its ID is the caller's own deterministic idempotency key, its
+// Type and Status the caller's own), and the insert runs as ON CONFLICT DO
+// NOTHING through insertIdempotent, reporting a duplicate (id, tenant_id)
+// as inserted==false with NO error: the transaction stays healthy, and the
+// read-back below runs on it either way. The insert must never raise a
+// unique-violation error: on PostgreSQL the violation aborts the whole
+// transaction (SQLSTATE 25P02), the read-back could not run on it, and a
+// retried call whose first attempt had already committed would return an
+// error instead of its own earlier row -- the money path failing on the
+// one dialect SQLite's tolerance of a failed statement inside a
+// transaction never exposes (proven against real PostgreSQL by
+// go/billing/integration_test/postgres_credit_transactions_test.go).
+//
+// A fresh insert applies the caller's own balance delta -- the same
+// availableDelta/reservedDelta pair applyBalanceDelta takes -- and reads
+// the resulting balance for the caller's post-commit audit record. The
+// guard's refusal becomes ErrInsufficientCredits and rolls the whole
+// transaction back, this call's own just-inserted row included: the key is
+// not burned, and a later, better-funded run with the same key is a fresh
+// attempt again.
+//
+// A duplicate is read back and must be this caller's own earlier row: the
+// ledger's row-ID namespace is shared across every row type, so a row of
+// any other kind under the same key (a Grant, an Expire, a Deduct) is
+// refused with ErrIdempotencyKeyCollision rather than reported as a
+// successful retry of an operation that never ran. Only an existing row of
+// exactly row's own Type counts as the retry's earlier run.
+//
+// fresh is true only when this call genuinely inserted the row; it gates
+// each caller's post-commit audit emit, so a no-op retry records nothing.
+func (s *CreditService) keyedInsertOrFetch(
+	ctx context.Context,
+	session *gorm.DB,
+	row *CreditTransaction,
+	availableDelta, reservedDelta int64,
+) (result *CreditTransaction, fresh bool, resultBalance *CreditBalance, err error) {
+	tenant, err := pkgcore.MustTenantFromContext(ctx)
+	if err != nil {
+		return nil, false, nil, err
+	}
+
+	inserted, err := s.transactions.insertIdempotent(ctx, session, row)
+	if err != nil {
+		return nil, false, nil, err
+	}
+	if inserted {
+		if err := s.ensureBalance(session, tenant); err != nil {
+			return nil, false, nil, err
+		}
+		ok, err := applyBalanceDelta(session, string(tenant), availableDelta, reservedDelta, s.now())
+		if err != nil {
+			return nil, false, nil, err
+		}
+		if !ok {
+			return nil, false, nil, ErrInsufficientCredits.WithParam("amount", row.Amount)
+		}
+		return row, true, s.readBalanceForAudit(ctx, session, string(tenant)), nil
+	}
+
+	existing, err := s.findTransaction(session, row.ID)
+	if err != nil {
+		return nil, false, nil, err
+	}
+	if existing == nil {
+		// The conflicting row vanished between the no-op insert and this
+		// read-back -- only a concurrent deleter could do that, and nothing
+		// in this module deletes credit-transaction rows. Unreachable in
+		// practice, but never silently swallow it into a nil result: the
+		// honest answer is a coded error a caller can retry on, exactly
+		// like go/metering's own errOutboxConflictRowVanished corner.
+		return nil, false, nil, errCreditLedgerRowVanished
+	}
+	if existing.Type != row.Type {
+		return nil, false, nil, ErrIdempotencyKeyCollision.
+			WithParam("idempotency_key", row.ID).
+			WithParam("type", existing.Type)
+	}
+	return existing, false, nil, nil
 }
 
 // ensureBalance materializes tenant's CreditBalance row at zero if it does

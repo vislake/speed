@@ -229,6 +229,45 @@ func TestCreditService_PreDeduct_IdempotentRetry_ReturnsTheSameReservation(t *te
 	}
 }
 
+// TestCreditService_PreDeduct_KeyCollidingWithAnotherKind_Refused proves
+// the keyed retry branch distinguishes its own earlier reservation from a
+// row of another kind sitting under the same key: the ledger's row-ID
+// namespace is shared across every row type, and a key that names a Grant
+// (or an Expire, or an unkeyed row's UUID) must never be answered as a
+// successful reservation -- the caller would treat a foreign row as its
+// own settled reservation. Such a call is refused with
+// ErrIdempotencyKeyCollision, and nothing is written.
+func TestCreditService_PreDeduct_KeyCollidingWithAnotherKind_Refused(t *testing.T) {
+	svc := newCreditService(t)
+	ctx := pkgcore.WithTenant(context.Background(), "tenant-a")
+
+	grantTx, err := svc.Grant(ctx, GrantInput{Amount: 100})
+	if err != nil {
+		t.Fatalf("Grant: %v", err)
+	}
+
+	_, err = svc.PreDeduct(ctx, PreDeductInput{Amount: 40, IdempotencyKey: grantTx.ID})
+	if !apperr.HasCode(err, ErrIdempotencyKeyCollision.Code) {
+		t.Errorf("keyed PreDeduct reusing a grant row's id: err = %v, want %s", err, ErrIdempotencyKeyCollision.Code)
+	}
+
+	bal, err := svc.Balance(ctx)
+	if err != nil {
+		t.Fatalf("Balance: %v", err)
+	}
+	if bal.Available != 100 || bal.Reserved != 0 {
+		t.Errorf("balance after the refused PreDeduct = %+v, want Available=100 Reserved=0 -- the refused call wrote nothing", bal)
+	}
+
+	rows, err := svc.Transactions(ctx)
+	if err != nil {
+		t.Fatalf("Transactions: %v", err)
+	}
+	if len(rows) != 1 {
+		t.Errorf("ledger rows = %d, want exactly 1 (the grant, untouched)", len(rows))
+	}
+}
+
 func TestCreditService_PreDeduct_Validation(t *testing.T) {
 	svc := newCreditService(t)
 	ctx := pkgcore.WithTenant(context.Background(), "tenant-a")

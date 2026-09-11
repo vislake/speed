@@ -68,18 +68,19 @@ var (
 	// second, genuinely new operation.
 	ErrIdempotencyKeyRequired = apperr.Invalid("billing.idempotency_key_required")
 
-	// ErrIdempotencyKeyCollision reports that a keyed CreditService.Expire
-	// call supplied an IdempotencyKey that already identifies a
-	// credit_transaction row of ANOTHER kind (a Grant row, a Deduct row,
-	// or an unkeyed row's generated UUID). The ledger's row-ID namespace
-	// is shared across every row type, so a deterministic expiry key that
-	// names a row which is not the caller's own earlier expire row cannot
-	// be answered as a successful idempotent retry -- reporting success on
-	// a row that is not an expiry record would be a wrong answer the audit
-	// trail would then preserve. Only an existing CreditTransactionExpire
-	// row counts as the retry's own earlier run (see CreditService.Expire's
-	// doc comment); anything else under the key is refused with this coded
-	// Conflict.
+	// ErrIdempotencyKeyCollision reports that a keyed
+	// CreditService.PreDeduct or CreditService.Expire call supplied an
+	// IdempotencyKey that already identifies a credit_transaction row of
+	// ANOTHER kind (a Grant row, an Expire row, a Deduct row, or an
+	// unkeyed row's generated UUID). The ledger's row-ID namespace is
+	// shared across every row type, so a deterministic key that names a
+	// row which is not the caller's own earlier row of the same kind
+	// cannot be answered as a successful idempotent retry -- reporting
+	// success on a row of another kind would be a wrong answer the audit
+	// trail would then preserve. Only an existing row of exactly the
+	// caller's own type counts as the retry's own earlier run (see
+	// CreditService.PreDeduct's and Expire's doc comments); anything else
+	// under the key is refused with this coded Conflict.
 	ErrIdempotencyKeyCollision = apperr.Conflict("billing.idempotency_key_collision")
 
 	// ErrInvalidReason reports a credit-operation Reason that violates
