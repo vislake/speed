@@ -23,8 +23,8 @@ const (
 // consults no dependency deliberately -- a probe that failed because, say,
 // the database was unreachable would take the replica out of the pool
 // exactly when an operator needs it up to diagnose the outage. Readiness
-// is a different question with a different answer (a future endpoint), and
-// this one stays a pure process-liveness signal.
+// is a different question with a different answer, and this one stays a
+// pure process-liveness signal.
 func HealthzHandler() http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)

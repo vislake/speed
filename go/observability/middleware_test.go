@@ -666,12 +666,12 @@ const multiByteRune = "😀"
 // The request target below percent-encodes the rune's bytes
 // (%F0%9F%98%80) rather than embedding them raw, matching how an actual
 // multi-byte path segment reaches this package: net/http percent-decodes
-// (*http.Request).URL.Path before Middleware ever sees it. Verified by
-// hand while writing this test: req.URL.Path below decodes back to
-// exactly prefix+multiByteRune, byte obs.MaxRouteLabelLength of that path
-// is confirmed NOT a rune-start byte, and a naive path[:obs.MaxRouteLabelLength]
-// slice of it is confirmed invalid UTF-8 -- so this test genuinely
-// exercises the backward scan rather than landing on a boundary by luck.
+// (*http.Request).URL.Path before Middleware ever sees it. req.URL.Path
+// below decodes back to exactly prefix+multiByteRune, byte
+// obs.MaxRouteLabelLength of that path is not a rune-start byte, and a
+// naive path[:obs.MaxRouteLabelLength] slice of it is invalid UTF-8 -- so
+// this test genuinely exercises the backward scan rather than landing on a
+// boundary by luck.
 func TestMiddleware_MultiByteRoutePath_TruncatesOnRuneBoundary(t *testing.T) {
 	reader := setupMeterProvider(t)
 	handler := obs.Middleware(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {

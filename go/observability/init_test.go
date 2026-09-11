@@ -255,7 +255,7 @@ func TestInit_WithOTLPEndpoint_EarlyExitLeaksGoroutinesWithoutAnImmediateDefer(t
 	// fails before any cleanup runs" inside its own goroutine, exiting
 	// it via runtime.Goexit -- exactly the mechanism t.Fatal uses -- so
 	// that, for the deferShutdown=false case, omitting a defer before
-	// the exit reproduces the original leak without failing this test
+	// the exit reproduces the leak without failing this test
 	// itself. t.Fatal/t.Errorf are deliberately never called from inside
 	// the goroutine (only the main test goroutine may call them safely);
 	// it reports failure to the caller by returning a nil shutdown. It
@@ -281,8 +281,8 @@ func TestInit_WithOTLPEndpoint_EarlyExitLeaksGoroutinesWithoutAnImmediateDefer(t
 				defer func() { _ = shutdown(context.Background()) }()
 			}
 			// Stand in for any assertion firing between Init succeeding
-			// and a later manual shutdown call -- exactly the window
-			// the original bug lived in.
+			// and a manual shutdown call -- exactly the window the
+			// undeferred shape leaks in.
 			runtime.Goexit()
 		}()
 		<-done

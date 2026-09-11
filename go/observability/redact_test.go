@@ -159,11 +159,12 @@ func TestRedact_TokenStemDoesNotOverRedactUnrelatedWords(t *testing.T) {
 // separated and camelCase twins.
 func TestRedact_TokenStemWordBoundary_AdversarialVocabulary(t *testing.T) {
 	benign := []string{
-		// Already covered by the original regression test; repeated here
-		// so this table is a self-contained adversarial pass.
+		// Already covered by TestRedact_TokenStemDoesNotOverRedactUnrelatedWords;
+		// repeated here so this table is a self-contained adversarial pass.
 		"tokens", "prompt_tokens", "completion_tokens", "tokenizer_version",
 		// "token" glued to a preceding letter with no separator at all --
-		// the class the original regression test did not exercise.
+		// the class TestRedact_TokenStemDoesNotOverRedactUnrelatedWords did
+		// not exercise.
 		"detokenize", "retokenized", "subtoken_count",
 		// "token" glued to a following letter with no separator, a
 		// different word shape than the "...tokens" plural.
