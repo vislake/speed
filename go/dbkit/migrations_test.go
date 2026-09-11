@@ -30,13 +30,12 @@ type fakeModule struct {
 	migrations embed.FS
 }
 
-func (m fakeModule) Name() string                     { return m.name }
-func (m fakeModule) DependsOn() []string              { return m.dependsOn }
-func (m fakeModule) Migrations() embed.FS             { return m.migrations }
-func (m fakeModule) Locales() embed.FS                { return embed.FS{} }
-func (m fakeModule) OpenAPISpec() []byte              { return nil }
+func (m fakeModule) Name() string                              { return m.name }
+func (m fakeModule) DependsOn() []string                       { return m.dependsOn }
+func (m fakeModule) Migrations() embed.FS                      { return m.migrations }
+func (m fakeModule) Locales() embed.FS                         { return embed.FS{} }
+func (m fakeModule) OpenAPISpec() []byte                       { return nil }
 func (m fakeModule) Register(*pkgcore.ComponentRegistry) error { return nil }
-
 
 // migrationsTestDBSeq gives every per-test SQLite database, and every
 // per-test Postgres schema, a distinct name -- mirroring

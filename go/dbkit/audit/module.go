@@ -146,7 +146,6 @@ func (m *Module) Register(reg *pkgcore.ComponentRegistry) error {
 	return nil
 }
 
-
 // onWriteCaptured normalizes a dbkit.WriteCapturedEvent into an AuditEvent
 // and persists it. Action is derived as "<resource_type>.<operation>" (e.g.
 // "note.create") -- deliberately honest about what a generic diff-capture

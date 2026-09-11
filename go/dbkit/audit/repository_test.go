@@ -34,13 +34,12 @@ import (
 // migrations_test.go fakeModule.
 type fakeAuditModule struct{}
 
-func (fakeAuditModule) Name() string                     { return "audit" }
-func (fakeAuditModule) DependsOn() []string              { return nil }
-func (fakeAuditModule) Migrations() embed.FS             { return migrations.FS }
-func (fakeAuditModule) Locales() embed.FS                { return embed.FS{} }
-func (fakeAuditModule) OpenAPISpec() []byte              { return nil }
+func (fakeAuditModule) Name() string                              { return "audit" }
+func (fakeAuditModule) DependsOn() []string                       { return nil }
+func (fakeAuditModule) Migrations() embed.FS                      { return migrations.FS }
+func (fakeAuditModule) Locales() embed.FS                         { return embed.FS{} }
+func (fakeAuditModule) OpenAPISpec() []byte                       { return nil }
 func (fakeAuditModule) Register(*pkgcore.ComponentRegistry) error { return nil }
-
 
 // auditTestDBSeq numbers the in-memory SQLite databases this package's
 // tests open, so parallel or repeated runs never share one -- mirroring

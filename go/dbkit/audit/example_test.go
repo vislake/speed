@@ -22,11 +22,11 @@ import (
 // this stand-in keeps the example self-contained.
 type exampleAuditModule struct{}
 
-func (exampleAuditModule) Name() string                     { return "audit" }
-func (exampleAuditModule) DependsOn() []string              { return nil }
-func (exampleAuditModule) Migrations() embed.FS             { return migrations.FS }
-func (exampleAuditModule) Locales() embed.FS                { return embed.FS{} }
-func (exampleAuditModule) OpenAPISpec() []byte              { return nil }
+func (exampleAuditModule) Name() string                              { return "audit" }
+func (exampleAuditModule) DependsOn() []string                       { return nil }
+func (exampleAuditModule) Migrations() embed.FS                      { return migrations.FS }
+func (exampleAuditModule) Locales() embed.FS                         { return embed.FS{} }
+func (exampleAuditModule) OpenAPISpec() []byte                       { return nil }
 func (exampleAuditModule) Register(*pkgcore.ComponentRegistry) error { return nil }
 
 // Example shows Repository end to end: migrating audit_events, appending
