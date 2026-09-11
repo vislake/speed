@@ -196,8 +196,9 @@ func openIDAndTenantOnlyMarkerDB(t *testing.T, ctx context.Context, dsn string) 
 // error-translation path, not just SQLite's — the same reason
 // TestPostgresTenantIsolation above exists alongside the parent package's
 // SQLite-only isolation tests. Its DifferentTenant_ReturnsNotFound subtest
-// proves the fix does not weaken isolation: a cross-tenant Update against
-// the same shape of model must still collapse to ErrRecordNotFound.
+// proves the no-SQL fallback does not weaken isolation: a cross-tenant
+// Update against the same shape of model must still collapse to
+// ErrRecordNotFound.
 func TestPostgresRepository_Update_IDAndTenantIDOnlyModel_SucceedsAsNoOp(t *testing.T) {
 	ctx := context.Background()
 	pgContainer := startPostgresContainer(t, ctx)

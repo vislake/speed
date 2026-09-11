@@ -34,11 +34,11 @@ var testDBSeq atomic.Uint64
 // first connection's tables while a connection to it stays open
 // continuously).
 //
-// This is a plain gorm.Open, not yet routed through dbkit.Open, which does
-// not exist at this point in dbkit's build-out. Callers that need dbkit's
-// own wiring — the tenant-scoping plugin, the encryption serializer, and so
-// on — can layer it on top of the *gorm.DB returned here, or open their own
-// connection directly once dbkit.Open exists.
+// This is a plain gorm.Open rather than dbkit.Open, so each caller composes
+// exactly the wiring its test exercises. Callers that need dbkit's own
+// wiring — the tenant-scoping plugin, the encryption serializer, and so on —
+// can layer it on top of the *gorm.DB returned here, or call dbkit.Open
+// themselves.
 func NewTestSQLite(t *testing.T) *gorm.DB {
 	t.Helper()
 

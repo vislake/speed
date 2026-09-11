@@ -369,7 +369,7 @@ func captureSlogDefault(t *testing.T) *bytes.Buffer {
 // invalid bytes with 22021), and every changed value is recorded in a
 // structured warning -- the truncation trace repository.go's own doc
 // comment promises. The PostgreSQL leg of the same proof -- where the
-// fail-before behavior is a genuine 22001 refusal -- lives in
+// refusal is a genuine 22001 -- lives in
 // integration_test/postgres_column_bounds_test.go.
 func TestRepository_Insert_CutsOverWideDescriptiveFieldsToTheirColumnBounds(t *testing.T) {
 	db := openAuditTestDB(t)

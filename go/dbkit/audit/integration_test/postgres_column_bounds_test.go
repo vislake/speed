@@ -16,8 +16,8 @@ import (
 // the PostgreSQL leg of the write-boundary enforcement repository.go's
 // Insert applies to audit_events' descriptive columns (see
 // fitEventToColumns' doc comment in repository.go and model.go's
-// column-bounds constants for the full account). It is the fail-before /
-// pass-after regression for the enforcement itself: an audit event whose
+// column-bounds constants for the full account). It is the dual-dialect
+// regression for the enforcement itself: an audit event whose
 // resource_display_name carries a legal value longer
 // than the target column's width -- the concrete case is an integration
 // webhook URL (url VARCHAR(2048), go/integration/webhook_model.go) fed

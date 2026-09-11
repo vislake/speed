@@ -29,10 +29,9 @@ const tenantSessionGUCName = "app.current_tenant"
 // statements do not accept a bound query parameter for the value being
 // set — "SET LOCAL app.current_tenant = $1" is rejected outright by the
 // server with a syntax error (SQLSTATE 42601, "syntax error at or near
-// "$1""), confirmed against a live PostgreSQL 16 server while writing this
-// function, independent of driver or ORM. That is a hard limitation of
-// PostgreSQL's own grammar for SET, not a gorm or pgx quirk to work around
-// differently.
+// "$1""), confirmed against a live PostgreSQL 16 server, independent of
+// driver or ORM. That is a hard limitation of PostgreSQL's own grammar for
+// SET, not a gorm or pgx quirk to work around differently.
 //
 // set_config(setting_name, new_value, is_local), by contrast, is an
 // ordinary SQL function call, so new_value is a normal bound parameter like
@@ -132,8 +131,7 @@ var ErrNestedTenantSession = errors.New("dbkit: WithTenantSession called with an
 // outside dbkit.Open — confirmed to return exactly "postgres"
 // (gorm.io/driver/postgres) and "sqlite" (github.com/glebarez/sqlite),
 // matching the DialectPostgres and DialectSQLite constants in open.go
-// exactly, by opening each dialector directly and calling Name() on it
-// while writing this function.
+// exactly, by opening each dialector directly and calling Name() on it.
 //
 // If the GUC-setting step fails, WithTenantSession aborts the whole
 // transaction and returns that error without ever calling fn: proceeding

@@ -134,15 +134,14 @@ func TestOpen_EnablesRecursiveTriggersOnEveryPooledConnection(t *testing.T) {
 // mechanisms -- the driver's own implicit default (glebarez/go-sqlite
 // applies `pragma BUSY_TIMEOUT(5000)` on every new connection) and the
 // explicit `_pragma=busy_timeout(...)` parameter withDefaultPragmas
-// appends -- so every test below passes on the pre-change code that
-// carried only the driver default too. The redundancy is the point of
-// declaring the contract: dbkit states the bound so that neither a
-// future driver change (dropping or altering its implicit default, or
-// changing how it applies `_pragma` DSN parameters) nor a caller-supplied
-// DSN override can silently remove it. Each test's doc comment says which
-// failure it would surface; the declaration itself -- the parameter
-// string and its append-after-caller order -- is pinned at string level
-// by TestWithDefaultPragmas in this file.
+// appends -- so every test below passes with the driver default alone. The
+// redundancy is the point of declaring the contract: dbkit states the bound
+// so that neither a future driver change (dropping or altering its implicit
+// default, or changing how it applies `_pragma` DSN parameters) nor a
+// caller-supplied DSN override can silently remove it. Each test's doc
+// comment says which failure it would surface; the declaration itself -- the
+// parameter string and its append-after-caller order -- is pinned at string
+// level by TestWithDefaultPragmas in this file.
 //
 // Every test drives two real connections to one real SQLite file through
 // dbkit.Open (dialect registration is this package's own init side
@@ -278,11 +277,10 @@ func TestOpen_AppliesDefaultBusyTimeoutToEveryPooledConnection(t *testing.T) {
 // This is a contract-pinning test, not a regression test for the DSN
 // parameter: the wait it observes is supplied today by two independent
 // mechanisms — the driver's per-connection implicit default and this
-// package's explicit parameter — so it passes on the pre-change code that
-// carried only the driver default, and would keep passing if either
-// mechanism alone survived a future change. That redundancy is the point of
-// declaring the contract (see the file header). The parameter's own
-// presence and reach are pinned by TestWithDefaultPragmas (string-level)
+// package's explicit parameter — so it passes with either mechanism
+// supplying the wait alone. That redundancy is the point of declaring the
+// contract (see the file header). The parameter's own presence and reach
+// are pinned by TestWithDefaultPragmas (string-level)
 // and TestOpen_AppliesDefaultBusyTimeoutToEveryPooledConnection
 // (read-back); this test pins the observable semantics the two mechanisms
 // jointly deliver, and fails only if the bounded wait itself is gone — an

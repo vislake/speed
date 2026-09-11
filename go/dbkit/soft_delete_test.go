@@ -230,8 +230,8 @@ func TestSoftDeleteScopeBeforeQuery_CallerOrCondition_DeletedAtFilterAppliesToEv
 // contains " AND "/" OR " and more than one WHERE expression is present, so
 // this shape composes correctly with the plugin's appended clause even
 // though the .Or(...) shape above does not. It is kept here — exactly as its
-// tenant_scope_test.go counterpart is — so a future fix to the case above
-// has a passing witness of the shape it must not regress.
+// tenant_scope_test.go counterpart is — as the passing witness of the shape
+// a fix to the case above must not regress.
 func TestSoftDeleteScopeBeforeQuery_CallerRawOrExpression_DeletedAtFilterAppliesToEveryBranch(t *testing.T) {
 	db := newSoftDeleteScopedTestDB(t)
 	seedSoftDeleteOrScenario(t, db)

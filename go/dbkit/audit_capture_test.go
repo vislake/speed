@@ -1399,11 +1399,11 @@ func TestAuditCapturePlugin_HardDelete_NoMatchingRow_PublishesNothing(t *testing
 // HardDelete performed on a system context that was never given an actor
 // therefore lands attributed to the zero Actor — which is exactly why those
 // docs tell callers to layer pkgcore.WithActor before entering system
-// context, rather than expecting the gate to attribute for them. If a
-// future round decides the capture should fall back to SystemReason.Actor
-// after all, this test fails — deliberately — until that fallback ships
-// with its own documented semantics, so the warning can never quietly drift
-// out of sync with the mechanism it warns about.
+// context, rather than expecting the gate to attribute for them. The zero
+// Actor pinned below is that obligation's boundary case: a capture that
+// fell back to SystemReason.Actor would contradict both the docs and this
+// expectation, so the warning can never quietly drift out of sync with the
+// mechanism it warns about.
 func TestAuditCapturePlugin_HardDelete_SystemContextAlone_DoesNotAttribute(t *testing.T) {
 	bus := &capturedBus{}
 	db := openAuditCaptureTestDB(t, bus)
@@ -2197,16 +2197,16 @@ func TestAuditCapturePlugin_WithTenantSession_ReleaseThenRollbackTo_CommittedRow
 // name until the newer one is destroyed (a rollback-to of an enclosing
 // savepoint destroys every savepoint established after its target), and is
 // the name's target again from then on. The buffer must keep the older same-
-// name frame exactly the way the database keeps the older savepoint. Before
-// this fix beginSavepoint deleted the older same-name frame at the reopen, so
-// a rollback-to that destroyed the newer savepoint through an enclosing
-// rollback and then rolled back to the now-reachable older one pruned nothing
-// the older frame should have covered: between-1's row (written between the
-// two shadow_sp savepoints, discarded by the final rollback-to of the older
-// savepoint) and disc-3's row (written after mid_sp's rollback, discarded by
-// that same rollback) were rolled back in the real database while their
-// captured events rode the outer commit's publish — two ghost audit events
-// for rows that never came into existence.
+// name frame exactly the way the database keeps the older savepoint. A
+// buffer that deleted the older same-name frame at the reopen would prune
+// nothing the older frame should cover when a rollback-to destroys the newer
+// savepoint through an enclosing rollback and then rolls back to the
+// now-reachable older one: between-1's row (written between the two shadow_sp
+// savepoints, discarded by the final rollback-to of the older savepoint) and
+// disc-3's row (written after mid_sp's rollback, discarded by that same
+// rollback) are rolled back in the real database, yet their captured events
+// would ride the outer commit's publish — two ghost audit events for rows
+// that never come into existence.
 func TestAuditCapturePlugin_WithTenantSession_ShadowedSameNameSavepoint_RolledBackRegionNeverPublishes(t *testing.T) {
 	bus := &capturedBus{}
 	db := openAuditCaptureTestDB(t, bus)

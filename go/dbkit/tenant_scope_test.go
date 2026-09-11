@@ -791,7 +791,7 @@ func TestAsTenantIDString(t *testing.T) {
 // plain, single-condition (or no-condition) shapes every other test in this
 // package builds.
 //
-// The short version, confirmed empirically below: tenantScopePlugin appends
+// The short version: tenantScopePlugin appends
 // its tenant filter as a brand new, separate `.Where(tenant_id = ?)` clause,
 // merged onto the end of whatever WHERE expressions the caller already
 // built (see clause.Where.MergeClause in gorm.io/gorm/clause/where.go). SQL
@@ -860,8 +860,8 @@ func TestTenantScopeBeforeQuery_CallerOrCondition_TenantFilterAppliesToEveryBran
 // contains " AND "/" OR " and more than one WHERE expression is present
 // (clause.buildExprs' Expr case), so this shape composes correctly with the
 // plugin's appended clause even though the .Or(...) shape above does not.
-// It is kept here specifically so a future fix to the case above has a
-// passing witness of the shape it must not regress.
+// It is kept here as the passing witness of the shape a fix to the case
+// above must not regress.
 func TestTenantScopeBeforeQuery_CallerRawOrExpression_TenantFilterAppliesToEveryBranch(t *testing.T) {
 	db := newScopedTestDB(t)
 	mustCreateWidget(t, db, tenantA, &testutil.Widget{ID: "a-x", TenantID: string(tenantA), Name: "x", Value: 1})
