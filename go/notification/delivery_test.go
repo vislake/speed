@@ -49,8 +49,8 @@ import (
 	"github.com/vislake/speed/go/jobs"
 	"github.com/vislake/speed/go/notification/locales"
 	"github.com/vislake/speed/go/pkgcore"
-	"github.com/vislake/speed/go/pkgcore/componenttest"
 	"github.com/vislake/speed/go/pkgcore/apperr"
+	"github.com/vislake/speed/go/pkgcore/componenttest"
 	"github.com/vislake/speed/go/pkgcore/i18n"
 )
 

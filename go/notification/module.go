@@ -498,4 +498,3 @@ var bootstrapKeyDecl = pkgcore.BootstrapKey{
 	Description: "HMAC key the notification module's blind indexers index its encrypted contact addresses with; one key serves the email and phone indexers, whose canonical forms are disjoint, and it stays separate from every cipher key.",
 	Group:       moduleName,
 }
-
