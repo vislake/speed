@@ -6,6 +6,7 @@ import (
 	"embed"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -348,6 +349,155 @@ func TestModule_Attach_RequiresACipherForSensitiveDeclarations(t *testing.T) {
 	// value without leaking it at rest, so Attach must refuse the pairing.
 	err := componenttest.DeclareAll(reg, declareTestSchema, attachModule(m, nil))
 	assertCode(t, err, ErrCipherRequired)
+}
+
+// TestModule_Attach_ReportsASchemaConflict pins Attach's fail-closed half
+// for a declaration set that cannot fold: a flag declared under a key a
+// configuration item already owns has no single schema to live in, and
+// Attach must refuse the whole set rather than publish a snapshot where
+// one layer silently loses to the other.
+func TestModule_Attach_ReportsASchemaConflict(t *testing.T) {
+	db := openModuleTestDB(t)
+	reg := newPlainRegistry()
+	m := NewModule(db, WithCipher(buildTestCipher(t)), WithPollInterval(0))
+	colliding := pkgcore.FeatureFlag{Key: "brand.site_name", Default: true, Description: "declared under a key a configuration item already owns"}
+
+	err := componenttest.DeclareAll(reg, declareTestSchema,
+		func(r *pkgcore.ComponentRegistry) error { return r.FeaturesSeat().Add(colliding) },
+		attachModule(m, nil),
+	)
+	assertCode(t, err, ErrSchemaConflict)
+}
+
+// TestModule_Attach_RequiresAnEventBus pins the one seam Attach cannot
+// synthesize: the item-changed subscription lands on the assembled
+// pkgcore.EventBus value, so an assembly carrying none must fail the
+// attach loudly rather than unwind into a Service whose change
+// notifications could never reach anyone.
+func TestModule_Attach_RequiresAnEventBus(t *testing.T) {
+	reg := pkgcore.NewComponentRegistry()
+	m := NewModule(openModuleTestDB(t), WithCipher(buildTestCipher(t)), WithPollInterval(0))
+
+	err := componenttest.DeclareAll(reg, declareTestSchema, attachModule(m, nil))
+	if err == nil {
+		t.Fatal("Attach succeeded without an assembled EventBus value; the item-changed subscription would have no bus to land on")
+	}
+	if !strings.Contains(err.Error(), "EventBus") {
+		t.Fatalf("Attach error = %v, want the missing-bus refusal naming the EventBus", err)
+	}
+}
+
+// TestModule_CompleteSnapshot_SupersedesAnEarlierHostSnapshot pins the
+// host-attached flow the descriptor's Start callback completes: a host
+// consumer that needed the Service during the Init stage attached and
+// published it early, a declaration landed later in the same window, and
+// CompleteSnapshot re-folds the schema to the complete set over the very
+// Service the host already holds -- the earlier, partial snapshot is
+// superseded, never left serving.
+func TestModule_CompleteSnapshot_SupersedesAnEarlierHostSnapshot(t *testing.T) {
+	db := openModuleTestDB(t)
+	reg := newPlainRegistry()
+	m := NewModule(db, WithCipher(buildTestCipher(t)), WithPollInterval(0))
+	late := pkgcore.ConfigItem{Key: "late.declared_key", Type: "string", Default: "late", Description: "declared after the host attached"}
+
+	var hostSvc *Service
+	if err := componenttest.DeclareAll(reg, declareTestSchema,
+		attachModule(m, &hostSvc),
+		func(r *pkgcore.ComponentRegistry) error { return r.ConfigSeat().Add(late) },
+	); err != nil {
+		t.Fatalf("declare, attach and declare again: %v", err)
+	}
+
+	svc, attached, err := m.CompleteSnapshot(reg)
+	if err != nil {
+		t.Fatalf("CompleteSnapshot: %v", err)
+	}
+	if attached {
+		t.Error("CompleteSnapshot reported a fresh attach although the host had already published a Service")
+	}
+	if svc != hostSvc {
+		t.Error("CompleteSnapshot did not return the Service the host already holds")
+	}
+	if got, err := GetTyped[string](svc, context.Background(), late.Key); err != nil || got != "late" {
+		t.Errorf("the completed snapshot does not serve the declaration made after the host's attach: %q, %v", got, err)
+	}
+}
+
+// TestModule_CompleteSnapshot_ReportsALateSchemaConflict pins the
+// completion's fail-closed half: a declaration landing after the host's
+// attach that cannot fold -- here a flag under a key an item already owns
+// -- fails the completion, so the schema left published stays the last one
+// that was sound.
+func TestModule_CompleteSnapshot_ReportsALateSchemaConflict(t *testing.T) {
+	db := openModuleTestDB(t)
+	reg := newPlainRegistry()
+	m := NewModule(db, WithCipher(buildTestCipher(t)), WithPollInterval(0))
+	colliding := pkgcore.FeatureFlag{Key: "brand.site_name", Default: true, Description: "declared under a key a configuration item already owns"}
+
+	if err := componenttest.DeclareAll(reg, declareTestSchema,
+		attachModule(m, nil),
+		func(r *pkgcore.ComponentRegistry) error { return r.FeaturesSeat().Add(colliding) },
+	); err != nil {
+		t.Fatalf("declare, attach and declare again: %v", err)
+	}
+
+	_, _, err := m.CompleteSnapshot(reg)
+	assertCode(t, err, ErrSchemaConflict)
+}
+
+// TestModule_CompleteSnapshot_RefusesALateSensitiveItemWithoutACipher pins
+// the cipher re-check the completion carries: a declaration landing after
+// the host's attach that grows the schema into a Sensitive item must be
+// refused without a cipher to seal it, exactly as Attach would have
+// refused the same complete set.
+func TestModule_CompleteSnapshot_RefusesALateSensitiveItemWithoutACipher(t *testing.T) {
+	db := openModuleTestDB(t)
+	reg := newPlainRegistry()
+	// No WithCipher: the attach-time schema declares no Sensitive item, so
+	// the early attach is legal and the late Sensitive declaration is the
+	// first thing that needs a cipher.
+	m := NewModule(db, WithPollInterval(0))
+	plain := pkgcore.ConfigItem{Key: "late.plain_key", Type: "string", Default: "plain", Description: "not Sensitive, so the early attach needs no cipher"}
+	secret := pkgcore.ConfigItem{Key: "late.secret_key", Type: "string", Sensitive: true, Description: "declared after the host attached, and needs a cipher"}
+
+	if err := componenttest.DeclareAll(reg,
+		func(r *pkgcore.ComponentRegistry) error { return r.ConfigSeat().Add(plain) },
+		attachModule(m, nil),
+		func(r *pkgcore.ComponentRegistry) error { return r.ConfigSeat().Add(secret) },
+	); err != nil {
+		t.Fatalf("declare, attach and declare again: %v", err)
+	}
+
+	_, _, err := m.CompleteSnapshot(reg)
+	assertCode(t, err, ErrCipherRequired)
+}
+
+// TestModule_Register_ReportsSeatRefusals pins Register's propagation of a
+// seat refusal: a duplicate event type or audit action means this module's
+// own declaration is already occupied by another writer, and Register must
+// surface the refusal rather than swallow half its declaration set.
+func TestModule_Register_ReportsSeatRefusals(t *testing.T) {
+	t.Run("duplicate event type", func(t *testing.T) {
+		reg := newPlainRegistry()
+		err := componenttest.DeclareAll(reg,
+			func(r *pkgcore.ComponentRegistry) error { return r.EventsSeat().Publishes(eventDecl) },
+			NewModule(nil).Register,
+		)
+		if !errors.Is(err, pkgcore.ErrDuplicateEventType) {
+			t.Fatalf("Register error = %v, want it to wrap %v", err, pkgcore.ErrDuplicateEventType)
+		}
+	})
+
+	t.Run("duplicate audit action", func(t *testing.T) {
+		reg := newPlainRegistry()
+		err := componenttest.DeclareAll(reg,
+			func(r *pkgcore.ComponentRegistry) error { return r.AuditActionsSeat().Add(AuditActionConfigSet) },
+			NewModule(nil).Register,
+		)
+		if !errors.Is(err, pkgcore.ErrDuplicateAuditAction) {
+			t.Fatalf("Register error = %v, want it to wrap %v", err, pkgcore.ErrDuplicateAuditAction)
+		}
+	})
 }
 
 // TestModule_Register_DeclaresItsBootstrapKey pins the one process-start key

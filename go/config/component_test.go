@@ -276,9 +276,10 @@ func TestComponentConstructionRefusesBadInputs(t *testing.T) {
 
 	t.Run("ambiguous cipher", func(t *testing.T) {
 		reg := pkgcore.NewComponentRegistry()
-		if err := reg.Register(testDBComponent(openModuleTestDB(t))); err != nil {
-			t.Fatalf("registering the database stand-in: %v", err)
-		}
+		// Construction reads the by-type context, so the database goes in as
+		// a value: the two ciphers must be the ambiguity the read reaches,
+		// never masked by a missing database one check earlier.
+		reg.Put(openModuleTestDB(t))
 		reg.Put(testCipher(t))
 		reg.Put(testCipher(t))
 		_, err := component().New(ctx, reg, empty)
@@ -289,9 +290,8 @@ func TestComponentConstructionRefusesBadInputs(t *testing.T) {
 
 	t.Run("ambiguous resolver", func(t *testing.T) {
 		reg := pkgcore.NewComponentRegistry()
-		if err := reg.Register(testDBComponent(openModuleTestDB(t))); err != nil {
-			t.Fatalf("registering the database stand-in: %v", err)
-		}
+		reg.Put(openModuleTestDB(t))
+		reg.Put(testCipher(t))
 		reg.Put(testResolver{})
 		reg.Put(testResolver{})
 		_, err := component().New(ctx, reg, empty)
@@ -299,6 +299,33 @@ func TestComponentConstructionRefusesBadInputs(t *testing.T) {
 			t.Fatal("construction picked one of two resolver values instead of refusing the ambiguity")
 		}
 	})
+}
+
+// TestComponent_CallbacksRefuseAForeignInstance pins the descriptor's type
+// guards: Init and Start each refuse an instance that is not the *Module New
+// builds, rather than reading fields off whatever value the assembly handed
+// the callback.
+func TestComponent_CallbacksRefuseAForeignInstance(t *testing.T) {
+	comp := component()
+	reg := pkgcore.NewComponentRegistry()
+	if err := comp.Init(context.Background(), reg, &struct{}{}); err == nil {
+		t.Error("Init accepted a foreign instance; it accepts only the *config.Module its New built")
+	}
+	if err := comp.Start(context.Background(), reg, &struct{}{}); err == nil {
+		t.Error("Start accepted a foreign instance; it accepts only the *config.Module its New built")
+	}
+}
+
+// TestComponent_Start_ReportsASnapshotFailure pins Start's error path: a
+// module whose snapshot cannot be taken -- here one that was never given a
+// database, so its attach cannot open the configs table -- fails the Start
+// callback with that error instead of reporting success over a service
+// nothing published.
+func TestComponent_Start_ReportsASnapshotFailure(t *testing.T) {
+	reg := pkgcore.NewComponentRegistry()
+	if err := component().Start(context.Background(), reg, NewModule(nil, WithPollInterval(0))); err == nil {
+		t.Fatal("Start succeeded for a module whose snapshot cannot be taken")
+	}
 }
 
 // compile-time check that testResolver satisfies tenancy.Resolver.
