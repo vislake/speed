@@ -386,6 +386,45 @@ func TestAuthnSelectionsExemptAuthnSubtreeByStructure(t *testing.T) {
 	}
 }
 
+// TestAuthnSelectionsWireTheDeclaredFeatureFlags pins the feature-gate
+// wiring in every authn-bearing selection: a declared feature flag is a
+// declaration with no enforcement until the host hands WithFeatureGate a
+// reader, so each selection must pass the config module's lazy handle --
+// the read that makes a disabled sign-in channel refused at its endpoint,
+// matching the login page that serves the same flag values through
+// config's pre-authentication features endpoint. The handle read is
+// ordered by the constructor dependency declared beside pki's, so a
+// selection that dropped that edge could read the handle before the
+// config component constructed it; the authn-less selection wires no authn
+// module and must carry none of it.
+func TestAuthnSelectionsWireTheDeclaredFeatureFlags(t *testing.T) {
+	for _, key := range []string{"authn+org+rbac", "authn+rbac", "authn+org", "authn"} {
+		path := ProjectRoot + "/selection/" + key + "/server.go"
+		content, err := fs.ReadFile(Project, path)
+		if err != nil {
+			t.Errorf("%s: %v", path, err)
+			continue
+		}
+		server := string(content)
+		for _, want := range []string{
+			"authn.WithFeatureGate(cfgModule.Handle())",
+			"pkgcore.Requirement{Token: (*config.Module)(nil)}",
+		} {
+			if !strings.Contains(server, want) {
+				t.Errorf("%s: missing %q; without the handle as the gate's reader, authn's declared flags stay declarations with no enforcement", path, want)
+			}
+		}
+	}
+
+	content, err := fs.ReadFile(Project, ProjectRoot+"/selection/none/server.go")
+	if err != nil {
+		t.Fatalf("read the none selection: %v", err)
+	}
+	if strings.Contains(string(content), "WithFeatureGate") {
+		t.Error("the none selection wires no authn module, so it must not reference authn.WithFeatureGate")
+	}
+}
+
 // TestRBACSelectionsAdoptTheRouteTable pins the adoption of the platform's
 // route-authorization mechanism: each rbac-bearing selection must declare
 // its routes through a routeRules table handed to chain.Standard's

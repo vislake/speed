@@ -570,9 +570,10 @@ func (b *serverBuild) authnComponent(reg *pkgcore.ComponentRegistry) (pkgcore.Co
 			return nil, err
 		}
 		// The config module's construction product: this construction wires
-		// its lazy handle as authn's dynamic-configuration reader below, and
-		// the required edge declared beside pki's orders this component after
-		// the config module's, so the product is in the by-type context here.
+		// its lazy handle as authn's feature gate and dynamic-configuration
+		// reader below, and the required edge declared beside pki's orders
+		// this component after the config module's, so the product is in the
+		// by-type context here.
 		cfgModule, err := pkgcore.Get[*config.Module](reg)
 		if err != nil {
 			return nil, err
@@ -581,6 +582,12 @@ func (b *serverBuild) authnComponent(reg *pkgcore.ComponentRegistry) (pkgcore.Co
 			authn.WithKeySource(pkiModule.Service()),
 			authn.WithBlindIndexKey(blindIndexKey),
 			authn.WithDeploymentMode(b.cfg.DeploymentMode),
+			// The feature gate, off the same lazy handle: authn's declared
+			// feature flags are enforced at request time, so a sign-in channel
+			// the configuration disables is refused at its endpoint, matching
+			// the login page that reads the same flag values through the
+			// config module's pre-authentication features endpoint.
+			authn.WithFeatureGate(cfgModule.Handle()),
 			// The dynamic-configuration reader: the handle satisfies
 			// authn.SettingsReader structurally, so the module's declared
 			// dynamic config items (password policy, token TTLs, the
