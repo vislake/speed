@@ -120,18 +120,22 @@ func openRBACPostgres(t *testing.T, ctx context.Context, pgContainer *postgres.P
 func attachRBACService(t *testing.T, db *gorm.DB, bus pkgcore.EventBus, opts ...rbac.Option) *rbac.Service {
 	t.Helper()
 
-	reg := componenttest.NewRegistry()
-	reg.Put(bus)
-	if err := reg.Permissions.Add(hostPermissions...); err != nil {
-		t.Fatalf("declaring the host's permissions: %v", err)
-	}
+	reg := componenttest.NewRegistryWithBus(bus)
 	module := rbac.NewModule(db, append([]rbac.Option{rbac.WithCacheTTL(time.Hour)}, opts...)...)
-	if err := componenttest.DeclareInto(reg, module); err != nil {
-		t.Fatalf("Register: %v", err)
-	}
-	svc, err := module.Attach(reg)
-	if err != nil {
-		t.Fatalf("Attach: %v", err)
+	var svc *rbac.Service
+	if err := componenttest.DeclareAll(reg,
+		func(r *pkgcore.ComponentRegistry) error { return r.Permissions.Add(hostPermissions...) },
+		module.Register,
+		func(r *pkgcore.ComponentRegistry) error {
+			attached, attachErr := module.Attach(r)
+			if attachErr != nil {
+				return attachErr
+			}
+			svc = attached
+			return nil
+		},
+	); err != nil {
+		t.Fatalf("declare the host's permissions and attach the module: %v", err)
 	}
 	t.Cleanup(func() {
 		if closeErr := svc.Close(); closeErr != nil {

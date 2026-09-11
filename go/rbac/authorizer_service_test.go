@@ -65,20 +65,31 @@ func newTestServiceWithRegistry(t *testing.T, opts ...Option) (*Service, *pkgcor
 // Services can be attached to the SAME database -- the shape a
 // multi-replica deployment has, and what the cross-replica invalidation
 // tests need.
+//
+// The three declaration steps a Service needs -- the host's permissions,
+// the module's own Register, and the Attach that freezes the permission
+// catalog and subscribes the invalidation handlers -- share one
+// DeclareAll window: a ComponentRegistry runs its Init stage once, and
+// only during it do the seats accept writes.
 func attachTestService(t *testing.T, db *gorm.DB, opts ...Option) (*Service, *pkgcore.ComponentRegistry) {
 	t.Helper()
 
 	reg := newPlainRegistry()
-	if err := reg.Permissions.Add(testPermissions...); err != nil {
-		t.Fatalf("declaring the host's permissions: %v", err)
-	}
 	module := NewModule(db, opts...)
-	if err := componenttest.DeclareInto(reg, module); err != nil {
-		t.Fatalf("Register: %v", err)
-	}
-	svc, err := module.Attach(reg)
-	if err != nil {
-		t.Fatalf("Attach: %v", err)
+	var svc *Service
+	if err := componenttest.DeclareAll(reg,
+		func(r *pkgcore.ComponentRegistry) error { return r.Permissions.Add(testPermissions...) },
+		module.Register,
+		func(r *pkgcore.ComponentRegistry) error {
+			attached, err := module.Attach(r)
+			if err != nil {
+				return err
+			}
+			svc = attached
+			return nil
+		},
+	); err != nil {
+		t.Fatalf("declare the host's permissions and attach the module: %v", err)
 	}
 	t.Cleanup(func() {
 		if err := svc.Close(); err != nil {
@@ -273,13 +284,7 @@ func TestService_RevokeOnOneReplica_InvalidatesTheOther(t *testing.T) {
 	// replica A withdrew. (The distributed leg of the same property, over
 	// a real Redis, is the module's integration tier.)
 	db := newRBACTestDB(t)
-	reg := newPlainRegistry()
-	if err := reg.Permissions.Add(testPermissions...); err != nil {
-		t.Fatalf("declaring permissions: %v", err)
-	}
-
-	replicaA := attachReplica(t, db, reg)
-	replicaB := attachReplica(t, db, reg)
+	_, replicaA, replicaB := twoReplicas(t, db)
 
 	sub := Subject{TenantID: "tenant-a", UserID: "user-1"}
 	grant(t, replicaA, sub, "reader", Scope{}, "notes:read")
@@ -303,21 +308,50 @@ func TestService_RevokeOnOneReplica_InvalidatesTheOther(t *testing.T) {
 	}
 }
 
+// twoReplicas builds the multi-replica test shape -- two Services over one
+// database, one registry and one bus -- and returns the registry plus both
+// replicas. A registry runs its Init stage once, so the host's permission
+// declaration, the module's Register and both Attach calls share a single
+// DeclareAll window.
+func twoReplicas(t *testing.T, db *gorm.DB) (*pkgcore.ComponentRegistry, *Service, *Service) {
+	t.Helper()
+	reg := newPlainRegistry()
+	var replicaA, replicaB *Service
+	if err := componenttest.DeclareAll(reg,
+		func(r *pkgcore.ComponentRegistry) error { return r.Permissions.Add(testPermissions...) },
+		func(r *pkgcore.ComponentRegistry) error { return NewModule(db).Register(r) },
+		func(r *pkgcore.ComponentRegistry) error {
+			var err error
+			replicaA, err = attachReplica(t, db, r)
+			return err
+		},
+		func(r *pkgcore.ComponentRegistry) error {
+			var err error
+			replicaB, err = attachReplica(t, db, r)
+			return err
+		},
+	); err != nil {
+		t.Fatalf("declare and attach the two replicas: %v", err)
+	}
+	return reg, replicaA, replicaB
+}
+
 // attachReplica attaches one more Service to a shared database and
-// registry, the way a second process would.
-func attachReplica(t *testing.T, db *gorm.DB, reg *pkgcore.ComponentRegistry) *Service {
+// registry, the way a second process would. It is a declaration step: the
+// caller runs it inside the registry's one Init window.
+func attachReplica(t *testing.T, db *gorm.DB, reg *pkgcore.ComponentRegistry) (*Service, error) {
 	t.Helper()
 	module := NewModule(db)
 	svc, err := module.Attach(reg)
 	if err != nil {
-		t.Fatalf("Attach: %v", err)
+		return nil, err
 	}
 	t.Cleanup(func() {
 		if err := svc.Close(); err != nil {
 			t.Errorf("Close: %v", err)
 		}
 	})
-	return svc
+	return svc, nil
 }
 
 func TestService_OnRoleBindingChanged_ForeignPayload_IsNotAnError(t *testing.T) {
@@ -378,18 +412,22 @@ func TestService_PublishFailure_IsReportedAndTheCacheIsStillInvalidated(t *testi
 	// still be reported so the caller knows the other replicas were not
 	// told.
 	db := newRBACTestDB(t)
-	reg := componenttest.NewRegistry()
-	reg.Put(&failingBus{})
-	if err := reg.Permissions.Add(testPermissions...); err != nil {
-		t.Fatalf("declaring permissions: %v", err)
-	}
+	reg := componenttest.NewRegistryWithBus(&failingBus{})
 	module := NewModule(db)
-	if err := componenttest.DeclareInto(reg, module); err != nil {
-		t.Fatalf("Register: %v", err)
-	}
-	svc, err := module.Attach(reg)
-	if err != nil {
-		t.Fatalf("Attach: %v", err)
+	var svc *Service
+	if err := componenttest.DeclareAll(reg,
+		func(r *pkgcore.ComponentRegistry) error { return r.Permissions.Add(testPermissions...) },
+		module.Register,
+		func(r *pkgcore.ComponentRegistry) error {
+			attached, err := module.Attach(r)
+			if err != nil {
+				return err
+			}
+			svc = attached
+			return nil
+		},
+	); err != nil {
+		t.Fatalf("declare the host's permissions and attach the module: %v", err)
 	}
 	t.Cleanup(func() { _ = svc.Close() })
 

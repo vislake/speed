@@ -42,6 +42,30 @@ func newPlainRegistry() *pkgcore.ComponentRegistry {
 	return componenttest.NewRegistry()
 }
 
+// attachAfterDeclare runs m's Register and then its Attach inside the
+// registry's one Init window and returns the attached Service: the seats
+// accept writes only during Init, and a registry runs Init once, so the two
+// steps share a single DeclareAll.
+func attachAfterDeclare(t *testing.T, reg *pkgcore.ComponentRegistry, m *Module) *Service {
+	t.Helper()
+	var svc *Service
+	if err := componenttest.DeclareAll(reg,
+		m.Register,
+		func(r *pkgcore.ComponentRegistry) error {
+			attached, err := m.Attach(r)
+			if err != nil {
+				return err
+			}
+			svc = attached
+			return nil
+		},
+	); err != nil {
+		t.Fatalf("declare and attach: %v", err)
+	}
+	t.Cleanup(func() { _ = svc.Close() })
+	return svc
+}
+
 // declaringModule is a minimal pkgcore.Module standing in for a business
 // module that declares permissions of its own. It is what makes the
 // "Attach snapshots EVERY module's permissions, not just rbac's" assertion
@@ -75,7 +99,7 @@ func TestModule_Name_And_DependsOn(t *testing.T) {
 
 func TestModule_Register_DeclaresItsOwnPermissions(t *testing.T) {
 	reg := newPlainRegistry()
-	if err := NewModule(nil).Register(reg); err != nil {
+	if err := componenttest.DeclareInto(reg, NewModule(nil)); err != nil {
 		t.Fatalf("Register: %v", err)
 	}
 	want := []string{PermissionManage, PermissionRead} // the registrar returns them sorted
@@ -86,7 +110,7 @@ func TestModule_Register_DeclaresItsOwnPermissions(t *testing.T) {
 
 func TestModule_Register_DeclaresItsEventsAndAuditActions(t *testing.T) {
 	reg := newPlainRegistry()
-	if err := NewModule(nil).Register(reg); err != nil {
+	if err := componenttest.DeclareInto(reg, NewModule(nil)); err != nil {
 		t.Fatalf("Register: %v", err)
 	}
 
@@ -116,7 +140,7 @@ func TestModule_Register_MountsNoRoutes(t *testing.T) {
 	// belongs to authn's /me. A route appearing here would mean one of
 	// those boundaries was quietly reversed.
 	reg := newPlainRegistry()
-	if err := NewModule(nil).Register(reg); err != nil {
+	if err := componenttest.DeclareInto(reg, NewModule(nil)); err != nil {
 		t.Fatalf("Register: %v", err)
 	}
 	if got := reg.RoutesSeat().Routes(); len(got) != 0 {
@@ -131,7 +155,7 @@ func TestModule_Register_PerformsNoIO(t *testing.T) {
 	// pkgcore.Module's contract: Register declares, it never performs I/O.
 	// A nil database is the sharpest possible proof -- any query would
 	// panic rather than merely fail.
-	if err := NewModule(nil).Register(newPlainRegistry()); err != nil {
+	if err := componenttest.DeclareInto(newPlainRegistry(), NewModule(nil)); err != nil {
 		t.Fatalf("Register on a nil-database module: %v", err)
 	}
 }
@@ -144,13 +168,19 @@ func TestModule_Attach_FreezesEveryModulesPermissions(t *testing.T) {
 	m := NewModule(newRBACTestDB(t))
 	host := &declaringModule{name: "notes", perms: []string{"notes:read", "notes:write"}}
 
-	reg, err := componenttest.DeclareModules(m, host)
-	if err != nil {
-		t.Fatalf("Bootstrap: %v", err)
-	}
-	svc, err := m.Attach(reg)
-	if err != nil {
-		t.Fatalf("Attach: %v", err)
+	reg := componenttest.NewRegistry()
+	var svc *Service
+	if err := componenttest.DeclareAll(reg, m.Register, host.Register,
+		func(r *pkgcore.ComponentRegistry) error {
+			attached, err := m.Attach(r)
+			if err != nil {
+				return err
+			}
+			svc = attached
+			return nil
+		},
+	); err != nil {
+		t.Fatalf("declare the modules and attach: %v", err)
 	}
 	t.Cleanup(func() { _ = svc.Close() })
 
@@ -170,14 +200,7 @@ func TestModule_Attach_TwiceReportsAlreadyAttached(t *testing.T) {
 	// legal, that is a security difference rather than a cosmetic one.
 	m := NewModule(newRBACTestDB(t))
 	reg := newPlainRegistry()
-	if err := componenttest.DeclareInto(reg, m); err != nil {
-		t.Fatalf("Register: %v", err)
-	}
-	first, err := m.Attach(reg)
-	if err != nil {
-		t.Fatalf("first Attach: %v", err)
-	}
-	t.Cleanup(func() { _ = first.Close() })
+	_ = attachAfterDeclare(t, reg, m)
 
 	second, err := m.Attach(reg)
 	if second != nil {
@@ -207,14 +230,7 @@ func TestModule_Options_ReachTheService(t *testing.T) {
 	resolver := &stubResolver{}
 	m := NewModule(newRBACTestDB(t), WithSubtreeResolver(resolver), WithCacheTTL(5*time.Second))
 	reg := newPlainRegistry()
-	if err := componenttest.DeclareInto(reg, m); err != nil {
-		t.Fatalf("Register: %v", err)
-	}
-	svc, err := m.Attach(reg)
-	if err != nil {
-		t.Fatalf("Attach: %v", err)
-	}
-	t.Cleanup(func() { _ = svc.Close() })
+	svc := attachAfterDeclare(t, reg, m)
 
 	if svc.subtree != SubtreeResolver(resolver) {
 		t.Fatalf("the wired SubtreeResolver did not reach the Service (got %#v)", svc.subtree)
@@ -236,14 +252,7 @@ func TestModule_NoSubtreeResolver_IsASupportedConfiguration(t *testing.T) {
 	// widen to the tenant.
 	m := NewModule(newRBACTestDB(t))
 	reg := newPlainRegistry()
-	if err := componenttest.DeclareInto(reg, m); err != nil {
-		t.Fatalf("Register: %v", err)
-	}
-	svc, err := m.Attach(reg)
-	if err != nil {
-		t.Fatalf("Attach without a resolver: %v", err)
-	}
-	t.Cleanup(func() { _ = svc.Close() })
+	svc := attachAfterDeclare(t, reg, m)
 	if svc.subtree != nil {
 		t.Fatalf("subtree = %#v, want nil when no host wired one", svc.subtree)
 	}

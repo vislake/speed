@@ -359,12 +359,7 @@ func TestService_OnMemberRemoved_ReapOnOneReplica_ConvergesTheOther(t *testing.T
 	// event reaches it), must stop answering "granted" on the very next
 	// call, not one TTL later.
 	db := newRBACTestDB(t)
-	reg := newPlainRegistry()
-	if err := reg.Permissions.Add(testPermissions...); err != nil {
-		t.Fatalf("declaring permissions: %v", err)
-	}
-	replicaA := attachReplica(t, db, reg)
-	replicaB := attachReplica(t, db, reg)
+	reg, replicaA, replicaB := twoReplicas(t, db)
 
 	sub := Subject{TenantID: "tenant-a", UserID: "user-1"}
 	grant(t, replicaA, sub, "reader", Scope{}, "notes:read")
@@ -811,12 +806,7 @@ func TestService_OnNodeDeleted_ReapOnOneReplica_ConvergesTheOther(t *testing.T) 
 	// not run the reap itself, must stop answering "granted" on the very
 	// next call, not one TTL later.
 	db := newRBACTestDB(t)
-	reg := newPlainRegistry()
-	if err := reg.Permissions.Add(testPermissions...); err != nil {
-		t.Fatalf("declaring permissions: %v", err)
-	}
-	replicaA := attachReplica(t, db, reg)
-	replicaB := attachReplica(t, db, reg)
+	reg, replicaA, replicaB := twoReplicas(t, db)
 
 	sub := Subject{TenantID: "tenant-a", UserID: "user-1"}
 	grant(t, replicaA, sub, "reader", Scope{NodeID: "node-1"}, "notes:read")
@@ -1247,12 +1237,7 @@ func TestService_OnMemberRestored_RestoreOnOneReplica_ConvergesTheOther(t *testi
 	// the revoked (denied) decision after the removal, must answer
 	// "granted" on the very next call, not one TTL later.
 	db := newRBACTestDB(t)
-	reg := newPlainRegistry()
-	if err := reg.Permissions.Add(testPermissions...); err != nil {
-		t.Fatalf("declaring permissions: %v", err)
-	}
-	replicaA := attachReplica(t, db, reg)
-	replicaB := attachReplica(t, db, reg)
+	reg, replicaA, replicaB := twoReplicas(t, db)
 
 	sub := Subject{TenantID: "tenant-a", UserID: "user-1"}
 	grant(t, replicaA, sub, "reader", Scope{}, "notes:read")

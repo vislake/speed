@@ -170,12 +170,7 @@ func TestService_EnsureBuiltinRoles_ConcurrentSeeds_NeitherFailsTheBoot(t *testi
 	// replica B's whole real EnsureBuiltinRoles runs there, seeding all
 	// three roles before A's own create.
 	db := newRBACTestDB(t)
-	reg := newPlainRegistry()
-	if err := reg.Permissions.Add(testPermissions...); err != nil {
-		t.Fatalf("declaring permissions: %v", err)
-	}
-	replicaA := attachReplica(t, db, reg)
-	replicaB := attachReplica(t, db, reg)
+	_, replicaA, replicaB := twoReplicas(t, db)
 
 	ctx := tenantCtx("tenant-a")
 	replicaA.beforeRoleCreate = func() {

@@ -46,16 +46,22 @@ func Example() {
 		return
 	}
 
-	registry, err := componenttest.DeclareModules(module)
-	if err != nil {
-		fmt.Println("bootstrap:", err)
-		return
-	}
-
-	// Exactly once, after Bootstrap: this is what freezes the catalog.
-	svc, err := module.Attach(registry)
-	if err != nil {
-		fmt.Println("attach:", err)
+	// The module's Register and its Attach share the assembly's one Init
+	// window: the seats accept writes only during Init, and Attach is what
+	// freezes the catalog and installs the invalidation subscriptions.
+	registry := componenttest.NewRegistry()
+	var svc *rbac.Service
+	if err := componenttest.DeclareAll(registry, module.Register,
+		func(r *pkgcore.ComponentRegistry) error {
+			attached, attachErr := module.Attach(r)
+			if attachErr != nil {
+				return attachErr
+			}
+			svc = attached
+			return nil
+		},
+	); err != nil {
+		fmt.Println("declare and attach:", err)
 		return
 	}
 	// Close stops the decision cache's janitor at shutdown.
@@ -94,15 +100,19 @@ func ExampleService_DeclaredPermissions() {
 		return
 	}
 
-	registry, err := componenttest.DeclareModules(module)
-	if err != nil {
-		fmt.Println("bootstrap:", err)
-		return
-	}
-
-	svc, err := module.Attach(registry)
-	if err != nil {
-		fmt.Println("attach:", err)
+	registry := componenttest.NewRegistry()
+	var svc *rbac.Service
+	if err := componenttest.DeclareAll(registry, module.Register,
+		func(r *pkgcore.ComponentRegistry) error {
+			attached, attachErr := module.Attach(r)
+			if attachErr != nil {
+				return attachErr
+			}
+			svc = attached
+			return nil
+		},
+	); err != nil {
+		fmt.Println("declare and attach:", err)
 		return
 	}
 	defer func() { _ = svc.Close() }()
@@ -441,11 +451,21 @@ func newExampleService(ctx context.Context, dsn string, resolver rbac.SubtreeRes
 		return nil, err
 	}
 
-	registry, err := componenttest.DeclareModules(module, notesLikeModule{})
-	if err != nil {
+	registry := componenttest.NewRegistry()
+	var svc *rbac.Service
+	if err = componenttest.DeclareAll(registry, module.Register, notesLikeModule{}.Register,
+		func(r *pkgcore.ComponentRegistry) error {
+			attached, attachErr := module.Attach(r)
+			if attachErr != nil {
+				return attachErr
+			}
+			svc = attached
+			return nil
+		},
+	); err != nil {
 		return nil, err
 	}
-	return module.Attach(registry)
+	return svc, nil
 }
 
 // notesLikeModule stands in for a business module that declares a

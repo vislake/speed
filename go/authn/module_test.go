@@ -257,7 +257,7 @@ func TestModule_RegisterDeclaresItsSurface(t *testing.T) {
 func TestModule_Register_DeclaresTheSignInEnumerationPurpose(t *testing.T) {
 	t.Parallel()
 
-	if err := newTestModule(t).Register(newTestRegistry()); err != nil {
+	if err := componenttest.DeclareInto(newTestRegistry(), newTestModule(t)); err != nil {
 		t.Fatalf("Register() error = %v", err)
 	}
 	if _, err := pkgcore.WithSystemContext(context.Background(), pkgcore.SystemReason{
@@ -299,7 +299,7 @@ func TestModule_RegisterDoesNoIO(t *testing.T) {
 		t.Fatalf("close the database: %v", err)
 	}
 
-	if err := module.Register(newTestRegistry()); err != nil {
+	if err := componenttest.DeclareInto(newTestRegistry(), module); err != nil {
 		t.Fatalf("Register() error = %v against a closed database; Register must only declare, never query", err)
 	}
 }
@@ -404,7 +404,9 @@ func TestConfigItems_AreValidDeclarations(t *testing.T) {
 	for _, item := range configItems() {
 		t.Run(item.Key, func(t *testing.T) {
 			reg := newTestRegistry()
-			if err := reg.Config.Add(item); err != nil {
+			if err := componenttest.Declare(reg, func(r *pkgcore.ComponentRegistry) error {
+				return r.Config.Add(item)
+			}); err != nil {
 				t.Errorf("Add(%+v) error = %v", item, err)
 				if errors.Is(err, pkgcore.ErrInvalidConfigItem) {
 					t.Log("the declaration contradicts itself; see pkgcore.ConfigItem's field documentation")

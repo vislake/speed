@@ -44,10 +44,12 @@ func newTestHandler(t *testing.T, extra ...Option) (*Handler, *serviceFixture) {
 // The bus and pkgcore.ComponentRegistry built here are deliberately separate from
 // serviceFixture's own internal one (newServiceFixtureWithKV's local
 // "bus" variable, which Service publishes its OWN business events on):
-// nothing about testing Handler.recordAudit requires sharing it, and a
-// real *pkgcore.ComponentRegistry (pkgcore.NewRegistry) is the same construction
-// module.go's own Register runs against in production, giving a real
-// AuditActionRegistrar rather than a hand-rolled stand-in.
+// nothing about testing Handler.recordAudit requires sharing it, and the
+// registry is the same construction module.go's own Register runs against
+// in production, giving a real AuditActionRegistrar rather than a
+// hand-rolled stand-in. The registry carries this test's bus as its one
+// EventBus value, so a declaration body that reads the bus back resolves
+// exactly the bus the returned Handler publishes on.
 func newAuditTestHandler(t *testing.T, extra ...Option) (*Handler, *serviceFixture, *testutil.EventRecorder) {
 	t.Helper()
 	f := newServiceFixture(t, extra...)
@@ -56,9 +58,10 @@ func newAuditTestHandler(t *testing.T, extra ...Option) (*Handler, *serviceFixtu
 	recorder := testutil.NewEventRecorder()
 	recorder.Subscribe(bus, audit.EventRecorded)
 
-	reg := componenttest.NewRegistry()
-	reg.Put(bus)
-	if err := reg.AuditActions.Add(auditActions...); err != nil {
+	reg := componenttest.NewRegistryWithBus(bus)
+	if err := componenttest.Declare(reg, func(r *pkgcore.ComponentRegistry) error {
+		return r.AuditActions.Add(auditActions...)
+	}); err != nil {
 		t.Fatalf("AuditActions.Add() error = %v", err)
 	}
 	return NewHandler(f.svc, bus, reg.AuditActions), f, recorder

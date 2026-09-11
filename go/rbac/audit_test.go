@@ -20,12 +20,14 @@ import (
 // declared audit vocabulary and its emission sites cannot drift apart.
 
 // recordAuditEvents subscribes an eventRecorder to every EventRecorded the
-// module's audit emissions publish. The in-memory bus delivers
-// synchronously inside the emitting write, so when the write returns, the
-// recorder holds every row it produced.
+// module's audit emissions publish, on the registry's own bus value -- an
+// observation of the finished assembly, not a declaration, so it needs no
+// Init window. The in-memory bus delivers synchronously inside the emitting
+// write, so when the write returns, the recorder holds every row it
+// produced.
 func recordAuditEvents(reg *pkgcore.ComponentRegistry) *eventRecorder {
 	rec := &eventRecorder{}
-	reg.Events.Subscribe(audit.EventRecorded, rec.record)
+	reg.EventBus().Subscribe(audit.EventRecorded, rec.record)
 	return rec
 }
 

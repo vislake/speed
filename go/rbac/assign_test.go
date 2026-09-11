@@ -43,11 +43,14 @@ func (r *eventRecorder) ofType(eventType string) []pkgcore.Event {
 	return out
 }
 
-// recordEvents subscribes a recorder to every event this module publishes.
+// recordEvents subscribes a recorder to every event this module publishes,
+// on the registry's own bus value -- an observation of the finished
+// assembly, not a declaration, so it needs no Init window.
 func recordEvents(reg *pkgcore.ComponentRegistry) *eventRecorder {
 	rec := &eventRecorder{}
+	bus := reg.EventBus()
 	for _, eventType := range []string{EventRoleBindingAssigned, EventRoleBindingRevoked, EventRoleBindingRestored, EventRoleChanged} {
-		reg.Events.Subscribe(eventType, rec.record)
+		bus.Subscribe(eventType, rec.record)
 	}
 	return rec
 }

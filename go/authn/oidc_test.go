@@ -1232,8 +1232,7 @@ func TestSSOService_SaveConfig_RecordsTheWriteAsAuditActionSSOConfigure(t *testi
 	bus := pkgcore.NewMemoryEventBus()
 	recorder := testutil.NewEventRecorder()
 	recorder.Subscribe(bus, audit.EventRecorded)
-	reg := componenttest.NewRegistry()
-	reg.Put(bus)
+	reg := componenttest.NewRegistryWithBus(bus)
 	if err := componenttest.DeclareInto(reg, module); err != nil {
 		t.Fatalf("Register() error = %v", err)
 	}

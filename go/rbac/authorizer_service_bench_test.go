@@ -76,16 +76,21 @@ func newBenchService(b *testing.B) *Service {
 	}
 
 	reg := componenttest.NewRegistry()
-	if addErr := reg.Permissions.Add(testPermissions...); addErr != nil {
-		b.Fatalf("declaring the host's permissions: %v", addErr)
-	}
 	module := NewModule(db)
-	if regErr := componenttest.DeclareInto(reg, module); regErr != nil {
-		b.Fatalf("Register: %v", regErr)
-	}
-	svc, attachErr := module.Attach(reg)
-	if attachErr != nil {
-		b.Fatalf("Attach: %v", attachErr)
+	var svc *Service
+	if err := componenttest.DeclareAll(reg,
+		func(r *pkgcore.ComponentRegistry) error { return r.Permissions.Add(testPermissions...) },
+		module.Register,
+		func(r *pkgcore.ComponentRegistry) error {
+			attached, err := module.Attach(r)
+			if err != nil {
+				return err
+			}
+			svc = attached
+			return nil
+		},
+	); err != nil {
+		b.Fatalf("declare the host's permissions and attach the module: %v", err)
 	}
 	b.Cleanup(func() {
 		if err := svc.Close(); err != nil {

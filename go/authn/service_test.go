@@ -1054,8 +1054,7 @@ func TestService_Refresh_ActualReplay_LeavesADurableAuditRecord(t *testing.T) {
 	bus := pkgcore.NewMemoryEventBus()
 	recorder := testutil.NewEventRecorder()
 	recorder.Subscribe(bus, audit.EventRecorded, EventSessionReplayDetected, EventSessionRevoked)
-	reg := componenttest.NewRegistry()
-	reg.Put(bus)
+	reg := componenttest.NewRegistryWithBus(bus)
 	if err := componenttest.DeclareInto(reg, module); err != nil {
 		t.Fatalf("Register() error = %v", err)
 	}
