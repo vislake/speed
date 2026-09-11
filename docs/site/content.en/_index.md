@@ -8,7 +8,7 @@ A modular monolith distributed as libraries: independently released Go
 modules and npm packages that business projects pull in via `go get` /
 `npm install` and compile into one binary. Pick the modules your SaaS
 needs — identity, tenancy, notifications, billing, AI, compliance —
-and compose them through a kernel assembly, instead of building each
+and compose them through one assembly, instead of building each
 layer yourself.
 
 This site has two main sections.

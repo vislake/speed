@@ -33,10 +33,10 @@ description: saasctl 生成项目的日常维护——它可以运行的两种�
 
 ## `db migrate`——在启动前备好 schema
 
-生成的应用每次启动都会自己应用迁移(`the assembly` 的 `Apply`,
-经 `schema_migrations` 台账幂等)。`saasctl db migrate` 是这一步的
-运维方手动版本,用于让 schema 在任何进程运行前就位——预置好 schema
-的首次启动、脚本化的开通步骤、CI 运行。
+生成的应用每次启动都会自己应用迁移——被选的 db 组件在装配的
+`Verify` 阶段运行它们,经 `schema_migrations` 台账幂等。
+`saasctl db migrate` 是这一步的运维方手动版本,用于让 schema 在任何
+进程运行前就位——预置好 schema 的首次启动、脚本化的开通步骤、CI 运行。
 
 ```sh
 saasctl db migrate                 # 迁移 ./go.mod 所属项目
@@ -46,10 +46,10 @@ saasctl db migrate ../my-app/go.mod
 它应用项目 `go.mod` 所要求、恰好带迁移文件的那些模块——`authn`、
 `config`、`org`、`pki`、`rbac`,按字母序——的 SQL 迁移,每个模块一个
 事务,每个文件落地时都记录进 `schema_migrations`。完整的
-`authn+org+rbac` 组合应用 33 个文件(`authn` 11、`config` 1、`org` 9、
+`authn+org+rbac` 组合应用 34 个文件(`authn` 12、`config` 1、`org` 9、
 `pki` 9、`rbac` 3),数目随各模块自己的迁移集合变动。重跑会报告数据库
-已是最新,对着迁移过的文件启动则让启动 `Apply` 空转——先 CLI 后启动
-与只靠启动两条路结果一致。
+已是最新,对着迁移过的文件启动则其启动迁移应用无事可做——先 CLI 后
+启动与只靠启动两条路结果一致。
 
 拒绝都点名原因:没有 speed require 的 `go.mod` 多半不是生成项目;
 已存在但没有 `schema_migrations` 台账的数据库文件会被拒绝,而不是去
@@ -64,11 +64,11 @@ saasctl config print ../my-app/go.mod
 ```
 
 `config print` 展示生成项目启动配置的解析结果:部署形态、端口、生效的
-SQLite 路径、五份密钥材料与可选的基础设施变量——生成
+SQLite 路径、六份密钥材料与可选的基础设施变量——生成
 `cmd/server/config.go` 解析的每个变量一行,显示解析出的值与来源(是哪
 个变量带来的,还是回退到了哪个默认值)。SQLite 路径行显示生效文件,
 所以锚定到项目目录的相对路径会按应用实际会打开的文件来报告。密钥行
-——五份密钥材料、S3 密钥、SMTP 密码、SMS 网关 URL——无论环境里是什么
+——六份密钥材料、S3 密钥、SMTP 密码、SMS 网关 URL——无论环境里是什么
 都显示 `[redacted]`。输入非法时的拒绝方式与应用自身拒绝启动的方式
 完全一致。改密钥之前、排查起不来的启动之前,先跑它。
 

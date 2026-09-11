@@ -7,7 +7,7 @@ weight: 1
 # storage
 
 storage 是 speed 的媒体对象模块:描述一个租户已存对象的元数据住在
-数据库里,字节住在内核解析的 `ObjectStore` 里,三步上传协议带服务
+数据库里,字节住在装配解析的 `ObjectStore` 里,三步上传协议带服务
 端复验把字节送进来——以实际到达的字节为权威,上传者的声明不算。
 
 ## 它做什么
@@ -59,7 +59,7 @@ m := storage.NewModule(db,
     storage.WithQueue(queue),           // 一个 jobs.Queue——没有它 Register 直接拒绝
     storage.WithMaxUploadBytes(10<<20), // 可选:单对象上限
 )
-// 把 m 交给 the assembly 的模块集;ObjectStore 与 EventBus
+// 把 m 交给组合选出的组件集;ObjectStore 与 EventBus
 // 来自已解析的注册表,每次调用现读。
 
 svc := m.ObjectService()

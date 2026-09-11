@@ -31,9 +31,10 @@ principal 变成每个租户级仓库都需要的租户上下文。你的路由�
 
 ## 最少集成步骤
 
-1. **把模块接进你的内核。** 在 `the assembly` 的模块集里加入
+1. **把模块选进你的组合。** 在组合配置选择的组件集里加入
    `authn`、`rbac`、`org`(以及作为 authn 密钥源的 `pki`)。
-   `dbkit.MigrationRegistry` 会应用每个模块自己的迁移;参考应用
+   每个模块的组件携带自己的迁移,由被选的 db 组件在装配的 `Verify`
+   阶段应用;参考应用
    `examples/reference-app/internal/app/server.go` 的启动注释逐行演示
    了确切接线顺序。
 2. **给 authn 必选的接缝。** `authn.NewModule` 急切校验选项:`KeySource`
@@ -47,9 +48,9 @@ principal 变成每个租户级仓库都需要的租户上下文。你的路由�
    principal 判定,被冒名的身份或租户自己的 Owner 角色都绝不能抵达
    它。其余一切路由用下游的
    `tenancy.Middleware(authn.NewPrincipalResolver())` 保护。
-4. **用权限门护住路由。** rbac 在 `the assembly` 之后执行
-   `Attach`(冻结所有模块声明的权限词汇表——授予词汇表外的任何东西
-   都会被拒绝)。用 `rbac.RequirePermission("notes", "write")` 或其
+4. **用权限门护住路由。** rbac 在装配的声明轮次之内(或紧随其后)
+   执行 `Attach`(冻结所有模块声明的权限词汇表——授予词汇表外的任何
+   东西都会被拒绝)。用 `rbac.RequirePermission("notes", "write")` 或其
    `*Func` 变体护住操作;org 导出它自己四条路由声明的权限
    (`PermissionRead`、`PermissionManage`、`PermissionInviteMember`、
    `PermissionRemoveMember`)供你同样使用。
@@ -98,6 +99,7 @@ import (
 	"github.com/vislake/speed/go/dbkit"
 	_ "github.com/vislake/speed/go/dbkit/dialect/sqlite" // 注册 DialectSQLite
 	"github.com/vislake/speed/go/pkgcore"
+	"github.com/vislake/speed/go/pkgcore/componenttest"
 	"github.com/vislake/speed/go/pki"
 	"github.com/vislake/speed/go/rbac"
 	"github.com/vislake/speed/go/tenancy"
@@ -161,16 +163,25 @@ func main() {
 	rbacModule := rbac.NewModule(db)
 
 	migrations := dbkit.NewMigrationRegistry()
-	for _, m := range []the module contract{pkiModule, authnModule, rbacModule} {
-		must(migrations.Register(m))
-	}
+	must(migrations.Register(pkiModule))
+	must(migrations.Register(authnModule))
+	must(migrations.Register(rbacModule))
 	must(migrations.Apply(ctx, db, dbkit.DialectSQLite))
 
-	reg := pkgcore.NewComponentRegistry()
-must(app.Assemble(ctx, reg, app.LoadSpec{Host: &hostConfig, Options: loaderOpts}))
-	must(err)
-	az, err := rbacModule.Attach(reg) // 冻结权限目录
-	must(err)
+	// 声明与 rbac 的 Attach 都在装配的 Init 窗口内运行——声明席只在
+	// 这一阶段接受写入,Attach 的订阅与任务处理器接线也只能落在这里。
+	// DeclareAll 为手工构造的模块驱动这个窗口,和各模块自己的示例套件
+	// 相同;配置驱动的宿主则通过 app.Assemble 驱动其组合选出的组件。
+	reg := componenttest.NewRegistry()
+	var az *rbac.Service
+	must(componenttest.DeclareAll(reg,
+		pkiModule.Register, authnModule.Register, rbacModule.Register, notesLikeModule{}.Register,
+		func(r *pkgcore.ComponentRegistry) error {
+			var attachErr error
+			az, attachErr = rbacModule.Attach(r) // 冻结权限目录
+			return attachErr
+		},
+	))
 	svc := authnModule.Service()
 
 	// 密码登录:Register 建号,Login 校验密码并签发令牌对;声明里的
@@ -254,8 +265,9 @@ must(app.Assemble(ctx, reg, app.LoadSpec{Host: &hostConfig, Options: loaderOpts}
 (`403`,信封带 `rbac.permission_denied` 与 `notes:write` 参数);匿名
 请求到不了权限门——`tenancy.Middleware` 因解析不出租户而失败关闭
 (`403`);校验不过的令牌由 `authn.Middleware` 自己回答 `401`,信封带
-`authn.token_invalid`。程序启动行——内核的接缝组合日志、以及内存接
-缝不跨重启存活的 `WARN`——先打到 stderr,再输出上面的 stdout 行。
+`authn.token_invalid`。(组合部署还会先把装配自己的能力校验警告——
+内存接缝不跨重启存活的 `WARN` 行——打到 stderr;这个手工接线的程序
+直接驱动声明窗口,stderr 上不写任何东西。)
 
 **在参考应用中看到它。** 参考应用正是这样门控自家 notes 路由的:
 [`internal/app/demo/demo_subject.go`](https://github.com/vislake/speed/blob/main/examples/reference-app/internal/app/demo/demo_subject.go)

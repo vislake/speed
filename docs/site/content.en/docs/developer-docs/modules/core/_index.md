@@ -10,7 +10,7 @@ bookCollapseSection: true
 The seven modules of the core group are the dependency floor of every
 speed-based binary. The division of labour, in one sentence each:
 
-- **pkgcore** — the assembly contract (`Module`/`ComponentRegistry`/`Component`),
+- **pkgcore** — the assembly contract (`ComponentRegistry`/`Component`),
   the infrastructure seam interfaces with their N implementations and
   capability declarations, the tenant-context primitives, structured
   errors and the message catalog. It imports no other speed module.
@@ -55,15 +55,16 @@ The seven split into two shapes, and knowing which shape a module has
 tells you how you use it:
 
 - **Assembly-composed modules** — `config` and `jobs` (and every module
-  above the core group) implement `the module contract` and contribute
+  above the core group) ship a `Component` descriptor and contribute
   routes, config schema, permissions, events and job handlers through
-  one `Register` call; the kernel assembles them. `config` additionally
-  needs its `Attach` call after bootstrap, because its schema is folded
-  from the registry's *combined* declarations.
-- **Used directly, not through the kernel** — `tenancy`'s middleware
+  one `Register` declaration body; the assembly drives them. `config`
+  additionally completes its `Attach` once every component's `Init` has
+  run, because its schema is folded from the registry's *combined*
+  declarations.
+- **Used directly, not through the assembly** — `tenancy`'s middleware
   guards HTTP entry points, `observability.Init` runs at process
   startup, `jobs` queues are constructed and started by the host (the
-  queue seam deliberately has no kernel seat), and `ratelimit` is a
+  queue deliberately has no declaration seat), and `ratelimit` is a
   pure library with nothing to register.
 
 ## The design threads that run through the group

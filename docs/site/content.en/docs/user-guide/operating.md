@@ -38,12 +38,12 @@ modes.
 
 ## `db migrate` — apply the schema ahead of a boot
 
-The generated app applies its own migrations at every startup
-(`the assembly`'s `Apply`, idempotent through the
-`schema_migrations` ledger). `saasctl db migrate` is the operator-driven
-twin of that step, for when you want the schema in place before any
-process runs — a prepared-schema first boot, a scripted provisioning
-step, CI.
+The generated app applies its own migrations at every startup — the
+selected db component runs them in the assembly's `Verify` stage,
+idempotent through the `schema_migrations` ledger. `saasctl db migrate`
+is the operator-driven twin of that step, for when you want the schema
+in place before any process runs — a prepared-schema first boot, a
+scripted provisioning step, CI.
 
 ```sh
 saasctl db migrate                 # migrates ./go.mod's project
@@ -54,11 +54,11 @@ It applies the SQL migrations of exactly the migration-shipping modules
 the project's `go.mod` requires — `authn`, `config`, `org`, `pki` and
 `rbac`, in alphabetical order — one transaction per module, every file
 recorded in `schema_migrations` as it lands. The full
-`authn+org+rbac` selection applies 33 files (`authn` 11, `config` 1,
+`authn+org+rbac` selection applies 34 files (`authn` 12, `config` 1,
 `org` 9, `pki` 9, `rbac` 3), the counts moving with the modules' own
-migration sets. A re-run reports the database up to date,
-and a boot against the migrated file no-ops its startup `Apply` —
-CLI-then-boot and boot-only agree.
+migration sets. A re-run reports the database up to date, and a boot
+against the migrated file finds its startup migration application a
+no-op — CLI-then-boot and boot-only agree.
 
 Refusals name their reason: a `go.mod` with no speed requires is
 probably not a generated project, and an existing database file
@@ -77,13 +77,13 @@ saasctl config print ../my-app/go.mod
 
 `config print` renders how the generated project's bootstrap
 configuration resolves: the deployment mode, the port, the effective
-SQLite path, the five key materials, and the optional infrastructure
+SQLite path, the six key materials, and the optional infrastructure
 variables — one row per variable the generated `cmd/server/config.go`
 parses, showing the resolved value and its provenance (the variable
 that carried it, or the default it fell back to). The SQLite path row
 shows the effective file, so a relative path anchored to the project
 directory is reported as the file the app would actually open. Secret
-rows — the five key materials, the S3 secret key, the SMTP password,
+rows — the six key materials, the S3 secret key, the SMTP password,
 the SMS gateway URL — render `[redacted]` whatever the environment
 holds. Malformed input is refused exactly when the app itself would
 refuse to boot. Run it before changing secrets or debugging a boot

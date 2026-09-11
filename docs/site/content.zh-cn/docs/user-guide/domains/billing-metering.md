@@ -51,7 +51,7 @@ flowchart LR
 
 ## Compliance:保留、擦除与导出
 
-`compliance` 自己没有任何表——它的三个服务通过注册到内核
+`compliance` 自己没有任何表——它的三个服务通过注册到注册表
 `Retention` 席位上的参与者操作*你的*数据:
 
 - `RetentionService` 清扫各参与者超过保留窗口的数据。

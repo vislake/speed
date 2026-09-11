@@ -72,8 +72,8 @@ a := admin.NewModule(db,
     admin.WithMetering(meteringModule),     // 可选:用量汇总维度
     admin.WithBilling(billingModule),       // 可选,与 metering 相互独立
 )
-// 放进你的 the assembly 模块集。然后,装配返回之后——
-// rbac.Service 要等 rbac 自己的 post-assembly Attach 冻结目录才存在:
+// 放进你的组合选出的组件集。然后,装配返回之后——
+// rbac.Service 要等 rbac 的 Attach 在装配的 Init 窗口内冻结目录才存在:
 if err := a.AttachRBAC(rbacService); err != nil { /* 处理 */ }
 ```
 

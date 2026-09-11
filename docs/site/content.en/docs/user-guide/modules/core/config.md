@@ -20,7 +20,7 @@ declaration (the component descriptor's `BootstrapKeys`), resolved by the genera
 a zero-dependency package this module never imports), and its
 key-material derivation convention — one purpose string per declared
 key path (`pkgcore.BootstrapKeyPurpose`), composed with
-`dbkit.DeriveKey` — lives with that seat and toolkit. This module
+`dbkit.DeriveBootstrapKey` — lives with that declaration and toolkit. This module
 owns the runtime layer, and it is required for any multi-tenant host.
 
 Modules declare items and feature flags on the registry during
@@ -32,11 +32,11 @@ and serves the effective values.
 ## When to choose it
 
 Always — it is among the always-on modules with no off switch. Its
-wiring differs from a plain kernel module in one load-bearing way:
+wiring differs from a plain module in one load-bearing way:
 registration alone is not enough. `Register` declares what never needs
-the assembled registry; `Attach` — called exactly once, **after**
-`the assembly` returns — folds the registry's *combined* item and
-flag declarations into the schema, and demands what registration must
+the assembled registry; `Attach` — called exactly once, once every
+component's `Init` turn has run — folds the registry's *combined* item
+and flag declarations into the schema, and demands what registration must
 not touch: a migrated `configs` table, a `dbkit.Cipher` whenever any
 registered item is `Sensitive` (`ErrCipherRequired` otherwise), and a
 poll interval. The `*Service` `Attach` returns is what the host keeps.

@@ -18,7 +18,7 @@ webhook 投递(`integration`)都经它入队。
 ## 何时选用
 
 任何不该在 HTTP 请求内同步跑的操作——比一个请求该活的时间更长、
-需要重试、调用方不该等它的工作。宿主按部署形态在内核启动时选实现
+需要重试、调用方不该等它的工作。宿主按部署形态在装配启动时选实现
 (业务代码里绝不分支):standalone 用 `NewStandaloneQueue` 配
 `dbkit.Open` 的数据库,分布式用 `asynq.NewQueue(redisOpt)`。业务
 代码只见 `Queue` 接口——两种形态下 `Task`/`EnqueueOption` 与

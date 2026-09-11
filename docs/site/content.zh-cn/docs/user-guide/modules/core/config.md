@@ -11,11 +11,12 @@ speed 的动态配置模块:schema 先行、数据库承载的设置库,值可�
 值存在 `configs` 表里,分两层作用域,`system`(平台级)→ `tenant`
 (逐租户覆盖);读取从窄层回落到宽层,再落到 schema 默认值。配置的
 另一层——进程启动的引导输入(旗标、环境变量与文件)——不在本模块
-职责内:声明在 `pkgcore` 的 bootstrap 席位、由通用加载器
+职责内:声明在 `pkgcore` 的引导声明面上(组件描述符的 `BootstrapKeys`)、
+由通用加载器
 `pkgcore/config` 解析(宿主自己的目标结构体驱动),该零依赖包本模块
 绝不导入;声明键材料的派生约定——每个键路径一个 purpose 串
-(`pkgcore.BootstrapKeyPurpose`),配合 `dbkit.DeriveKey`——也在席位
-与工具箱侧。本模块在席位上只声明一枚自己的键(`config.cipher_key`),
+(`pkgcore.BootstrapKeyPurpose`),配合 `dbkit.DeriveBootstrapKey`——
+也在声明与工具箱侧。本模块在该声明上只声明一枚自己的键(`config.cipher_key`),
 不拥有该层任何机制。它拥有运行时层,对多租户宿主是必需的:任何其他
 模块的行为都可能受它服务的开关或限额支配。
 
@@ -26,9 +27,9 @@ schema,运行时解析开关依赖,并服务有效值。
 
 ## 何时选用
 
-永远——它属于常开模块,没有关闭开关。它的接线与普通内核模块有一
+永远——它属于常开模块,没有关闭开关。它的接线与普通模块有一
 个承重差异:光注册不够。`Register` 声明不需要已组装注册器的东西;
-`Attach`——恰好一次,在 `the assembly` **返回之后**——把注册器
+`Attach`——恰好一次,在每个组件的 `Init` 轮次都跑完之后——把注册器
 *合并*后的配置项与开关声明折进 schema,并要求注册期不得触碰的
 运行时部件:迁移好的 `configs` 表、任何已注册项为 `Sensitive` 时
 的 `dbkit.Cipher`(否则 `ErrCipherRequired`)、以及轮询间隔。

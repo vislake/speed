@@ -55,7 +55,7 @@ defer q.Close(ctx)
 ## 消息面:notification
 
 每种通知类型是**声明的,不是存模板**:你的模块在 `Register` 期间把
-类型注册到内核注册表(`reg.NotificationsSeat().Add(...)`),每个类型带其偏
+类型注册到注册表的通知席位(`reg.NotificationsSeat().Add(...)`),每个类型带其偏
 好组、默认通道与收件人能否退订(验证码是事务性的,不可退订)。文案
 存在声明模块自己的双语 locale 包里,投递时按收件人 locale 渲染——
 绝不在注册时捕获。

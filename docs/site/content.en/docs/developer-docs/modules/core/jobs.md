@@ -39,9 +39,10 @@ never knows which implementation it runs under.
 - **`StandaloneQueue` holds no `*gorm.DB` of its own making** — the
   caller passes one from `dbkit.Open`, and the module never calls
   `dbkit.Open` or imports `dbkit.Repository[T]`.
-- **The queue seam deliberately has no kernel seat** — no registry
-  entry, no preset name; the host constructs and starts its queue,
-  which is exactly why the packaging decision below matters.
+- **The queue has no declaration seat** — nothing declares into it;
+  it is an ordinary component (`queue.standalone`, or the distributed
+  `queue.asynq`) the composition selects like any other, which is
+  exactly why the packaging decision below matters.
 - **No asynqmon, no requeue-from-dead-letter API** — recorded
   limitations, not silent gaps.
 

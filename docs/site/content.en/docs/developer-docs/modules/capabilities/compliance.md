@@ -61,7 +61,7 @@ registrar on `pkgcore` itself: the `Retention` seat, with
 `Export`, each optional except that a participant with neither Sweep
 nor Erase is useless) and the `SubjectRef` type erasure takes. The
 `ComponentRegistry` struct exists so a new cross-cutting mechanism does not
-change the `Module` interface — under lockstep versioning, touching
+change the descriptor contract — under lockstep versioning, touching
 that contract would break every module at once. Participants are
 registered by their owning business modules (the reference app's notes
 module is the real one), and compliance's own code never imports or

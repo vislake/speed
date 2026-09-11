@@ -8,7 +8,7 @@ weight: 1
 
 storage is speed's media-object module: the metadata describing one
 tenant's stored objects lives in the database, the bytes live in the
-kernel-resolved `ObjectStore`, and a three-step upload protocol moves
+assembly-resolved `ObjectStore`, and a three-step upload protocol moves
 them in with server-side revalidation.
 
 ## What it is for
@@ -69,8 +69,8 @@ m := storage.NewModule(db,
     storage.WithQueue(queue),           // a jobs.Queue — Register refuses without one
     storage.WithMaxUploadBytes(10<<20), // optional: per-object ceiling
 )
-// hand m to the assembly's module set; the ObjectStore and
-// EventBus come from the resolved registry, read per call.
+// hand m to the component set your composition selects; the ObjectStore
+// and EventBus come from the resolved registry, read per call.
 
 svc := m.ObjectService()
 created, err := svc.Create(ctx, storage.CreateParams{

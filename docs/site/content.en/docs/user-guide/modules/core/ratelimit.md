@@ -9,9 +9,9 @@ description: "The shared KVStore-backed rate-limiting primitive — one sliding-
 speed's shared rate-limiting primitive: a `Limiter` that decides
 whether one more hit against a caller-supplied `key` is within a
 caller-supplied `Limit`, backed entirely by `pkgcore.KVStore`. It is a
-**pure library** — unlike every other module in the platform it does
-not implement `the module contract`: nothing to register, nothing to wire
-into the assembly, a consumer just calls `ratelimit.New(store)`. It exists
+**pure library** — unlike every other module in the platform it ships
+no component: nothing to register, nothing to wire into the assembly, a
+consumer just calls `ratelimit.New(store)`. It exists
 because six otherwise-unrelated modules each need rate limiting —
 `authn`'s login brute-force guard, `integration`'s three-layer API-key
 throttling, `notification`'s verification-code budgets, `org`'s
@@ -108,7 +108,7 @@ one protocol helper the package ships, `RetryAfterSeconds(remaining)`
   lacks.
 - Do not give `Limiter` a second method, an HTTP-specific
   `Decision`, or a multi-key `Allow`; do not make it a
-  `the module contract`; do not read tenant context inside it. One
+  module; do not read tenant context inside it. One
   dimension per call, composed by the caller, is the whole design.
 
 ## Source

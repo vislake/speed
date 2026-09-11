@@ -36,12 +36,13 @@ middleware, and the tenant never comes from a request header.
 
 ## Minimal integration steps
 
-1. **Wire the modules into your kernel.** Add `authn`, `rbac` and
-   `org` (plus `pki` as authn's key source) to the module set your
-   `the assembly` runs. The `dbkit.MigrationRegistry` applies each
-   module's own migrations; the app's boot-time comments in
-   `examples/reference-app/cmd/server/server.go` walk the exact wiring
-   order.
+1. **Select the modules in your composition.** Add `authn`, `rbac`
+   and `org` (plus `pki` as authn's key source) to the component set
+   your composition configuration selects. Each module's component
+   carries its own migrations, and the selected db component applies
+   them in the assembly's `Verify` stage; the app's boot-time comments
+   in `examples/reference-app/cmd/server/server.go` walk the exact
+   wiring order.
 2. **Give authn its mandatory seams.** `authn.NewModule` validates
    options eagerly: a `KeySource` (pki's `Service` satisfies it) and a
    blind-index key are required — there is no safe default for either —
@@ -56,14 +57,14 @@ middleware, and the tenant never comes from a request header.
    an impersonated identity or a tenant's own Owner role must never
    reach it. Protect everything else with
    `tenancy.Middleware(authn.NewPrincipalResolver())` downstream.
-4. **Gate your routes on permissions.** rbac attaches after
-   `the assembly` (its `Attach` freezes every module's declared
-   permission vocabulary — granting anything else is refused). Protect
-   an operation with `rbac.RequirePermission("notes", "write")` or its
-   `*Func` variant; org exports the four permissions its own routes
-   declare (`PermissionRead`, `PermissionManage`,
-   `PermissionInviteMember`, `PermissionRemoveMember`) for you to gate
-   on the same way.
+4. **Gate your routes on permissions.** rbac attaches inside (or
+   right after) the assembly's declaration turn — its `Attach` freezes
+   every module's declared permission vocabulary, so granting anything
+   else is refused. Protect an operation with
+   `rbac.RequirePermission("notes", "write")` or its `*Func` variant;
+   org exports the four permissions its own routes declare
+   (`PermissionRead`, `PermissionManage`, `PermissionInviteMember`,
+   `PermissionRemoveMember`) for you to gate on the same way.
 5. **Drive identity data through org's flow.** Register a user, then
    invite them into a tenant node through `org`'s invitation flow; the
    accepted membership is what your `MembershipReader` and rbac's
@@ -116,6 +117,7 @@ import (
 	"github.com/vislake/speed/go/dbkit"
 	_ "github.com/vislake/speed/go/dbkit/dialect/sqlite" // registers DialectSQLite
 	"github.com/vislake/speed/go/pkgcore"
+	"github.com/vislake/speed/go/pkgcore/componenttest"
 	"github.com/vislake/speed/go/pki"
 	"github.com/vislake/speed/go/rbac"
 	"github.com/vislake/speed/go/tenancy"
@@ -179,15 +181,27 @@ func main() {
 	rbacModule := rbac.NewModule(db)
 
 	migrations := dbkit.NewMigrationRegistry()
-	for _, m := range []the module contract{pkiModule, authnModule, rbacModule} {
-		must(migrations.Register(m))
-	}
+	must(migrations.Register(pkiModule))
+	must(migrations.Register(authnModule))
+	must(migrations.Register(rbacModule))
 	must(migrations.Apply(ctx, db, dbkit.DialectSQLite))
 
-	reg := pkgcore.NewComponentRegistry()
-	must(app.Assemble(ctx, reg, app.LoadSpec{Host: &hostConfig, Options: loaderOpts}))
-	az, err := rbacModule.Attach(reg) // freezes the permission catalog
-	must(err)
+	// The declarations and rbac's Attach run inside the assembly's Init
+	// window -- the only stage the declaration seats accept writes in, and
+	// therefore where Attach's subscription and job-handler wiring lands.
+	// DeclareAll drives that window over the hand-constructed modules the
+	// way their own example suites do; a config-driven host reaches it
+	// through app.Assemble over the components its composition selects.
+	reg := componenttest.NewRegistry()
+	var az *rbac.Service
+	must(componenttest.DeclareAll(reg,
+		pkiModule.Register, authnModule.Register, rbacModule.Register, notesLikeModule{}.Register,
+		func(r *pkgcore.ComponentRegistry) error {
+			var attachErr error
+			az, attachErr = rbacModule.Attach(r) // freezes the permission catalog
+			return attachErr
+		},
+	))
 	svc := authnModule.Service()
 
 	// Password sign-in: Register creates the account, Login verifies the
@@ -279,9 +293,11 @@ a composed deployment answers them: the member's `GET` passes the gate
 request never reaches the gate — `tenancy.Middleware` fails closed with
 `403` because no tenant can be resolved; and a token that does not verify
 is answered by `authn.Middleware` itself with `401` and the
-`authn.token_invalid` envelope. The program's startup lines — the kernel's
-seam-composition log and the `WARN` lines that the in-memory seams do not
-survive a restart — go to stderr before the stdout lines above.
+`authn.token_invalid` envelope. (A composed deployment also logs the
+assembly's capability-validation warnings — the `WARN` lines that the
+in-memory seams do not survive a restart — to stderr before its stdout
+lines; this hand-wired program drives the declaration window directly
+and writes nothing to stderr.)
 
 **See it in the reference app.** The reference app gates its own notes
 route exactly this way: [`internal/app/demo/demo_subject.go`](https://github.com/vislake/speed/blob/main/examples/reference-app/internal/app/demo/demo_subject.go)

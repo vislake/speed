@@ -10,7 +10,7 @@ app is speed's **application assembly layer**: the structure every
 application's own boot code is built from. The [architecture
 page](/docs/developer-docs/architecture/) draws it as the top node of
 the module graph, and it is the one module with **no business domain**: no tables,
-no routes, no permissions, no `pkgcore.Module` implementation. What it
+no routes, no permissions, no module contract. What it
 owns is the half of a host's boot that would otherwise be written by
 hand in every host: the configuration load, the composition plan, the
 seven-stage component drive, the shutdown sequence and the HTTP helpers
@@ -202,10 +202,11 @@ adapter per pair, so each host writes the wiring as one call:
 | `ShareExpiryReader` | config's lazy handle → sharing's tenant-config reader | `sharing.WithTenantConfigReader(bridges.ShareExpiryReader{Handle: configModule.Handle()})` |
 
 The three feature-gate bridges exist for the same ordering reason:
-`sharing.Module` (and the gates' consumers) are constructed before
-`Kernel.Bootstrap` returns while config's `*Service` only exists after
-`Attach`, so reading through the handle defers resolution to read time
-and fails closed in the window before it.
+`sharing.Module` (and the gates' consumers) are constructed before the
+assembly publishes config's `*Service` — config attaches only once
+every component's `Init` turn has run — so reading through the handle
+defers resolution to read time and fails closed in the window before
+it.
 
 ## Lifecycle and failure semantics
 

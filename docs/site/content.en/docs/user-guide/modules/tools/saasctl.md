@@ -16,10 +16,10 @@ rewriting its speed-module requires onto one lockstep version
 (`config print`).
 
 Unlike every module in this reference, nothing assembles saasctl into a
-binary: it implements no `the module contract`, consumer code never imports
+binary: it ships no component and implements no module, consumer code never imports
 it, and the reference app deliberately does not wire it — its consumers
 are the generated projects. It acts on the project boundary at
-development time, never inside a running kernel. No usable release is
+development time, never inside a running service. No usable release is
 published yet, so it runs from a checkout
 (`go run ./go/saasctl <command>` at the repository root). All four
 commands share an exit-code contract — **0** success and help, **2**
@@ -100,7 +100,7 @@ the project's `go.mod` requires — `authn`, `config`, `org`, `pki` and
 `rbac`, in alphabetical order — one transaction per module, every file
 recorded in `schema_migrations` as it lands; `pki`'s tables migrate
 only when the go.mod genuinely requires `go/pki`. The full
-`authn+org+rbac` selection applies 33 files, the per-module counts
+`authn+org+rbac` selection applies 34 files, the per-module counts
 moving with the modules' own migration trees. A re-run applies only
 what is unrecorded and reports the database up to date; booting against
 the migrated file no-ops the startup `Apply` the app would otherwise

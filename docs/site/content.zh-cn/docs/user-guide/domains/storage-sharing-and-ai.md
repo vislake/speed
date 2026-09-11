@@ -24,7 +24,7 @@ flowchart LR
 
 ## storage:字节永不进你的数据库
 
-`storage` 把元数据放在租户作用域的表里,字节走内核解析的
+`storage` 把元数据放在租户作用域的表里,字节走装配解析的
 `ObjectStore` 接缝,键由模块自己推导——绝不收你提供的键。上传生命
 周期是三步协议:
 
@@ -55,7 +55,7 @@ flowchart LR
 ## ai-gateway:一个面,多家厂商
 
 `ai-gateway` 天生与厂商无关:每个 provider 实现 `ChatProvider`
-(`Chat` / `ChatStream`),按名注册在接缝注册表上;默认实现是
+(`Chat` / `ChatStream`),按名注册在模块自己的接缝注册表上;默认实现是
 OpenAI 兼容的,大多数厂商根本不需要适配器。对话默认同步。图像生成
 只异步:`Gateway.GenerateImage` 恰好入队一个 job 并返回其 `JobID`——
 图像工作绝不跑在 HTTP 请求内。provider 凭据是 BYOK,以作用域分层

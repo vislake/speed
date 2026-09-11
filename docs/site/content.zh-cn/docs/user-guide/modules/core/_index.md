@@ -10,7 +10,7 @@ bookCollapseSection: true
 每个 speed 二进制——以及平台上每个其他 Go 模块——都踩在这七个模块
 上。它们之上的东西离开它们就不存在,而消费方是直接 `go get` 它们的:
 它们不是你继承的应用框架,而是你调用的库,外加让业务模块把自己注册
-进一个二进制的组装契约(`pkgcore` 的 `Module`/`ComponentRegistry`/`Component`)。
+进一个二进制的组装契约(`pkgcore` 的 `ComponentRegistry`/`Component`)。
 
 ```mermaid
 flowchart TB
@@ -45,11 +45,11 @@ flowchart TB
 
 依赖方向就是发布纪律:`pkgcore` 不导入任何其他 speed 模块,根包也
 不携带任何第三方依赖,上面每一层只添加自己关切所需的东西。对消费方
-这意味着两点。其一,你写的大多数业务模块实现 `the module contract`,在
-一次 `Register` 调用里注册路由、配置 schema、权限、事件与任务处理器
-——由内核组装。其二,有几块 core 组件是直接用、不走内核的:`tenancy`
+这意味着两点。其一,你写的大多数业务模块携带 `Component` 描述符,在
+一次 `Register` 声明体里注册路由、配置 schema、权限、事件与任务处理
+器——由装配驱动。其二,有几块 core 组件是直接用、不走装配的:`tenancy`
 的中间件护住你的 HTTP 入口,`observability.Init` 在进程启动时运行,
-`config` 在引导之后还需要那次 `Attach`,`jobs` 队列由宿主构造并
+`config` 需要每个组件都声明完之后的那次 `Attach`,`jobs` 队列由宿主构造并
 启动,`ratelimit` 则是纯库。各页的「接线与最少使用」一节说明各自
 属于哪种形态。
 

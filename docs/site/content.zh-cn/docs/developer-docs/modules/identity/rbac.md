@@ -30,7 +30,7 @@ rbac 做判定。它不做身份识别——它的定义性属性是它**不**�
 
 `rbac_roles` 与 `rbac_role_permissions` 是租户数据;`rbac_role_bindings` 是关联数据(用户 × 租户 × 角色——数据分域表里 memberships 形状的那一行)。三张都嵌 `dbkit.Repository[T]`,都跑 `tenancytest.AssertIsolated`(rbac 没有身份或平台表——反向套件零次,是刻意的);`user_id`/`node_id` 是裸 id 引用,没有外键。
 
-权限**目录**是平台数据,**但没有表**:一份冻结的内存快照,内容是每个模块声明的每个 `resource:action`。`Module.Attach`——恰好一次,在 `the assembly` 返回之后——拍下快照;第二次 `Attach` 失败(`ErrAlreadyAttached`):对"一笔授权是否合法"的判定集合而言,一份不同的第二快照是安全差异。
+权限**目录**是平台数据,**但没有表**:一份冻结的内存快照,内容是每个模块声明的每个 `resource:action`。`Module.Attach`——恰好一次,在装配的 Init 窗口内——拍下快照;第二次 `Attach` 失败(`ErrAlreadyAttached`):对"一笔授权是否合法"的判定集合而言,一份不同的第二快照是安全差异。
 
 `"system"` 伪租户承载平台运营授权,而对每一层来说它都是一个**普通租户 id**:它的行走同一批仓库、同一把隔离插件、同一条代码路径。没有任何地方为它分支——这正是它可信的原因——它也不是通配符:system 域授权拿不到任何客户租户的数据。
 

@@ -27,7 +27,7 @@ flowchart LR
 ## storage: bytes never touch your database
 
 `storage` keeps metadata in tenant-scoped tables and sends the bytes
-through the kernel's `ObjectStore` seam, under keys the module itself
+through the `ObjectStore` seam, under keys the module itself
 derives — never keys you supply. The upload lifecycle is a three-step
 protocol:
 
@@ -67,7 +67,8 @@ actual bytes, and rate limiting guards both creation and access.
 
 `ai-gateway` is vendor-agnostic by construction: every provider
 implements `ChatProvider` (`Chat` / `ChatStream`), registered by name
-on a seam registry; the default implementation is OpenAI-compatible,
+on the module's own seam registry; the default implementation is
+OpenAI-compatible,
 so most vendors need no adapter at all. Chat is synchronous by
 default. Image generation is async-only: `Gateway.GenerateImage`
 enqueues exactly one job and returns its `JobID` — image work never
@@ -88,7 +89,7 @@ it) writes the derivative row. The clinic then mints a share link over the
 completed object for the patient, the patient opens it without any
 authentication, and a later revocation refuses the very next access.
 The walk runs all of it in one process over an in-memory SQLite
-database and a real kernel bootstrap — the standalone deployment mode's
+database and a real assembly drive — the standalone deployment mode's
 ordinary shape.
 
 Your consumer module's `go.mod` replaces the speed module paths onto a
@@ -263,7 +264,7 @@ To run it:
    `go mod tidy`.
 2. Paste the first block into a file of your `main` package and run
    `go run .`.
-3. The walk migrates both modules from zero, bootstraps a real kernel,
+3. The walk migrates both modules from zero, drives a real assembly,
    derives the thumbnail through a real queue worker and exits —
    nothing needs Docker.
 

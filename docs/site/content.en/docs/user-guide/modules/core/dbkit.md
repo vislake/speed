@@ -66,7 +66,7 @@ db, err := dbkit.Open(ctx, dbkit.Options{Dialect: dbkit.DialectPostgres, DSN: ds
 // handle err
 
 reg := dbkit.NewMigrationRegistry()
-if err := reg.Register(billingModule); err != nil { // billingModule: your the module contract
+if err := reg.Register(billingModule); err != nil { // billingModule: your module value
     // handle err
 }
 if err := reg.Apply(ctx, db, dbkit.DialectPostgres); err != nil {
@@ -121,7 +121,7 @@ tenant" — deliberately indistinguishable.
   `Auditable` model as `dbkit.write.captured`, published only after
   the write's transaction committed; `go/dbkit/audit` supplies the
   append-only `AuditEvent` model, its migrations, an `Emit` path and
-  the persister `Module`.
+  the persister `audit.Module`.
 - **Test helpers** — `dbkit/dbtest`'s `NewSQLite(t)`/`NewPostgres(t)`
   return plugin-wired connections for module suites; the mandatory
   isolation assertions live in `tenancy`'s `tenancytest`.

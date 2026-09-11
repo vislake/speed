@@ -1,7 +1,7 @@
 ---
 title: storage
 weight: 1
-description: "go/storage 的设计:元数据在租户表、字节在内核解析的 ObjectStore;三步上传协议在完成时复验已存字节;崩溃收敛的删除与宿主排程的到期清扫。"
+description: "go/storage 的设计:元数据在租户表、字节在装配解析的 ObjectStore;三步上传协议在完成时复验已存字节;崩溃收敛的删除与宿主排程的到期清扫。"
 ---
 
 # storage
@@ -16,7 +16,7 @@ description: "go/storage 的设计:元数据在租户表、字节在内核解析
 
 模块拥有的是**元数据,不是字节**——也不是存储本身。字节住在宿主
 的 `ObjectStore` 里(独立部署是本地目录,分布式是 S3 兼容存储;模块
-从不知道是哪个),经内核缝解析。模块拥有的是"一个对象的完整故事":
+从不知道是哪个),经装配的接缝解析。模块拥有的是"一个对象的完整故事":
 上传者在任何字节到达之前声明了什么,字节入库后管线确立了什么,
 对象处在生命周期的哪一步。
 
@@ -161,7 +161,7 @@ flowchart LR
   [pki](/zh-cn/docs/developer-docs/modules/services/pki/)、
   [integration](/zh-cn/docs/developer-docs/modules/services/integration/)、
   [metering](/zh-cn/docs/developer-docs/modules/services/metering/)
-- [总体架构](/zh-cn/docs/developer-docs/architecture/)——内核缝与能力校验
+- [总体架构](/zh-cn/docs/developer-docs/architecture/)——接缝接口与能力校验
 - 使用:[用户指南的
   storage](/zh-cn/docs/user-guide/modules/services/storage/)、
   [存储、分享与 AI 域页](/zh-cn/docs/user-guide/domains/storage-sharing-and-ai/),

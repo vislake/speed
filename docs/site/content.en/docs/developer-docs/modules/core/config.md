@@ -21,13 +21,14 @@ frontend. It is among the always-on modules with no off switch.
 
 - **Assembly resolution is not this module's business.** How to
   reach infrastructure — DSNs, addresses, the deployment mode, the
-  composition preset, the master key — is decided once at process
-  startup: the keys are declared on `pkgcore`'s bootstrap seat,
-  resolved by the general-purpose `pkgcore/config` loader (a separate
-  zero-dependency package this module must never import), and their
-  key-material derivation convention — one purpose string per declared
-  key path (`pkgcore.BootstrapKeyPurpose`), composed with
-  `dbkit.DeriveKey` — lives with that seat and toolkit. Mixing the two
+  composition configuration, the bootstrap key material — is decided
+  once at process startup: the keys are declared as each component's
+  `BootstrapKeys`, resolved by the general-purpose `pkgcore/config`
+  loader (a separate zero-dependency package this module must never
+  import), and their key-material derivation convention — one purpose
+  string per declared key path (`pkgcore.BootstrapKeyPurpose`),
+  composed with `dbkit.DeriveBootstrapKey` — lives with that
+  declaration and toolkit. Mixing the two
   would create the chicken-and-egg of "database connection string
   stored in the database": bootstrap values are immutable at runtime
   by definition; dynamic values exist precisely to be changed.
@@ -52,13 +53,16 @@ frontend. It is among the always-on modules with no off switch.
 The module's wiring splits into two steps, and the split is load-
 bearing. **Register** declares what never needs the assembled
 registry — the audited system purpose, the two route paths, the change
-event, the audit action. **Attach** happens only after every module
-has registered (after `the assembly` returns), because the
-service's schema is folded from the registry's *combined* item and
-flag declarations — items owned by other modules are first-class
-citizens of it, so the schema cannot exist before registration
-completes. Attach demands what registration must not touch: a
-migrated `*gorm.DB`, a cipher whenever any registered item is
+event, the audit action. **Attach** completes only once every
+component's `Init` turn has run — the descriptor attaches and
+publishes the service from its `Start` step, and a host whose
+Init-stage consumers need the service earlier attaches during `Init`,
+the snapshot completing to the same set — because the service's schema
+is folded from the registry's *combined* item and flag declarations —
+items owned by other modules are first-class citizens of it, so the
+schema cannot exist before the declaration turn completes. Attach
+demands what registration must not touch: a migrated `*gorm.DB`, a
+cipher whenever any registered item is
 `Sensitive` (`ErrCipherRequired` otherwise — a host without the key
 could never write or read such a value without leaking it), and a poll
 interval. It is idempotence-guarded (`ErrAlreadyAttached`), and the

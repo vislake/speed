@@ -65,7 +65,7 @@ over-quota request through on aggregation delay.
 ## Compliance: retention, erasure and export
 
 `compliance` owns no table — its three services operate *your* data
-through participants that register onto the registry's `Retention` seat
+through participants that register onto the registry's `Retention`
 seat:
 
 - `RetentionService` sweeps each participant's data past the retention

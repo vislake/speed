@@ -24,8 +24,8 @@ modules it pulls in:
 - `config print` renders how a generated project's bootstrap
   configuration resolves, secret rows `[redacted]`.
 
-Nothing assembles saasctl into a running service. It implements no
-`the module contract`, never registers into a `ComponentRegistry`, and consumer code
+Nothing assembles saasctl into a running service. It ships no
+component, never registers into a `ComponentRegistry`, and consumer code
 never imports it; the reference app deliberately does not wire it —
 its consumers are the generated projects themselves. Where the module
 pages answer "I am integrating module X into my binary", this page

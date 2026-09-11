@@ -19,7 +19,7 @@ no table of its own.
 
 Three orchestrations plus one query API, all built over the
 `pkgcore.RetentionParticipant` registrations business modules make on
-the kernel's retention seat (`reg.RetentionSeat()`):
+the registry's retention seat (`reg.RetentionSeat()`):
 
 - **`RetentionService`** — `SweepTenant(tenant)` hard-deletes each
   registered participant's soft-deleted rows past the tenant's
@@ -69,10 +69,11 @@ c := compliance.NewModule(auditRepo, // the same *audit.Repository your audit wi
     compliance.WithSharing(sharingModule.Service()), // arms export delivery
     // optional: compliance.WithTenantLister(lister), WithConfigService(cfg)
 )
-// in your assembly's module set. After the assembly returns, register the business
-// modules whose rows the orchestrations may touch — the reference app's
-// notes module registers exactly this participant shape, its callbacks
-// backed by its own repository's HardDelete and read methods:
+// in the component set your composition selects. The owning business
+// module's component registers its participant inside the assembly's Init
+// window — the reference app's notes module registers exactly this
+// participant shape, its callbacks backed by its own repository's
+// HardDelete and read methods:
 if err := reg.Retention.Add(
     notes.NewRetentionParticipant(notes.NewRepository(db)),
 ); err != nil { /* handle */ }

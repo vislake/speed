@@ -16,7 +16,7 @@ saasctl 就是那一刻的工具:塑造业务方实际运行的那个项目—�
 
 ## 为什么是 CLI 模块
 
-四个动作全部发生在尚无内核存在的地方——建目录、改 `go.mod`、应用
+四个动作全部发生在尚无装配存在的地方——建目录、改 `go.mod`、应用
 SQL、渲染配置——在启动之前与启动之外,从不进入启动本身;所以没有
 一个能成为运行中应用的功能。CLI 让每个动作显式、可脚本化、可重复,
 幂等被设计进来,于是第二次运行兼作一次校验;命令面刻意小而刻意用
@@ -39,7 +39,7 @@ flowchart TB
     libs -.-> ref[参考应用<br/>库的强制首消费者]
     saasctl -->|new:生成骨架| proj
     saasctl -->|upgrade / db migrate / config print| proj
-    proj --> boot[项目自己的内核<br/>启动 Apply 在已迁移的<br/>数据库上 no-op]
+    proj --> boot[项目自身的启动<br/>启动迁移在已迁移的<br/>数据库上无事可做]
     ref -.永不接线 saasctl.-> saasctl
 ```
 

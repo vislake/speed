@@ -16,7 +16,7 @@ compliance 是 speed 的治理层:保留窗口清扫、被遗忘权编排、数�
 ## 它做什么
 
 三个编排加一个查询 API,全部建在业务模块经 `reg.RetentionSeat()`
-向内核保留席位注册的 `pkgcore.RetentionParticipant` 之上:
+向注册表保留席位注册的 `pkgcore.RetentionParticipant` 之上:
 
 - **`RetentionService`**——`SweepTenant(tenant)` 把各注册参与者过了
   保留窗口的软删行物理删除;`EnqueueRetentionSweep`(一个 `jobs` 任
@@ -57,8 +57,8 @@ c := compliance.NewModule(auditRepo, // 与你审计接线共用的同一个 *au
     compliance.WithSharing(sharingModule.Service()), // 武装导出投递
     // 可选:compliance.WithTenantLister(lister)、WithConfigService(cfg)
 )
-// 放进你的装配模块集。装配返回之后,注册编排可能碰
-// 到的业务模块的行——参考应用的 notes 模块注册的正是这个形态,回
+// 放进你的组合选出的组件集。拥有该参与者的业务模块在其组件的
+// Init 窗口内注册——参考应用的 notes 模块注册的正是这个形态,回
 // 调由它自己的仓库的 HardDelete 与读方法背书:
 if err := reg.Retention.Add(
     notes.NewRetentionParticipant(notes.NewRepository(db)),

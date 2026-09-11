@@ -11,7 +11,7 @@ Every speed-based binary — and every other Go module in the platform —
 sits on these seven modules. Nothing above them can exist without them,
 and a consumer `go get`s them directly: they are not an application
 framework you inherit but libraries you call, with the assembly
-contract (`pkgcore`'s `Module`/`ComponentRegistry`/`Component`) that lets business
+contract (`pkgcore`'s `ComponentRegistry`/`Component`) that lets business
 modules register themselves into one binary.
 
 ```mermaid
@@ -52,12 +52,13 @@ The dependency direction is the release discipline: `pkgcore` imports
 no other speed module and carries no third-party dependency in its
 root package, and every layer above only adds what its own concern
 requires. For a consumer this means two things. First, most business
-modules you write implement `the module contract` and register routes,
+modules you write ship a `Component` descriptor and declare routes,
 config schema, permissions, events and job handlers in one
-`Register` call — the kernel assembles them. Second, several core
-pieces are used directly rather than through the kernel: `tenancy`'s
+`Register` body — the assembly drives them. Second, several core
+pieces are used directly rather than through the assembly: `tenancy`'s
 middleware guards your HTTP entry points, `observability.Init` runs at
-process startup, `config` needs its `Attach` call after bootstrap,
+process startup, `config` needs its `Attach` once every component has
+declared,
 `jobs` queues are constructed and started by the host, and `ratelimit`
 is a pure library. Each page's "Wiring and minimal use" section shows
 which shape applies.

@@ -17,7 +17,7 @@ behind the shape.
 
 ## Why a CLI module
 
-All four actions happen where no kernel exists yet — creating a
+All four actions happen where nothing is assembled yet — creating a
 directory, editing a `go.mod`, applying SQL, rendering configuration —
 before and around boots, never inside them; none could be a feature
 of a running application. A CLI keeps each action explicit,
@@ -44,7 +44,7 @@ flowchart TB
     libs -.-> ref[reference app<br/>mandatory first consumer<br/>of the libraries]
     saasctl -->|new: materialise the skeleton| proj
     saasctl -->|upgrade / db migrate / config print| proj
-    proj --> boot[the project's own kernel<br/>startup Apply no-ops on the<br/>already-migrated database]
+    proj --> boot[the project's own boot<br/>startup migration no-ops on the<br/>already-migrated database]
     ref -.never wires saasctl.-> saasctl
 ```
 

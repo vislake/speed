@@ -34,8 +34,9 @@ flowchart LR
    通用基座提供租户过滤的增删改查,以及多语句写所需的
    `dbkit.WithTenantSession` 事务形态。
 3. **版本化 SQL 迁移,绝不 `AutoMigrate`。** 每个模块随附双方言
-   迁移集(SQLite 与 PostgreSQL),由 `dbkit.MigrationRegistry` 应用;
-   模块经 `the module contract` 的 `Migrations()` 暴露它们。两种方言一视
+   迁移集(SQLite 与 PostgreSQL),作为其组件的 `Migrations` 嵌入集;
+   `dbkit` 的台账负责应用——被选的 db 组件在装配的 `Verify` 阶段运行它们,
+   `saasctl db migrate` 则在启动前应用同一批集合。两种方言一视
    同仁——避开 PostgreSQL 专属特性(`gen_random_uuid()`、原生数组、
    `NOW()`);ID 在应用里生成。
 4. **设计前先给表分类。** 租户数据是租户级、跑
@@ -53,7 +54,7 @@ flowchart LR
 支持设置、能力开关、AI 密钥。两个决策塑造了它的用法:
 
 - **Register 与 Attach 分离。** 模块在 `Register` 时*声明*自己的配置
-  项与开关;`Attach`——恰好一次,在 `the assembly` 返回之后——
+  项与开关;`Attach`——恰好一次,在装配的声明轮次结束之后——
   把所有模块的声明折成一个 schema,并且只要存在 `Sensitive` 项就
   拒绝无密钥启动。宿主保留 Attach 返回的 `*Service`。
 - **作用域层级与回退。** 每个值只在一个层级(租户/系统);读取从窄
@@ -252,7 +253,7 @@ if err := app.Assemble(ctx, reg, app.LoadSpec{Host: &hostConfig, Options: loader
 然后以 `GOWORK=off` 运行 `go mod tidy` 与 `go run .`(别让 checkout
 自己的 `go.work` 渗进构建)。tidy 会拉取一次第三方依赖。
 
-**预期结果。** 程序在 stdout 打印下面六行;内核自己的接缝组合日志行
+**预期结果。** 程序在 stdout 打印下面六行;装配自己的能力校验日志行
 先打到 stderr:
 
 ```

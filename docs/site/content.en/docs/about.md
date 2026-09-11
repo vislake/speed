@@ -9,7 +9,7 @@ speed is a modular monolith distributed as libraries: independently
 released Go modules and npm packages that a business project pulls in
 with `go get` / `npm install` and compiles into one binary. It is not
 an application you run and not a repository you fork — you assemble
-the modules your product needs through a kernel, and own the result.
+the modules your product needs through one assembly, and own the result.
 
 | Decision | What it means in practice |
 |---|---|

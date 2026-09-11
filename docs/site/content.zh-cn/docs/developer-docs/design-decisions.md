@@ -29,7 +29,7 @@ ADR 与修复本身同一次改动落地,原始设计文档也在同一次改动
 
 ## ADR 0001:`Module.Migrations()` 返回 `embed.FS`
 
-`Module` 接口是每个模块都要实现的接线契约,它活在 `pkgcore`——
+模块契约是每个模块都要实现的接线契约,它的词汇活在 `pkgcore`——
 依赖地基里。设计文档写的是 `Migrations() dbkit.MigrationSet`,那
 会迫使 `pkgcore` import `dbkit`;而 `dbkit` 已经 import `pkgcore`
 (为租户上下文原语与模块契约本身),于是按文档实现的接口无法编译:
@@ -38,7 +38,7 @@ ADR 与修复本身同一次改动落地,原始设计文档也在同一次改动
 决策:`Migrations()` 直接返回标准库的 `embed.FS`——刻意选择能
 成立的最薄类型。模块迁移如何被解释(方言选择、版本方案)是
 `dbkit.MigrationRegistry` 的事,发生在接口边界之后。后果:`pkgcore`
-对 `dbkit` 保持零 import 依赖;方言逻辑不进 `Module` 接口;设计
+对 `dbkit` 保持零 import 依赖;方言逻辑不进模块契约;设计
 文档在同一次改动中被改正。
 
 [读 ADR 0001 全文](https://github.com/vislake/speed/blob/main/docs/adr/0001-module-migrations-return-embed-fs.md)

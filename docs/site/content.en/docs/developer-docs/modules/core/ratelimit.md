@@ -20,9 +20,9 @@ interface every deployment mode already provides.
 ## Responsibility and boundary
 
 This is a **pure library**, unlike every other module in the
-repository: it implements no `the module contract`, registers no routes, no
+repository: it ships no component, registers no routes, no
 config schema, no feature flags, no permissions. There is nothing to
-wire into a kernel; a consumer just calls `ratelimit.New`. The
+wire into an assembly; a consumer just calls `ratelimit.New`. The
 deliberate boundaries follow from "no business semantics", stated
 concretely:
 
@@ -41,7 +41,7 @@ concretely:
   escalation-aware variant, deliberately.
 - **It has no dynamic configuration.** `Limit` values are supplied by
   each call site in code — the same reason it implements no module
-  contract: it is a library, not a kernel-assembled component.
+  contract: it is a library, not an assembled component.
 - **It decides neither fail-open nor fail-closed.** `Allow` returns
   KVStore failures unmodified so each call site makes its own choice
   — a login guard and a cost-limiter may legitimately differ.
@@ -148,7 +148,7 @@ shape that keeps it a primitive rather than a product:
   documented consumers key by blind indexes, never plaintext
   identifiers.
 - **No module contract, no config schema** — tunable thresholds would
-  need schema, an admin surface and the kernel; per-call-site code
+  need schema, an admin surface and the assembly machinery; per-call-site code
   values keep the library dependency-free and the decision where the
   caller can see it.
 

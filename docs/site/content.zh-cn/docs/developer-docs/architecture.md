@@ -112,34 +112,32 @@ web 包以分层 npm workspace 镜像同一形态——设计令牌与 i18n 在�
 
 反例说明为什么:单进程部署对接真实 Stripe、真实 SMTP、真实 S3,是小客户安装的常规生产形态;分布式部署同样可以在联调环境挂 Mailpit 与支付沙箱。"外部服务真不真"是环境与凭证问题,不是副本数问题。
 
-因此:**部署模式不选择实现,它只约束实现。** `pkgcore` 的每个基础设施接缝(`KVStore`、`EventBus`、`Mailer`、`ObjectStore`)都是带 N 套实现的接口,N ≥ 1——绝不是固定两套。每套实现声明自己的能力:`MultiReplicaSafe`(多副本可共享这份状态)、`SurvivesRestart`(状态跨进程重启仍在)、`Stateless`(没有重启会丢失的东西——控制台发信器因此跳过对它毫无意义的横幅警告)。每种部署模式声明自己要求什么;`the assembly` 解析每个接缝后做集合比较。无法在所声明模式下运行的组装**启动即失败**,报 `ErrCapabilityUnsatisfied`,点名接缝、实现、缺失的能力与模式——绝不会是"缺少分布式实现"这类泛化错误,因为一旦存在 N 套实现,这句话就不再有任何含义。仅缺 `SurvivesRestart` 是响亮的启动横幅而非失败:组装可以运行,但操作者必须确切知道哪些数据不跨重启存活。
+因此:**部署模式不选择实现,它只约束实现。** `pkgcore` 的每个基础设施接缝(`KVStore`、`EventBus`、`Mailer`、`ObjectStore`)都是带 N 套实现的接口,N ≥ 1——绝不是固定两套。每个组件声明它所提供实现的能力:`MultiReplicaSafe`(多副本可共享这份状态)、`SurvivesRestart`(状态跨进程重启仍在)、`Stateless`(没有重启会丢失的东西——控制台发信器因此跳过对它毫无意义的横幅警告)。每种部署模式声明自己要求什么,装配的 Prepare 阶段把每个被选组件的声明与该模式做比较。无法在所声明模式下运行的组装**启动即失败**,报 `ErrCapabilityUnsatisfied`,点名组件、缺失的能力位与模式——绝不会是"缺少分布式实现"这类泛化错误,因为一旦存在 N 套实现,这句话就不再有任何含义。仅缺 `SurvivesRestart` 是响亮的启动横幅而非失败:组装可以运行,但操作者必须确切知道哪些数据不跨重启存活。
 
 ```mermaid
 flowchart TD
-    Host[Host application] --> Mode[the composition's deployment field<br/>standalone or distributed]
-    Host --> Seams[the composition configuration, or per-seam injection]
-    Mode --> Boot[the assembly resolves every seam]
-    Seams --> Boot
+    Host[Host application] --> Config[the composition configuration<br/>deployment key · components block]
+    Config --> Boot[app.Assemble<br/>plans components, constructs in dependency order]
     Boot --> Check{Capabilities satisfy<br/>the declared mode}
     Check -->|yes| Run[Startup proceeds]
-    Check -->|no| Fail[Startup fails with ErrCapabilityUnsatisfied<br/>naming seam, implementation, capability, mode]
+    Check -->|no| Fail[Startup fails with ErrCapabilityUnsatisfied<br/>naming the component, the missing capabilities and the mode]
 ```
 
-约束是单向的:分布式(多副本)排除进程内实现;单进程**不排除任何东西**。框架不预设"生产"或"测试"preset——哪组组装算生产、生产环境能不能出现 mock,是组装应用自己的判断。
+约束是单向的:分布式(多副本)排除进程内实现;单进程**不排除任何东西**。框架不预设"生产"或"测试"组合——哪组组装算生产、生产环境能不能出现 mock,是组装应用自己的判断。
 
 由于 Go 按**包**而非按符号解析依赖,同一立场延伸到打包:**二进制包含哪些实现,由应用组装者决定。** 每套实现住在自己的子包里(`go/pkgcore/kv/redis`、`go/jobs/queue/asynq`……),在自己的 `init()` 中自我注册;确定只用 SQLite 的应用只 import 一个方言包、只承担一套方言的依赖——`database/sql` 就是模型。要接受的代价也是 `database/sql` 的:没人 import 的实现会以启动错误现身,报错信息点名修复它所需的 import。
 
-业务代码永远看不到这两条轴——模块逻辑里没有 `if mode == "standalone"`,因为模块逻辑根本不持有模式;模式与实现只活在 装配的代码里。进程内那批实现的附带收益是它们同时充当测试替身,多数单元测试因此不需要容器。
+业务代码永远看不到这两条轴——模块逻辑里没有 `if mode == "standalone"`,因为模块逻辑根本不持有模式;模式与实现只活在装配的代码里。进程内那批实现的附带收益是它们同时充当测试替身,多数单元测试因此不需要容器。
 
 ## 模块接线契约
 
-每个后端模块实现同一个 `the module contract` 接口,把它贡献的一切——路由、配置 schema、功能开关、权限、任务处理器、通知类型、事件、审计动作——通过**一次 `Register(reg *pkgcore.ComponentRegistry)` 调用**注册。声明面就是 `*pkgcore.ComponentRegistry` 视图:每种机制一个注册席,内核的模块 `Registry` 与组件组装的 `ComponentRegistry` 都回答它。
+每个后端模块携带一个 `pkgcore.Component` 描述符,由它的 `Init` 回调执行模块**唯一的一次 `Register(reg *pkgcore.ComponentRegistry)` 声明体**;该声明体注册模块贡献的一切——路由、配置 schema、功能开关、权限、任务处理器、通知类型、事件、审计动作。声明面就是 `*pkgcore.ComponentRegistry`:十个注册席,每种机制一个,只在装配的 Init 阶段接受写入。
 
-**为什么是一次 `Register` 而不是八个接口方法?** 因为在锁步版本下,改动 `Module` 接口是同时打破所有模块的破坏性变更。新的横切机制变成声明面上的一个新注册席——`*pkgcore.ComponentRegistry` 上的一个访问器加上它背后的注册器;既有模块不用改、不用重编译。声明面的存在意义,正是让"新增机制"永远不改变 `Module` 接口。
+**为什么是一个声明体,而不是八个描述符回调?** 因为在锁步版本下,改动描述符契约是同时打破所有模块的破坏性变更。新的横切机制变成声明面上的一个新注册席——`*pkgcore.ComponentRegistry` 上的一个席位访问器加上它背后的注册器;既有模块不用改、不用重编译。声明面的存在意义,正是让"新增机制"永远不改变每个模块描述符所携带的契约。
 
 注册是声明式的,这在外界换来三份红利:权限清单自动汇入运营后台的角色配置界面,配置与开关 schema 自动汇入生成的配置文档,通知类型自动汇入用户可见的偏好矩阵。每个模块还把自己的资产——双方言 SQL 迁移、`zh-CN`/`en-US` 语言包、自己的 OpenAPI 片段——与代码一同发布,模块版本与资产永不脱节。
 
-装配驱动负责解析,而不是由模式参数组装——`app.Assemble(opts...)` 加 `the composition's deployment field`、`the composition configuration` 与逐接缝注入。驱动装配遍历模块图、解析并校验每个组件、安装合并后的消息目录;模块在 `Register` 期间声明,在此之后读取已解析的状态。
+装配由组合配置驱动,而不是由一个模式参数——`app.Assemble(ctx, reg, spec)` 的 `LoadSpec` 点名宿主的配置目标与加载器选项;组合配置的 `deployment` 键声明拓扑,`components` 块选择哪些组件参与。引擎的 `Assemble` 规划组件图、按依赖序构造、按模式校验每个被选组件的声明能力,再逐阶段驱动;模块在自己的 `Register` 窗口内声明,在此之后读取已解析的状态。
 
 HTTP 中间件链有一个固定、不可随意调整的顺序,`go/app/chain` 是它唯一
 的实现:`authn.Middleware(verifier)` 包住整个组合,把两个结构性豁免

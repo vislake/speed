@@ -1,7 +1,7 @@
 ---
 title: storage
 weight: 1
-description: "Design of go/storage: metadata in tenant tables, bytes in the kernel-resolved ObjectStore; the three-step upload protocol whose completion revalidates the stored bytes; crash-convergent deletion and host-scheduled expiry."
+description: "Design of go/storage: metadata in tenant tables, bytes in the assembly-resolved ObjectStore; the three-step upload protocol whose completion revalidates the stored bytes; crash-convergent deletion and host-scheduled expiry."
 ---
 
 # storage
@@ -19,7 +19,7 @@ and call.
 The module owns **metadata, not bytes** — and not the store either.
 Bytes sit in the host's `ObjectStore` (a local directory in standalone
 deployments, S3-compatible storage in distributed ones; the module
-never knows which), resolved through the kernel seam. What the module
+never knows which), resolved through the assembly's seam. What the module
 owns is the story of one object: what the uploader declared before any
 bytes arrived, what the pipeline established once the bytes were in,
 and where the object stands in its lifecycle.
@@ -193,5 +193,5 @@ and starve everything after it — and a partial pass reports
 ## Related pages
 
 - [Platform services](/docs/developer-docs/modules/services/) group overview; siblings [notification](/docs/developer-docs/modules/services/notification/), [pki](/docs/developer-docs/modules/services/pki/), [integration](/docs/developer-docs/modules/services/integration/), [metering](/docs/developer-docs/modules/services/metering/)
-- [Architecture](/docs/developer-docs/architecture/) — the kernel seams and capability validation
+- [Architecture](/docs/developer-docs/architecture/) — the seam interfaces and capability validation
 - Usage: [storage in the user guide](/docs/user-guide/modules/services/storage/), the [storage, sharing and AI domain page](/docs/user-guide/domains/storage-sharing-and-ai/), and the [jobs queue](/docs/user-guide/modules/core/jobs/) its asynchronous half runs on

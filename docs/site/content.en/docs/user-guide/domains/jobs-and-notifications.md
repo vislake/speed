@@ -65,8 +65,9 @@ defer q.Close(ctx)
 ## The messaging surface: notification
 
 Every notification type is **declared, not stored as a template**: your
-module registers its types on the kernel registry during `Register`
-(`reg.NotificationsSeat().Add(...)`), each carrying its preference group,
+module registers its types on the registry's notification seat during
+`Register` (`reg.NotificationsSeat().Add(...)`), each carrying its
+preference group,
 default channels and whether recipients may unsubscribe (verification
 codes are transactional and not unsubscribable). The copy lives in the
 declaring module's own bilingual locale bundles, rendered at delivery

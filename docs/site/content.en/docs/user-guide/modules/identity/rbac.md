@@ -70,8 +70,8 @@ permission snapshot taken during `Register` would be partial.
 
 ```go
 rbacMod := rbac.NewModule(db) // options: WithSubtreeResolver, WithCacheTTL, WithQueue
-// rbacMod joins the assembly's module set; after the assembly
-// returns, exactly once:
+// rbacMod joins the component set your composition selects; Attach runs
+// exactly once, inside the assembly's Init window:
 az, err := rbacMod.Attach(reg) // freezes every module's declared permissions
 if err != nil {
     return err // a second Attach fails: ErrAlreadyAttached

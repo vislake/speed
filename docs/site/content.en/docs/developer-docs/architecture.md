@@ -165,34 +165,33 @@ environment-and-credentials question, not a replica-count question.
 Consequently, **the deployment mode does not select implementations —
 it only constrains them.** Every infrastructure seam in `pkgcore`
 (`KVStore`, `EventBus`, `Mailer`, `ObjectStore`) is an interface with
-N implementations, N ≥ 1 — never a fixed two. Each implementation
-declares capabilities: `MultiReplicaSafe` (several replicas can share
-this state), `SurvivesRestart` (state outlives a restart), and
-`Stateless` (nothing a restart could lose — the console mailer skips
-a warning that would be empty for it). Each deployment mode declares
-what it requires; `the assembly` resolves every seam and compares
-the sets. A composition that cannot run in the declared mode **fails
-startup** with `ErrCapabilityUnsatisfied`, naming the seam, the
-implementation, the missing capability and the mode — never a generic
-"missing distributed implementation" error, a sentence that stops
-meaning anything once N implementations exist. A missing
+N implementations, N ≥ 1 — never a fixed two. Each component declares
+the capabilities of the implementation it provides:
+`MultiReplicaSafe` (several replicas can share this state),
+`SurvivesRestart` (state outlives a restart), and `Stateless` (nothing
+a restart could lose — the console mailer skips a warning that would
+be empty for it). Each deployment mode declares what it requires, and
+the assembly's Prepare stage compares each selected component's
+declaration against the mode. A composition that cannot run in the
+declared mode **fails startup** with `ErrCapabilityUnsatisfied`,
+naming the component, the missing capability bits and the mode — never
+a generic "missing distributed implementation" error, a sentence that
+stops meaning anything once N implementations exist. A missing
 `SurvivesRestart` alone is a loud startup banner, not a failure: the
 operator must know exactly which data will not survive a restart.
 
 ```mermaid
 flowchart TD
-    Host[Host application] --> Mode[the composition's deployment field<br/>standalone or distributed]
-    Host --> Seams[the composition configuration, or per-seam injection]
-    Mode --> Boot[the assembly resolves every seam]
-    Seams --> Boot
+    Host[Host application] --> Config[the composition configuration<br/>deployment key · components block]
+    Config --> Boot[app.Assemble<br/>plans components, constructs in dependency order]
     Boot --> Check{Capabilities satisfy<br/>the declared mode}
     Check -->|yes| Run[Startup proceeds]
-    Check -->|no| Fail[Startup fails with ErrCapabilityUnsatisfied<br/>naming seam, implementation, capability, mode]
+    Check -->|no| Fail[Startup fails with ErrCapabilityUnsatisfied<br/>naming the component, the missing capabilities and the mode]
 ```
 
 The constraint is one-directional: a multi-replica deployment excludes
 in-process implementations, while a single-process deployment excludes
-**nothing**. The framework ships no "production" or "test" preset —
+**nothing**. The framework ships no "production" or "test" composition —
 the assembling application judges which composition counts as
 production.
 
@@ -214,21 +213,23 @@ containers.)
 
 ## The module wiring contract
 
-Every backend module implements one `the module contract` interface and
-registers everything it contributes — routes, config schema, feature
-flags, permissions, job handlers, notification types, events, audit
-actions — through a **single `Register(reg *pkgcore.ComponentRegistry)` call**. The
-declaration face is the `*pkgcore.ComponentRegistry` view: one registration seat per
-mechanism, answered by both the assembly's `ComponentRegistry` and the
-component assembly's `ComponentRegistry`.
+Every backend module ships one `pkgcore.Component` descriptor whose
+`Init` callback runs the module's **single
+`Register(reg *pkgcore.ComponentRegistry)` declaration body**; that
+body registers everything the module contributes — routes, config
+schema, feature flags, permissions, job handlers, notification types,
+events, audit actions. The declaration face is the
+`*pkgcore.ComponentRegistry`: ten registration seats, one per
+mechanism, accepting writes only while the assembly's Init stage runs.
 
-**Why one `Register` call instead of eight interface methods?**
-Under lockstep versioning, changing the `Module` interface is a
+**Why one declaration body instead of eight descriptor callbacks?**
+Under lockstep versioning, changing the descriptor contract is a
 breaking change that breaks every module at once. A new cross-cutting
-mechanism becomes a new seat on the declaration face — a `*pkgcore.ComponentRegistry`
-accessor plus the registrar behind it; existing modules do not change
-and do not recompile. The declaration face exists precisely so that
-adding a mechanism never changes the `Module` interface.
+mechanism becomes a new seat on the declaration face — a
+`*pkgcore.ComponentRegistry` seat accessor plus the registrar behind
+it; existing modules do not change and do not recompile. The
+declaration face exists precisely so that adding a mechanism never
+changes the contract every module's descriptor carries.
 
 Registration is declarative, which pays dividends elsewhere:
 permission lists feed the admin console's role surface, config and
@@ -238,12 +239,15 @@ module ships its assets — dual-dialect SQL migrations, `zh-CN`/
 `en-US` locale bundles, its own OpenAPI fragment — with its code, so
 version and assets never drift apart.
 
-The kernel is assembled from options, not a mode argument —
-`app.Assemble(opts...)` with `the composition's deployment field`, `the composition configuration`, and the
-per-seam injectors. The engine's `Assemble` drives the component graph, resolves and
-validates every seam, and installs the merged message catalog; a
-module declares during `Register` and reads resolved state
-afterwards.
+The assembly is driven from a composition configuration, not a mode
+argument — `app.Assemble(ctx, reg, spec)` with a `LoadSpec` naming the
+host's configuration target and loader options; the composition
+configuration's `deployment` key declares the topology and its
+`components` block selects which components compose. The engine's
+`Assemble` plans the component graph, constructs in dependency order,
+validates every selected component's declared capabilities against the
+mode, and runs each stage; a module declares during its `Register`
+window and reads resolved state afterwards.
 
 The HTTP middleware chain has one fixed, non-negotiable order, and
 `go/app/chain` is its one implementation:
@@ -297,7 +301,7 @@ ID references, since modules release and migrate independently.
 
 ## Where the design lives
 
-The user guide tells you *how* — install modules, wire the kernel,
+The user guide tells you *how* — install modules, wire the assembly,
 shape the org tree, operate a generated project. This Developer docs
 section tells you *why*. The
 [design principles](/docs/developer-docs/design-principles/) page

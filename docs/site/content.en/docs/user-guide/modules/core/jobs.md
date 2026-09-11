@@ -23,7 +23,7 @@ webhooks — all through this queue.
 Any operation that must not run synchronously inside an HTTP request
 — a job that takes longer than a request should live, a retryable
 side effect, work a caller should not wait for. The host chooses the
-implementation by deployment mode at kernel startup (never branched
+implementation by deployment mode at assembly startup (never branched
 on in business code): `NewStandaloneQueue` over a `dbkit.Open`
 database for standalone, `asynq.NewQueue(redisOpt)` for distributed.
 Business code sees only the `Queue` interface — the same

@@ -54,7 +54,7 @@ Three prohibitions sharpen the boundary:
 The module discipline divides modules by domain cohesion, and app has
 no domain: it registers no routes, config schema, feature flags,
 permissions, job handlers or audit actions, and implements no
-`pkgcore.Module`. It is the discipline's **one recorded exception**,
+module contract. It is the discipline's **one recorded exception**,
 and the reasoning is an exchange: an assembly layer is warranted
 precisely because the alternative is the same glue — the configuration
 load, the boot order, the component drive, the shutdown sequence —

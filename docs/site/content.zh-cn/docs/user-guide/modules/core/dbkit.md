@@ -59,7 +59,7 @@ db, err := dbkit.Open(ctx, dbkit.Options{Dialect: dbkit.DialectPostgres, DSN: ds
 // handle err
 
 reg := dbkit.NewMigrationRegistry()
-if err := reg.Register(billingModule); err != nil { // billingModule: 你的 the module contract
+if err := reg.Register(billingModule); err != nil { // billingModule: 你的模块值
     // handle err
 }
 if err := reg.Apply(ctx, db, dbkit.DialectPostgres); err != nil {
@@ -101,7 +101,7 @@ if err := reg.Apply(ctx, db, dbkit.DialectPostgres); err != nil {
 - **审计采集**——可选 `Options.AuditBus`(加 `AuditModels`)把针对
   `Auditable` 模型的每次增删改捕获为 `dbkit.write.captured`,只在
   写入事务真正提交后发布;`go/dbkit/audit` 提供只追加的
-  `AuditEvent` 模型、迁移、`Emit` 路径与持久化 `Module`。
+  `AuditEvent` 模型、迁移、`Emit` 路径与持久化 `audit.Module`。
 - **测试辅助**——`dbkit/dbtest` 的 `NewSQLite(t)`/`NewPostgres(t)`
   返回插件齐备的连接供模块测试;强制的隔离断言在 `tenancy` 的
   `tenancytest` 里。

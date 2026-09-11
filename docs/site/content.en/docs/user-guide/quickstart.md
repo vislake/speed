@@ -87,7 +87,7 @@ go run ./go/saasctl new --speed-root . --with="" ../my-app-bare
 |---|---|
 | `saasctl new [flags] <target-directory>` | Materializes the project skeleton into a new directory from saasctl's embedded template tree, substituting the app's module path and the resolved speed-checkout path. Exit codes: 0 success/help, 2 usage error, 1 execution error. |
 | `saasctl upgrade --version vX.Y.Z [go.mod]` | Rewrites a consumer `go.mod`'s `github.com/vislake/speed/go/*` requires to one target version, in place, byte-for-byte preserving everything else (third-party requires with their `// indirect` markers, `replace` blocks, comments, formatting). `--version` is required and validated against the release-version grammar; a second run over an already-rewritten file is a no-op. Rewrites Go `go.mod` files only. |
-| `saasctl db migrate [go.mod]` | Applies the SQL migrations of exactly the migration-shipping modules the project's `go.mod` requires — `authn`, `config`, `org`, `pki` and `rbac`, in alphabetical order; 33 files for the full selection (`authn` 11, `config` 1, `org` 9, `pki` 9, `rbac` 3) — to the project's SQLite database, one transaction per module, every file recorded in `schema_migrations`. Idempotent; an existing database file with no `schema_migrations` ledger is refused. |
+| `saasctl db migrate [go.mod]` | Applies the SQL migrations of exactly the migration-shipping modules the project's `go.mod` requires — `authn`, `config`, `org`, `pki` and `rbac`, in alphabetical order; 34 files for the full selection (`authn` 12, `config` 1, `org` 9, `pki` 9, `rbac` 3) — to the project's SQLite database, one transaction per module, every file recorded in `schema_migrations`. Idempotent; an existing database file with no `schema_migrations` ledger is refused. |
 | `saasctl config print [go.mod]` | Renders how a generated project's bootstrap configuration resolves — one row per `APP_*`/`PORT` variable the generated `cmd/server/config.go` parses, showing the resolved value and its provenance, secret rows `[redacted]` whatever the environment holds; malformed input is refused exactly when the app would refuse to boot. |
 
 ## 3. Migrate the database and run
@@ -108,10 +108,12 @@ go run .
 
 The boot defaults: standalone deployment mode, a SQLite database `app.db`
 in the current directory (`APP_DB_PATH` overrides), port 8080 (`PORT`
-overrides). The generated app applies its own migrations at startup
-(`the assembly`'s `Apply` step) — `db migrate` is the
-operator-driven twin of that step, for when you want the schema ready
-before the first boot. CLI-then-boot and boot-only agree.
+overrides). The generated app applies its own migrations at every
+startup — the selected db component runs them in the assembly's
+`Verify` stage, idempotent through the `schema_migrations` ledger —
+and `db migrate` is the operator-driven twin of that step, for when
+you want the schema ready before the first boot. CLI-then-boot and
+boot-only agree.
 
 From the moment the skeleton boots, `/healthz` and
 `/api/v1/config/public` answer 200, and registering an account through

@@ -222,7 +222,7 @@ if err = app.Assemble(ctx, reg, app.LoadSpec{Host: &hostConfig, Options: loaderO
 然后以 `GOWORK=off` 运行 `go mod tidy` 与 `go run .`(别让 checkout
 自己的 `go.work` 渗进构建)。tidy 会拉取一次第三方依赖。
 
-**预期结果。** 程序在 stdout 打印下面七行;内核自己的接缝组合日志行
+**预期结果。** 程序在 stdout 打印下面七行;装配自己的能力校验日志行
 (含内存接缝的 `WARN`)先打到 stderr:
 
 ```

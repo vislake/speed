@@ -29,8 +29,8 @@ Key-material lifecycle needs tables, `jobs` scheduling and tenant
 context, none of which belong in the `pkgcore` dependency floor; it is
 a different concern from authentication (who the caller is), which
 `authn` already owns; and `dbkit` sits below it in the graph, so
-housing it there would be circular. The module implements
-`the module contract` like any business module.
+housing it there would be circular. The module ships a
+`Component` descriptor like any business module.
 
 Inside, two layers with one boundary: the **key-lifecycle layer**
 (the `Signer` seam, the state machine, the expiry scan) and the

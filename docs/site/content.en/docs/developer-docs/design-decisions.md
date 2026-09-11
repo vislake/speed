@@ -35,8 +35,8 @@ documents once described.
 
 ## ADR 0001: `Module.Migrations()` returns `embed.FS`
 
-The `Module` interface is the wiring contract every module implements,
-and it lives in `pkgcore` — the dependency floor. The design documents
+The module contract is the wiring contract every module implements,
+and its vocabulary lives in `pkgcore` — the dependency floor. The design documents
 specified `Migrations() dbkit.MigrationSet`, which would force
 `pkgcore` to import `dbkit`. `dbkit` already imports `pkgcore` (for
 the tenant-context primitives and the module contract itself), so the
@@ -47,7 +47,7 @@ The decision: `Migrations()` returns the standard library's
 module's migrations are interpreted (dialect selection, versioning) is
 `dbkit.MigrationRegistry`'s business, applied after the interface
 boundary. Consequences: `pkgcore` keeps zero import-path dependency on
-`dbkit`; dialect logic stays out of the `Module` interface; the design
+`dbkit`; dialect logic stays out of the module contract; the design
 documents were corrected in the same change.
 
 [Read ADR 0001](https://github.com/vislake/speed/blob/main/docs/adr/0001-module-migrations-return-embed-fs.md)

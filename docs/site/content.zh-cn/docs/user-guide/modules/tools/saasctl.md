@@ -14,9 +14,9 @@ require 重写到同一个锁步版本(`upgrade`)、把各模块的 SQL 迁移�
 (`config print`)。
 
 与本节参考里的每个模块都不同,没有任何东西会把 saasctl 组装进
-二进制:它不实现 `the module contract`,业务方代码从不 import 它,参考
+二进制:它不实现任何模块(不带组件),业务方代码从不 import 它,参考
 应用也刻意不接它——它的消费方是生成的项目。它在开发期作用于项目
-边界,从不进入运行中的内核。目前还没有可用的发布物,所以它从
+边界,从不进入运行中的服务。目前还没有可用的发布物,所以它从
 checkout 运行(`go run ./go/saasctl <command>`,在仓库根目录)。
 四个命令共享同一套退出码契约——**0** 成功与帮助,**2** 用法错误,
 **1** 执行错误——都接受可选的 `[go.mod]` 参数(项目目录内默认
@@ -87,7 +87,7 @@ saasctl db migrate [go.mod]
 `config`、`org`、`pki`、`rbac`,按字母序——的 SQL 迁移,每个模块
 一个事务,每个文件落地时都记录进 `schema_migrations`;`pki` 的表
 只在 go.mod 确实 require 了 `go/pki` 时才迁移。完整的
-`authn+org+rbac` 组合应用 33 个文件,各模块的数目随它们自己的
+`authn+org+rbac` 组合应用 34 个文件,各模块的数目随它们自己的
 迁移树变动。重跑只应用未记录的部分并报告数据库已是最新;对着迁移
 过的文件启动时,应用本会执行的启动 `Apply` 变成空转——本命令正是
 那一步的运维方手动版本。
@@ -139,8 +139,8 @@ SQLite 路径行报告生效文件,相对路径解析出不同结果时原始值
 [`github.com/vislake/speed/go/app`](/zh-cn/docs/user-guide/modules/app/),每个生成项目与参考应用一样直接
 import——各宿主自己的 `server.go` 把组件注册到
 `pkgcore.ComponentRegistry`,经引擎的 `Assemble` 驱动,并由宿主自己
-的监听器对外服务;仓库有一道门禁止任一宿主自行重新声明这套内核或
-重抛出引擎掌管的装配步骤。
+的监听器对外服务;仓库有一道门禁止任一宿主自行重新声明这套共享组
+装或重抛出引擎掌管的装配步骤。
 
 启动默认值:standalone 形态、SQLite `app.db`、端口 8080。
 `/healthz` 与 `/api/v1/config/public` 应答 200,注册应答 201;但骨架

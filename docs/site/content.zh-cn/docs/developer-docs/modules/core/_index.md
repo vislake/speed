@@ -9,7 +9,7 @@ bookCollapseSection: true
 
 core 组的七个模块是每个 speed 二进制的依赖地板。分工,每模块一句话:
 
-- **pkgcore**——装配契约(`Module`/`ComponentRegistry`/`Component`)、带 N 套实现与能力声明的基础设施 seam 接口、租户上下文原语、结构化错误与消息目录。不 import 任何其它 speed 模块。
+- **pkgcore**——装配契约(`ComponentRegistry`/`Component`)、带 N 套实现与能力声明的基础设施 seam 接口、租户上下文原语、结构化错误与消息目录。不 import 任何其它 speed 模块。
 - **dbkit**——双方言数据访问层:安全包裹的 `Open`、带标记删除与门禁硬删除语义的强制泛型 `Repository[T]`、迁移聚合、字段级加密与盲索引。在上下文已携带租户之后执行租户隔离。
 - **tenancy**——隔离的输入侧:决定请求携带哪个租户(解析中间件)、系统上下文逃生舱的带审计封装,以及每个仓储必须运行的隔离断言套件。
 - **observability**——导出器选择是一个选项的 OpenTelemetry 装配、默认开启脱敏的上下文感知结构化日志器、标签有界的 HTTP 埋点。
@@ -34,8 +34,8 @@ flowchart TB
 
 七个模块分两种形态,认清形态就知道怎么用:
 
-- **内核组装的模块**——`config` 与 `jobs`(以及 core 之上的每个模块)实现 `the module contract`,经一次 `Register` 调用贡献路由、配置 schema、权限、事件与任务处理器,由内核组装。`config` 还需要在引导完成后调它的 `Attach`,因为它的 schema 是从注册表*合并*声明折出的。
-- **直接使用、不经内核**——`tenancy` 的中间件守 HTTP 入口,`observability.Init` 在进程启动时跑,`jobs` 队列由宿主构造并启动(队列 seam 刻意没有内核座位),`ratelimit` 是无物可注册的纯库。
+- **装配组合的模块**——`config` 与 `jobs`(以及 core 之上的每个模块)携带 `Component` 描述符,经一次 `Register` 声明体贡献路由、配置 schema、权限、事件与任务处理器,由装配驱动。`config` 还要在每个组件的 `Init` 都跑完之后完成它的 `Attach`,因为它的 schema 是从注册表*合并*声明折出的。
+- **直接使用、不经装配**——`tenancy` 的中间件守 HTTP 入口,`observability.Init` 在进程启动时跑,`jobs` 队列由宿主构造并启动(队列刻意没有声明席位),`ratelimit` 是无物可注册的纯库。
 
 ## 贯穿全组的三个设计线索
 

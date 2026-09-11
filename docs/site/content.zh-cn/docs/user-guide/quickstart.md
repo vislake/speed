@@ -77,7 +77,7 @@ go run ./go/saasctl new --speed-root . --with="" ../my-app-bare
 |---|---|
 | `saasctl new [flags] <target-directory>` | 从 saasctl 内嵌的模板树把项目骨架生成到一个新目录,替换应用的 module path 与解析出的 speed checkout 路径。退出码:0 成功/帮助,2 用法错误,1 执行错误。 |
 | `saasctl upgrade --version vX.Y.Z [go.mod]` | 把业务方 `go.mod` 里 `github.com/vislake/speed/go/*` 的 require 就地重写到同一个目标版本,逐字节保留其余一切(第三方 require 及其 `// indirect` 标记、`replace` 块、注释、格式)。`--version` 必填,并按发布版本号语法校验;对已重写过的文件再运行一次是无操作。只重写 Go 的 `go.mod` 文件。 |
-| `saasctl db migrate [go.mod]` | 把项目 `go.mod` 所要求、恰好带迁移文件的模块——`authn`、`config`、`org`、`pki`、`rbac`,按字母序——的 SQL 迁移应用到项目的 SQLite 数据库,每个模块一个事务,每个文件落地时都记录进 `schema_migrations`;完整组合共 33 个文件(`authn` 11、`config` 1、`org` 9、`pki` 9、`rbac` 3)。幂等;没有 `schema_migrations` 台账的既有数据库文件会被拒绝。 |
+| `saasctl db migrate [go.mod]` | 把项目 `go.mod` 所要求、恰好带迁移文件的模块——`authn`、`config`、`org`、`pki`、`rbac`,按字母序——的 SQL 迁移应用到项目的 SQLite 数据库,每个模块一个事务,每个文件落地时都记录进 `schema_migrations`;完整组合共 34 个文件(`authn` 12、`config` 1、`org` 9、`pki` 9、`rbac` 3)。幂等;没有 `schema_migrations` 台账的既有数据库文件会被拒绝。 |
 | `saasctl config print [go.mod]` | 展示生成项目启动配置的解析结果——生成 `cmd/server/config.go` 解析的每个 `APP_*`/`PORT` 变量一行,显示解析出的值与来源,密钥行无论环境变量里是什么都显示 `[redacted]`;输入非法时的拒绝方式与应用自身拒绝启动的方式完全一致。 |
 
 ## 3. 迁移数据库并运行
@@ -97,7 +97,8 @@ go run .
 
 启动默认值:standalone 部署形态、当前目录下名为 `app.db` 的 SQLite
 数据库(`APP_DB_PATH` 可覆盖)、8080 端口(`PORT` 可覆盖)。生成的应用
-自己会在启动时应用迁移(`the assembly` 的 `Apply` 步骤)——`db
+自己会在每次启动时应用迁移——被选的 db 组件在装配的 `Verify` 阶段
+运行它们,经 `schema_migrations` 台账幂等——`db
 migrate` 是同一步骤的运维方手动版本,适合想在第一次启动前就把 schema
 准备好的场景;先 CLI 后启动与只靠启动两条路结果一致。
 

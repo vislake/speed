@@ -39,11 +39,13 @@ leaking rows across tenants.
    tenant-filtered CRUD plus the `dbkit.WithTenantSession` transaction
    shape for multi-statement writes.
 3. **Migrate with versioned SQL, never `AutoMigrate`.** Each module
-   ships dual-dialect migration sets (SQLite and PostgreSQL) applied by
-   `dbkit.MigrationRegistry`; a module exposes them through its
-   `the module contract` `Migrations()`. Both dialects are first-class —
-   avoid PostgreSQL-only features (`gen_random_uuid()`, native arrays,
-   `NOW()`); generate IDs in the application.
+   ships dual-dialect migration sets (SQLite and PostgreSQL) as its
+   component's `Migrations` embed, which `dbkit`'s ledger applies — the
+   selected db component runs them in the assembly's `Verify` stage,
+   and `saasctl db migrate` applies the same sets ahead of a boot.
+   Both dialects are first-class — avoid PostgreSQL-only features
+   (`gen_random_uuid()`, native arrays, `NOW()`); generate IDs in the
+   application.
 4. **Classify every table before designing it.** Tenant data is
    tenant-scoped and runs `tenancytest.AssertIsolated`; identity data
    (a person who may belong to several tenants) and platform data
@@ -63,9 +65,10 @@ switches, AI keys. Two decisions shape its use:
 
 - **Register vs Attach.** Modules *declare* their config items and
   flags on the registry during `Register`; `Attach` — exactly once,
-  after `the assembly` returns — folds every module's declarations
-  into one schema and refuses a cipher-less startup while any
-  `Sensitive` item exists. A host keeps the `*Service` Attach returns.
+  after the assembly's declaration turn has finished — folds every
+  module's declarations into one schema and refuses a cipher-less
+  startup while any `Sensitive` item exists. A host keeps the
+  `*Service` Attach returns.
 - **Scope tiers and fallback.** Every value lives at one tier
   (tenant / system); reads fall back narrow-to-wide: tenant row, then
   system row, then the schema default. A tenant-less context never
@@ -276,7 +279,7 @@ then run `go mod tidy` and `go run .` with `GOWORK=off` (the checkout's own
 dependencies once.
 
 **Expected result.** The program prints the six stdout lines below; the
-kernel's own seam-composition log lines go to stderr first:
+assembly's own capability-validation log lines go to stderr first:
 
 ```
 subscription: plan_pro active

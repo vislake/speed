@@ -9,7 +9,7 @@ description: "应用装配层:解析配置与 composition 的装载器、七阶�
 app 是 speed 的**应用装配层**:每个应用自己的启动代码所基于的结构。
 [总体架构页](/zh-cn/docs/developer-docs/architecture/)把它画在模块图
 的顶层节点;它也是唯一**没有业务域**的模块:没有表、没有路由、没有
-权限、不实现 `pkgcore.Module`。它拥有的是宿主启动中本来会在每个宿
+权限、不实现任何模块契约。它拥有的是宿主启动中本来会在每个宿
 主里被手写一遍的那一半:配置装载、composition 计划、七阶段组件驱
 动、关停时序与 HTTP 帮手(为什么无域模块仍然成立,见
 [设计页](/zh-cn/docs/developer-docs/modules/app/))。
@@ -172,8 +172,8 @@ allowlist)→ 你的受保护 handler**;两个分支从 authn 的输出按结构
 | `ShareExpiryReader` | config 的惰性 handle → sharing 的租户配置读取器 | `sharing.WithTenantConfigReader(bridges.ShareExpiryReader{Handle: configModule.Handle()})` |
 
 三个功能门桥接出于同一个时序原因:`sharing.Module`(以及各门的消
-费方)在 `Kernel.Bootstrap` 返回前就已构造,而 config 的
-`*Service` 要到 `Attach` 之后才存在——经 handle 读取把解析推迟到读
+费方)在装配发布 config 的 `*Service` 之前就已构造——config 要等
+每个组件的 `Init` 轮次都跑完才挂接——经 handle 读取把解析推迟到读
 取时,并在那之前的窗口里 fail closed。
 
 ## 生命周期与失败语义

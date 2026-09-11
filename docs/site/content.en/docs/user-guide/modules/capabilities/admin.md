@@ -87,8 +87,9 @@ a := admin.NewModule(db,
     admin.WithMetering(meteringModule),     // optional: usage-summary dimensions
     admin.WithBilling(billingModule),       // optional, independent of metering
 )
-// in your assembly's module set. Then, after the assembly returns — rbac.Service only
-// exists once rbac's own post-assembly Attach has frozen the catalog:
+// in the component set your composition selects. Then, after the assembly
+// has returned — rbac.Service exists once rbac's Attach has frozen the
+// catalog, inside the assembly's Init window:
 if err := a.AttachRBAC(rbacService); err != nil { /* handle */ }
 ```
 
