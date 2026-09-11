@@ -133,25 +133,37 @@ func openConfigPostgres(t *testing.T, ctx context.Context, pgContainer *postgres
 // purpose is declared -- mirroring what a real Bootstrap performs before
 // Attach, so systemWriteContext works even in a test that never registers
 // a module (none do, but the helper stands alone).
+//
+// The registry carries the caller's bus as its ONE EventBus value
+// (NewRegistryWithBus), and the host's schema items, the module's own
+// declaration turn and the Attach call that snapshots the schema all run
+// inside one real Init window (componenttest.DeclareAll) -- the one stage
+// whose declaration seats accept writes. A Config.Add before the window
+// opened would be refused, and a registry holding a second EventBus would
+// make the module's bus reads ambiguous; both are refusals the assembly
+// itself raises, and this helper drives the assembly the way a real host
+// does instead of working around them.
 func attachConfigService(t *testing.T, db *gorm.DB, bus pkgcore.EventBus, cipher *dbkit.Cipher) *config.Service {
 	t.Helper()
 
 	pkgcore.RegisterSystemPurpose(config.SystemPurposeSystemWrite)
-	reg := componenttest.NewRegistry()
-	reg.Put(bus)
-	if err := reg.Config.Add(pgItems...); err != nil {
-		t.Fatalf("reg.Config.Add: %v", err)
-	}
-	if err := reg.Features.Add(pgFlags...); err != nil {
-		t.Fatalf("reg.Features.Add: %v", err)
-	}
+	reg := componenttest.NewRegistryWithBus(bus)
 	module := config.NewModule(db, config.WithCipher(cipher), config.WithPollInterval(0))
-	if err := componenttest.DeclareInto(reg, module); err != nil {
-		t.Fatalf("Register: %v", err)
-	}
-	svc, err := module.Attach(reg)
-	if err != nil {
-		t.Fatalf("Attach: %v", err)
+	var svc *config.Service
+	if err := componenttest.DeclareAll(reg,
+		func(r *pkgcore.ComponentRegistry) error { return r.Config.Add(pgItems...) },
+		func(r *pkgcore.ComponentRegistry) error { return r.Features.Add(pgFlags...) },
+		module.Register,
+		func(r *pkgcore.ComponentRegistry) error {
+			attached, err := module.Attach(r)
+			if err != nil {
+				return err
+			}
+			svc = attached
+			return nil
+		},
+	); err != nil {
+		t.Fatalf("declare the host's config schema and attach the module: %v", err)
 	}
 	return svc
 }
