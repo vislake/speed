@@ -491,7 +491,7 @@ func (m *Module) Name() string { return moduleName }
 // This is a real answer, not a stub. org sits above dbkit and tenancy in
 // the module graph, but neither is a
 // module -- they are libraries the host wires, and DependsOn
-// enumerates only modules in the bootstrap set. org must also NOT depend on
+// enumerates only modules in the assembly's component set. org must also NOT depend on
 // authn: it learns about users from a domain event and an id, never from
 // authn's Go types -- the canonical module-boundary example. Naming authn
 // here would make org unbootable in a host

@@ -19,7 +19,7 @@ func TestModule_Identity(t *testing.T) {
 		t.Errorf("Name() = %q, want %q", got, moduleName)
 	}
 	if got := m.DependsOn(); got != nil {
-		t.Errorf("DependsOn() = %v, want nil -- sharing depends on no other module in the bootstrap set", got)
+		t.Errorf("DependsOn() = %v, want nil -- sharing depends on no other module in the assembly's component set", got)
 	}
 	spec := m.OpenAPISpec()
 	if len(spec) == 0 {

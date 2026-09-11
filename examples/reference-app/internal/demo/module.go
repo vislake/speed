@@ -14,7 +14,7 @@
 // message catalog from the Locales() of the modules it is given, freezing it
 // once before the registry is returned, and the notification module renders
 // every dispatch from that frozen catalog. A notification type whose copy
-// sits outside the bootstrap set can never render. demo is the smallest
+// sits outside the assembly's component set can never render. demo is the smallest
 // module that qualifies: it declares no tables, no API fragment, no
 // events of its own, no permissions and no configuration -- only two
 // notification types and the two-language template set that renders them.

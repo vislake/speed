@@ -266,7 +266,7 @@ func (m *Module) Name() string { return moduleName }
 
 // DependsOn implements the module contract: nothing. sharing's dependence on a
 // queue is a seam the host wires (WithQueue), not a requirement that the
-// jobs module itself be in the bootstrap set -- the identical reasoning
+// jobs module itself be in the assembly's component set -- the identical reasoning
 // go/storage's own DependsOn doc comment gives.
 func (m *Module) DependsOn() []string { return nil }
 

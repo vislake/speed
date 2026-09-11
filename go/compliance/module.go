@@ -195,7 +195,7 @@ func (m *Module) Name() string { return moduleName }
 // graph), imported directly for its Go API the same sanctioned way
 // go/billing imports go/metering (SharingCreator's own doc comment) --
 // but that is a compile-time package import, not a module the
-// bootstrap set must contain in a particular order, so it still does not
+// assembly's component set must contain in a particular order, so it still does not
 // belong in DependsOn (which is reserved for "this module's Register call
 // requires another module to have registered first" -- compliance's own
 // Register never reads anything go/sharing's Register declares).

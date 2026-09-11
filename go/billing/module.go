@@ -190,7 +190,7 @@ func (m *Module) Name() string { return moduleName }
 // go/metering's Go API directly (UsageReader's own doc comment), but it
 // wires no cross-module event subscription and no consumer of any other
 // module's pkgcore.ComponentRegistry declarations, so DependsOn -- which
-// enumerates only modules in the bootstrap set billing itself requires to
+// enumerates only modules in the assembly's component set billing itself requires to
 // have registered first -- returns nil, the same answer go/metering's and
 // go/pki's Module give for the identical reason.
 func (m *Module) DependsOn() []string { return nil }

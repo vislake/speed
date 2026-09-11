@@ -17,7 +17,7 @@ func TestModule_Identity(t *testing.T) {
 		t.Errorf("Name() = %q, want %q", got, moduleName)
 	}
 	if got := m.DependsOn(); got != nil {
-		t.Errorf("DependsOn() = %v, want nil -- metering depends on no other module in the bootstrap set this round", got)
+		t.Errorf("DependsOn() = %v, want nil -- metering depends on no other module in the assembly's component set", got)
 	}
 	if got := m.OpenAPISpec(); got != nil {
 		t.Errorf("OpenAPISpec() = %v, want nil -- metering has no HTTP surface this round", got)

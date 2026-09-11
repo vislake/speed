@@ -234,7 +234,7 @@ func (m *Module) Name() string { return moduleName }
 // DependsOn implements the module contract: nothing. metering wires no
 // cross-module event subscription and no consumer of any other module's
 // declarations, so DependsOn -- which enumerates only modules in the
-// bootstrap set metering itself requires -- returns nil, the same answer
+// assembly's component set metering itself requires -- returns nil, the same answer
 // go/pki's identical-shaped Module gives for the same reason.
 func (m *Module) DependsOn() []string { return nil }
 
