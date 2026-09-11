@@ -16,10 +16,10 @@ rules' living proof, in the same shape as the sibling checker suites:
     while a test file's own use of the identifiers does not;
   * a re-grown kernel sentinel in a non-test file fires, while the same
     text in a test file stays silent;
-  * the sentinel and call-ban allowances stay scoped to the one named
-    file (the reference app's application component): the sanctioned
-    shapes there stay silent, the same shapes in another host file --
-    and in the skeleton's tree -- still fire;
+  * the sentinel and call-ban allowances stay scoped to the named files
+    (each host's assembly core and application component): the sanctioned
+    shapes there stay silent, and the same shapes in any other host file
+    still fire;
   * a re-issued engine-owned assembly call (pkgcore.NewKernel, dbkit.Open,
     http.NewServeMux, chain.Chain under any alias, obs.Init, ...) in a
     non-test file fires, while the sanctioned engine options and the same
@@ -352,11 +352,11 @@ class ComponentAssemblyStagedRules(unittest.TestCase):
 
 
 class AllowedFileRules(unittest.TestCase):
-    """The one-file allowances the reference app's assembly relies on: the
-    assembly core creates the registry and owns the process's signal
-    handling, and the host's database component opens the connection with
-    its write-capture scope. Each stays silent in its own file and fires
-    from any other."""
+    """The one-file allowances the two hosts' assembly relies on: each
+    host's assembly core creates the registry, owns the process's signal
+    handling and composes its own HTTP face, and the reference app's
+    database component opens the connection with its write-capture scope.
+    Each stays silent in its own file and fires from any other."""
 
     ALLOWED_BODIES = {
         "examples/reference-app/internal/app/server.go": (
@@ -366,6 +366,19 @@ class AllowedFileRules(unittest.TestCase):
             "\tctx, stop := signal.NotifyContext(ctx, syscall.SIGINT)\n"
             "\t_ = reg\n"
             "\t_ = stop\n"
+            "}\n"
+        ),
+        "go/saasctl/internal/template/project/selection/authn/server.go": (
+            "package main\n\n"
+            "func assemble(ctx *Context) {\n"
+            "\treg := pkgcore.NewComponentRegistry()\n"
+            "\tctx, stop := signal.NotifyContext(ctx, syscall.SIGINT)\n"
+            "\tmux := http.NewServeMux()\n"
+            "\tsrv := &http.Server{BaseContext: baseContext}\n"
+            "\t_ = reg\n"
+            "\t_ = stop\n"
+            "\t_ = mux\n"
+            "\t_ = srv\n"
             "}\n"
         ),
         "examples/reference-app/internal/app/host_wiring.go": (

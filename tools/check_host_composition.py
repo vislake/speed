@@ -79,6 +79,17 @@ import sys
 TEMPLATE_TREE = "go/saasctl/internal/template/project"
 APP_TREE = "examples/reference-app"
 
+# The five selection server.go templates `saasctl new` materializes into a
+# generated project's cmd/server/server.go: each selection's own assembly
+# file, which registers the host's own components, drives the assembly
+# through the engine's Assemble, owns the process's signal handling and
+# composes the host's HTTP face. Each is named in the allowances below for
+# exactly the host-owned shapes it carries.
+TEMPLATE_SELECTION_SERVERS = tuple(
+    "go/saasctl/internal/template/project/selection/%s/server.go" % key
+    for key in ("authn+org+rbac", "authn+rbac", "authn+org", "authn", "none")
+)
+
 # The platform kernel module the shared symbols now live in (named in the
 # findings so a reader is sent to the import that fixes them).
 KERNEL_MODULE = "github.com/vislake/speed/go/app"
@@ -109,16 +120,21 @@ HOST_COMPOSITION_IDENTIFIERS = (
 # (sentinel, allowed), read as the call bans' allowed tuple is:
 #
 #   * BaseContext -- allowed in the reference app's application component
-#     (examples/reference-app/internal/app/component.go), which composes and
-#     serves the host's own HTTP face: the request base context it hands its
-#     listener is that component's own contract, not a re-grown copy of the
-#     engine's serve loop. Every other host file still fires, and the
-#     ListenAndServe entry stays unconditionally banned (the component calls
-#     net.Listen plus Serve, so no host file spells the engine's listen
-#     call).
+#     (examples/reference-app/internal/app/component.go) and in each
+#     selection server.go template (TEMPLATE_SELECTION_SERVERS): both
+#     compose and serve the host's own HTTP face, and the request base
+#     context handed to a listener is that face's own contract, not a
+#     re-grown copy of the engine's serve loop. Every other host file still
+#     fires, and the ListenAndServe entry stays unconditionally banned (the
+#     face calls net.Listen plus Serve, so no host file spells the engine's
+#     listen call).
 HOST_COMPOSITION_SENTINELS = (
     ("ListenAndServe", ()),
-    ("BaseContext", ("examples/reference-app/internal/app/component.go",)),
+    (
+        "BaseContext",
+        ("examples/reference-app/internal/app/component.go",)
+        + TEMPLATE_SELECTION_SERVERS,
+    ),
     ('"/healthz"', ()),
     ('"/metrics"', ()),
     ('"/api/v1/authn"', ()),
@@ -167,15 +183,17 @@ HOST_COMPOSITION_PATHS = (
 #         parameter of the connection, so the host's database component
 #         owns the call. Any other host file still fires.
 #       - signal.NotifyContext in the reference app's assembly core
-#         (examples/reference-app/internal/app/server.go): the signal
-#         handling of Run belongs to the host whose listener the process
-#         owns. Any other host file still fires.
+#         (examples/reference-app/internal/app/server.go) and in each
+#         selection server.go template (TEMPLATE_SELECTION_SERVERS): the
+#         signal handling of Run belongs to the host whose listener the
+#         process owns. Any other host file still fires.
 #       - http.NewServeMux in the reference app's application component
-#         (examples/reference-app/internal/app/component.go): the mux that
-#         component's Init composes IS the host's own face -- the platform
-#         liveness routes, the protected-face composition and the SPA wrap
-#         hang off it there -- so that one file owns the call. Any other
-#         composition-path file still fires.
+#         (examples/reference-app/internal/app/component.go) and in each
+#         selection server.go template (TEMPLATE_SELECTION_SERVERS): the mux
+#         the application component's Init composes IS the host's own face
+#         -- the platform liveness routes, the protected-face composition
+#         and the SPA wrap hang off it there -- so those files own the call.
+#         Any other composition-path file still fires.
 HOST_COMPOSITION_CALL_BANS = (
     ("pkgcore.NewKernel", r"(?<![A-Za-z0-9_.])pkgcore\.NewKernel\(", "tree", ()),
     (".Bootstrap(", r"\.Bootstrap\(", "tree", ()),
@@ -190,7 +208,8 @@ HOST_COMPOSITION_CALL_BANS = (
         "http.NewServeMux",
         r"(?<![A-Za-z0-9_.])http\.NewServeMux\(",
         "composition",
-        ("examples/reference-app/internal/app/component.go",),
+        ("examples/reference-app/internal/app/component.go",)
+        + TEMPLATE_SELECTION_SERVERS,
     ),
     (
         "jobs.NewStandaloneQueue",
@@ -208,7 +227,7 @@ HOST_COMPOSITION_CALL_BANS = (
         "signal.NotifyContext",
         r"(?<![A-Za-z0-9_.])signal\.NotifyContext\(",
         "tree",
-        ("examples/reference-app/internal/app/server.go",),
+        ("examples/reference-app/internal/app/server.go",) + TEMPLATE_SELECTION_SERVERS,
     ),
     ("chain.Chain", r"(?<![A-Za-z0-9_.])[A-Za-z0-9_]*chain\.Chain\(", "tree", ()),
     ("obs.Init", r"(?<![A-Za-z0-9_.])obs\.Init\(", "tree", ()),
@@ -221,8 +240,9 @@ HOST_COMPOSITION_CALL_BANS = (
 # retires into the single ban set once the old option surface is gone (see
 # the module docstring's staging paragraph).
 #
-# The reference app's assembly core (internal/app/server.go) is the one
-# allowed caller of pkgcore.NewComponentRegistry: that file is where the host
+# The reference app's assembly core (internal/app/server.go) and each
+# selection server.go template (TEMPLATE_SELECTION_SERVERS) are the allowed
+# callers of pkgcore.NewComponentRegistry: those files are where a host
 # registers its own components and drives the assembly through the engine's
 # Assemble -- the shape this ban exists to force. Any other host file still
 # fires.
@@ -231,7 +251,8 @@ HOST_COMPOSITION_ASSEMBLY_BANS = (
         "pkgcore.NewComponentRegistry",
         r"(?<![A-Za-z0-9_.])pkgcore\.NewComponentRegistry\(",
         "tree",
-        ("examples/reference-app/internal/app/server.go",),
+        ("examples/reference-app/internal/app/server.go",)
+        + TEMPLATE_SELECTION_SERVERS,
     ),
     ("a component-registry Prepare call", r"\.Prepare\(", "composition", ()),
     ("a component-registry Construct call", r"\.Construct\(", "composition", ()),
