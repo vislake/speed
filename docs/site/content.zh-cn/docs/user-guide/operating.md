@@ -1,10 +1,10 @@
 ---
-title: 生成项目的运维
+title: 生成项目的操作
 weight: 4
 description: saasctl 生成项目的日常维护——它可以运行的两种部署形态,以及维持它的 upgrade、db migrate、config print 三个命令。
 ---
 
-# 生成项目的运维
+# 生成项目的操作
 
 [起始项目](../quickstart/)生成并跑起来之后,有三种操作会反复出现:在启动
 前先准备好数据库 schema、把项目迁到新的 speed 发布版本、弄清它启动时
@@ -35,7 +35,7 @@ description: saasctl 生成项目的日常维护——它可以运行的两种�
 
 生成的应用每次启动都会自己应用迁移——被选的 db 组件在装配的
 `Verify` 阶段运行它们,经 `schema_migrations` 台账幂等。
-`saasctl db migrate` 是这一步的运维方手动版本,用于让 schema 在任何
+`saasctl db migrate` 是这一步由操作者手动执行的版本,用于让 schema 在任何
 进程运行前就位——预置好 schema 的首次启动、脚本化的开通步骤、CI 运行。
 
 ```sh
@@ -98,7 +98,7 @@ saasctl upgrade --version v1.0.0 ../my-app/go.mod
   错误码。
 - [模块索引](/zh-cn/docs/user-guide/modules/)——项目可以 require 的每个 Go
   模块与 npm 包,各自链接自己的 `AGENTS.md`。
-- [快速开始](../quickstart/)——生成本页所运维的那个项目。
+- [快速开始](../quickstart/)——生成本页所操作的那个项目。
 
 ## Source
 

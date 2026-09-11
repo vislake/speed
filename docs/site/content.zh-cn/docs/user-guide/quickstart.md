@@ -99,7 +99,7 @@ go run .
 数据库(`APP_DB_PATH` 可覆盖)、8080 端口(`PORT` 可覆盖)。生成的应用
 自己会在每次启动时应用迁移——被选的 db 组件在装配的 `Verify` 阶段
 运行它们,经 `schema_migrations` 台账幂等——`db
-migrate` 是同一步骤的运维方手动版本,适合想在第一次启动前就把 schema
+migrate` 是同一步骤由操作者手动执行的版本,适合想在第一次启动前就把 schema
 准备好的场景;先 CLI 后启动与只靠启动两条路结果一致。
 
 骨架一启动就有两个可依赖的应答:`/healthz` 与 `/api/v1/config/public`
@@ -126,7 +126,7 @@ cd go/authn && go build ./... && go vet ./...
 
 - [参考应用演练](../walkthrough-reference-app/)——驱动一个完全接好线、
   预置了演示数据的应用走真实 HTTP,看登录、权限与租户隔离的实际行为。
-- [生成项目的运维](../operating/)——部署形态简述,以及日常维护项目的
+- [生成项目的操作](../operating/)——部署形态简述,以及日常维护项目的
   `upgrade`/`db migrate`/`config print` 命令。
 - [用户指南](/zh-cn/docs/user-guide/)——按领域阅读:身份与访问、多租户
   与组织、计费、通知等。

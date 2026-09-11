@@ -167,7 +167,7 @@ HTTP 中间件链有一个固定、不可随意调整的顺序,`go/app/chain` �
 
 ## 设计详情所在
 
-用户指南讲*怎么做*:装模块、驱动装配、搭组织树、运维生成的项目。本栏(Developer docs)讲*为什么*。姊妹页[设计原则](/zh-cn/docs/developer-docs/design-principles/)是这一页的搭档:每个模块都遵守的纪律清单,每条规则附理由与执行处。
+用户指南讲*怎么做*:装模块、驱动装配、搭组织树、操作生成的项目。本栏(Developer docs)讲*为什么*。姊妹页[设计原则](/zh-cn/docs/developer-docs/design-principles/)是这一页的搭档:每个模块都遵守的纪律清单,每条规则附理由与执行处。
 
 ## 相关页面
 

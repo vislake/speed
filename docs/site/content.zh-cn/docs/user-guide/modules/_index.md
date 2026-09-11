@@ -53,4 +53,4 @@ speed 不是一个你直接运行的应用,而是你可以拉进自己产品、�
 
 还没构建过 speed 服务,先走[快速开始](/zh-cn/docs/user-guide/quickstart/);
 [演练](../walkthrough-reference-app/)与
-[运维](../operating/)页覆盖本栏分解之前的组装形态。
+[操作](../operating/)页覆盖本栏分解之前的组装形态。

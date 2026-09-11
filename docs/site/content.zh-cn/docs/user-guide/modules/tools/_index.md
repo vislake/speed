@@ -38,7 +38,7 @@ bookCollapseSection: true
 - **发布之时**——`upgrade` 把项目的整个兼容面迁到发布所带的那个
   版本上。
 - **围绕项目**——[参考应用演练](/zh-cn/docs/user-guide/walkthrough-reference-app/)
-  与[生成项目的运维](/zh-cn/docs/user-guide/operating/)两页覆盖
+  与[生成项目的操作](/zh-cn/docs/user-guide/operating/)两页覆盖
   运行中产品的组装形态与日常命令;本组的这一页是两者底下各自的
   完整参考。
 

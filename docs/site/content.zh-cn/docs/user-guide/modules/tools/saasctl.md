@@ -90,7 +90,7 @@ saasctl db migrate [go.mod]
 `authn+org+rbac` 组合应用 34 个文件,各模块的数目随它们自己的
 迁移树变动。重跑只应用未记录的部分并报告数据库已是最新;对着迁移
 过的文件启动时,应用本会执行的启动 `Apply` 变成空转——本命令正是
-那一步的运维方手动版本。
+那一步由操作者手动执行的版本。
 
 默认数据库路径——固定的字面量 `app.db`,绝不从 module path 派生——
 落在 `[go.mod]` 参数旁边,也就是应用文档规定的运行目录;显式
@@ -179,7 +179,7 @@ go run .                             # 启动;启动 Apply 空转
 
 - [快速开始](/zh-cn/docs/user-guide/quickstart/)——一个项目的生成、
   迁移与启动,从头到尾。
-- [生成项目的运维](/zh-cn/docs/user-guide/operating/)——日常命令
+- [生成项目的操作](/zh-cn/docs/user-guide/operating/)——日常命令
   与两种部署形态简述。
 - [模块参考](/zh-cn/docs/user-guide/modules/)——生成项目接线的各
   模块,各自一页。
