@@ -12,7 +12,7 @@
 - **今天一个作业的终结只能靠轮询 `Queue.Get` 观察到**。唯一的推送面是 `FailureHook.OnFailure`(go/jobs/handler.go:134):仅死信、仅进程内、挂在 Handler 上;两个实现相对死信持久化的时序不同(StandaloneQueue 严格在写入之后、asynq 在归档写之前,handler.go:95-133 逐条写明),且被明确裁定为"队列对失败补偿的全部涉入面——补偿属业务模块"。
 - **崩溃面的现状答案**是 `resetInterruptedRecords`(store.go:908):Start 时把残留 `running` 行重置重跑——本模块不存在"至多一次执行",至少一次是既定语义,消费者幂等是每个跨进程消费方的既有义务。
 - **队列目前没有总线**:`NewStandaloneQueue(db, opts...)` 与 `asynq.NewQueue(redisOpt, opts...)` 都不接受 `pkgcore.EventBus`;`jobs` 也不是 `pkgcore.Module`(根包无 `Register`),`reg.Jobs` 是外部向它声明的座席(`JobHandlerRegistrar`,go/pkgcore/registry.go:324),由 `jobs.Wire`(go/jobs/wire.go)在 Bootstrap 之后排空。
-- **"列终态作业"的唯一读面**是两个实现各自的 `DeadLetterJobs(ctx)`(go/jobs/standalone_queue.go:577;asynq 同名),不在 `Queue` 接口上,且只覆盖死信一类。
+- **"列终态作业"的唯一读面**是两个实现各自的 `DeadLetterJobs(ctx)`(go/jobs/queue_standalone.go:577;asynq 同名),不在 `Queue` 接口上,且只覆盖死信一类。
 
 ### 1.2 观察一:信用结算的轮询与持久台账
 

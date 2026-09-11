@@ -32,7 +32,7 @@
 `onUserCreated` 永远返回 nil(:292 起):in-process 总线上 handler 的错误会回灌进 authn 自己的 `Publish`,而注册已经(或即将)答案是 201,所以失败只能记 Error 再自行恢复。恢复链是:
 
 - 同步尝试失败 → `scheduleProvisionRetry` 入队一条 `SelfServiceProvisionTask`(payload 只带 user id;job 的 `TenantID` 是诊所,worker 由 jobs 契约重建租户上下文,go/jobs/worker.go 的 `jobContext`);
-- handler `SelfServiceProvisionJobHandler.Handle`(:408)重跑同一个 `provision`;队列按 `DefaultBackoffBase = 1s`、`DefaultBackoffMax = 5m`(go/jobs/standalone_queue.go:73/:77)退避重试;
+- handler `SelfServiceProvisionJobHandler.Handle`(:408)重跑同一个 `provision`;队列按 `DefaultBackoffBase = 1s`、`DefaultBackoffMax = 5m`(go/jobs/queue_standalone.go:73/:77)退避重试;
 - 预算耗尽即死信,`OnFailure`(:446,jobs.FailureHook,go/jobs/handler.go:134)补一条宿主自己的终局 Error,点名账号。
 
 这条"事件只发一次、失败靠队列自重试"的设计,org 模块自己的文档已经认定并写死:org 的订阅者(go/org/events.go:300-304)明说"transient database error ... is logged and never retried (nothing re-fires the event), so a host that needs its new users' workspaces guaranteed converges them through a queue-backed retry of its own"。宿主链正是那个 "queue-backed retry of its own"。

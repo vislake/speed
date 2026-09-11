@@ -22,7 +22,7 @@ Vitest + Testing Library 做组件与 hook 测试；Playwright 做 e2e。UI 包�
 
 这是硬性约定，不是风格偏好——目的是让 `go test ./...`（默认只跑单元测试，秒级完成）和 `go test -tags=integration ./...`（显式触发，允许慢）这条分层在物理上可执行，而不是靠开发者自觉：
 
-- **单元测试文件名必须是被测目标的前缀**：`registry.go` 对应 `registry_test.go`，`memory_kvstore.go` 对应 `memory_kvstore_test.go`（Go 原生约定）；前端同理，`PlanCard.tsx` 对应 `PlanCard.test.tsx`。不与单个源文件一一对应的测试文件，必须用它验证的行为语义命名（如 `concurrency_test.go`），禁止用 `misc`/`extra`/`independent` 这类不表意的名字——名字是未来定位测试的第一手段，含糊的名字让这个手段失效。
+- **单元测试文件名必须是被测目标的前缀**：`registry.go` 对应 `registry_test.go`，`kv_memory.go` 对应 `kv_memory_test.go`（Go 原生约定）；前端同理，`PlanCard.tsx` 对应 `PlanCard.test.tsx`。不与单个源文件一一对应的测试文件，必须用它验证的行为语义命名（如 `concurrency_test.go`），禁止用 `misc`/`extra`/`independent` 这类不表意的名字——名字是未来定位测试的第一手段，含糊的名字让这个手段失效。
 - **`example_test.go` 是 Go 惯例的例外**：godoc 可渲染的 `Example*` 函数按约定放在这个文件名下，不受"按目标命名"规则约束。
 - **测试工具与帮助类放在独立的测试目录**：Go 侧是模块内的 `internal/testutil` 子包，前端侧是每个包的 `test-utils/` 目录；跨测试文件复用的 fake、builder、断言辅助函数都放这里，不允许在 `_test.go` 里内联重复定义（Go 的 `_test.go` 本身也无法被其他包 import，这是该约定的硬约束，不只是风格要求）。
 - **集成测试与单元测试物理分离**：Go 侧每个模块用 `integration_test/` 子目录 + `//go:build integration` 构建标签；前端侧用 Playwright 原生的 `e2e/` 目录。任何一次普通的单元测试运行都不会碰到集成测试。
@@ -132,10 +132,10 @@ Vitest + Testing Library 做组件与 hook 测试；Playwright 做 e2e。UI 包�
 
 > **实施状态注记（benchmark-suite 轮次）：** 上面清单里的四组热点已随归属模块落地为可跑的 benchmark（本轮的 `feat/benchmark-suite` 分支），全部满足"`go test -bench` 直接运行、无 Docker 无网络"的约束（SQLite 走进程内临时文件，基础设施 seam 走进程内实现）：
 >
-> - `go/jobs` 的 `standalone_queue_bench_test.go`：单次持久化 enqueue 的写路径成本（校验、id 生成、带幂等键唯一索引检查的事务插入、日志行），以及单个任务走完 dispatcher claim → worker 执行 → 终态落库的全链路延迟——分 15ms 与默认 200ms 两种轮询周期跑，两条结果的差就是轮询粒度对端到端延迟的贡献；
+> - `go/jobs` 的 `queue_standalone_bench_test.go`：单次持久化 enqueue 的写路径成本（校验、id 生成、带幂等键唯一索引检查的事务插入、日志行），以及单个任务走完 dispatcher claim → worker 执行 → 终态落库的全链路延迟——分 15ms 与默认 200ms 两种轮询周期跑，两条结果的差就是轮询粒度对端到端延迟的贡献；
 > - `go/notification` 的 `delivery_bench_test.go` 与 `preference_service_bench_test.go`：投递键派生（每次投递尝试的每个 channel 都重算，canonical JSON + SHA-256），以及 `ResolveForDelivery` 的按 (收件人, 类型) 发送时偏好重查，覆盖无存储行（走类型默认值）、有存储行、轮转收件人三种真实状态；
 > - `go/authn` 的 `password_bench_test.go` 与 `token_bench_test.go`：`DefaultPasswordParams`（argon2id 成本下限，OWASP 首推配置）下的哈希与校验——每次派生约 19 MiB 内存，这一条就是"提高成本前先看当前硬件的实测"的依据——以及访问令牌的签发与每请求校验（含 KeySource seam 的逐次取钥）；
-> - `go/rbac` 的 `service_bench_test.go`：单次权限判定，三个子基准分别报告缓存命中的允许/拒绝（稳态的每请求代价，实测零分配）与失效后重载（一次 revoke 之后那次判定要付的完整数据库重载，正是"立即失效"形态的代价）。
+> - `go/rbac` 的 `authorizer_service_bench_test.go`：单次权限判定，三个子基准分别报告缓存命中的允许/拒绝（稳态的每请求代价，实测零分配）与失效后重载（一次 revoke 之后那次判定要付的完整数据库重载，正是"立即失效"形态的代价）。
 >
 > benchmark 随归属模块入库本身不再欠账；nightly 的回归腿（基线采集、阈值、对比告警）仍未落地，与 flaky 腿一起等实现轮次（见下节注记——当前唯一的外部前置是 `issues: write` token）。
 

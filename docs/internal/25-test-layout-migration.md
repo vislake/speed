@@ -127,9 +127,9 @@ Go 不允许外部目录的测试访问 package main 的未导出符号,也不�
 
 | 文件 | 钉什么 | 套件所在(支撑包) | 支撑包黑盒可导入? |
 |---|---|---|---|
-| go/pkgcore/eventbus_conformance_test.go | `NewMemoryEventBus` 满足 `eventbustest.AssertConforms`;内存总线"额外属性"(同步投递错误回传)由 `memory_eventbus_test.go` 在包内另行钉住 | go/pkgcore/eventbustest | 是:`AssertConforms(t, caps, factory)`,签名公开 |
+| go/pkgcore/eventbus_conformance_test.go | `NewMemoryEventBus` 满足 `eventbustest.AssertConforms`;内存总线"额外属性"(同步投递错误回传)由 `eventbus_memory_test.go` 在包内另行钉住 | go/pkgcore/eventbustest | 是:`AssertConforms(t, caps, factory)`,签名公开 |
 | go/pkgcore/kv_conformance_test.go | `NewMemoryKVStore` 以能力 0(单实例、无能力声明)满足 `kvstoretest.AssertConforms` 的单实例检查段 | go/pkgcore/kvstoretest(另有 AssertSurvivesRestart) | 是 |
-| go/pkgcore/mailer_conformance_test.go | `NewSMTPMailer` 满足 `mailertest.AssertConforms`,假中继为进程内 net.Listener(单元层,无 Docker);文件内 `smtpMailerFor` 因环约束重复了 smtp_mailer_test.go 的 mailerFor | go/pkgcore/mailertest | 是 |
+| go/pkgcore/mailer_conformance_test.go | `NewSMTPMailer` 满足 `mailertest.AssertConforms`,假中继为进程内 net.Listener(单元层,无 Docker);文件内 `smtpMailerFor` 因环约束重复了 mailer_smtp_test.go 的 mailerFor | go/pkgcore/mailertest | 是 |
 | go/pkgcore/objectstore_conformance_test.go | `NewLocalObjectStore(t.TempDir())` 满足 `objectstoretest.AssertConforms` | go/pkgcore/objectstoretest(另有 AssertSurvivesRestart) | 是 |
 | go/jobs/queue_conformance_test.go | `NewStandaloneQueue(dbtest.NewSQLite(t), …)` 满足 `queuetest.AssertConforms`;asynq 侧同套件由其 integration_test 的驱动运行 | go/jobs/queuetest(另有 AssertFailsClosedOnUnreadableCancellationState) | 是 |
 
@@ -166,7 +166,7 @@ Go 不允许外部目录的测试访问 package main 的未导出符号,也不�
 | go/billing/poll_window_test.go | go/billing/job_test.go | poll 窗口与幂等键属 job.go |
 | go/compliance/retention_sweep_window_test.go | go/compliance/retention_test.go;并入后 config 接线族拆至 retention_config_test.go | 目标文件越过 ~1000 行,机械拆分保留 retention_ 前缀 |
 | examples/reference-app/internal/smilesim/disconnect_robustness_test.go | 并入 service 测试族;credit-settlement 族与断连套件拆至 service_settlement_test.go | 目标文件越过 ~1000 行,机械拆分保留 service_ 前缀 |
-| go/jobs/option_validation_test.go | go/jobs/standalone_queue_test.go;并入后 cancel-race 族拆至 standalone_queue_cancel_test.go | 目标文件越过 ~1000 行,机械拆分保留 standalone_queue_ 前缀 |
+| go/jobs/option_validation_test.go | go/jobs/queue_standalone_test.go;并入后 cancel-race 族拆至 queue_standalone_cancel_test.go | 目标文件越过 ~1000 行,机械拆分保留 queue_standalone_ 前缀 |
 | go/dbkit/soft_delete_unique_index_test.go | go/dbkit/soft_delete_test.go | partial unique index 属 soft_delete.go |
 
 ### 裁定保留(行为命名文件合法,记录理由)
@@ -311,8 +311,8 @@ Go 不允许外部目录的测试访问 package main 的未导出符号,也不�
 | go/jobs/single_writer_test.go | jobs | 白 | 单写者注册(ensureJobsSchema) | WB |
 | go/jobs/writer_gate_liveness_test.go | jobs | 白 | 写者门活性(queueWritersTable、findByID) | WB |
 | go/jobs/scheduler_test.go | jobs | 白 | 周期调度器(声明遍历、租户展开、窗口截断、键派生、生命周期与选项校验) | WB |
-| go/jobs/standalone_queue_cancel_test.go | jobs | 黑(包内) | standalone_queue_test 取消竞态族(2a 行数拆分片) | S |
-| go/jobs/standalone_queue_bench_test.go | jobs | 白 | StandaloneQueue 基准 | BENCH |
+| go/jobs/queue_standalone_cancel_test.go | jobs | 黑(包内) | queue_standalone_test 取消竞态族(2a 行数拆分片) | S |
+| go/jobs/queue_standalone_bench_test.go | jobs | 白 | StandaloneQueue 基准 | BENCH |
 | go/jobs/queue/asynq/job_outcome_metrics_recording_test.go | asynq | 白 | handleErrorAttempt/wrapFailedAttempt 双源结果度量 | WB |
 | go/jobs/queue/asynq/marker_fail_closed_test.go | asynq | 白 | dispatchAfterMarkerRead/errCancelMarkerUnreadable | WB |
 | go/jobs/queuetest/assert_fails_closed_rejects_defective_queues_test.go | queuetest | 白 | 故障层中间态拒绝有牙(支撑包自验) | SELF |
@@ -346,7 +346,7 @@ Go 不允许外部目录的测试访问 package main 的未导出符号,也不�
 | go/org/migrations/upgrade_postgres_test.go | migrations | 黑(包内) | 同上 PostgreSQL 腿(build tag) | M |
 | go/metering/migrations/upgrade_test.go | migrations | 黑(包内) | 0007 升级(0006 时代库,go:embed 子集) | M |
 | go/metering/migrations/upgrade_postgres_test.go | migrations | 黑(包内) | 同上 PostgreSQL 腿(build tag) | M |
-| go/rbac/service_bench_test.go | rbac | 白 | 服务基准(白盒触 svc.cache/grantKey) | BENCH |
+| go/rbac/authorizer_service_bench_test.go | rbac | 白 | 服务基准(白盒触 svc.cache/grantKey) | BENCH |
 | examples/reference-app/cmd/server/demo_subject_test.go | main | 黑(app 面) | 解析器/守卫纯逻辑(target 现居 internal/app) | G→internal/app |
 | examples/reference-app/cmd/server/demo_notification_test.go | main | 黑(app 面) | payload 提取纯逻辑(target 现居 internal/app) | G→internal/app |
 | examples/reference-app/cmd/server/clinic_name_test.go | main | 黑(app 面) | 诊所名 4 路由 + 1 直测(混合) | G→拆分(路由半→flowtests,直测半→internal/app) |
@@ -383,7 +383,7 @@ Go 包规则的推演:测试文件移到另一个目录就成为不同包,只能
 | go/pkgcore/standalone_build_test.go | pkgcore | package→`unittest`;路径锚定编辑:`filepath.Dir(thisFile)` 改为自 `runtime.Caller` 上溯至含 go.mod 的模块根 |
 | go/pkgcore/go_work_use_block_test.go | pkgcore | 同上;仓库根锚点 `..`,`..` 改自模块根上溯至 go.work 所在根 |
 | go/jobs/queue_conformance_test.go、go/jobs/fail_closed_cancellation_state_test.go | jobs_test | package→`unittest`,引用已限定 |
-| go/jobs/claim_window_test.go | jobs | 加 `import jobs` 并全量限定导出符号;其包内辅助 newTestQueue/startQueue/pollJob/waitTerminal(standalone_queue_test.go,留包)不可跨包,按共享辅助规则迁最小集入 `go/jobs/internal/testutil`(已有该包,加导出构造器) |
+| go/jobs/claim_window_test.go | jobs | 加 `import jobs` 并全量限定导出符号;其包内辅助 newTestQueue/startQueue/pollJob/waitTerminal(queue_standalone_test.go,留包)不可跨包,按共享辅助规则迁最小集入 `go/jobs/internal/testutil`(已有该包,加导出构造器) |
 | go/authn/standalone_build_test.go、go/tenancy/standalone_build_test.go | authn/tenancy | package→`unittest`;路径锚定编辑(上溯 go.mod) |
 | go/ratelimit/no_cjk_characters_test.go | ratelimit | package→`unittest`;路径锚定编辑:`WalkDir(".")` 改为自模块根上溯后 `WalkDir(moduleRoot)` |
 | go/observability/exporter/otlp/invalid_utf8_export_test.go | otlp_test | 迁入 go/observability/unittest/;package→`unittest`(引 otlp 空导入;注意与 otlp_not_registered 的 SHAPE 互斥——后者必须留在 prometheus 目录,二者永不同目录) |
@@ -401,7 +401,7 @@ Go 包规则的推演:测试文件移到另一个目录就成为不同包,只能
 
 ### 留包例外登记(45 文件)
 
-WB 20(白盒,Go 强制):kernel_shutdown、factory_vars、hub_http、address_index_column、subscribe、sweep_window、webhook_redelivery、enqueue_window、key_ref_widening、signin_channel_feature_gates、impersonation_service_start_dispatch、jobs 7 件(database_fault_paths/candidate_window_fairness/metric_ordering/metric_registration_failure/retryable_start/single_writer/writer_gate_liveness)、asynq 2 件。S 4(拆分片):standalone_queue_cancel、retention_config、tenant_scope_tenantmodel、smilesim service_settlement。M 5(迁移套件):org/metering migrations 各 2、audit 1。BENCH 6。SHAPE 1。OOS 1。SELF 5。T 1。FIXT 2。逐文件理由见总表"分档"列;执行批次不改动这些文件(仅登记)。
+WB 20(白盒,Go 强制):kernel_shutdown、factory_vars、hub_http、address_index_column、subscribe、sweep_window、webhook_redelivery、enqueue_window、key_ref_widening、signin_channel_feature_gates、impersonation_service_start_dispatch、jobs 7 件(database_fault_paths/candidate_window_fairness/metric_ordering/metric_registration_failure/retryable_start/single_writer/writer_gate_liveness)、asynq 2 件。S 4(拆分片):queue_standalone_cancel、retention_config、tenant_scope_tenantmodel、smilesim service_settlement。M 5(迁移套件):org/metering migrations 各 2、audit 1。BENCH 6。SHAPE 1。OOS 1。SELF 5。T 1。FIXT 2。逐文件理由见总表"分档"列;执行批次不改动这些文件(仅登记)。
 
 ## 验证记录
 
