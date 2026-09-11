@@ -4,7 +4,7 @@ app is speed's **application assembly layer**: the structure every
 application's boot code is built from. It is the one module in this
 repository with **no business domain** — it owns no tables, registers no
 routes, config schema, feature flags, permissions, job handlers or audit
-actions, and implements no `the module contract`. It exists so that what every
+actions, and carries no module contract. It exists so that what every
 host would otherwise re-write by hand — the configuration load, the boot
 order, the component drive, the HTTP helpers, the shutdown sequence — is
 written once, in one place.
@@ -191,8 +191,8 @@ re-declare the kernel's symbols or re-grow its statements (the serve loop,
 the liveness/authn path literals) in its own code, nor issue an
 engine-owned assembly call — `dbkit.Open`, `dbkit.NewMigrationRegistry`,
 `http.NewServeMux`, `jobs.NewStandaloneQueue`/`jobs.Wire`,
-`signal.NotifyContext`, `chain.Chain`, `obs.Init`, `pkgcore.app.Assemble`,
-`.Bootstrap(`, or the component drive's `pkgcore.NewComponentRegistry` and
+`signal.NotifyContext`, `chain.Chain`, `obs.Init`, or the component drive's
+`pkgcore.NewComponentRegistry` and
 `Prepare`/`Construct`/`Verify`/`Init` — with the one named-file allowance,
 where one applies, for the host file that legitimately owns the call (the
 signal overlay and the jobs pair carry none: the engine's `RunAssembly`
