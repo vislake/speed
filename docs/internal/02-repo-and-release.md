@@ -11,12 +11,13 @@ speed/
     pkgcore/  dbkit/  observability/  ratelimit/  tenancy/  config/
     jobs/  storage/  notification/  authn/  rbac/  org/  metering/
     billing/  ai-gateway/  sharing/          # billing/gateway/ 是子包，不是模块
-    integration/  compliance/  admin/  pki/  saasctl/
+    integration/  compliance/  admin/  pki/  saasctl/  app/
                                               # 各含独立 go.mod 与 AGENTS.md；
                                               # api/openapi.yaml、locales/、
                                               # migrations/ 视模块是否落地
                                               # HTTP 面/i18n 文案/迁移而定，
-                                              # 非全员标配
+                                              # 非全员标配；app 为应用组装层
+                                              # （无业务域，纪律例外见 01）
   web/
     packages/{tokens,i18n,ui-kit,api-client,api-sdk,auth-core,auth-ui,
               account-ui,tenancy-ui,layout-kit,product-shell}/
