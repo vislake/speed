@@ -16,7 +16,9 @@ import (
 	"context"
 	"crypto/rand"
 	"fmt"
+	"strings"
 	"time"
+	"unicode/utf8"
 
 	"gorm.io/gorm"
 
@@ -647,4 +649,26 @@ func ExampleIsRecordNotFound() {
 	// true
 	// false
 	// false
+}
+
+// ExampleFitColumnValue demonstrates the write-boundary fit for untrusted
+// text on its way into a declaratively bounded column: a value longer than
+// its column is cut at maxRunes runes -- never bytes, so a multi-byte
+// character is never split -- and invalid UTF-8 bytes are rendered as the
+// Unicode replacement character rather than left for a UTF-8 database to
+// refuse.
+func ExampleFitColumnValue() {
+	// 5 runes in 15 bytes: a byte-wide cut would land inside a character.
+	price := strings.Repeat("€", 5)
+
+	fitted, cut := dbkit.FitColumnValue(price, 3)
+	fmt.Println(fitted, utf8.ValidString(fitted), cut)
+
+	// Within the bound but not valid UTF-8: sanitized, not cut.
+	sanitized, cut := dbkit.FitColumnValue("ok\xff", 100)
+	fmt.Println(sanitized, cut)
+
+	// Output:
+	// €€€ true true
+	// ok� false
 }

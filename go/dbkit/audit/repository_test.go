@@ -466,7 +466,7 @@ func TestRepository_Insert_CutsOverWideDescriptiveFieldsToTheirColumnBounds(t *t
 }
 
 // TestRepository_Insert_SanitizesInvalidUTF8InDescriptiveFields pins the
-// invalid-UTF-8 half of fitColumnValue: a UTF-8-encoded PostgreSQL
+// invalid-UTF-8 half of dbkit.FitColumnValue: a UTF-8-encoded PostgreSQL
 // database refuses raw invalid bytes with error 22021 (SQLite again stores
 // them silently), so the write boundary sanitizes each consecutive invalid
 // run to a single replacement character (U+FFFD) -- never by dropping the

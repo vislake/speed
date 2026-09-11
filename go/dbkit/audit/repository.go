@@ -5,11 +5,12 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"strings"
 	"unicode/utf8"
 
 	"github.com/google/uuid"
 	"gorm.io/gorm"
+
+	"github.com/vislake/speed/go/dbkit"
 )
 
 // Repository is the audit_events table accessor. It is deliberately a
@@ -100,10 +101,9 @@ var ErrEventFieldTooLong = errors.New("audit: event field exceeds its declared c
 //     truncation has no such trace by construction, which is why the cut
 //     happens here and not in the schema.
 //
-// The cut itself is rune-safe and, mirroring go/sharing's
-// truncateAccessLogValue (the codebase's existing write-boundary cut for
-// log columns), sanitizes invalid UTF-8 runs to the Unicode replacement
-// character first: a UTF-8-encoded PostgreSQL database refuses raw
+// The cut itself is the shared write-boundary fit, dbkit.FitColumnValue:
+// rune-safe, and sanitizing invalid UTF-8 runs to the Unicode replacement
+// character first -- a UTF-8-encoded PostgreSQL database refuses raw
 // invalid bytes with 22021, and dropping them could concatenate two
 // arbitrary byte runs into a different valid value.
 func fitEventToColumns(ctx context.Context, evt *AuditEvent) error {
@@ -146,7 +146,7 @@ func fitEventToColumns(ctx context.Context, evt *AuditEvent) error {
 		if c.dst == nil {
 			continue
 		}
-		fitted, cut := fitColumnValue(*c.dst, c.runes)
+		fitted, cut := dbkit.FitColumnValue(*c.dst, c.runes)
 		if fitted == *c.dst {
 			continue
 		}
@@ -167,28 +167,6 @@ func fitEventToColumns(ctx context.Context, evt *AuditEvent) error {
 		*c.dst = fitted
 	}
 	return nil
-}
-
-// fitColumnValue renders v storable in a column of at most maxRunes
-// characters. cut reports whether the value had to be shortened; a value
-// that only needed invalid-UTF-8 sanitization reports cut=false, so the
-// caller can say which change happened (the warning's reason attribute).
-// Invalid UTF-8 runs are sanitized to the Unicode replacement character
-// (one per consecutive run, so two arbitrary byte runs never concatenate
-// into a different valid value), then the value is cut at maxRunes runes
-// when it is longer -- never at maxRunes bytes, which could split a
-// multi-byte character and store garbage PostgreSQL would refuse. A value
-// that is already valid UTF-8 and within the bound is returned unchanged.
-func fitColumnValue(v string, maxRunes int) (fitted string, cut bool) {
-	if len(v) <= maxRunes && utf8.ValidString(v) {
-		return v, false
-	}
-	runes := []rune(strings.ToValidUTF8(v, "\uFFFD"))
-	cut = len(runes) > maxRunes
-	if cut {
-		runes = runes[:maxRunes]
-	}
-	return string(runes), cut
 }
 
 // Insert appends evt to the audit trail. evt.ID is generated -- a
