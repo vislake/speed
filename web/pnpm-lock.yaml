@@ -518,6 +518,9 @@ importers:
       '@speed/i18n':
         specifier: workspace:*
         version: link:../i18n
+      '@speed/ui-kit':
+        specifier: workspace:*
+        version: link:../ui-kit
     devDependencies:
       '@emotion/react':
         specifier: ^11.14.0
@@ -534,9 +537,6 @@ importers:
       '@speed/api-sdk':
         specifier: workspace:*
         version: link:../api-sdk
-      '@speed/ui-kit':
-        specifier: workspace:*
-        version: link:../ui-kit
       '@testing-library/jest-dom':
         specifier: ^7.0.1
         version: 7.0.1(@testing-library/dom@10.4.1)(vitest@4.1.11)
