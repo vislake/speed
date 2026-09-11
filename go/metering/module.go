@@ -270,4 +270,3 @@ func (m *Module) Register(reg *pkgcore.ComponentRegistry) error {
 	m.aggregator.bus = reg.EventBus()
 	return nil
 }
-

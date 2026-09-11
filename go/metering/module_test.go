@@ -295,4 +295,3 @@ func (neighbourModule) Register(reg *pkgcore.ComponentRegistry) error {
 		Group:       "neighbour",
 	})
 }
-
