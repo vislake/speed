@@ -260,8 +260,12 @@ func (r *MigrationRegistry) Apply(ctx context.Context, db *gorm.DB, dialect Dial
 // same machinery MigrationRegistry.Apply uses: dbkit's schema_migrations
 // ledger, one transaction per component, and the PostgreSQL advisory lock
 // around the whole run. A selected component carrying no migrations is
-// skipped; the ledger key is the component's name, mirroring the module
-// name a MigrationRegistry registration records under.
+// skipped; the ledger key is the module the component implements
+// (Asset.Module), the same name a MigrationRegistry registration records
+// under, so a host that renames or overrides a component does not fork the
+// log. The assembly requires a migration-carrying component to declare its
+// module and admits one set per module per selection, so the key is never
+// empty here and two selected sets never collide.
 //
 // It is the migration-application step of a db component's Verify callback:
 // every product exists by then, so the assembled set is complete, and a
@@ -288,7 +292,7 @@ func ApplyMigrations(ctx context.Context, reg *pkgcore.ComponentRegistry) error 
 		if asset.Migrations == zeroFS {
 			continue
 		}
-		sources = append(sources, migrationSource{name: asset.Name, fs: asset.Migrations})
+		sources = append(sources, migrationSource{name: asset.Module, fs: asset.Migrations})
 	}
 
 	return applySources(ctx, db, dialect, dir, sources)
@@ -298,9 +302,9 @@ func ApplyMigrations(ctx context.Context, reg *pkgcore.ComponentRegistry) error 
 // schema_migrations ledger records its files under, and the embed.FS
 // carrying them. Both registration paths produce sources -- Apply converts
 // each registered migratable (name from Name(), set from Migrations()),
-// ApplyMigrations each selected component's Asset (name and set as the
-// component declared them) -- so the ledger semantics are identical
-// whichever path a boot takes.
+// ApplyMigrations each selected component's Asset (name from the module the
+// component implements, set as the component declared it) -- so the ledger
+// semantics are identical whichever path a boot takes.
 type migrationSource struct {
 	name string
 	fs   embed.FS

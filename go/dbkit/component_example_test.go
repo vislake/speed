@@ -42,13 +42,14 @@ func ExampleClose() {
 // (and only connects -- construction failure must not touch the database),
 // and Verify applies every selected component's migration set through
 // ApplyMigrations, dependency-ordered and recorded in the schema_migrations
-// ledger under each component's name.
+// ledger under the module the component implements.
 func ExampleApplyMigrations() {
 	ctx := context.Background()
 
 	reg := pkgcore.NewComponentRegistry()
 	err := reg.Register(pkgcore.Component{
 		Name:       "fixture.base",
+		Module:     "fixture.base",
 		Migrations: basemodule.Migrations,
 		New: func(context.Context, *pkgcore.ComponentRegistry, pkgcore.ComponentConfig) (any, error) {
 			return &struct{}{}, nil
