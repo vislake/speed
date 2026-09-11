@@ -1,14 +1,14 @@
 name: e2e
 # PURPOSE: the reference-app's browser-level end-to-end suite on real
-# runners -- daily and on demand now, wired to merge to main once its
-# first dispatched run is green (TRIGGER below). A real browser drives
+# runners -- daily, on demand, and on every push to main (TRIGGER
+# below). A real browser drives
 # the real web host against a real, freshly booted reference-app server
 # (standalone deployment mode, SQLite, zero external dependencies), and
 # reaches the smile-simulation vendor through the suite's own
 # deterministic fake image endpoint -- no live provider credential is
 # involved anywhere; real vendor calls happen only during milestone
-# acceptance and demos. Target duration and the eventual merge-time
-# guarantee are docs/internal/18-cicd.md's pipeline table (the e2e row).
+# acceptance and demos. Target duration and the merge-time guarantee
+# are docs/internal/18-cicd.md's pipeline table (the e2e row).
 #
 # WHAT EXISTS: the suite (26 spec files plus the shared test-utils under
 # examples/reference-app/web/e2e), its Playwright config with three
@@ -41,16 +41,13 @@ name: e2e
 #     either -- without E2E_BASE_URL those gates skip themselves, which
 #     is why a default-tier run reports a few skipped tests.
 #
-# TRIGGER: workflow_dispatch and a daily schedule at 04:23 UTC, offset
-# from scaffold-verify's 03:00 and security's 05:37 so the three do not
-# contend for runner capacity. The push-to-main trigger is deliberately
-# NOT enabled: its first run would be this pipeline's first run on a
-# real runner -- a cold Go build cache, a browser download and an apt
-# dependency install all first encountered there -- and the repository
-# opens a push trigger under its own recorded argument. That argument
-# is a dispatched run on this file that went green; until that exists,
-# the daily schedule is the standing coverage and workflow_dispatch
-# serves on-demand and milestone runs.
+# TRIGGER: workflow_dispatch, a daily schedule at 04:23 UTC, and every
+# push to main. The schedule is offset from scaffold-verify's 03:00 and
+# security's 05:37 so the three do not contend for runner capacity. The
+# push-to-main trigger stands on its recorded argument -- a dispatched
+# run on this file that went green: run 34625987669, 2026-09-11, all
+# three legs success. The daily schedule remains the standing coverage
+# and workflow_dispatch serves on-demand and milestone runs.
 #
 # BUDGET: target under 20 minutes; every job carries timeout-minutes 30
 # as a hang ceiling, not a target. A row spends 4-6 minutes in setup
@@ -99,6 +96,8 @@ on:
   workflow_dispatch:
   schedule:
     - cron: "23 4 * * *"
+  push:
+    branches: [main]
 
 concurrency:
   group: e2e-${{ github.ref_name }}
