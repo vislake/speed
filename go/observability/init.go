@@ -481,8 +481,9 @@ func initLocalExporters(res *resource.Resource) (func(context.Context) error, er
 	// log/slog directly, since nothing has called Init yet to give this
 	// package a context-scoped logger of its own (obs.FromContext needs a
 	// context already carrying one). Without this line, a host that
-	// forgot the blank import had no signal at process start; discovery
-	// depended entirely on someone eventually probing /metrics.
+	// forgot the blank import would have no signal at process start;
+	// discovery would depend entirely on someone eventually probing
+	// /metrics.
 	metricsHandler := http.Handler(http.HandlerFunc(metricsUnavailable))
 	factoryMu.Lock()
 	readerFactory := metricsReaderFactory

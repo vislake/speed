@@ -555,9 +555,9 @@ func TestRedact_SecretShapesInValues(t *testing.T) {
 			// (api[_-]?key, client[_-]?secret, session[_-]?key) heading a
 			// bare query string. These rows exercise the leading-anchor
 			// branch of the gate, whose querySecretParamNames mirror must
-			// name each of them; a compact spelling forgotten there fails
-			// its own row here (both clientsecret and sessionkey once were,
-			// while the alternation kept matching them).
+			// name each of them: a compact spelling missing from that
+			// mirror fails its own row here even though the alternation
+			// keeps matching it.
 			name:     "apikey heading a bare query string",
 			value:    "apikey=abCdefgh1234567890&scope=read",
 			secret:   "abCdefgh1234567890",
