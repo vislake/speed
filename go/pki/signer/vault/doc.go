@@ -29,10 +29,10 @@
 // particular Config selects. Rather than have Build lie about the
 // capability of whichever mode a given cfg happened to choose, this package
 // registers the two modes as two separate, honestly-labelled names, exactly
-// mirroring how pkgcore's own MailerRegistry carries "mailer.console"
-// (Stateless) and "mailer.smtp" (MultiReplicaSafe|Stateless) as two
-// names rather than one name with a capability that depends on
-// configuration.
+// mirroring how pkgcore's own mailer registers "mailer.console" (a
+// component declaring Stateless) and "mailer.smtp" (declaring
+// MultiReplicaSafe|Stateless) as two named components rather than one
+// name whose capability depends on configuration.
 //
 // # In-place Transit key rotation is not governed by this module's
 // # lifecycle state machine -- read this before choosing a direct-sign name
