@@ -120,7 +120,11 @@ func TestRequestSMSCode_UnknownPhone_SendsNothingButSucceeds(t *testing.T) {
 // const, and t.Cleanup below for the restore.
 func TestRequestSMSCode_TimingParity_KnownAndUnknownPhoneAnswerInComparableTime(t *testing.T) {
 	orig := smsCodeRequestLatencyFloor
-	smsCodeRequestLatencyFloor = 30 * time.Millisecond
+	// 200ms, sized so the floor stays above the known branch's real work
+	// -- a persisted code row plus a console send, ~130ms on a loaded CI
+	// runner under -race -- and only sleep-overshoot noise is left for the
+	// ratio assertion below to absorb.
+	smsCodeRequestLatencyFloor = 200 * time.Millisecond
 	t.Cleanup(func() { smsCodeRequestLatencyFloor = orig })
 
 	var buf bytes.Buffer
@@ -139,13 +143,16 @@ func TestRequestSMSCode_TimingParity_KnownAndUnknownPhoneAnswerInComparableTime(
 	}
 	unknownDuration := time.Since(unknownStart)
 
-	// A generous 3x tolerance absorbs scheduler/GC jitter on a loaded CI
-	// runner (both durations are dominated by the SAME floor sleep, so
-	// genuine timing noise between them is only ever a few milliseconds)
-	// while still catching the shape without the floor: an unknown-phone
-	// path without it returns in low microseconds against a known-phone
-	// path's multiple milliseconds (a real DB write plus a console SMS
-	// send) -- many orders of magnitude apart, not a mere 3x.
+	// A generous 3x tolerance absorbs scheduler jitter and sleep overshoot
+	// on a loaded CI runner. The 200ms floor above is sized above the
+	// known branch's real work (a persisted code row plus a console send,
+	// ~130ms on a loaded CI runner under -race), so both branches are
+	// padded to the same floor and the ratio stays near 1: only sleep
+	// overshoot -- never the work itself -- falls to the tolerance. The
+	// assertion still catches the shape with no effective floor: an
+	// unknown number's unpadded branch answers in microseconds against a
+	// known number's milliseconds (orders of magnitude, not 3x), and the
+	// ratio only reaches 3 once that work exceeds 3x the floor (~600ms).
 	const toleranceFactor = 3
 	if ratio := durationRatio(knownDuration, unknownDuration); ratio > toleranceFactor {
 		t.Errorf("timing ratio between known (%v) and unknown (%v) phone requests = %.2f, want <= %d (the timing side channel is not closed)",
