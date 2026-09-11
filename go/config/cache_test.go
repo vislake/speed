@@ -65,7 +65,7 @@ func TestValueCache_InvalidateDropsOneRow(t *testing.T) {
 	}
 	// Invalidation of a row that was never cached drops nothing from the
 	// entries map (it still advances the mutation generation: the row
-	// changed, and an in-flight backfill of the pre-change value must not
+	// changed, and an in-flight backfill of the superseded value must not
 	// land).
 	c.invalidate("brand.site_name", ScopeSystem, "")
 }

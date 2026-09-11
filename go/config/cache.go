@@ -177,7 +177,7 @@ func (c *valueCache) putMissing(key string, scope Scope, tenant pkgcore.TenantID
 // survive whichever of the three noticed the change first. Generation
 // advances whether or not an entry was present to drop:
 // the call itself reports a change to the row, and an in-flight
-// read-through backfill of the pre-change value must not land after it.
+// read-through backfill of the superseded value must not land after it.
 func (c *valueCache) invalidate(key string, scope Scope, tenant pkgcore.TenantID) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
