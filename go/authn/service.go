@@ -357,11 +357,12 @@ func NewService(db *gorm.DB, bus pkgcore.EventBus, kv pkgcore.KVStore, opts ...O
 	// A freshly built Service must be able to take its one system context
 	// (the sign-in tenant enumeration) without its embedder having
 	// remembered a separate declaration, so the purpose is declared here as
-	// well as in Module.Register -- idempotent by contract, and the same
-	// purpose twice changes nothing. Without this, a Service built directly
-	// through NewService would fail its no-tenant sign-in with a refusal
-	// folded into the uniform invalid-credentials answer, which is the
-	// hardest possible place to diagnose a missing declaration.
+	// well as on the module's component descriptor (SystemPurposes) --
+	// idempotent by contract, and the same purpose twice changes nothing.
+	// Without this, a Service built directly through NewService would fail
+	// its no-tenant sign-in with a refusal folded into the uniform
+	// invalid-credentials answer, which is the hardest possible place to
+	// diagnose a missing declaration.
 	pkgcore.RegisterSystemPurpose(SystemPurposeSignInTenantEnumeration)
 
 	cfg, err := newOptions(opts)

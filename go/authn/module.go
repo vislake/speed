@@ -189,8 +189,11 @@ const (
 // answer it; the read is reserved for the authn side of the house, and it
 // is taken through tenancy.WithSystemContext with the account itself as
 // the actor, which publishes a tenancy.system_context.entered audit event
-// on every use. Register declares the purpose (idempotent, the module
-// convention), so a host that bootstraps this module never has to.
+// on every use. The component descriptor declares the purpose as its
+// SystemPurposes, which the assembly registers when its Init stage closes
+// (the transition bridge registers it inside the module's own registration
+// turn on the module path), so a host that bootstraps this module never has
+// to.
 const SystemPurposeSignInTenantEnumeration pkgcore.SystemPurpose = "speed.authn.sign_in_tenant_enumeration"
 
 // FeatureGate reports whether a feature flag is enabled for the tenant the
