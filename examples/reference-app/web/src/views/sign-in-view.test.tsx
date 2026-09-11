@@ -84,10 +84,10 @@ describe('SignInView', () => {
 
     // The register surface replaces the sign-in form: the sign-in
     // surface's own action -- its submit button -- is gone with it.
-    // (The former proxy for the sign-in form, the password tab's title
-    // text, renders nowhere now that this deployment's one channel
-    // carries no tab strip, and the two forms' identifier fields share
-    // one label, so the submit action is the property to ask about.)
+    // (The assertions below ask about the submit button because the
+    // password tab's title text is not rendered anywhere here -- this
+    // deployment's one channel carries no tab strip -- and the two
+    // forms' identifier fields share one label.)
     expect(await view.findByText(zhCN.register.heading)).toBeInTheDocument()
     expect(
       view.queryByRole('button', { name: authUiZhCN.passwordSignIn.submit }),
@@ -188,9 +188,10 @@ describe('SignInView', () => {
 
     // Back to the sign-in surface: the footer prompt is host copy of
     // the sign-in mode again, and the password channel is up -- its
-    // form visible directly. (The former proxy for that, the channel
-    // tab's title text, renders nowhere now that one channel carries
-    // no tab strip; the identifier field is the channel.)
+    // form visible directly. (The channel tab's title text is not
+    // rendered anywhere here -- one channel carries no tab strip --
+    // and the identifier field is the channel's marker, which the
+    // assertion below asks about.)
     await user.click(
       view.getByRole('button', { name: zhCN.register.backToSignIn }),
     )

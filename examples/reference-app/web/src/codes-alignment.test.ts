@@ -77,8 +77,8 @@
  * unknown fallback by design).
  *
  * The GO_PINNED enumeration is deliberately hand-maintained, and the
- * machine-extracted server-side code census the deferral below once
- * deferred is now HALF-real: tools/gen_error_code_index.py extracts
+ * machine-extracted server-side code census automates one half of that
+ * maintenance: tools/gen_error_code_index.py extracts
  * every code constructed in Go source with a literal code argument
  * into the documentation site's error-codes page (generated from the
  * Go tree into docs/site/content.en/docs/user-guide/error-codes.md) and its
@@ -88,8 +88,8 @@
  * reads that JSON back: every GO_PINNED code must exist in the census
  * as a construction at exactly the file its citation names, bound to
  * the cited identifier. What stays hand-maintained, and why, is the
- * REACHABLE half of the census the old deferral framed ("every
- * answerable code of every route this app mounts"): reachability is a
+ * REACHABLE half ("every answerable code of every route this app
+ * mounts"): reachability is a
  * flow property judged from the surfaces' own requests through the
  * composed stack -- no line-based extractor can derive which codes a
  * form's requests can draw, so membership in GO_PINNED remains the
@@ -97,7 +97,7 @@
  * suite's two directions keep it honest -- a code the server gains and
  * the whitelists do not cover, or a whitelist entry with no citation,
  * both fail here. A code whose CITATION is wrong (the sentinel's code
- * string changed, the citation names the wrong file) now fails the
+ * string changed, the citation names the wrong file) fails the
  * machine leg, not just review.
  */
 
