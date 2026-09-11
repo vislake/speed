@@ -996,7 +996,7 @@
       "file": "go/billing/errors.go",
       "ident": "ErrChannelReferenceNotFound",
       "kind": "declared",
-      "line": 142,
+      "line": 143,
       "module": "billing",
       "status": 404
     },
@@ -1005,7 +1005,7 @@
       "file": "go/billing/errors.go",
       "ident": "ErrCreditBalanceInconsistent",
       "kind": "declared",
-      "line": 122,
+      "line": 123,
       "module": "billing",
       "status": 500
     },
@@ -1014,7 +1014,7 @@
       "file": "go/billing/errors.go",
       "ident": "ErrCreditTransactionAlreadyResolved",
       "kind": "declared",
-      "line": 112,
+      "line": 113,
       "module": "billing",
       "status": 409
     },
@@ -1023,7 +1023,7 @@
       "file": "go/billing/errors.go",
       "ident": "ErrCreditTransactionNotFound",
       "kind": "declared",
-      "line": 103,
+      "line": 104,
       "module": "billing",
       "status": 404
     },
@@ -1041,7 +1041,7 @@
       "file": "go/billing/errors.go",
       "ident": "ErrIdempotencyKeyCollision",
       "kind": "declared",
-      "line": 83,
+      "line": 84,
       "module": "billing",
       "status": 409
     },
@@ -1059,7 +1059,7 @@
       "file": "go/billing/errors.go",
       "ident": "ErrInsufficientCredits",
       "kind": "declared",
-      "line": 98,
+      "line": 99,
       "module": "billing",
       "status": 409
     },
@@ -1068,7 +1068,7 @@
       "file": "go/billing/errors.go",
       "ident": "ErrInternal",
       "kind": "declared",
-      "line": 197,
+      "line": 198,
       "module": "billing",
       "status": 500
     },
@@ -1095,7 +1095,7 @@
       "file": "go/billing/errors.go",
       "ident": "ErrInvalidLimit",
       "kind": "declared",
-      "line": 175,
+      "line": 176,
       "module": "billing",
       "status": 400
     },
@@ -1104,7 +1104,7 @@
       "file": "go/billing/errors.go",
       "ident": "ErrInvalidReason",
       "kind": "declared",
-      "line": 93,
+      "line": 94,
       "module": "billing",
       "status": 400
     },
@@ -1113,7 +1113,7 @@
       "file": "go/billing/errors.go",
       "ident": "ErrInvalidRequest",
       "kind": "declared",
-      "line": 190,
+      "line": 191,
       "module": "billing",
       "status": 400
     },
@@ -1140,7 +1140,7 @@
       "file": "go/billing/errors.go",
       "ident": "ErrPaymentEventNotFound",
       "kind": "declared",
-      "line": 146,
+      "line": 147,
       "module": "billing",
       "status": 404
     },
@@ -1176,7 +1176,7 @@
       "file": "go/billing/errors.go",
       "ident": "ErrUnsupportedCurrency",
       "kind": "declared",
-      "line": 153,
+      "line": 154,
       "module": "billing",
       "status": 400
     },
@@ -1185,7 +1185,7 @@
       "file": "go/billing/errors.go",
       "ident": "ErrUsageReaderUnconfigured",
       "kind": "declared",
-      "line": 165,
+      "line": 166,
       "module": "billing",
       "status": 500
     },
@@ -1194,7 +1194,7 @@
       "file": "go/billing/errors.go",
       "ident": "ErrWebhookPayloadUnrecognized",
       "kind": "declared",
-      "line": 137,
+      "line": 138,
       "module": "billing",
       "status": 400
     },
@@ -1203,7 +1203,7 @@
       "file": "go/billing/errors.go",
       "ident": "ErrWebhookSignatureInvalid",
       "kind": "declared",
-      "line": 129,
+      "line": 130,
       "module": "billing",
       "status": 400
     },
