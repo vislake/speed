@@ -526,3 +526,43 @@ func TestErasureService_Erase_AuditRecordFailure_SurfacesWithResult(t *testing.T
 		t.Error("note-1 should have been erased: the participant ran before the audit publish failed")
 	}
 }
+
+// TestErasureService_Erase_NilEraseCallbackSkipped pins the defensive half
+// of the pass driver's skip on the erasure path: a participant whose Erase
+// callback is nil is skipped entirely -- never called, never recorded in
+// Erased or Errors, and never failing the request. The real registrar
+// refuses that shape outright (pkgcore.ErrNilRetentionErase), so only a
+// hand-built registrar (testutil.FixedRegistrar) can hand it back at all.
+func TestErasureService_Erase_NilEraseCallbackSkipped(t *testing.T) {
+	bus := pkgcore.NewMemoryEventBus()
+	reg := componenttest.NewRegistryWithBus(bus)
+	pkgcore.RegisterSystemPurpose(SystemPurposeRightToErasure)
+	if err := componenttest.DeclareAll(reg,
+		func(r *pkgcore.ComponentRegistry) error { return r.AuditActions.Add(AuditActionErasureRequest) },
+	); err != nil {
+		t.Fatalf("declare the audit action: %v", err)
+	}
+
+	registrar := &testutil.FixedRegistrar{}
+	if err := registrar.Add(
+		// NoopSweep satisfies the erasure's own view of the participant;
+		// the nil Erase is the shape under test.
+		pkgcore.RetentionParticipant{Name: "testutil.nil_erase", Sweep: testutil.NoopSweep},
+	); err != nil {
+		t.Fatalf("register the hand-built participant: %v", err)
+	}
+	svc := newErasureService()
+	svc.retention = registrar
+	svc.bus = bus
+	svc.actions = reg.AuditActions
+
+	tenant := pkgcore.TenantID("tenant-a")
+	ctx := pkgcore.WithTenant(context.Background(), tenant)
+	result, err := svc.Erase(ctx, pkgcore.SubjectRef{TenantID: tenant, SubjectID: "subject-1"}, testErasureActor)
+	if err != nil {
+		t.Fatalf("Erase: %v", err)
+	}
+	if len(result.Erased) != 0 || result.HasErrors() {
+		t.Errorf("Erased = %v, Errors = %v, want both empty -- a nil Erase callback must be skipped, not called or recorded", result.Erased, result.Errors)
+	}
+}

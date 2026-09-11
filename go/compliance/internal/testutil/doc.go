@@ -5,7 +5,10 @@
 // participant the test suite registers to prove the retention-sweep,
 // right-to-erasure and export-gathering orchestration end to end, without
 // modifying any real business module (opting in is each owning module's
-// own decision).
+// own decision). FixedRegistrar is the hand-built
+// pkgcore.RetentionRegistrar whose participants may carry the nil
+// callbacks the real registrar refuses, driving the pass driver's
+// defensive nil-callback skip.
 //
 // FakeNote mirrors go/dbkit/internal/testutil's SoftDeletableWidget
 // fixture as closely as a different-module package can: a tenant-scoped,

@@ -224,6 +224,39 @@ func TestRetentionService_SweepTenant_Idempotent(t *testing.T) {
 	}
 }
 
+// TestRetentionService_SweepTenant_NilSweepCallbackSkipped pins the
+// defensive half of the pass driver's skip on the sweep path: a
+// participant whose Sweep callback is nil is skipped entirely -- never
+// called, never recorded in Reaped or Errors, and never failing the pass.
+// The real registrar refuses that shape outright
+// (pkgcore.ErrNilRetentionSweep), so only a hand-built registrar
+// (testutil.FixedRegistrar) can hand it back at all.
+func TestRetentionService_SweepTenant_NilSweepCallbackSkipped(t *testing.T) {
+	bus := pkgcore.NewMemoryEventBus()
+	reg := retentionHarnessRegistry(t, bus)
+
+	registrar := &testutil.FixedRegistrar{}
+	if err := registrar.Add(
+		// NoopErase satisfies the sweep's own view of the participant;
+		// the nil Sweep is the shape under test.
+		pkgcore.RetentionParticipant{Name: "testutil.nil_sweep", Erase: testutil.NoopErase},
+	); err != nil {
+		t.Fatalf("register the hand-built participant: %v", err)
+	}
+	svc := newRetentionService()
+	svc.retention = registrar
+	svc.bus = bus
+	svc.actions = reg.AuditActions
+
+	result, err := svc.SweepTenant(context.Background(), "tenant-a")
+	if err != nil {
+		t.Fatalf("SweepTenant: %v", err)
+	}
+	if len(result.Reaped) != 0 || result.HasErrors() {
+		t.Errorf("Reaped = %v, Errors = %v, want both empty -- a nil Sweep callback must be skipped, not called or recorded", result.Reaped, result.Errors)
+	}
+}
+
 // TestRetentionService_SweepTenant_ParticipantErrorIsPartialFailure proves
 // a failing participant does not stop the pass and is reported both in
 // the SweepResult and as ErrSweepPartialFailure.
