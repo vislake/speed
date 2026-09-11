@@ -31,11 +31,11 @@ import (
 // missing-dependency check over a database that has no authn tables.
 type adminMigrationModule struct{}
 
-func (adminMigrationModule) Name() string                     { return "admin" }
-func (adminMigrationModule) DependsOn() []string              { return nil }
-func (adminMigrationModule) Migrations() embed.FS             { return migrations.FS }
-func (adminMigrationModule) Locales() embed.FS                { return embed.FS{} }
-func (adminMigrationModule) OpenAPISpec() []byte              { return nil }
+func (adminMigrationModule) Name() string                              { return "admin" }
+func (adminMigrationModule) DependsOn() []string                       { return nil }
+func (adminMigrationModule) Migrations() embed.FS                      { return migrations.FS }
+func (adminMigrationModule) Locales() embed.FS                         { return embed.FS{} }
+func (adminMigrationModule) OpenAPISpec() []byte                       { return nil }
 func (adminMigrationModule) Register(*pkgcore.ComponentRegistry) error { return nil }
 
 // ExampleUsageService_Summary demonstrates the cross-tenant usage

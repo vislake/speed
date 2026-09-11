@@ -20,8 +20,8 @@ import (
 	"github.com/vislake/speed/go/notification"
 	obs "github.com/vislake/speed/go/observability"
 	"github.com/vislake/speed/go/pkgcore"
-	"github.com/vislake/speed/go/pkgcore/componenttest"
 	"github.com/vislake/speed/go/pkgcore/apperr"
+	"github.com/vislake/speed/go/pkgcore/componenttest"
 	"github.com/vislake/speed/go/rbac"
 	rbacmigrations "github.com/vislake/speed/go/rbac/migrations"
 )
