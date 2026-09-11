@@ -24,8 +24,9 @@ package (subscription management, payment) are host content. The
 boundary follows the sibling discipline:
 
 - **The read surface is the whole surface.** The billing HTTP
-  fragment ships exactly two read operations — list and get, no
-  writes — so the family renders exactly the read surface the module
+  fragment ships exactly four read operations — credit balance, credit
+  transactions, the invoice list and a single invoice — and no
+  writes, so the family renders exactly the read surface the module
   offers. Nothing settles, voids or creates an invoice, and nothing
   invalidates a query after a mutation: a document whose status changed
   elsewhere converges through the host's refetch policy.

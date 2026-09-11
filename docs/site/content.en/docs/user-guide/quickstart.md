@@ -47,7 +47,7 @@ left unwired and fail closed, each named by a doc comment as your
 first task.
 
 ```sh
-go run ./go/saasctl new ../my-app --speed-root .
+go run ./go/saasctl new --speed-root . ../my-app
 ```
 
 `--speed-root` names the checkout the generated `go.mod` will point at.
@@ -72,13 +72,13 @@ require set each selection produces is in the [module index](/docs/user-guide/mo
 
 ```sh
 # the default: the full {authn, rbac, org} selection
-go run ./go/saasctl new ../my-app --speed-root .
+go run ./go/saasctl new --speed-root . ../my-app
 
 # authn only — no org tree, no role-based access control
-go run ./go/saasctl new ../my-app-lite --speed-root . --with=authn
+go run ./go/saasctl new --speed-root . --with=authn ../my-app-lite
 
 # bare config-only skeleton, no switchable module at all
-go run ./go/saasctl new ../my-app-bare --speed-root . --with=""
+go run ./go/saasctl new --speed-root . --with="" ../my-app-bare
 ```
 
 ## The four `saasctl` commands

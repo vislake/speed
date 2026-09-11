@@ -94,9 +94,9 @@ refused before any provider is built.
 
 ## Boundaries and pitfalls
 
-- Mount the middleware **outside** `tenancy.Middleware` (the fixed
-  chain order is `recover -> request-id/log-context -> observability
-  -> tenancy.Middleware -> ...`), and call `AnnotateTenant` from
+- Mount the middleware **outside** the whole fixed chain — it is the
+  outermost layer a served request reaches, wrapping the composed
+  handler above `authn.Middleware` — and call `AnnotateTenant` from
   business code once the tenant is known — the span survives the
   context fork; a plain context value does not.
 - `MetricsHandler` answers 404 until `exporter/prometheus` is

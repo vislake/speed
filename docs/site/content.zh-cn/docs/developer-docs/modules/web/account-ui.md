@@ -84,9 +84,11 @@ step-up 码、`authn.rate_limited` 与 `client.*` 传输码;其余一律渲
 
 ## 对外稳定面
 
-五个导出组件、prop 表都小——两个只读区块无 prop;`SocialBindingsSection`
-多 provider 清单与 `onAuthorizeUrl`;`BindingCallbackHandler` 多
-`code`/`state` 对与 `onBound`;`MfaSection` 收 session——加上
+六个导出组件、prop 表都小——三个区块无 prop(`SessionsSection`、
+`LoginHistorySection` 与偏好编辑区块 `PreferencesSection`);
+`SocialBindingsSection` 多 provider 清单与 `onAuthorizeUrl`;
+`BindingCallbackHandler` 多 `code`/`state` 对与 `onBound`;
+`MfaSection` 收 session——加上
 `SocialProvider`/`SocialProviderConfig` 与双语
 `ACCOUNT_UI_NAMESPACE`/`accountUiResources` 对。
 

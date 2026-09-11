@@ -64,9 +64,9 @@ there is no `--without`. `go/pki` is never a choice: it rides along
 silently with `authn` as its signing-key source.
 
 ```sh
-go run ./go/saasctl new ../my-app --speed-root .            # default: authn,org,rbac
-go run ./go/saasctl new ../my-app-lite --speed-root . --with=authn,org
-go run ./go/saasctl new ../my-app-bare --speed-root . --with=""   # bare config-only skeleton
+go run ./go/saasctl new --speed-root . ../my-app            # default: authn,org,rbac
+go run ./go/saasctl new --speed-root . --with=authn,org ../my-app-lite
+go run ./go/saasctl new --speed-root . --with="" ../my-app-bare   # bare config-only skeleton
 ```
 
 ## `upgrade` — move a project onto one release version
@@ -183,7 +183,7 @@ that release will be consumed through.
 
 ```sh
 # From inside a speed checkout: materialise the full default selection.
-go run ./go/saasctl new ../my-app --speed-root .
+go run ./go/saasctl new --speed-root . ../my-app
 cd ../my-app
 
 # Once a release exists, from inside the project:

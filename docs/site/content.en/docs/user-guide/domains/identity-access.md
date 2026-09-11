@@ -49,9 +49,13 @@ middleware, and the tenant never comes from a request header.
    tenant" at sign-in; absent means refuse, never allow.
 3. **Mount the chain in order.** Route authn's own subtree straight
    from `authn.Middleware`'s output — never through `tenancy.Middleware`,
-   because sign-in happens before any tenant exists. Protect everything
-   else with `tenancy.Middleware(authn.NewPrincipalResolver())`
-   downstream.
+   because sign-in happens before any tenant exists — and dispatch
+   admin's console from that same output *ahead of both* the
+   impersonation decorator and the tenancy chain: admin's permissions
+   are judged against the caller's own real, unsubstituted principal, so
+   an impersonated identity or a tenant's own Owner role must never
+   reach it. Protect everything else with
+   `tenancy.Middleware(authn.NewPrincipalResolver())` downstream.
 4. **Gate your routes on permissions.** rbac attaches after
    `Kernel.Bootstrap` (its `Attach` freezes every module's declared
    permission vocabulary — granting anything else is refused). Protect
@@ -126,7 +130,7 @@ func (notesLikeModule) DependsOn() []string  { return nil }
 func (notesLikeModule) Migrations() embed.FS { return embed.FS{} }
 func (notesLikeModule) Locales() embed.FS    { return embed.FS{} }
 func (notesLikeModule) OpenAPISpec() []byte  { return nil }
-func (notesLikeModule) Register(reg pkgcore.Registrar) error {
+func (notesLikeModule) Register(reg *pkgcore.ComponentRegistry) error {
 	return reg.PermissionsSeat().Add("notes:read", "notes:write")
 }
 

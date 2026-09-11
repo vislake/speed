@@ -114,6 +114,6 @@ react-query 的重试与缓存策略是宿主自己的,绑定回合也是:添加
 ## 相关页面
 
 - 前端分层:[搭建前端](/zh-cn/docs/user-guide/domains/frontend-building/)
-- 后端表面:[authn](/zh-cn/docs/user-guide/modules/identity/authn/) 模块页;错误码见 [authn](/zh-cn/docs/user-guide/error-codes/#authn)
+- 后端表面:[authn](/zh-cn/docs/user-guide/modules/identity/authn/) 模块页;错误码见[错误码索引(English)](/docs/user-guide/error-codes/#authn)
 - 相关包页:[auth-ui](/zh-cn/docs/user-guide/modules/web/auth-ui/)、[tenancy-ui](/zh-cn/docs/user-guide/modules/web/tenancy-ui/)
 - 同级包 `@speed/auth-core`、`@speed/ui-kit` 与 `@speed/api-sdk` 各在本组的页面

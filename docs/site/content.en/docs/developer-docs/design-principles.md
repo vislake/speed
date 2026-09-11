@@ -203,6 +203,12 @@ section.
   against both SQL dialects. The unit tier needs no containers — the
   in-process implementations double as test doubles.
 
+## Decisions carry their rationale
+
+Every principle here was once a decision that weighed rejected
+alternatives — why not ent, why not Casbin, why not microservices are
+all written down with their reasoning.
+
 ## Related pages
 
 - [Architecture](/docs/developer-docs/architecture/), [Developer docs](/docs/developer-docs/) hub

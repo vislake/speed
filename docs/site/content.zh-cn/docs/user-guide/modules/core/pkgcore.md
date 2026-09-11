@@ -44,7 +44,7 @@ pkgcore 只拥有七样东西:`Module`/`Registry`/`Kernel` 组装契约——
 服务;注册顺序从不重要,由 `DependsOn` 与 `Bootstrap` 的排序决定:
 
 ```go
-func (m *BillingModule) Register(reg pkgcore.Registrar) error {
+func (m *BillingModule) Register(reg *pkgcore.ComponentRegistry) error {
     reg.RoutesSeat().Mount("/api/v1/billing", m.router())
     if err := reg.PermissionsSeat().Add("billing:read", "billing:write"); err != nil {
         return err
@@ -81,7 +81,7 @@ if err != nil {
 reg, err := pkgcore.NewKernel(pkgcore.WithDeploymentMode(mode)).
     Bootstrap(ctx, billingModule, orgModule)
 if err != nil {
-    return err // ErrCapabilityUnsatisfied 点名接缝、实现、缺失能力与模式
+    return err // Prepare 阶段点名了组件、缺失能力与模式(ErrCapabilityUnsatisfied)
 }
 ```
 
@@ -101,16 +101,20 @@ pkgcore.MultiReplicaSafe|pkgcore.SurvivesRestart)`、`WithKVStore`、
 ## 核心概念与 API 要点
 
 - **`Registry`**——每个机制一个字段(`Routes`、`Config`、`Features`、
-  `Permissions`、`Jobs`、`Notifications`、`Events`、`AuditActions`),
+  `Permissions`、`Jobs`、`Notifications`、`Events`、`AuditActions`、
+  `Retention`、`Schedules`),
   由三参 `NewRegistry(bus, kv, mailer)` 构建,或由 `Bootstrap`
   安装——它同时解析 `ObjectStore()` 与合并后的 `Locales()` 目录。
   `Registry.EventBus()` 就是注册器背后的总线,宿主发布进模块订阅
   的地方。
 - **接缝与能力**——每个接缝接口按已注册实现里最弱的那一个设计
-  (`KVStore` 上没有服务端脚本),每个实现声明
-  `MultiReplicaSafe`/`SurvivesRestart`/`Stateless`。`Bootstrap`
-  让无法满足所声明模式能力的组合启动失败;缺 `SurvivesRestart`
-  只是启动警告,`Stateless` 实现连警告都免。
+  (`KVStore` 上没有服务端脚本);实现声明自己的能力位:四个基础设施
+  接缝上是 `MultiReplicaSafe`/`SurvivesRestart`/`Stateless`(由装配
+  校验),go/pki 的 `Signer` 实现另有 `KeyNeverLeavesBoundary`——经
+  Signer 自己的注册表声明,装配并不把它与任何要求作比较(该缺口由
+  go/pki 自己的文档记录)。`Bootstrap` 让无法满足所声明模式能力的组
+  合启动失败;缺 `SurvivesRestart` 只是启动警告,`Stateless` 实现连
+  警告都免。
 - **租户上下文**——`WithTenant`/`TenantFromContext`/
   `MustTenantFromContext`(失败关闭:`ErrNoTenant`,绝无「所有租户」
   语义),以及本身不压制任何东西的 `WithSystemContext` 标记——谁

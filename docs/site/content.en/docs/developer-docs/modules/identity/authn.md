@@ -213,7 +213,7 @@ mandatory (no safe default exists for either), `WithMembershipReader`
 (absent means refuse), `WithSMSSender` required for a distributed
 deployment — the `Principal` type (identity only, never permissions),
 the service flows (`Register`/`Login`/`Refresh`/`SwitchTenant`/
-`Logout`), and the spec-generated HTTP fragment: twenty operations
+`Logout`), and the spec-generated HTTP fragment: twenty-two operations
 under `/api/v1/authn`, mounted straight from `authn.Middleware`'s
 output — most operations happen before any tenant exists, and the
 tenant some act inside comes from the token's own claim.

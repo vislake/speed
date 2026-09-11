@@ -96,6 +96,15 @@ and `bindRequestFn` is a last-bind-wins single binding.
   so a retried request carries the fresh token. A request can declare
   `omitAccessToken` and travel credential-less. No tenant header
   exists anywhere — tenant context travels inside the access token.
+- **Language announcement, read per attempt.** The optional
+  `languageProvider` supplies the request's `accept-language` value —
+  the host returns its i18n instance's current language — read per
+  attempt like the token, so a retry after a language switch announces
+  the new language. A caller-supplied `accept-language` is never
+  overwritten; null or empty leaves the header absent. It is a
+  transport channel for requester-language content (an SMS code's
+  language tier), never response localization — responses stay
+  code + params.
 - **Silent 401 refresh, bearer-only.** When a request that presented a
   bearer token answers 401 and `refreshAccessToken` is configured, one
   refresh runs — concurrent 401s share a single in-flight refresh —

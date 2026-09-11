@@ -15,9 +15,11 @@ project builds *on*, rarely ships *as* — the services group is what a
 product actually turns into features: media objects, outbound
 messages, signing keys and certificates, a tenant's outward-facing
 API, and usage measurement. Each module ships real tables with
-dual-dialect migrations, an HTTP fragment mounted at `/api/v1/*`, and
-its declared permissions, audit actions, events and job handlers; the
-reference app is the mandatory first consumer of every one.
+dual-dialect migrations and its declared permissions, audit actions,
+events and job handlers, and every one but metering mounts an HTTP
+fragment at `/api/v1/*` (metering is a Go-level API business modules
+call in-process, deliberately without an HTTP surface); the reference
+app is the mandatory first consumer of every one.
 
 The pages here are usage guides for a consumer team — what each module
 is for, when you choose it, how to wire it, its core concepts and its

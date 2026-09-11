@@ -245,11 +245,21 @@ validates every seam, and installs the merged message catalog; a
 module declares during `Register` and reads resolved state
 afterwards.
 
-The HTTP middleware chain has one fixed, non-negotiable order:
-`recover → request-id/log context → observability → authn →
-tenancy → rbac.RequirePermission → handler`. Authentication precedes
-tenant resolution because the tenant resolver returns a tenant but no
-context — it must read a verified principal to resolve. The
+The HTTP middleware chain has one fixed, non-negotiable order, and
+`go/app/chain` is its one implementation:
+`authn.Middleware(verifier)` wraps the whole composition and dispatches
+the two structurally exempt branches first — admin's console (behind
+neither tenancy nor impersonation, because its permissions are judged
+against the caller's own unsubstituted principal), then authn's own
+subtree (no tenant exists before sign-in). The fallthrough runs the
+optional impersonation decorator, then
+`tenancy.Middleware(authn.NewPrincipalResolver())` with the pre-auth
+allowlist, into the host's protected handler. Authentication precedes
+tenant resolution because it is the only order that verifies a token
+exactly once — the tenant resolver reads the already-verified principal
+out of the context. Permission gating is not a chain element: rbac's
+route-authorization table (`rbac.GuardRoutes`) is applied at mount time,
+above this chain. The
 [identity and access domain page](/docs/user-guide/domains/identity-access/)
 walks the chain operationally.
 

@@ -30,7 +30,7 @@ pkgcore 是所有 Go 模块共同 import、却不 import 任何其它 speed 模�
 
 两条轴被严格保持正交,pkgcore 正是落实这一区分的地方。**部署模式**声明拓扑——跑几个副本,因此每个 seam 的实现必须具备哪些能力。**实现组装**决定每个 seam 实际用哪套实现。模式从不选择实现,只约束实现。让这一分离成立的典型反例:单进程部署对接真实 SMTP、真实 S3、真实支付网关,是小客户安装的常规生产形态;而分布式部署照样可以在联调环境挂 Mailpit 与支付沙箱。
 
-机制:每套实现声明自己能做什么(`MultiReplicaSafe`、`SurvivesRestart`、`Stateless`——第三个位是后加的,让 console 邮件器这类无状态实现免于一条对它而言不指称任何损失的"重启丢失"警告横幅),每种模式声明自己要求什么(分布式要求所有承载共享状态的 seam 都 `MultiReplicaSafe`,单进程不要求任何能力),`Kernel.Bootstrap` 是唯一逐 seam 比较两集合的地方。无法在声明模式下运行的组装在启动时失败,报 `ErrCapabilityUnsatisfied`,点名 seam、实现、缺失能力与模式——刻意不是一族按模式硬编码的哨兵,因为实现一旦有 N 套,"缺少分布式实现"这种说法本身就不成立。仅缺 `SurvivesRestart` 时是启动横幅而非失败:操作者必须确切知道哪些数据不跨重启存活。
+机制:每套实现声明自己能做什么(`MultiReplicaSafe`、`SurvivesRestart`、`Stateless`——第三个位是后加的,让 console 邮件器这类无状态实现免于一条对它而言不指称任何损失的"重启丢失"警告横幅——外加 go/pki 的 `Signer` 实现声明的 `KeyNeverLeavesBoundary`,装配刻意不与它作比较:装配只校验四个固定的基础设施接缝),每种模式声明自己要求什么(分布式要求所有承载共享状态的 seam 都 `MultiReplicaSafe`,单进程不要求任何能力),装配的 Prepare 阶段是唯一逐组件比较两集合的地方。无法在声明模式下运行的组装在启动时失败,报 `ErrCapabilityUnsatisfied`,点名组件、缺失的能力位与模式——刻意不是一族按模式硬编码的哨兵,因为实现一旦有 N 套,"缺少分布式实现"这种说法本身就不成立。仅缺 `SurvivesRestart` 时是启动横幅而非失败:操作者必须确切知道哪些数据不跨重启存活。
 
 内核由选项组装,而非模式参数:`NewKernel(opts...)`,配 `WithDeploymentMode`(声明拓扑)、`WithPreset`(整张 seam→实现映射)、以及逐 seam 注入(`WithEventBus`/`WithKVStore`/`WithMailer`/`WithObjectStore`,按 seam 恒优先于 preset)。两个设计后果由此而来。其一,框架不预设"生产""测试"之类 preset——哪组组装算生产是应用组装者的判断,裸 `NewKernel()` 即零配置的 standalone 默认。其二,业务代码根本拿不到模式值,"业务逻辑里不许 `if mode == standalone`"这条纪律靠"无物可分支"来执行。
 
@@ -41,7 +41,7 @@ flowchart TD
     Boot --> Resolve["解析每个 seam<br/>preset 名字,或注入值"]
     Resolve --> Check{"能力满足<br/>所声明模式的要求?"}
     Check -->|是| Run[启动继续<br/>安装合并后的消息目录]
-    Check -->|否| Fail["启动失败:ErrCapabilityUnsatisfied<br/>点名 seam、实现、能力、模式"]
+    Check -->|否| Fail["启动失败:ErrCapabilityUnsatisfied<br/>点名组件、缺失的能力与模式"]
     Check -->|"仅缺 SurvivesRestart"| Banner[启动继续,打出持久性警告横幅]
 ```
 

@@ -150,8 +150,9 @@ HttpOnly 存储也没有可依赖的对象。
 - **authn** 模块的操作支撑 `auth-core` 会话与
   `auth-ui`/`account-ui`/`tenancy-ui` 组件家族——见
   [authn 使用页](/zh-cn/docs/user-guide/modules/identity/authn/);
-- **config** 的两个预认证端点支撑 `api-client` 隔离 react 子路径里
-  的 `fetchPublicConfig` 与 `useFeature`;
+- **config** 的两个预认证端点支撑 `api-client` 无依赖主入口里的
+  `fetchPublicConfig`,以及隔离 react 子路径里的 `usePublicConfig`/
+  `useFeature` hooks;
 - **billing** 的只读操作支撑 `billing-ui`,它把生成 hooks 渲染进组
   件树,是只读面的范式。
 

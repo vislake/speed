@@ -90,15 +90,19 @@ real SMTP, real S3 and a real payment gateway is the ordinary
 production shape of a small install, while a distributed deployment
 may hang off Mailpit and a payment sandbox.
 
-The machinery: every implementation declares what it can do
+The machinery: implementations declare what they can do
 (`MultiReplicaSafe`, `SurvivesRestart`, `Stateless` — the third added
 so a stateless console mailer skips a restart-warning banner that
-names no loss for it), each mode declares what it requires
+names no loss for it — plus `KeyNeverLeavesBoundary`, declared by
+go/pki's `Signer` implementations and deliberately not compared by the
+assembly, which validates only the four fixed infrastructure seams),
+each mode declares what it requires
 (distributed requires `MultiReplicaSafe` on every shared-state seam;
-standalone requires nothing), and `Kernel.Bootstrap` is the one place
-that compares the two sets, per seam. A composition that cannot run in
+standalone requires nothing), and the assembly's Prepare stage is the
+one place that compares the two sets, per component. A composition
+that cannot run in
 the declared mode fails startup with `ErrCapabilityUnsatisfied`,
-naming the seam, the implementation, the missing capability and the
+naming the component, the missing capability bits and the
 mode — deliberately *not* a family of per-mode sentinels, because
 "missing distributed implementation" stops meaning anything once N
 implementations exist. A missing `SurvivesRestart` alone is a startup
@@ -124,7 +128,7 @@ flowchart TD
     Boot --> Resolve["Resolve every seam<br/>preset name, or injected value"]
     Resolve --> Check{"Capabilities satisfy<br/>declared mode's requirements"}
     Check -->|yes| Run[Startup proceeds<br/>installs merged message catalog]
-    Check -->|no| Fail["Startup fails: ErrCapabilityUnsatisfied<br/>naming seam, implementation, capability, mode"]
+    Check -->|no| Fail["Startup fails: ErrCapabilityUnsatisfied<br/>naming the component, the missing capabilities and the mode"]
     Check -->|"missing SurvivesRestart only"| Banner[Startup proceeds with a durability warning banner]
 ```
 

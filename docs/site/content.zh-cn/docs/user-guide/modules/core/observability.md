@@ -75,10 +75,10 @@ mux.Handle("/", obs.Middleware(appHandler)) // 在 tenancy.Middleware 之外,按
 
 ## 边界与注意
 
-- 把中间件挂在 **`tenancy.Middleware` 之外**(固定链序是
-  `recover -> request-id/log-context -> observability ->
-  tenancy.Middleware -> ...`),业务代码在租户已知后调
-  `AnnotateTenant`——span 能越过上下文分叉存活,普通上下文值不能。
+- 把中间件挂在 **整条固定链之外**——它是被服务请求能触达的最外层,
+  包在最终组合好的处理器上、位于 `authn.Middleware` 之上——业务代码
+  在租户已知后调 `AnnotateTenant`——span 能越过上下文分叉存活,普通
+  上下文值不能。
 - `MetricsHandler` 在空导入 `exporter/prometheus` 之前答 404——
   这是可选加入的契约,生成的消费项目也继承它。
 - 手工 `WithLogger` 附上的日志器必须是裸 `slog.New(handler)`,不得

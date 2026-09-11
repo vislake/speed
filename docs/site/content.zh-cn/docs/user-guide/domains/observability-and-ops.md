@@ -14,18 +14,19 @@ description: 你基于 speed 的产品中的日志、指标与追踪——observ
 ```mermaid
 flowchart LR
     R[HTTP 请求] -->|指标中间件| M[路由: 请求数与时长]
-    H[你的 handler] -->|obs.FromContext ctx| L[脱敏结构化日志]
-    L -->|OTLP exporter| C[你选的 collector]
+    H[你的 handler] -->|obs.FromContext ctx| L[脱敏结构化日志 -> 本地输出]
+    M -->|配置 OTLP exporter 时| C[你选的 collector]
     E[API 错误信封] -->|结构化 code| X[客户端: 按码白名单,\n渲染自己的双语文本]
 ```
 
 ## 接线
 
 启动时初始化一次:`observability.Init(ctx, opts...)`。不声明部署模式
-——exporter 的选择全在选项:设了 `WithOTLPEndpoint` 时日志、指标与
-追踪经 OTLP 导出到该端点(分布式形态);没设时输出留在本地(控制台
-诊断)。一个 HTTP `Middleware` 在基数受限的路由标签后记录请求数与
-时长指标。
+——exporter 的选择全在选项:设了 `WithOTLPEndpoint` 时指标与追踪经
+OTLP 导出到该端点(分布式形态,经 `exporter/otlp` 空导入);日志在任
+何组合里都留在本地——脱敏结构化日志器写进程自己的输出,平台不附带
+OTLP 日志 exporter。没设端点时输出全部留在本地(控制台诊断)。一个
+HTTP `Middleware` 在基数受限的路由标签后记录请求数与时长指标。
 
 ## 结构化日志
 

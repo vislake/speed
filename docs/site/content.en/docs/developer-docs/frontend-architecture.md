@@ -178,8 +178,9 @@ split). By surface:
 - the **authn** module's operations back the `auth-core` session and
   the `auth-ui`/`account-ui`/`tenancy-ui` families — see the
   [authn usage page](/docs/user-guide/modules/identity/authn/);
-- **config**'s two pre-auth endpoints back `fetchPublicConfig` and
-  `useFeature` in `api-client`'s isolated react subpath;
+- **config**'s two pre-auth endpoints back `fetchPublicConfig` in
+  `api-client`'s dependency-free main entry and the `usePublicConfig`/
+  `useFeature` hooks in its isolated react subpath;
 - **billing**'s read operations back `billing-ui`, the generated-hooks
   read surface.
 

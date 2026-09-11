@@ -16,8 +16,8 @@ every answer carries.
 ```mermaid
 flowchart LR
     R[HTTP request] -->|metrics middleware| M[routes: request count/duration]
-    H[Your handler] -->|obs.FromContext ctx| L[redacted structured logger]
-    L -->|OTLP exporter| C[collector of your choice]
+    H[Your handler] -->|obs.FromContext ctx| L[redacted structured logger -> local output]
+    M -->|OTLP exporter, when configured| C[collector of your choice]
     E[API error envelope] -->|structured code| X[client: whitelist by code,\nrender own bilingual text]
 ```
 
@@ -25,9 +25,12 @@ flowchart LR
 
 Initialize once at boot: `observability.Init(ctx, opts...)`. No
 deployment mode is declared — the exporter choice is the option set:
-with `WithOTLPEndpoint` set, logs, metrics and traces export over OTLP
-to that endpoint (the distributed shape); without it, output stays
-local (console diagnostics). An HTTP `Middleware` records
+with `WithOTLPEndpoint` set, metrics and traces export over OTLP to
+that endpoint (the distributed shape, via the `exporter/otlp` blank
+import); logs stay local in every composition — the redacted structured
+logger writes to the process's own output, and no OTLP log exporter
+ships. Without the endpoint, output stays local entirely. An HTTP
+`Middleware` records
 request-count and duration metrics behind a cardinality-bounded route
 label.
 

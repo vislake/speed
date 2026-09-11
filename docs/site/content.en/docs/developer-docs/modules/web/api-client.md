@@ -74,6 +74,16 @@ cookie, so the session layer (`@speed/auth-core`) holds it in its
 closure and drives the refresh operation. `api-client` only defines
 the seam: `refreshAccessToken?: () => Promise<boolean>`.
 
+The same per-attempt read governs one non-credential header:
+`ClientOptions.languageProvider` supplies `accept-language`'s value
+(the host returns its i18n instance's current language), so a retry
+issued after a language switch announces the new language. A
+caller-supplied `accept-language` is never overwritten — the same
+guard the accept/content-type defaults observe — and null or empty
+leaves the header absent. It is a transport channel for
+requester-language content (an SMS code's language tier), never
+response localization: responses stay code + params.
+
 ## Design: why the 401 refresh is bearer-only, single-flight and once
 
 When a request that *presented a bearer token* answers 401 and the

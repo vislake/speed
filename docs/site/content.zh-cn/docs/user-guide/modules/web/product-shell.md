@@ -15,7 +15,16 @@ hooks(`@speed/auth-core`)组合成一个可直接复制的租户面向业务应�
 ## 它做什么
 
 包导出 `ProductShell` 与其 props 类型,外加 `PRODUCT_SHELL_NAMESPACE`
-(字面量 `'product-shell'`)与 `productShellResources` 资源对。
+(字面量 `'product-shell'`)与 `productShellResources` 资源对。第二个
+入口——`@speed/product-shell/bootstrap` 子路径——导出
+`bootstrapSpeedApp`:交付应用 `main` 用一份声明式定义驱动的应用入口
+组装——创建 i18n 实例(它自己组合的四个包的命名空间自动注册,平台
+错误文案束命名为 fallback)、在内存 access-token 存储上挂载 auth-core
+会话、带着会话的刷新腿与实例的逐请求语言 provider 在生成操作的
+runtime 接缝上构建 api-client、并把主题与 query-client 的 provider
+栈包到你的 `view` 外。主入口保持组件包的依赖下限;只有入口点才用
+到的东西(`@speed/api-client`、`@speed/api-sdk`、`@speed/ui-kit`、
+`@tanstack/react-query`)在子路径里导入。
 `ProductShell` 从认证快照渲染三个分支之一:
 
 | 快照 | 分支 |
@@ -113,4 +122,5 @@ attachSession(session) // 宿主的 @speed/auth-core 会话,渲染之前
 
 - 前端分层:[搭建前端](/zh-cn/docs/user-guide/domains/frontend-building/)
 - 相关包页:[auth-ui](/zh-cn/docs/user-guide/modules/web/auth-ui/)(登录家族与默认结束屏)、[tenancy-ui](/zh-cn/docs/user-guide/modules/web/tenancy-ui/)(`userMenu` 切换器)
+- 同组有自己页面的兄弟包:`@speed/layout-kit`(`AppShell` 外框与 `RouteGuard`)、`@speed/auth-core`(会话 hooks)、`@speed/ui-kit`(主题)、`@speed/i18n`(实例与命名空间帮手,本包导出类型所依赖者)、`@speed/api-client`(`./bootstrap` 子路径组装的客户端)与 `@speed/api-sdk`(生成操作与 `./bootstrap` 绑定的 runtime 接缝)
 - 同级包 `@speed/layout-kit`(`AppShell` 外框与 `RouteGuard`)、`@speed/auth-core`(会话 hooks)与 `@speed/ui-kit`(主题)各在本组的页面

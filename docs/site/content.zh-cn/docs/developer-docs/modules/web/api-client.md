@@ -59,6 +59,14 @@ description: "为什么 api-client 是前端唯一的手写 HTTP 层:构造时�
 刷新操作。`api-client` 只定义缝:`refreshAccessToken?: () =>
 Promise<boolean>`。
 
+同一条逐尝试重读的纪律还管着一个非凭据头:
+`ClientOptions.languageProvider` 供给 `accept-language` 的值(宿主返
+回它 i18n 实例的当前语言),所以语言切换之后发出的重试宣告的是新语
+言。调用方自己带 `accept-language` 时绝不覆盖——与 accept/content-type
+默认值同一道守卫;null 或空串则让该头缺席。它是一条给"请求方语言内
+容"用的传输通道(短信验证码的语言档),绝不是响应本地化手段:响应
+始终是 code + params。
+
 ## 设计:为什么 401 刷新只认带凭据的请求、单飞、且只一次
 
 当携带 bearer 令牌的请求答 401 且钩子已配置时,客户端跑一次刷新——

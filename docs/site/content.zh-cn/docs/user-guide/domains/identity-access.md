@@ -42,7 +42,10 @@ principal 变成每个租户级仓库都需要的租户上下文。你的路由�
    ——缺省即拒绝,绝不放行。
 3. **按序挂中间件链。** authn 自己的子树直接从 `authn.Middleware`
    的输出挂出——绝不经过 `tenancy.Middleware`,因为登录发生在任何
-   租户存在之前。其余一切路由用下游的
+   租户存在之前;admin 控制台同样从那里派出,且必须先于冒名装饰器
+   与 tenancy 链**两者**:admin 的权限按调用者自己真实、未被替换的
+   principal 判定,被冒名的身份或租户自己的 Owner 角色都绝不能抵达
+   它。其余一切路由用下游的
    `tenancy.Middleware(authn.NewPrincipalResolver())` 保护。
 4. **用权限门护住路由。** rbac 在 `Kernel.Bootstrap` 之后执行
    `Attach`(冻结所有模块声明的权限词汇表——授予词汇表外的任何东西
@@ -109,7 +112,7 @@ func (notesLikeModule) DependsOn() []string  { return nil }
 func (notesLikeModule) Migrations() embed.FS { return embed.FS{} }
 func (notesLikeModule) Locales() embed.FS    { return embed.FS{} }
 func (notesLikeModule) OpenAPISpec() []byte  { return nil }
-func (notesLikeModule) Register(reg pkgcore.Registrar) error {
+func (notesLikeModule) Register(reg *pkgcore.ComponentRegistry) error {
 	return reg.PermissionsSeat().Add("notes:read", "notes:write")
 }
 

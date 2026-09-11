@@ -148,7 +148,7 @@ func (subscriptionsModule) DependsOn() []string  { return nil }
 func (subscriptionsModule) Migrations() embed.FS { return embed.FS{} }
 func (subscriptionsModule) Locales() embed.FS    { return embed.FS{} }
 func (subscriptionsModule) OpenAPISpec() []byte  { return nil }
-func (subscriptionsModule) Register(reg pkgcore.Registrar) error {
+func (subscriptionsModule) Register(reg *pkgcore.ComponentRegistry) error {
 	if err := reg.ConfigSeat().Add(pkgcore.ConfigItem{
 		Key: "support.email", Type: "string", Default: "support@example.com",
 		Public: true, Description: "The address shown to this tenant's users",

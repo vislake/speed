@@ -141,7 +141,16 @@ flowchart TD
 
 Kernel 由选项组装,而不是由模式参数组装——`NewKernel(opts...)` 加 `WithDeploymentMode`、`WithPreset` 与逐接缝注入。`Bootstrap` 遍历模块图、解析并校验每个接缝、安装合并后的消息目录;模块在 `Register` 期间声明,在此之后读取已解析的状态。
 
-HTTP 中间件链有一个固定、不可随意调整的顺序:`recover → request-id/日志上下文 → 可观测性 → authn → tenancy → rbac.RequirePermission → handler`。认证必须先于租户解析,因为租户解析器只返回租户而不返回 context——它必须读到一个已验证的 Principal 才能解析。[身份与访问领域页](/zh-cn/docs/user-guide/domains/identity-access/)按操作讲解这条链。
+HTTP 中间件链有一个固定、不可随意调整的顺序,`go/app/chain` 是它唯一
+的实现:`authn.Middleware(verifier)` 包住整个组合,把两个结构性豁免
+的分支先派发出去——admin 控制台(不经 tenancy 也不经冒名替换,因为它
+的权限按调用者自己未替换的 principal 判定),然后是 authn 自己的子树
+(登录发生在任何租户存在之前)。落到默认分支的请求先经可选的冒名装
+饰器,再过 `tenancy.Middleware(authn.NewPrincipalResolver())` 与预认证
+白名单,进入宿主的受保护处理器。认证必须先于租户解析,因为只有这个
+次序让 token 恰好验证一次——租户解析器从上下文里读已验的 Principal。
+权限门不是链上的一环:rbac 的路由授权表(`rbac.GuardRoutes`)在挂载期
+应用,位于这条链之上。[身份与访问领域页](/zh-cn/docs/user-guide/domains/identity-access/)按操作讲解这条链。
 
 ## 多租户:隔离是平台属性
 

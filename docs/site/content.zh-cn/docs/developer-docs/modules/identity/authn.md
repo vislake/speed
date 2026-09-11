@@ -78,7 +78,7 @@ TOTP 只用标准库实现,钉在 RFC 4226/6238 官方测试向量上;开通发�
 
 ## 对外稳定面
 
-宿主组合所对的表面刻意小而稳:`NewModule` 及其选项——`WithKeySource` 与 `WithBlindIndexKey` 强制(两者都没有安全默认)、`WithMembershipReader`(缺失即拒绝)、分布式部署必须 `WithSMSSender`——`Principal` 类型(只有身份,绝无权限)、服务流程(`Register`/`Login`/`Refresh`/`SwitchTenant`/`Logout`),以及 spec 生成的 HTTP 片段:`/api/v1/authn` 下二十个操作,直接从 `authn.Middleware` 输出挂出——多数操作发生在任何租户存在之前,少数在租户内动作的操作,租户来自令牌自己的 claim。
+宿主组合所对的表面刻意小而稳:`NewModule` 及其选项——`WithKeySource` 与 `WithBlindIndexKey` 强制(两者都没有安全默认)、`WithMembershipReader`(缺失即拒绝)、分布式部署必须 `WithSMSSender`——`Principal` 类型(只有身份,绝无权限)、服务流程(`Register`/`Login`/`Refresh`/`SwitchTenant`/`Logout`),以及 spec 生成的 HTTP 片段:`/api/v1/authn` 下二十二个操作,直接从 `authn.Middleware` 输出挂出——多数操作发生在任何租户存在之前,少数在租户内动作的操作,租户来自令牌自己的 claim。
 
 ## Source
 

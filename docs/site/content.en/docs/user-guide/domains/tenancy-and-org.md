@@ -25,13 +25,18 @@ flowchart TD
 ```
 
 The resolver is a host-supplied function: `tenancy.NewDomainResolver`
-maps a request to a tenant by host, and the reference app resolves
-custom domain first, subdomain second, platform defaults last — a
-resolution that fails still serves platform defaults with a 200 for the
-login-page endpoints, never an error. Where a request's tenant comes
-from is the framework's job: your handler reads it out of the context
-with `pkgcore.TenantFromContext(ctx)` and never accepts one from a
-header, parameter or body.
+maps a request to a tenant by host through the host's own lookup
+function — whether a Host is a tenant's custom domain or a platform
+subdomain is entirely the lookup's business, and the reference app's
+lookup is a flat, deployment-configured host-to-tenant map — falling
+back to the one default tenant it was constructed with when the lookup
+misses (the reference app leaves it empty, so an unmatched host reads
+the platform-defaults tier); a resolution that fails still serves that
+fallback with a 200 for the login-page endpoints, never an error.
+Where a request's tenant comes from is the framework's job: your
+handler reads it out of the context with
+`pkgcore.TenantFromContext(ctx)` and never accepts one from a header,
+parameter or body.
 
 ## Minimal integration steps
 

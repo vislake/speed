@@ -50,7 +50,7 @@ services started; registration order never matters, `DependsOn` and
 `Bootstrap`'s sort decide:
 
 ```go
-func (m *BillingModule) Register(reg pkgcore.Registrar) error {
+func (m *BillingModule) Register(reg *pkgcore.ComponentRegistry) error {
     reg.RoutesSeat().Mount("/api/v1/billing", m.router())
     if err := reg.PermissionsSeat().Add("billing:read", "billing:write"); err != nil {
         return err
@@ -89,7 +89,7 @@ if err != nil {
 reg, err := pkgcore.NewKernel(pkgcore.WithDeploymentMode(mode)).
     Bootstrap(ctx, billingModule, orgModule)
 if err != nil {
-    return err // ErrCapabilityUnsatisfied names seam, implementation, missing capability, mode
+    return err // the Prepare stage named the component, the missing capability and the mode (ErrCapabilityUnsatisfied)
 }
 ```
 
@@ -113,17 +113,22 @@ client must not see.
 
 - **The `Registry`** — one field per mechanism (`Routes`, `Config`,
   `Features`, `Permissions`, `Jobs`, `Notifications`, `Events`,
-  `AuditActions`), built with the three-argument
+  `AuditActions`, `Retention`, `Schedules`), built with the three-argument
   `NewRegistry(bus, kv, mailer)` or installed by `Bootstrap`, which
   also resolves `ObjectStore()` and the merged `Locales()` catalog.
   `Registry.EventBus()` is the bus behind the registrar.
 - **Seams and capabilities** — each seam interface is designed
   against the weakest registered implementation (no server-side
-  scripting on `KVStore`), and every implementation declares
-  `MultiReplicaSafe`/`SurvivesRestart`/`Stateless`. `Bootstrap`
-  fails a composition whose resolved implementation cannot satisfy
-  the declared mode; a missing `SurvivesRestart` is a startup warning
-  only, and a `Stateless` seam is exempt from even that.
+  scripting on `KVStore`), and implementations declare their capability
+  bits: `MultiReplicaSafe`/`SurvivesRestart`/`Stateless` on the four
+  infrastructure seams the assembly validates, plus
+  `KeyNeverLeavesBoundary` on go/pki's `Signer` implementations, which
+  declare it through their own registry — a bit the assembly does not
+  compare against a requirement (the gap go/pki's docs record).
+  `Bootstrap` fails a composition whose resolved implementation cannot
+  satisfy the declared mode; a missing `SurvivesRestart` is a startup
+  warning only, and a `Stateless` implementation is exempt from even
+  that.
 - **Tenant context** — `WithTenant`/`TenantFromContext`/
   `MustTenantFromContext` (fail-closed: `ErrNoTenant`, never "all
   tenants"), and `WithSystemContext` as a marker that suppresses

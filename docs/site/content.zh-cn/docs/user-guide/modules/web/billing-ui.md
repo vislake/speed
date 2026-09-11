@@ -24,7 +24,7 @@ description: "账单文档只读面——一个 InvoicesSection 渲染调用方�
 `useBillingGetInvoice`)跑在宿主的 QueryClient 上。账单操作不带租户
 概念——读返回谁的发票由调用方的访问令牌决定——因此**区块完全无
 prop**,租户值永远不是 prop 或请求头。这里也没有会话 prop、没有会话
-操作:表面按规范只读,账单 HTTP 片段恰好交付两个读操作。这里没有任
+操作:表面按规范只读,账单 HTTP 片段恰好交付四个读操作。这里没有任
 何东西读存储、导航或直接碰网络;内置文案从双语 `billing-ui` 命名空
 间渲染,落定的空/错状态组合 ui-kit 的 `EmptyState`。
 
@@ -109,5 +109,5 @@ react-query 的重试与缓存策略是宿主自己的。套件编译并运行�
 ## 相关页面
 
 - 前端分层:[搭建前端](/zh-cn/docs/user-guide/domains/frontend-building/)
-- 后端表面:[billing](/zh-cn/docs/user-guide/modules/capabilities/billing/) 模块页与域指南[计费与计量](/zh-cn/docs/user-guide/domains/billing-metering/);错误码见 [billing](/zh-cn/docs/user-guide/error-codes/#billing)
+- 后端表面:[billing](/zh-cn/docs/user-guide/modules/capabilities/billing/) 模块页与域指南[计费与计量](/zh-cn/docs/user-guide/domains/billing-metering/);错误码见[错误码索引(English)](/docs/user-guide/error-codes/#billing)
 - 同级包 `@speed/api-sdk`(生成 hooks)、`@speed/ui-kit` 与 `@speed/i18n` 各在本组的页面

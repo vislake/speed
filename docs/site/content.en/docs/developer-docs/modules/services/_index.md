@@ -26,11 +26,13 @@ queue and rate limiting — are surfaces a consumer project builds
 *on*. The services group is what a product actually turns into
 features. Where a core module often owns no table and mounts no HTTP
 route, every services module ships the full stack of a business
-capability: real tables with dual-dialect migrations, an OpenAPI
-fragment mounted at `/api/v1/*`, declared permissions, audit actions,
-events and job handlers — registered through the one
-`Register(reg Registrar)` call of the [module wiring
-contract](/docs/developer-docs/architecture/).
+capability: real tables with dual-dialect migrations, declared
+permissions, audit actions, events and job handlers, all registered
+through the one `Register(reg Registrar)` call of the [module wiring
+contract](/docs/developer-docs/architecture/) — plus, for every one but
+metering, an OpenAPI fragment mounted at `/api/v1/*`. Metering is the
+deliberate exception: it is a Go-level API business modules call
+in-process, not a service reached over HTTP, so it mounts no fragment.
 
 The five modules also share the discipline the [design
 principles](/docs/developer-docs/design-principles/) state for

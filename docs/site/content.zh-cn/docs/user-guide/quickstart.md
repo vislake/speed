@@ -41,7 +41,7 @@ cd speed
 在生成文件里以 doc comment 点名,是你的第一个任务。
 
 ```sh
-go run ./go/saasctl new ../my-app --speed-root .
+go run ./go/saasctl new --speed-root . ../my-app
 ```
 
 `--speed-root` 指定生成 `go.mod` 要指向的 checkout。省略时,saasctl
@@ -62,13 +62,13 @@ go run ./go/saasctl new ../my-app --speed-root .
 
 ```sh
 # 默认:完整的 {authn, rbac, org} 组合
-go run ./go/saasctl new ../my-app --speed-root .
+go run ./go/saasctl new --speed-root . ../my-app
 
 # 只要 authn——没有组织树,没有基于角色的访问控制
-go run ./go/saasctl new ../my-app-lite --speed-root . --with=authn
+go run ./go/saasctl new --speed-root . --with=authn ../my-app-lite
 
 # 只保留配置能力的裸骨架,不接入任何可切换模块
-go run ./go/saasctl new ../my-app-bare --speed-root . --with=""
+go run ./go/saasctl new --speed-root . --with="" ../my-app-bare
 ```
 
 ## `saasctl` 的四个命令

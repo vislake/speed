@@ -54,9 +54,9 @@ path。创建任何东西之前,两者都必须通过 go 命令自己的校验�
 `go/pki` 从来不是选项:选了 `authn` 它就作为签名密钥来源悄悄随行。
 
 ```sh
-go run ./go/saasctl new ../my-app --speed-root .            # 默认:authn,org,rbac
-go run ./go/saasctl new ../my-app-lite --speed-root . --with=authn,org
-go run ./go/saasctl new ../my-app-bare --speed-root . --with=""   # 只留配置能力的裸骨架
+go run ./go/saasctl new --speed-root . ../my-app            # 默认:authn,org,rbac
+go run ./go/saasctl new --speed-root . --with=authn,org ../my-app-lite
+go run ./go/saasctl new --speed-root . --with="" ../my-app-bare   # 只留配置能力的裸骨架
 ```
 
 ## `upgrade`——把项目迁到一个发布版本上
@@ -156,7 +156,7 @@ import——各宿主自己的 `server.go` 把组件注册到
 
 ```sh
 # 在 speed checkout 内部:生成完整的默认组合。
-go run ./go/saasctl new ../my-app --speed-root .
+go run ./go/saasctl new --speed-root . ../my-app
 cd ../my-app
 
 # 有了发布之后,在项目目录内:

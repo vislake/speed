@@ -30,7 +30,7 @@ concept — whose invoices a read returns is decided by the caller's
 access token — so **the section takes no props**, and no tenant value
 is ever a prop or a header. There is no session prop and no session
 operation either: the surface is read-only by spec, the billing HTTP
-fragment shipping exactly the two read operations. Nothing here reads
+fragment shipping exactly the four read operations. Nothing here reads
 storage, navigates or touches the network directly; built-in strings
 render from the bilingual `billing-ui` namespace, and the settled
 empty/error states compose ui-kit's `EmptyState`.

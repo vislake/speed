@@ -116,10 +116,12 @@ sign-in surface's reuse the auth-ui bundle's text verbatim.
 
 ## The stable surface
 
-Five exported components with small prop tables — the two read-only
-sections take none; `SocialBindingsSection` adds the provider list and
-`onAuthorizeUrl`; `BindingCallbackHandler` adds the `code`/`state`
-pair and `onBound`; `MfaSection` takes the session — plus the
+Six exported components with small prop tables — three sections take
+none (`SessionsSection`, `LoginHistorySection` and the preference
+editor `PreferencesSection`); `SocialBindingsSection` adds the
+provider list and `onAuthorizeUrl`; `BindingCallbackHandler` adds the
+`code`/`state` pair and `onBound`; `MfaSection` takes the session —
+plus the
 `SocialProvider`/`SocialProviderConfig` copy of the spec's channel
 list and the bilingual `ACCOUNT_UI_NAMESPACE`/`accountUiResources`
 pair.

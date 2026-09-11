@@ -119,6 +119,6 @@ attachSession(session) // hooks 读取已挂接的会话
 ## 相关页面
 
 - 前端分层:[搭建前端](/zh-cn/docs/user-guide/domains/frontend-building/)
-- 后端表面:[authn](/zh-cn/docs/user-guide/modules/identity/authn/) 模块页;错误码见 [authn](/zh-cn/docs/user-guide/error-codes/#authn)
+- 后端表面:[authn](/zh-cn/docs/user-guide/modules/identity/authn/) 模块页;错误码见[错误码索引(English)](/docs/user-guide/error-codes/#authn)
 - 相关包页:[account-ui](/zh-cn/docs/user-guide/modules/web/account-ui/)、[product-shell](/zh-cn/docs/user-guide/modules/web/product-shell/)
 - 同级包 `@speed/auth-core`、`@speed/ui-kit` 与 `@speed/layout-kit` 各在本组的页面
