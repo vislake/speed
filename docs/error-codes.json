@@ -3237,7 +3237,7 @@
       "file": "go/sharing/ratelimit.go",
       "ident": "ErrRateLimited",
       "kind": "declared",
-      "line": 97,
+      "line": 96,
       "module": "sharing",
       "status": 429
     },
