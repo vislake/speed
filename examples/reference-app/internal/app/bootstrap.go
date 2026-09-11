@@ -805,13 +805,16 @@ var hostBootstrapKeys = []string{
 	"failselfserviceprovision",
 }
 
-// verifyBootstrapBinding proves the bootstrap targets bind this app's whole
-// bootstrap surface: every key the composed modules declared on the registry's
-// bootstrap seat maps onto a field of the host target or of the embedded
-// platform declaration, and every key this app owns maps onto a field of the
-// host target. A field nobody declares and no key reaches is what the targets'
-// own leaf counts pin (bootstrap_test.go), so the two directions together are
-// the strict correspondence between the targets and the surface.
+// verifyBootstrapBinding proves the bootstrap targets bind the seat's
+// bootstrap surface: every key declared on the registry's bootstrap seat maps
+// onto a field of the host target or of the embedded platform declaration,
+// and every key this app owns (hostBootstrapKeys) maps onto a field of the
+// host target. The platform modules' declared keys are descriptor data,
+// bound against the same targets by the assembly loader's stage-prepare
+// check before anything is constructed. A field nobody declares and no key
+// reaches is what the targets' own leaf counts pin (bootstrap_test.go), so
+// the two directions together are the strict correspondence between the
+// targets and the surface.
 func verifyBootstrapBinding(reg *pkgcore.Registry) error {
 	hc := hostConfig{}
 	var unbound []error

@@ -29,9 +29,9 @@
 //
 //   - The BOOTSTRAP layer: the process-start input resolved once, before the
 //     dynamic layer exists. Its keys come from the modules themselves: every
-//     module that consumes process-start input declares it on the registry's
-//     bootstrap seat (pkgcore.BootstrapKey, reg.Bootstrap.Add), and this
-//     command renders those declarations -- what the key protects, its value
+//     module that consumes process-start input declares it on its component
+//     descriptor (pkgcore.BootstrapKey, pkgcore.Component.BootstrapKeys), and
+//     this command renders those declarations -- what the key protects, its value
 //     type, whether it is secret material, the environment variable name
 //     the loader derives from the key path, the fallback an operator should
 //     expect when the key is unset -- straight from the census the same

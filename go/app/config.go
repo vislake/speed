@@ -222,11 +222,14 @@ func loadConfiguration(cfg *engineConfig) error {
 	return nil
 }
 
-// verifyBinding is the schema half of stage 4: every bootstrap key the
-// bootstrapped modules declared must map onto a field of one of the host's
+// verifyBinding is the schema half of stage 4: every bootstrap key declared
+// on the registry's bootstrap seat must map onto a field of one of the host's
 // two configuration targets. A declared key that binds to nothing is a key
-// whose contract is silently unreachable -- the module's wiring reads a value
-// no source can ever supply -- so it fails the boot, naming every such key.
+// whose contract is silently unreachable -- its wiring reads a value no
+// source can ever supply -- so it fails the boot, naming every such key. The
+// seat carries the host's own declarations; each component's statically
+// declared BootstrapKeys are bound against the same targets by the loader's
+// stage-prepare check, before anything is constructed.
 func verifyBinding(spec *ConfigSpec, reg *pkgcore.Registry) error {
 	declared := reg.Bootstrap.Keys()
 	var missing []error

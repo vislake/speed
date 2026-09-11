@@ -18,10 +18,11 @@ package main
 //
 // The composition also registers notification, which declares no schema of
 // its own but does declare a process-start key: the bootstrap side of the
-// reference is enumerated from the same boot (reg.Bootstrap.Keys()), so the
-// composed set is every platform module whose declarations this reference
-// renders, on either layer, and no module's declaration can reach the
-// reference without being composed here.
+// reference is enumerated from the same composed set (each module's
+// component descriptor carries its BootstrapKeys), so the composed set is
+// every platform module whose declarations this reference renders, on either
+// layer, and no module's declaration can reach the reference without being
+// composed here.
 //
 // The composition deliberately stops at the platform modules. A
 // config reference committed at the repository's docs/ root documents the
@@ -253,5 +254,25 @@ func schemaHost(ctx context.Context) (*hostSnapshot, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &hostSnapshot{service: svc, declaredKeys: reg.Bootstrap.Keys()}, nil
+	return &hostSnapshot{service: svc, declaredKeys: declaredBootstrapKeys(modules)}, nil
+}
+
+// declaredBootstrapKeys returns the composed set's declared process-start
+// keys: each module states its keys on its component descriptor
+// (pkgcore.Component.BootstrapKeys), the static declaration the assembly's
+// loader resolves before anything is constructed, so the census reads the
+// descriptors of exactly the modules composed here -- the module Registry's
+// own bootstrap seat carries only what a host declares on it directly.
+func declaredBootstrapKeys(modules []pkgcore.Module) []pkgcore.BootstrapKey {
+	descriptors := make(map[string]pkgcore.Component)
+	for _, c := range pkgcore.RegisteredComponents(pkgcore.NewComponentRegistry()) {
+		if c.Name == c.Module && c.Module != "" {
+			descriptors[c.Name] = c
+		}
+	}
+	var keys []pkgcore.BootstrapKey
+	for _, m := range modules {
+		keys = append(keys, descriptors[m.Name()].BootstrapKeys...)
+	}
+	return keys
 }
