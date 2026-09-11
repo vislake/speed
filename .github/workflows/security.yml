@@ -61,10 +61,12 @@ name: security
 #     `replace`s one of the bumped modules was re-tidied under GOWORK=off
 #     so its own go.mod resolves the bumped version transitively. A
 #     govulncheck run finds zero findings in every module.
-#   * deps-go job: a matrix over the implemented modules,
-#     `go run golang.org/x/vuln/cmd/govulncheck@v1.1.4 ./...` with
-#     working-directory go/<module> after setup-go-env. Govulncheck
-#     version stays pinned at v1.1.4.
+#   * deps-go job: one row per derived module (reusable-go-module-set.yml
+#     reads the go.work use entries outside examples/ -- the go/ modules
+#     plus tools/configrefgen), `go run
+#     golang.org/x/vuln/cmd/govulncheck@v1.1.4 ./...` with
+#     working-directory set to the row's module after setup-go-env.
+#     Govulncheck version stays pinned at v1.1.4.
 #
 # DEFERRED (a real prerequisite is still missing; wiring it now would
 # produce a permanently red check):
@@ -200,39 +202,25 @@ jobs:
       - name: Analyze
         uses: github/codeql-action/analyze@6f5948dfacef28e207b48d0905cf90c03365536d  # v3.37.9
 
+  module-set:
+    # The derived module set the row job below feeds from: go.work is the
+    # membership authority, so a module is scanned the moment its go.work
+    # use entry lands.
+    uses: ./.github/workflows/reusable-go-module-set.yml
+
   deps-go:
     name: govulncheck (${{ matrix.module }})
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    needs: module-set
     strategy:
       fail-fast: false
-      # Mirrors fast-check.yml's go-modules matrix exactly: one row per
-      # implemented module (a go.mod + real code, never a doc.go-only
-      # stub). Adding a module to that matrix and to this one is the same
-      # act -- keep the two lists identical.
-      matrix:
-        module:
-          - go/pkgcore
-          - go/dbkit
-          - go/tenancy
-          - go/observability
-          - go/config
-          - go/jobs
-          - go/ratelimit
-          - go/rbac
-          - go/org
-          - go/authn
-          - go/saasctl
-          - go/storage
-          - go/notification
-          - go/pki
-          - go/integration
-          - go/metering
-          - go/sharing
-          - go/billing
-          - go/ai-gateway
-          - go/compliance
-          - go/admin
+      # The matrix is derived from go.work at run time
+      # (reusable-go-module-set.yml -- the same derivation fast-check's
+      # and full-check's go-modules matrices feed from), so every member
+      # is scanned and adding a module means adding one go.work use
+      # entry, never a row here.
+      matrix: ${{ fromJSON(needs.module-set.outputs.matrix) }}
     steps:
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1

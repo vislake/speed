@@ -1,0 +1,106 @@
+name: go-module-set
+# Reusable derived module set: the pipeline orchestrators (fast-check,
+# full-check, security) take their go-modules matrices from here instead
+# of a hand-maintained list, so go.work -- the membership authority -- is
+# the single place a module is registered and no caller list can drift.
+# The derivation reads the go.work use block with the release
+# coordinator's own parser (tools/release/lockstep-release.py), so there
+# is one copy of the parse logic.
+#
+# The derived set: every go.work use entry outside examples/ -- the go/
+# modules plus the repository's tool module tools/configrefgen. Entries
+# under examples/ are consumers (examples/reference-app), whose CI runs
+# live elsewhere (full-check's reference-app job) and which are never
+# published or tagged.
+#
+# FAIL-CLOSED: a go.work that is missing, declares no use entries, or
+# names an entry whose directory carries no go.mod aborts the derivation
+# naming the offending entry -- a matrix can never silently shrink.
+#
+# OUTPUT
+# `matrix`: the strategy.matrix object, as JSON, in go.work file order,
+# one row per derived module:
+#   {"module": ["go/admin", ..., "tools/configrefgen"]}
+# Callers feed it to their row job as
+#   strategy:
+#     matrix: ${{ fromJSON(needs.module-set.outputs.matrix) }}
+
+on:
+  workflow_call:
+    outputs:
+      matrix:
+        description: >-
+          JSON strategy.matrix object with one row per go.work use entry
+          outside examples/, in go.work file order.
+        value: ${{ jobs.derive.outputs.matrix }}
+
+permissions:
+  contents: read
+
+jobs:
+  derive:
+    name: derive the module set from go.work
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      matrix: ${{ steps.derive.outputs.matrix }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+      # The derived list is printed on every run (auditable) and parsed
+      # into the matrix output. Pure python: no Go toolchain, no setup
+      # action, no network.
+      - name: Derive the module set from go.work
+        id: derive
+        run: |
+          python3 - <<'PY'
+          import importlib.util
+          import json
+          import os
+          import sys
+
+          spec = importlib.util.spec_from_file_location(
+              "lockstep_release", "tools/release/lockstep-release.py"
+          )
+          m = importlib.util.module_from_spec(spec)
+          spec.loader.exec_module(m)
+
+          try:
+              with open("go.work", encoding="utf-8") as fh:
+                  go_work_text = fh.read()
+              entries = m.parse_gowork_uses(go_work_text)
+          except (OSError, m.ReleaseError) as exc:
+              print(f"error: cannot derive the module set: {exc}",
+                    file=sys.stderr)
+              sys.exit(1)
+
+          modules = []
+          for entry in entries:
+              if entry.split("/", 1)[0] == "examples":
+                  # Consumer modules (examples/reference-app): their CI
+                  # runs live elsewhere (full-check's reference-app job).
+                  print(f"  (consumer, not a matrix row) {entry}")
+                  continue
+              if not os.path.isfile(os.path.join(entry, "go.mod")):
+                  print(
+                      f"error: go.work registers {entry!r} but "
+                      f"{entry}/go.mod does not exist -- fix go.work or "
+                      f"the directory before the matrices can derive",
+                      file=sys.stderr,
+                  )
+                  sys.exit(1)
+              modules.append(entry)
+
+          if not modules:
+              print("error: go.work yielded no matrix entries",
+                    file=sys.stderr)
+              sys.exit(1)
+
+          print(f"derived {len(modules)} module rows from go.work:")
+          for entry in modules:
+              print(f"  {entry}")
+          matrix = json.dumps({"module": modules})
+          print(f"matrix={matrix}")
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as fh:
+              fh.write(f"matrix={matrix}\n")
+          PY
