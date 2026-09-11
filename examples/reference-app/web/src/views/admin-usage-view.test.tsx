@@ -45,6 +45,7 @@
  */
 
 import type { RequestFn } from '@speed/api-client'
+import type { AdminUsageSummaryRow } from '@speed/api-sdk'
 import { bindRequestFn } from '@speed/api-sdk/runtime'
 import { describe, expect, it } from 'vitest'
 import { act } from '@testing-library/react'
@@ -53,7 +54,6 @@ import uiKitZhCN from '../../../../../web/packages/ui-kit/src/locales/zh-CN.json
 import enUS from '../locales/en-US.json' with { type: 'json' }
 import zhCN from '../locales/zh-CN.json' with { type: 'json' }
 import { SYSTEM_PSEUDO_TENANT_ID } from '../demo-tenants.js'
-import type { DemoUsageSummaryRow } from '../test-utils/demo-server.js'
 import { demoServer } from '../test-utils/demo-server.js'
 import type { RealClientRig } from '../test-utils/real-client.js'
 import {
@@ -93,7 +93,7 @@ const RAW_LEDGER_TENANT_ID = 'tenant-64307885-8a11-4b23-9c45-6d7e8f90a1b2'
  * summary, a balance with something reserved and an active
  * subscription; tenant-globex holds an empty-but-present usage list, a
  * full balance and no subscription. */
-const DEMO_USAGE_ROWS: readonly DemoUsageSummaryRow[] = [
+const DEMO_USAGE_ROWS: readonly AdminUsageSummaryRow[] = [
   {
     tenantId: 'tenant-acme',
     displayName: '',

@@ -223,13 +223,19 @@
 
 import type { CasesCase, NotesNote } from '../app-api/index.js'
 import type {
+  AdminTenant,
+  AdminUsageSummaryRow,
   AuthnIdentity,
   AuthnLoginAttempt,
   AuthnSession,
   BillingCreditTransaction,
+  OrgInvitation,
+  OrgMembership,
+  OrgNode,
 } from '@speed/api-sdk'
 import type { PublicConfigResponse } from '@speed/api-client'
 import { SYSTEM_PSEUDO_TENANT_ID } from '../demo-tenants.js'
+import type { TeamMember } from '../team-api.js'
 import { errorResponse, jsonResponse } from './real-client.js'
 import type { RealCall, RealResponder } from './real-client.js'
 
@@ -354,7 +360,7 @@ export interface DemoServerOptions {
    * row and the reader's -- the mirror of the real boot's demo-owner
    * and demo-reader registrations landing in org's memberships
    * table). */
-  readonly initialTeamMembers?: readonly DemoOrgMembership[]
+  readonly initialTeamMembers?: readonly OrgMembership[]
   /** The display identity of a roster row whose user is outside the
    * demo account directory (or whose identity a suite wants to script
    * over the directory's): user id to the account's own display name
@@ -369,7 +375,7 @@ export interface DemoServerOptions {
    * tenant as first served; default [] -- a freshly booted server has
    * none pending. Stateful from there: a create appends the invitation
    * later list answers of the same tenant carry. */
-  readonly initialTeamInvitations?: readonly DemoOrgInvitation[]
+  readonly initialTeamInvitations?: readonly OrgInvitation[]
   /** Answers the team surface's roster answer (GET
    * /api/reference-app/team-members) and every org read (members,
    * invitations, nodes) with the rbac read gate's 403 -- the answer a
@@ -570,7 +576,7 @@ export interface DemoServerOptions {
    * domain (internal/app/demo/demo_admin.go's adminSubjectResolver). Default
    * [] -- the mirror of a ledger a freshly booted server auto-fills as
    * org roots are created. */
-  readonly initialAdminTenants?: readonly DemoAdminTenant[]
+  readonly initialAdminTenants?: readonly AdminTenant[]
   /** The GET /api/v1/admin/usage-summary rows as first served -- the
    * platform's usage/billing dashboard go/admin's operator-facing route
    * answers (admin-api.ts), one row per tenant in the ledger. Only a
@@ -582,7 +588,7 @@ export interface DemoServerOptions {
    * adminSubjectResolver), exactly like the ledger read above. Default
    * [] -- the mirror of a freshly booted ledger with no tenants in it
    * yet. */
-  readonly initialUsageSummary?: readonly DemoUsageSummaryRow[]
+  readonly initialUsageSummary?: readonly AdminUsageSummaryRow[]
 }
 
 /** The name the fixture gives a registered account's clinic when its
@@ -714,105 +720,22 @@ const DEMO_CASE_CREATED_AT = DEMO_NOTE_CREATED_AT
  * above. */
 const DEMO_SHARE_EXPIRES_AT = '2026-10-04T00:00:00Z'
 
-/** The org roster answers' wire shapes, mirroring go/org's spec
- * (OrgMembership, OrgInvitation, OrgNode) -- the demo answers a real
- * org surface would get from a freshly booted server: membership rows
- * carry opaque user ids only, invitation rows name no invitee (the
- * address never crosses the boundary; see org-api.ts). */
-export interface DemoOrgMembership {
-  readonly membershipId: string
-  readonly userId: string
-  readonly nodeId: string
-  readonly status: string
-  readonly createdAt: string
-}
-
-/** One row of the team surface's roster answer (GET
- * /api/reference-app/team-members) -- the wire shape of the app's own
- * composition (internal/app/team_members.go): the org membership facts
- * above plus the member's display identity from authn's users table,
- * each field the empty string when the account has none. */
-export interface DemoTeamMember {
-  readonly membershipId: string
-  readonly userId: string
-  readonly nodeId: string
-  readonly status: string
-  readonly createdAt: string
-  /** The account's own display name, '' when it registered none. */
-  readonly displayName: string
-  /** The account's own email, '' when it has none. */
-  readonly email: string
-}
-
-export interface DemoOrgInvitation {
-  readonly id: string
-  readonly nodeId: string
-  readonly status: string
-  readonly expiresAt: string
-  readonly createdAt: string
-}
-
-/** One row of the platform's tenant ledger answer (GET
- * /api/v1/admin/tenants) -- the wire shape of go/admin's own
- * operator-facing route (go/admin/api/openapi.yaml's AdminTenant): the
- * tenant id, the display name an operator recorded ('' for the rows
- * the org.node.created subscription auto-registers, go/admin's
- * tenant_service.go), the ledger's status opinion and the row's
- * recorded-at stamp. */
-export interface DemoAdminTenant {
-  readonly tenantId: string
-  readonly displayName: string
-  readonly status: string
-  readonly createdAt: string
-}
-
-/** One recorded usage aggregation of a usage-dashboard row (the wire
- * shape of go/admin/api/openapi.yaml's AdminUsageFeatureSummary): a
- * feature's summed quantity over one calendar period, the feature keys
- * the composed app records being go/ai-gateway's usage dimensions
- * (ai.chat_tokens, ai.image_count, ai.image_steps). */
-export interface DemoUsageFeatureSummary {
-  readonly feature: string
-  readonly periodStart: string
-  readonly periodEnd: string
-  readonly quantity: number
-}
-
-/** One row of the platform's usage/billing dashboard answer (GET
- * /api/v1/admin/usage-summary) -- the wire shape of go/admin's own
- * operator-facing route (go/admin/api/openapi.yaml's
- * AdminUsageSummaryRow): the ledger's tenant identity plus the
- * dimensions a row carries only when the answering module was wired.
- * The composed app wires both metering and billing, so the mirror's
- * served rows carry meteringSummaries (possibly empty, never absent)
- * and creditBalance, with activeSubscription absent exactly when the
- * tenant holds none active. */
-export interface DemoUsageSummaryRow {
-  readonly tenantId: string
-  readonly displayName: string
-  readonly meteringSummaries?: readonly DemoUsageFeatureSummary[]
-  readonly creditBalance?: {
-    readonly available: number
-    readonly reserved: number
-  }
-  readonly activeSubscription?: {
-    readonly id: string
-    readonly planId: string
-    readonly status: string
-    readonly createdAt: string
-  }
-}
-
-export interface DemoOrgNode {
-  readonly id: string
-  readonly parentId: string
-  readonly path: string
-  readonly depth: number
-  readonly name: string
-  readonly kind: string
-  readonly createdAt: string
-  readonly updatedAt: string
-}
+// The demo's org, admin and team answers speak the generated wire types
+// themselves -- OrgMembership / OrgInvitation / OrgNode (go/org's
+// fragment), AdminTenant / AdminUsageSummaryRow (go/admin's), and the
+// host's own TeamMember (team-api.ts, the shape internal/app/team_members.go
+// mounts) -- so a fixture row and a served row are checked against the
+// same shape and cannot drift apart. The demo answers what a freshly
+// booted server would: membership rows carry opaque user ids only, and
+// an invitation row names no invitee (the address never crosses the
+// boundary).
+//
+// The spec leaves the generated types' fields optional; the fixture's
+// own rows always carry every field it constructs (the `?? ''` guards
+// below are the type-level bridge, never a served value), while the
+// optional fields that ARE semantic -- meteringSummaries present-but-
+// empty, activeSubscription absent for a tenant without one -- stay
+// exactly as the composed server answers them.
 
 /** The root node of the demo tenants' organization trees: the single
  * node an invitation binds an invitee to. The real demo tenants' roots
@@ -820,7 +743,7 @@ export interface DemoOrgNode {
  * renders from this read -- the roster and the invite flow use only the
  * node's id and depth -- so the fixture names it with a plain
  * identifier rather than importing clinic copy. */
-const DEMO_TEAM_ROOT_NODE: DemoOrgNode = {
+const DEMO_TEAM_ROOT_NODE: OrgNode = {
   id: 'node-root-1',
   parentId: '',
   path: '/node-root-1/',
@@ -1059,7 +982,7 @@ export function demoServer(options: DemoServerOptions = {}): RealResponder {
   // demo-reader registration) -- and the invitations start as
   // option-scripted (empty by default) and grow statefully: a create
   // appends the row later list answers of the same tenant carry.
-  const membersByTenant = new Map<string, DemoOrgMembership[]>([
+  const membersByTenant = new Map<string, OrgMembership[]>([
     [
       tenantId,
       [
@@ -1082,10 +1005,10 @@ export function demoServer(options: DemoServerOptions = {}): RealResponder {
       ],
     ],
   ])
-  const membersOf = (tenant: string): DemoOrgMembership[] => {
+  const membersOf = (tenant: string): OrgMembership[] => {
     const list = membersByTenant.get(tenant)
     if (list === undefined) {
-      const fresh: DemoOrgMembership[] = []
+      const fresh: OrgMembership[] = []
       membersByTenant.set(tenant, fresh)
       return fresh
     }
@@ -1129,13 +1052,13 @@ export function demoServer(options: DemoServerOptions = {}): RealResponder {
     // nothing answers the empty pair.
     return { displayName: '', email: '' }
   }
-  const invitationsByTenant = new Map<string, DemoOrgInvitation[]>([
+  const invitationsByTenant = new Map<string, OrgInvitation[]>([
     [tenantId, [...(initialTeamInvitations ?? [])]],
   ])
-  const invitationsOf = (tenant: string): DemoOrgInvitation[] => {
+  const invitationsOf = (tenant: string): OrgInvitation[] => {
     const list = invitationsByTenant.get(tenant)
     if (list === undefined) {
-      const fresh: DemoOrgInvitation[] = []
+      const fresh: OrgInvitation[] = []
       invitationsByTenant.set(tenant, fresh)
       return fresh
     }
@@ -1579,15 +1502,19 @@ export function demoServer(options: DemoServerOptions = {}): RealResponder {
         if (denyTeamRead) {
           return errorResponse(403, RBAC_PERMISSION_DENIED_CODE)
         }
-        const rows: DemoTeamMember[] = membersOf(principal.tenant_id).map(
+        // The membership rows are this responder's own constructions
+        // (every field set in the maps above), so the empty-string
+        // guards are the generated type's optionality bridged, never a
+        // rewritten value.
+        const rows: TeamMember[] = membersOf(principal.tenant_id).map(
           (membership) => {
-            const identity = teamIdentityOf(membership.userId)
+            const identity = teamIdentityOf(membership.userId ?? '')
             return {
-              membershipId: membership.membershipId,
-              userId: membership.userId,
-              nodeId: membership.nodeId,
-              status: membership.status,
-              createdAt: membership.createdAt,
+              membershipId: membership.membershipId ?? '',
+              userId: membership.userId ?? '',
+              nodeId: membership.nodeId ?? '',
+              status: membership.status ?? '',
+              createdAt: membership.createdAt ?? '',
               displayName: identity.displayName,
               email: identity.email,
             }
@@ -1638,7 +1565,7 @@ export function demoServer(options: DemoServerOptions = {}): RealResponder {
         if (!/^[^\s@]+@[^\s@]+$/.test(email)) {
           return errorResponse(400, 'org.invalid_email')
         }
-        const created: DemoOrgInvitation = {
+        const created: OrgInvitation = {
           id: `invitation-${nextInvitationId}`,
           nodeId: DEMO_TEAM_ROOT_NODE.id,
           status: 'pending',

@@ -40,12 +40,12 @@
  */
 
 import type { RequestFn } from '@speed/api-client'
+import type { AdminTenant } from '@speed/api-sdk'
 import { bindRequestFn } from '@speed/api-sdk/runtime'
 import { describe, expect, it } from 'vitest'
 import uiKitZhCN from '../../../../../web/packages/ui-kit/src/locales/zh-CN.json' with { type: 'json' }
 import zhCN from '../locales/zh-CN.json' with { type: 'json' }
 import { SYSTEM_PSEUDO_TENANT_ID } from '../demo-tenants.js'
-import type { DemoAdminTenant } from '../test-utils/demo-server.js'
 import { demoServer } from '../test-utils/demo-server.js'
 import type { RealClientRig } from '../test-utils/real-client.js'
 import {
@@ -72,19 +72,25 @@ const LEDGER_CREATED_AT = '2026-09-04T00:00:00Z'
 
 /** The ledger as the real server answers it for the two demo tenants:
  * the auto-registered rows (org root creation lazily registers the
- * row with a blank display name -- go/admin/tenant_service.go). */
-const DEMO_TENANT_ROWS: readonly DemoAdminTenant[] = [
+ * row with a blank display name -- go/admin/tenant_service.go). An
+ * auto-registered row has no operator behind it, so createdBy is a
+ * blank id and notes stays empty, exactly what EnsureExists records. */
+const DEMO_TENANT_ROWS: readonly AdminTenant[] = [
   {
     tenantId: 'tenant-acme',
     displayName: '',
     status: 'active',
     createdAt: LEDGER_CREATED_AT,
+    createdBy: '',
+    notes: '',
   },
   {
     tenantId: 'tenant-globex',
     displayName: '',
     status: 'suspended',
     createdAt: LEDGER_CREATED_AT,
+    createdBy: '',
+    notes: '',
   },
 ]
 
@@ -123,10 +129,17 @@ describe('AdminView', () => {
         initialAdminTenants: [
           ...DEMO_TENANT_ROWS,
           {
+            // The operator-recorded row: the staff account the rig
+            // signs in as (the demo server's configured user) recorded
+            // the name, so createdBy carries that user id, as a manual
+            // ledger write does (go/admin/handler.go records the
+            // caller).
             tenantId: 'tenant-7f9e4d2b',
             displayName: 'Mayfair Dental',
             status: 'active',
             createdAt: LEDGER_CREATED_AT,
+            createdBy: 'user-1',
+            notes: '',
           },
         ],
       }),
@@ -167,7 +180,14 @@ describe('AdminView', () => {
       demoServer({
         tenantId: SYSTEM_PSEUDO_TENANT_ID,
         initialAdminTenants: [
-          { tenantId: RAW_LEDGER_TENANT_ID, displayName: '', status: 'active', createdAt: LEDGER_CREATED_AT },
+          {
+            tenantId: RAW_LEDGER_TENANT_ID,
+            displayName: '',
+            status: 'active',
+            createdAt: LEDGER_CREATED_AT,
+            createdBy: '',
+            notes: '',
+          },
         ],
       }),
     )

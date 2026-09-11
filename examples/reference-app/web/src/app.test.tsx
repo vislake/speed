@@ -334,12 +334,16 @@ describe('AppView', () => {
           displayName: '',
           status: 'active',
           createdAt: '2026-09-04T00:00:00Z',
+          createdBy: '',
+          notes: '',
         },
         {
           tenantId: 'tenant-globex',
           displayName: '',
           status: 'active',
           createdAt: '2026-09-04T00:00:00Z',
+          createdBy: '',
+          notes: '',
         },
       ],
     })
@@ -382,12 +386,16 @@ describe('AppView', () => {
           displayName: '',
           status: 'active',
           createdAt: '2026-09-04T00:00:00Z',
+          createdBy: '',
+          notes: '',
         },
         {
           tenantId: 'tenant-globex',
           displayName: '',
           status: 'active',
           createdAt: '2026-09-04T00:00:00Z',
+          createdBy: '',
+          notes: '',
         },
       ],
       initialUsageSummary: [
