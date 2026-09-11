@@ -927,7 +927,7 @@ func TestEnqueueExpirySweep_LaterWindowEnqueuesNewJobAndSweepsAgain(t *testing.T
 
 // TestEnqueueExpirySweep_DeadLetteredWindowDoesNotPoisonLaterOnes pins
 // regression (c): a sweep job that dead-letters poisons only its own
-// window. Fails on the pre-window key (tenant only), where the dead job's
+// window. Fails under a tenant-only key (no window), where the dead job's
 // idempotency key stays resolved forever -- every later enqueue returns the
 // dead job's id, no second row is ever created and the tenant is never
 // swept again.

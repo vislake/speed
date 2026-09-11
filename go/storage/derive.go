@@ -34,10 +34,10 @@ package storage
 // bytes nothing references. A delete that races the gate instead blocks on
 // the object row the gate locked until this insert commits, and its own row
 // removal -- deleteObjectRows deletes the object row first and the
-// derivative rows last -- then removes the row that just landed. There is
-// no separate post-write re-read to race anymore: the gate is atomic with
-// the insert where a re-read was not, so no interleaving can slip a
-// derivative row past a completed deletion. (The gate's row lock is a
+// derivative rows last -- then removes the row that just landed. The gate
+// is atomic with the insert, so no interleaving can slip a derivative row
+// past a completed deletion -- a separate post-write re-read could not
+// close that window. (The gate's row lock is a
 // genuine FOR UPDATE on PostgreSQL; the SQLite driver has no row locks and
 // the clause vanishes, SQLite's single-writer serialization answering a
 // racing writer with a busy error the queue's retry converges.)
