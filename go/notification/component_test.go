@@ -2,6 +2,7 @@ package notification
 
 import (
 	"context"
+	"errors"
 	"io"
 	"net/http"
 	"slices"
@@ -74,6 +75,50 @@ func TestComponent_NewBuildsAConfiguredModule(t *testing.T) {
 	if m.subject == nil {
 		t.Error("subject is nil, want the registry's optional subject resolver wired")
 	}
+}
+
+// TestComponent_NewPropagatesOptionalReadFailures pins the optional-read
+// contract the component's construction follows: an absent optional product
+// is skipped (the module's documented default), while any other read
+// failure -- two registered values for one optional token -- fails the
+// construction instead of being taken for absence.
+func TestComponent_NewPropagatesOptionalReadFailures(t *testing.T) {
+	mandatory := func() *pkgcore.ComponentRegistry {
+		reg := pkgcore.NewComponentRegistry()
+		reg.Put(testutil.NewSQLite(t, moduleName, migrations.FS))
+		reg.Put(pkgcore.NewConsoleSMSSender(io.Discard))
+		reg.Put(&stubQueue{})
+		reg.Put(&stubUserResolver{byUser: map[string]UserAddresses{}})
+		return reg
+	}
+	cfg := pkgcore.NewComponentConfig(map[string]any{
+		"mail_from": "notifications@test.example",
+		"reply_to":  "support@test.example",
+	})
+
+	t.Run("absent optional products are skipped", func(t *testing.T) {
+		instance, err := notificationComponent.New(context.Background(), mandatory(), cfg)
+		if err != nil {
+			t.Fatalf("New: %v; want the absent optional resolvers skipped", err)
+		}
+		m, ok := instance.(*Module)
+		if !ok {
+			t.Fatalf("New returned %T, want *notification.Module", instance)
+		}
+		if m.subject != nil || m.userLocale != nil {
+			t.Errorf("subject = %v, userLocale = %v; want both left at their absent default", m.subject, m.userLocale)
+		}
+	})
+
+	t.Run("a duplicate delivery fails the construction", func(t *testing.T) {
+		reg := mandatory()
+		reg.Put(SubjectResolverFunc(func(*http.Request) (string, bool) { return "", false }))
+		reg.Put(SubjectResolverFunc(func(*http.Request) (string, bool) { return "org:demo", true }))
+		_, err := notificationComponent.New(context.Background(), reg, cfg)
+		if !errors.Is(err, pkgcore.ErrAmbiguousProvider) {
+			t.Fatalf("New = %v, want ErrAmbiguousProvider propagated, not the absent default", err)
+		}
+	})
 }
 
 // TestComponent_NewFailsWithoutTheDatabase pins the fail-closed shape: an

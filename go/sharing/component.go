@@ -57,13 +57,25 @@ var sharingComponent = pkgcore.Component{
 			return nil, err
 		}
 		var opts []Option
-		if queue, err := pkgcore.Get[jobs.Queue](reg); err == nil {
+		queue, ok, err := pkgcore.GetOptional[jobs.Queue](reg)
+		if err != nil {
+			return nil, err
+		}
+		if ok {
 			opts = append(opts, WithQueue(queue))
 		}
-		if cfg, err := pkgcore.Get[TenantConfigReader](reg); err == nil {
+		cfg, ok, err := pkgcore.GetOptional[TenantConfigReader](reg)
+		if err != nil {
+			return nil, err
+		}
+		if ok {
 			opts = append(opts, WithTenantConfigReader(cfg))
 		}
-		if resolver, err := pkgcore.Get[ResourceResolver](reg); err == nil {
+		resolver, ok, err := pkgcore.GetOptional[ResourceResolver](reg)
+		if err != nil {
+			return nil, err
+		}
+		if ok {
 			opts = append(opts, WithResourceResolver(resolver))
 		}
 		return NewModule(db, opts...), nil

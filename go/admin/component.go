@@ -107,10 +107,18 @@ var adminComponent = pkgcore.Component{
 			WithNotification(notificationModule),
 			WithQueue(queue),
 		}
-		if meteringModule, err := pkgcore.Get[*metering.Module](reg); err == nil {
+		meteringModule, hasMetering, err := pkgcore.GetOptional[*metering.Module](reg)
+		if err != nil {
+			return nil, err
+		}
+		if hasMetering {
 			opts = append(opts, WithMetering(meteringModule))
 		}
-		if billingModule, err := pkgcore.Get[*billing.Module](reg); err == nil {
+		billingModule, hasBilling, err := pkgcore.GetOptional[*billing.Module](reg)
+		if err != nil {
+			return nil, err
+		}
+		if hasBilling {
 			opts = append(opts, WithBilling(billingModule))
 		}
 		return NewModule(db, opts...), nil

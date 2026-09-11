@@ -84,10 +84,18 @@ var integrationComponent = pkgcore.Component{
 		if c.MaxAPIKeyLifetime > 0 {
 			opts = append(opts, WithMaxAPIKeyLifetime(c.MaxAPIKeyLifetime))
 		}
-		if queue, err := pkgcore.Get[jobs.Queue](reg); err == nil {
+		queue, ok, err := pkgcore.GetOptional[jobs.Queue](reg)
+		if err != nil {
+			return nil, err
+		}
+		if ok {
 			opts = append(opts, WithWebhookQueue(queue))
 		}
-		if subject, err := pkgcore.Get[SubjectResolver](reg); err == nil {
+		subject, ok, err := pkgcore.GetOptional[SubjectResolver](reg)
+		if err != nil {
+			return nil, err
+		}
+		if ok {
 			opts = append(opts, WithSubjectResolver(subject))
 		}
 		return NewModule(db, opts...), nil

@@ -109,10 +109,18 @@ var notificationComponent = pkgcore.Component{
 			WithDeliveryQueue(queue),
 			WithUserAddressResolver(resolver),
 		}
-		if subject, err := pkgcore.Get[SubjectResolver](reg); err == nil {
+		subject, ok, err := pkgcore.GetOptional[SubjectResolver](reg)
+		if err != nil {
+			return nil, err
+		}
+		if ok {
 			opts = append(opts, WithSubjectResolver(subject))
 		}
-		if locale, err := pkgcore.Get[UserLocaleResolver](reg); err == nil {
+		locale, ok, err := pkgcore.GetOptional[UserLocaleResolver](reg)
+		if err != nil {
+			return nil, err
+		}
+		if ok {
 			opts = append(opts, WithUserLocaleResolver(locale))
 		}
 		return NewModule(db, opts...), nil

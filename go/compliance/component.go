@@ -73,10 +73,18 @@ var complianceComponent = pkgcore.Component{
 			WithQueue(queue),
 			WithExportConfigReader(NewConfigReader(cfgModule.Handle())),
 		}
-		if creator, err := pkgcore.Get[SharingCreator](reg); err == nil {
+		creator, ok, err := pkgcore.GetOptional[SharingCreator](reg)
+		if err != nil {
+			return nil, err
+		}
+		if ok {
 			opts = append(opts, WithSharing(creator))
 		}
-		if lister, err := pkgcore.Get[TenantLister](reg); err == nil {
+		lister, ok, err := pkgcore.GetOptional[TenantLister](reg)
+		if err != nil {
+			return nil, err
+		}
+		if ok {
 			opts = append(opts, WithTenantLister(lister))
 		}
 		// The repository is built over the shared connection exactly as the

@@ -132,7 +132,11 @@ var queueStandaloneComponent = pkgcore.Component{
 		// is ordered before this one by the optional requirement above, so
 		// its product exists. With no bus selected or put, the queue
 		// publishes nothing, exactly the WithEventBus-omitted behavior.
-		if bus, err := pkgcore.Get[pkgcore.EventBus](reg); err == nil {
+		bus, hasBus, err := pkgcore.GetOptional[pkgcore.EventBus](reg)
+		if err != nil {
+			return nil, err
+		}
+		if hasBus {
 			opts = append(opts, WithEventBus(bus))
 		}
 		return &standaloneQueueInstance{
@@ -168,7 +172,11 @@ var queueStandaloneComponent = pkgcore.Component{
 		// it exists by Start. Without one, a PerTenant declaration makes
 		// Scheduler.Start refuse with ErrTenantListerRequired rather than
 		// silently sweeping nothing.
-		if lister, err := pkgcore.Get[TenantLister](reg); err == nil {
+		lister, hasLister, err := pkgcore.GetOptional[TenantLister](reg)
+		if err != nil {
+			return err
+		}
+		if hasLister {
 			schedulerOpts = append(schedulerOpts, WithTenantLister(lister))
 		}
 		if q.scheduleInterval > 0 {

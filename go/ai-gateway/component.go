@@ -77,15 +77,29 @@ var aiGatewayComponent = pkgcore.Component{
 		// are selected: the queue its job handler drains and the storage
 		// service whose bytes it reads and writes. A gateway with either
 		// absent stays chat-only, the WithImageGeneration-omitted shape.
-		queue, queueErr := pkgcore.Get[jobs.Queue](reg)
-		storageModule, storageErr := pkgcore.Get[*storage.Module](reg)
-		if queueErr == nil && storageErr == nil {
+		queue, hasQueue, err := pkgcore.GetOptional[jobs.Queue](reg)
+		if err != nil {
+			return nil, err
+		}
+		storageModule, hasStorage, err := pkgcore.GetOptional[*storage.Module](reg)
+		if err != nil {
+			return nil, err
+		}
+		if hasQueue && hasStorage {
 			opts = append(opts, WithImageGeneration(queue, storageModule.ObjectService()))
 		}
-		if entitlements, err := pkgcore.Get[Entitlements](reg); err == nil {
+		entitlements, hasEntitlements, err := pkgcore.GetOptional[Entitlements](reg)
+		if err != nil {
+			return nil, err
+		}
+		if hasEntitlements {
 			opts = append(opts, WithEntitlements(entitlements))
 		}
-		if recorder, err := pkgcore.Get[UsageRecorder](reg); err == nil {
+		recorder, hasRecorder, err := pkgcore.GetOptional[UsageRecorder](reg)
+		if err != nil {
+			return nil, err
+		}
+		if hasRecorder {
 			opts = append(opts, WithUsageRecorder(recorder))
 		}
 		return NewModule(db, opts...), nil
