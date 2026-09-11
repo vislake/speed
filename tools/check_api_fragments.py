@@ -1,16 +1,18 @@
 #!/usr/bin/env python3
 """Fragment-enumeration drift gate for .github/workflows/api-contract.yml.
 
-The workflow names the backend-fragment universe in several coherent
-places at once: the trigger path filters (the pull_request and push
-`paths` blocks name each fragment's api/ directory), the oapi-codegen
-regeneration steps (one `cd <dir>` + pinned oapi-codegen run per
-fragment), and the redocly `join` input list (the fragments merged into
-contracts/speed.yaml, whose order is load-bearing: the merged
-document is committed and diff-gated, and the input order is what join
-renders). Every one of those sites is enumerated by hand, with the
-sites' consistency held only by comments in that file saying "keep the
-two in lockstep" -- an enumeration that can drift silently.
+The workflow names the backend-fragment universe in two hand-written
+places: the trigger path filters (the pull_request and push `paths`
+blocks name each fragment's api/ directory) and the redocly `join`
+input list (the fragments merged into contracts/speed.yaml, whose order
+is load-bearing: the merged document is committed and diff-gated, and
+the input order is what join renders). Both are enumerated by hand,
+with their consistency held only by comments in that file saying "keep
+the two in lockstep" -- an enumeration that can drift silently. The
+regeneration leg is no longer an enumeration at all: the workflow's
+contract-gate job runs tools/api_fragment_matrix.py over the manifest
+and publishes the derived array as its `fragments` output, and the
+regeneration job's matrix is `fromJson` of exactly that output.
 
 tools/api_fragments.json is the single machine-readable source of truth
 for the fragment list. The manifest carries two lists: `fragments`,
@@ -38,17 +40,25 @@ workflow's legs, and fails (exit 1) on any of these disagreements:
     trigger path filter (each fragment's filter row is exactly its
     `<dir>/**`), or a path-filter row of fragment shape (`.../api/**`)
     naming a directory the manifest does not register;
-  * a registered fragment with no oapi-codegen regeneration step in the
-    workflow, or a regeneration step regenerating a directory the
-    manifest does not register;
+  * the matrix leg decoupled from the manifest: the contract-gate job
+    must carry a step (id `derive`) running tools/api_fragment_matrix.py
+    into $GITHUB_OUTPUT under the published output key, the
+    regeneration job's `strategy.matrix.fragment` must be `fromJson` of
+    exactly that output, and its regeneration step must run the pinned
+    oapi-codegen over `${{ matrix.fragment.dir }}` (with the porcelain
+    gate beside it). The gate also executes the script itself against
+    the tree and fails when its output -- the array the workflow
+    consumes -- is not exactly the manifest's fragments in manifest
+    order with the `name`/`dir` keys the workflow reads;
   * the redocly join step's input list disagreeing with the manifest's
     merged fragments (the fragments carrying a `merge_rank`, in rank
     order -- rank order is the join order, and the join order shapes
     the committed merged document);
-  * tools/api_fragments.json, tools/check_api_fragments.py or
-    tools/test_check_api_fragments.py missing from either trigger path
-    filter (a change to the manifest or to this gate must re-run the
-    job that consumes them).
+  * tools/api_fragments.json, tools/api_fragment_matrix.py,
+    tools/check_api_fragments.py or tools/test_check_api_fragments.py
+    missing from either trigger path filter (a change to the manifest,
+    to the derivation or to this gate must re-run the job that consumes
+    them).
 
 The tree scan skips .git/, .claude/ (nested worktree checkouts), node_modules/,
 vendor/ and __pycache__/. A fragment added to the tree that touches no
@@ -81,15 +91,19 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import subprocess
 import sys
 
 WORKFLOW_REL = os.path.join(".github", "workflows", "api-contract.yml")
 MANIFEST_REL = os.path.join("tools", "api_fragments.json")
+MATRIX_SCRIPT_REL = os.path.join("tools", "api_fragment_matrix.py")
 # Files whose change must re-run this job: the manifest this gate reads,
-# and the gate itself (plus its suite). The gate checks their presence in
-# both trigger path filters so that wiring cannot silently regress.
+# the derivation the matrix consumes, and the gate itself (plus its
+# suite). The gate checks their presence in both trigger path filters so
+# that wiring cannot silently regress.
 SELF_ROWS = [
     "tools/api_fragments.json",
+    "tools/api_fragment_matrix.py",
     "tools/check_api_fragments.py",
     "tools/test_check_api_fragments.py",
 ]
@@ -98,6 +112,17 @@ CONFIG_ARGS = "-config oapi-codegen.yaml openapi.yaml"
 FRAGMENT_SPEC = "openapi.yaml"
 FRAGMENT_CONFIG = "oapi-codegen.yaml"
 SKIP_DIRS = {".git", ".claude", "node_modules", "vendor", "__pycache__", ".venv"}
+# The three jobs of the matrix-ized workflow and the wiring strings that
+# couple them: the gate job publishes the derivation under this output
+# key from a step with this id, the regeneration job's matrix consumes
+# exactly this fromJson expression, and its regeneration step runs from
+# the matrix entry's directory.
+GATE_JOB = "contract-gate"
+REGEN_JOB = "regenerate-fragments"
+MATRIX_STEP_ID = "derive"
+MATRIX_OUTPUT_KEY = "fragments"
+MATRIX_CONSUMER = "${{ fromJson(needs.contract-gate.outputs.fragments) }}"
+MATRIX_WORKDIR = "${{ matrix.fragment.dir }}"
 
 
 def _infra(message: str) -> None:
@@ -440,38 +465,206 @@ def _path_rows(doc: dict, trigger: str) -> list[str]:
     return rows
 
 
-def _job_steps(doc: dict) -> list[dict]:
+def _job(doc: dict, name: str) -> dict:
     jobs = doc.get("jobs")
     if not isinstance(jobs, dict):
         _infra(f"error: {WORKFLOW_REL} has no readable 'jobs' block")
-    job = jobs.get("api-contract")
+    job = jobs.get(name)
     if not isinstance(job, dict):
-        _infra(f"error: {WORKFLOW_REL} has no readable 'jobs.api-contract' job")
+        _infra(
+            f"error: {WORKFLOW_REL} has no readable 'jobs.{name}' job -- "
+            f"the job this gate reads"
+        )
+    return job
+
+
+def _job_steps(doc: dict, name: str) -> list[dict]:
+    job = _job(doc, name)
     steps = job.get("steps")
     if not isinstance(steps, list) or not all(isinstance(s, dict) for s in steps):
         _infra(
-            f"error: {WORKFLOW_REL} 'jobs.api-contract.steps' is not a list "
+            f"error: {WORKFLOW_REL} 'jobs.{name}.steps' is not a list "
             f"of steps -- the step legs this gate reads"
         )
     return steps
 
 
-def _regen_steps(steps: list[dict]) -> list[tuple[str, str, str]]:
-    """(step name, run, regenerated dir or None) for every oapi-codegen step."""
-    out: list[tuple[str, str, str | None]] = []
-    for step in steps:
-        run = step.get("run")
-        if not isinstance(run, str) or OAPI_TOOL not in run:
+def _as_str(value: object) -> str:
+    return value if isinstance(value, str) else ""
+
+
+def _check_matrix_leg(
+    root: str, frags: list[dict], doc: dict, problems: list[str]
+) -> None:
+    """The matrix wiring, end to end: gate job -> derivation -> matrix.
+
+    The regeneration leg is derived, not enumerated, so this check is
+    about the wiring surviving restructures: the gate job must publish
+    the derivation under the consumed output key from a step with the
+    consumed id that runs the derivation script into $GITHUB_OUTPUT; the
+    regeneration job's matrix must consume exactly that output and its
+    oapi-codegen step must run from the matrix entry's directory with
+    the pinned invocation; and the script, executed here against the
+    tree, must print exactly the manifest's fragments in manifest order
+    with the name/dir keys the workflow reads."""
+    gate_job = _job(doc, GATE_JOB)
+    outputs = gate_job.get("outputs")
+    if not isinstance(outputs, dict):
+        problems.append(
+            f"jobs.{GATE_JOB} carries no readable 'outputs' block -- the "
+            f"regeneration matrix consumes the derived fragment array "
+            f"from it"
+        )
+        published = ""
+    else:
+        published = _as_str(outputs.get(MATRIX_OUTPUT_KEY))
+        if f"steps.{MATRIX_STEP_ID}.outputs.{MATRIX_OUTPUT_KEY}" not in published:
+            problems.append(
+                f"jobs.{GATE_JOB}.outputs.{MATRIX_OUTPUT_KEY} is "
+                f"{published!r}, not the derivation step's output "
+                f"(expected it to carry "
+                f"'steps.{MATRIX_STEP_ID}.outputs.{MATRIX_OUTPUT_KEY}')"
+            )
+
+    gate_steps = _job_steps(doc, GATE_JOB)
+    derive_steps = [
+        step
+        for step in gate_steps
+        if MATRIX_SCRIPT_REL in _as_str(step.get("run"))
+    ]
+    if not derive_steps:
+        problems.append(
+            f"jobs.{GATE_JOB} has no step running {MATRIX_SCRIPT_REL} -- "
+            f"the derivation the regeneration matrix consumes"
+        )
+    else:
+        step = derive_steps[0]
+        if _as_str(step.get("id")) != MATRIX_STEP_ID:
+            problems.append(
+                f"the derivation step in jobs.{GATE_JOB} carries id "
+                f"{_as_str(step.get('id'))!r}, not {MATRIX_STEP_ID!r} -- "
+                f"the id the published output references"
+            )
+        if "$GITHUB_OUTPUT" not in _as_str(step.get("run")):
+            problems.append(
+                f"the derivation step in jobs.{GATE_JOB} does not write "
+                f"$GITHUB_OUTPUT -- the matrix would be empty"
+            )
+
+    regen_job = _job(doc, REGEN_JOB)
+    if _as_str(regen_job.get("needs")) != GATE_JOB:
+        problems.append(
+            f"jobs.{REGEN_JOB} does not declare 'needs: {GATE_JOB}' -- the "
+            f"matrix cannot consume an output of a job it does not need"
+        )
+    strategy = regen_job.get("strategy")
+    matrix = strategy.get("matrix") if isinstance(strategy, dict) else None
+    fragment_entry = matrix.get("fragment") if isinstance(matrix, dict) else None
+    if _as_str(fragment_entry) != MATRIX_CONSUMER:
+        problems.append(
+            f"jobs.{REGEN_JOB}'s matrix entry is {fragment_entry!r}, not "
+            f"{MATRIX_CONSUMER!r} -- the derived output is the only "
+            f"fragment enumeration this leg may consume"
+        )
+    regen_steps = _job_steps(doc, REGEN_JOB)
+    oapi_steps = [
+        step
+        for step in regen_steps
+        if OAPI_TOOL in _as_str(step.get("run"))
+    ]
+    if not oapi_steps:
+        problems.append(
+            f"jobs.{REGEN_JOB} has no oapi-codegen step -- the matrix's "
+            f"whole purpose"
+        )
+    else:
+        step = oapi_steps[0]
+        name = _as_str(step.get("name")) or "(unnamed step)"
+        if _as_str(step.get("working-directory")) != MATRIX_WORKDIR:
+            problems.append(
+                f"regeneration step '{name}': working-directory is "
+                f"{_as_str(step.get('working-directory'))!r}, not "
+                f"{MATRIX_WORKDIR!r} -- oapi-codegen.yaml's paths are "
+                f"relative to the matrix entry's directory"
+            )
+        if CONFIG_ARGS not in _as_str(step.get("run")):
+            problems.append(
+                f"regeneration step '{name}': run does not pass "
+                f"'{CONFIG_ARGS}' -- the invocation shape this gate reads"
+            )
+    if not any(
+        "git status --porcelain" in _as_str(step.get("run"))
+        for step in regen_steps
+    ):
+        problems.append(
+            f"jobs.{REGEN_JOB} carries no porcelain gate -- a regenerated "
+            f"artifact that does not match its spec must fail the entry"
+        )
+
+    # Execute the derivation over the live tree: the array the workflow
+    # consumes must be exactly the manifest's fragments, in manifest
+    # order, with the keys the workflow reads (name and dir).
+    script = os.path.join(root, MATRIX_SCRIPT_REL)
+    if not os.path.isfile(script):
+        problems.append(
+            f"{MATRIX_SCRIPT_REL} is missing -- the derivation "
+            f"jobs.{GATE_JOB} runs and this gate executes"
+        )
+        return
+    try:
+        proc = subprocess.run(
+            [sys.executable, script, "--root", root],
+            capture_output=True,
+            text=True,
+            cwd=root,
+        )
+    except OSError as exc:
+        problems.append(
+            f"cannot execute {MATRIX_SCRIPT_REL}: {exc}"
+        )
+        return
+    if proc.returncode != 0:
+        problems.append(
+            f"{MATRIX_SCRIPT_REL} exited {proc.returncode} against this "
+            f"tree: {proc.stderr.strip() or proc.stdout.strip()}"
+        )
+        return
+    try:
+        derived = json.loads(proc.stdout)
+    except json.JSONDecodeError as exc:
+        problems.append(
+            f"{MATRIX_SCRIPT_REL} output is not one JSON array: {exc}"
+        )
+        return
+    if not isinstance(derived, list):
+        problems.append(
+            f"{MATRIX_SCRIPT_REL} output is not a JSON array"
+        )
+        return
+    clean = []
+    for entry in derived:
+        if not isinstance(entry, dict):
+            problems.append(
+                f"{MATRIX_SCRIPT_REL} emitted a non-object matrix entry: "
+                f"{entry!r}"
+            )
             continue
-        name = step.get("name")
-        name = name if isinstance(name, str) and name else "(unnamed step)"
-        dirs = [
-            line.strip()[3:].strip()
-            for line in run.splitlines()
-            if line.strip().startswith("cd ")
-        ]
-        out.append((name, run, dirs[0] if len(dirs) == 1 else None))
-    return out
+        extra = sorted(set(entry) - {"name", "dir"})
+        if extra:
+            problems.append(
+                f"{MATRIX_SCRIPT_REL} emitted matrix entry keys the "
+                f"workflow does not read: {extra}"
+            )
+            continue
+        clean.append({"name": entry.get("name"), "dir": entry.get("dir")})
+    expected = [{"name": f["name"], "dir": f["dir"]} for f in frags]
+    if clean != expected:
+        problems.append(
+            f"{MATRIX_SCRIPT_REL}'s output does not match the manifest's "
+            f"fragments in manifest order: expected {expected!r} but got "
+            f"{clean!r} -- every manifest fragment must reach the "
+            f"regeneration matrix"
+        )
 
 
 def _merge_inputs(steps: list[dict]) -> list[str] | None:
@@ -566,55 +759,13 @@ def check(root: str) -> tuple[list[str], int, int, int]:
             if self_row not in path_rows[trigger]:
                 problems.append(
                     f"{self_row} is missing from the {trigger} path "
-                    f"filter -- a change to the fragment manifest or to "
-                    f"this gate must re-run this job"
+                    f"filter -- a change to the fragment manifest, the "
+                    f"matrix derivation or this gate must re-run this job"
                 )
 
-    steps = _job_steps(doc)
-    regen = _regen_steps(steps)
-    if not regen:
-        _infra(
-            f"error: no oapi-codegen regeneration step found in "
-            f"{WORKFLOW_REL} -- the workflow no longer matches the shape "
-            f"this gate reads; update tools/check_api_fragments.py"
-        )
-    regen_dirs: set[str] = set()
-    for step_name, run, regen_dir in regen:
-        if CONFIG_ARGS not in run:
-            problems.append(
-                f"regeneration step '{step_name}': run does not pass "
-                f"'{CONFIG_ARGS}' -- the invocation shape this gate reads"
-            )
-        if regen_dir is None:
-            problems.append(
-                f"regeneration step '{step_name}': no single 'cd <fragment "
-                f"dir>' line found in its run -- the shape this gate "
-                f"reads is a run that starts with 'cd <dir>' and passes "
-                f"'{CONFIG_ARGS}'"
-            )
-            continue
-        regen_dirs.add(regen_dir)
-    for frag in frags:
-        if frag["dir"] not in regen_dirs:
-            problems.append(
-                f"fragment '{frag['name']}' ({frag['dir']}): no "
-                f"oapi-codegen regeneration step regenerates it"
-            )
-    for step_name, _run, regen_dir in regen:
-        if regen_dir is not None and regen_dir not in manifest_dirs:
-            suffix = ""
-            if regen_dir in app_owned_set:
-                suffix = (
-                    " (it is listed under app_owned -- app-owned "
-                    "fragments regenerate through the app's own "
-                    "generation leg, not this workflow's)"
-                )
-            problems.append(
-                f"regeneration step '{step_name}' regenerates {regen_dir}, "
-                f"but {MANIFEST_REL} registers no fragment there"
-                f"{suffix}"
-            )
+    _check_matrix_leg(root, frags, doc, problems)
 
+    steps = _job_steps(doc, "generated-surface")
     actual = _merge_inputs(steps)
     if actual is None:
         _infra(
@@ -671,7 +822,7 @@ def main(argv: list[str] | None = None) -> int:
     print(
         "api-fragments: ok    "
         f"{n_frags} fragments in {MANIFEST_REL} match the tree, the "
-        f"trigger path filters, the {n_frags} regeneration steps and the "
+        f"trigger path filters, the derived regeneration matrix and the "
         f"redocly join (merged: {n_merged}, app-owned: {n_app_owned})"
     )
     return 0

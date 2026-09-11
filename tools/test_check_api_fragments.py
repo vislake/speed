@@ -8,17 +8,21 @@ executables with no third-party dependencies" convention (tools/README.md's
     python3 tools/test_check_api_fragments.py
 
 The fixture tree is a small fake repository: a tools/api_fragments.json
-manifest, a mini .github/workflows/api-contract.yml shaped exactly like
-the real file (the same indentation levels, `run: |` literal blocks with
-`#`-leading content lines, trailing `#` comments on plain scalars), and
+manifest, the real tools/api_fragment_matrix.py derivation (copied, so
+the gate can execute it; drift tests may plant a variant instead), a
+mini .github/workflows/api-contract.yml shaped exactly like the real
+file (the three jobs, the same indentation levels, `run: |` literal
+blocks with `#`-leading content lines, trailing `#` comments on plain
+scalars, the gate job's outputs block and the matrix reference), and
 one api/ directory per manifest entry carrying openapi.yaml +
 oapi-codegen.yaml. Every planted drift below must make check() report it
 (exit 1 in the CLI); the machinery-level tests prove the checker catches
 the drift classes the gate exists for -- a fragment added to the tree
 without the manifest, a manifest entry missing from one leg, an
-unregistered fragment in a leg -- and test_real_tree_is_consistent runs
-the real check against this repository, which is what the api-contract
-job's drift-check step runs on every trigger.
+unregistered fragment in a leg, the matrix leg decoupled from the
+manifest -- and test_real_tree_is_consistent runs the real check against
+this repository, which is what the api-contract job's drift-check step
+runs on every trigger.
 
 The fixture mirrors the real tree's two fragment classes: platform
 fragments registered in the manifest (alpha and beta, both merged) and
@@ -42,10 +46,18 @@ it green -- the regression teeth this mechanism ships with):
     test_app_owned_entry_spec_missing_is_drift);
   * one dir registered as a fragment and listed app_owned
     (test_fragment_also_listed_app_owned_is_drift);
-  * manifest entry with no oapi-codegen regeneration step, and a
-    regeneration step for a dir the manifest does not register
-    (test_registered_fragment_missing_from_regen_steps_is_drift,
-    test_extra_regen_step_for_unregistered_dir_is_drift);
+  * the matrix leg decoupled from the manifest: a matrix not consuming
+    the gate job's derived output, a gate job without the derivation
+    step, a derivation whose output drops a fragment (the gate executes
+    the planted script), a regeneration step running outside the matrix
+    entry's directory, a missing oapi-codegen step, and a missing
+    porcelain gate
+    (test_matrix_not_derived_from_the_gate_output_is_drift,
+    test_missing_derivation_step_is_drift,
+    test_derivation_dropping_a_fragment_is_drift,
+    test_regeneration_step_off_the_matrix_directory_is_drift,
+    test_missing_oapi_codegen_step_is_drift,
+    test_missing_porcelain_gate_in_the_matrix_job_is_drift);
   * manifest entry missing from one trigger path filter, and a
     fragment-shaped path-filter row naming an unregistered dir
     (test_fragment_missing_from_pull_request_paths_is_drift,
@@ -101,12 +113,20 @@ def workflow_text(
     *,
     pr_paths: list[str] | None = None,
     push_paths: list[str] | None = None,
-    regen_skip: tuple[str, ...] = (),
-    regen_extra: tuple[str, ...] = (),
+    derive_run: str | None = None,
+    matrix_consumer: str | None = None,
+    regen_working_directory: str | None = None,
+    include_regen: bool = True,
+    include_porcelain: bool = True,
     merge_inputs: list[str] | None = None,
     include_merge: bool = True,
 ) -> str:
-    """Render a mini api-contract.yml in the real file's exact shapes."""
+    """Render a mini api-contract.yml in the real file's exact shapes:
+    the contract-gate job (drift steps + the derivation into
+    $GITHUB_OUTPUT), the matrix regeneration job (fromJson of the gate
+    output, whitelisting the derivation knobs the planted drifts turn),
+    and the generated-surface job (the merge step and an unrelated
+    sibling)."""
     frag_dirs = [f["dir"] for f in frags]
     fragment_rows = [f + "/**" for f in frag_dirs]
     other_rows = ["redocly.yaml", "contracts/**"]
@@ -114,6 +134,15 @@ def workflow_text(
         pr_paths = other_rows + fragment_rows + list(m.SELF_ROWS)
     if push_paths is None:
         push_paths = other_rows + fragment_rows + list(m.SELF_ROWS)
+    if derive_run is None:
+        derive_run = (
+            'echo "fragments=$(python3 tools/api_fragment_matrix.py)" '
+            '>> "$GITHUB_OUTPUT"'
+        )
+    if matrix_consumer is None:
+        matrix_consumer = "${{ fromJson(needs.contract-gate.outputs.fragments) }}"
+    if regen_working_directory is None:
+        regen_working_directory = "${{ matrix.fragment.dir }}"
 
     lines: list[str] = [
         "name: api-contract (fixture)",
@@ -137,36 +166,67 @@ def workflow_text(
         "permissions:",
         "  contents: read",
         "jobs:",
-        "  api-contract:",
-        "    name: fixture job",
+        "  contract-gate:",
+        "    name: fixture gate job",
+        "    runs-on: ubuntu-latest",
+        "    outputs:",
+        "      fragments: ${{ steps.derive.outputs.fragments }}",
+        "    steps:",
+        "      - name: An unrelated setup step",
+        "        uses: actions/checkout@0123456789abcdef0123456789abcdef01234567  # v7.0.1",
+        "        run: |",
+        "          echo hello",
+    ]
+    if derive_run != "":
+        lines += [
+            "      - name: Derive the fragment-regeneration matrix",
+            "        # A comment inside the step the reader must skip.",
+            "        id: derive",
+            "        run: |",
+            f"          {derive_run}",
+        ]
+    lines += [
+        "  regenerate-fragments:",
+        "    name: regenerate fragment ${{ matrix.fragment.name }}",
+        "    needs: contract-gate",
+        "    runs-on: ubuntu-latest",
+        "    strategy:",
+        "      fail-fast: false",
+        "      matrix:",
+        f"        fragment: {matrix_consumer}",
+        "    steps:",
+        "      - name: Check out repository",
+        "        uses: actions/checkout@0123456789abcdef0123456789abcdef01234567  # v7.0.1",
+    ]
+    if include_regen:
+        lines += [
+            "      - name: Regenerate the fragment's API surface",
+            "        # A comment inside the step the reader must skip.",
+            "        working-directory: " + regen_working_directory,
+            "        run: |",
+            "          # A '#'-leading content line inside the literal.",
+            f"          {OAPI_RUN} \\",
+            "            -config oapi-codegen.yaml openapi.yaml",
+        ]
+    if include_porcelain:
+        lines += [
+            "      - name: Regenerated artifact must match the committed spec",
+            "        run: |",
+            '          if [ -n "$(git status --porcelain --untracked-files=all)" ]; then',
+            "            exit 1",
+            "          fi",
+        ]
+    lines += [
+        "  generated-surface:",
+        "    name: merged document and frontend sdk",
+        "    needs: contract-gate",
         "    runs-on: ubuntu-latest",
         "    steps:",
+        "      - name: An unrelated setup step",
+        "        uses: actions/checkout@0123456789abcdef0123456789abcdef01234567  # v7.0.1",
+        "        run: |",
+        "          echo hello",
     ]
-
-    regen_dirs = [d for d in frag_dirs if d not in regen_skip] + list(
-        regen_extra
-    )
-    for idx, frag_dir in enumerate(regen_dirs):
-        lines.append(
-            f"      - name: Regenerate surface {idx} (pinned oapi-codegen "
-            f"v2.8.0)"
-        )
-        lines.append("        # A comment inside the step the reader must skip.")
-        lines.append("        run: |")
-        lines.append(f"          cd {frag_dir}")
-        lines.append("          # A '#'-leading content line inside the literal.")
-        lines.append(f"          {OAPI_RUN} \\")
-        lines.append("            -config oapi-codegen.yaml openapi.yaml")
-        lines.append(
-            "      - name: Regenerated artifact must match the committed spec"
-        )
-        lines.append("        run: |")
-        lines.append(
-            '          if [ -n "$(git status --porcelain --untracked-files=all)" ]; then'
-        )
-        lines.append("            exit 1")
-        lines.append("          fi")
-
     if include_merge:
         lines.append(
             "      - name: Merge every fragment into speed.yaml "
@@ -178,14 +238,7 @@ def workflow_text(
         for frag_dir in merge_inputs if merge_inputs is not None else MERGE_ORDER:
             lines.append(f"            {frag_dir}/openapi.yaml \\")
         lines.append("            -o contracts/speed.yaml")
-
-    lines += [
-        "      - name: An unrelated setup step",
-        "        uses: actions/checkout@0123456789abcdef0123456789abcdef01234567  # v7.0.1",
-        "        run: |",
-        "          echo hello",
-        "",
-    ]
+    lines.append("")
     return "\n".join(lines)
 
 
@@ -201,6 +254,7 @@ class CheckApiFragmentsTest(unittest.TestCase):
         self,
         frags: list[dict] | None = None,
         app_owned: list[str] | None = None,
+        script_text: str | None = None,
         **workflow_kw,
     ) -> None:
         frags = FRAGS if frags is None else frags
@@ -229,6 +283,17 @@ class CheckApiFragmentsTest(unittest.TestCase):
         (tools_dir / "api_fragments.json").write_text(
             manifest_text(frags, app_owned), encoding="utf-8"
         )
+        # The real derivation script, unless a drift test plants its own
+        # (the gate executes this file, so the fixture must carry one).
+        script = tools_dir / "api_fragment_matrix.py"
+        if script_text is None:
+            shutil.copyfile(
+                pathlib.Path(__file__).resolve().parent
+                / "api_fragment_matrix.py",
+                script,
+            )
+        else:
+            script.write_text(script_text, encoding="utf-8")
         workflow_dir = self.root / ".github" / "workflows"
         workflow_dir.mkdir(parents=True, exist_ok=True)
         (workflow_dir / "api-contract.yml").write_text(
@@ -264,21 +329,76 @@ class CheckApiFragmentsTest(unittest.TestCase):
         problems = self._problems()
         self.assertTrue(any("beta" in p and "openapi.yaml is missing" in p for p in problems))
 
-    def test_registered_fragment_missing_from_regen_steps_is_drift(self) -> None:
-        self._write_fixture(regen_skip=("go/beta/api",))
+    def test_matrix_not_derived_from_the_gate_output_is_drift(self) -> None:
+        # The regeneration leg is only as good as its derivation: a matrix
+        # that stops consuming the gate job's output re-opens the silent
+        # enumeration drift this mechanism exists to close.
+        self._write_fixture(matrix_consumer="[alpha, beta]")
         problems = self._problems()
         self.assertTrue(
             any(
-                "go/beta/api" in p and "no oapi-codegen regeneration step" in p
+                "only fragment enumeration this leg may consume" in p
                 for p in problems
             )
         )
 
-    def test_extra_regen_step_for_unregistered_dir_is_drift(self) -> None:
-        self._write_fixture(regen_extra=("go/zzz/api",))
+    def test_missing_derivation_step_is_drift(self) -> None:
+        self._write_fixture(derive_run="")
         problems = self._problems()
         self.assertTrue(
-            any("regenerates go/zzz/api" in p for p in problems)
+            any(
+                "no step running tools/api_fragment_matrix.py" in p
+                for p in problems
+            )
+        )
+
+    def test_derivation_dropping_a_fragment_is_drift(self) -> None:
+        # A derivation whose output silently drops a fragment: the gate
+        # executes the script against the tree, so the planted variant
+        # goes red even though the workflow and the manifest still agree
+        # textually.
+        script = (
+            "import json\n"
+            "data = json.load(open('tools/api_fragments.json'))\n"
+            "entries = [\n"
+            "    {'name': f['name'], 'dir': f['dir']}\n"
+            "    for f in data['fragments'][:1]\n"
+            "]\n"
+            "print(json.dumps(entries))\n"
+        )
+        self._write_fixture(script_text=script)
+        problems = self._problems()
+        self.assertTrue(
+            any(
+                "does not match the manifest's fragments in manifest "
+                "order" in p
+                for p in problems
+            )
+        )
+
+    def test_regeneration_step_off_the_matrix_directory_is_drift(self) -> None:
+        self._write_fixture(regen_working_directory="go/alpha/api")
+        problems = self._problems()
+        self.assertTrue(
+            any(
+                "working-directory" in p
+                and "${{ matrix.fragment.dir }}" in p
+                for p in problems
+            )
+        )
+
+    def test_missing_oapi_codegen_step_is_drift(self) -> None:
+        self._write_fixture(include_regen=False)
+        problems = self._problems()
+        self.assertTrue(
+            any("no oapi-codegen step" in p for p in problems)
+        )
+
+    def test_missing_porcelain_gate_in_the_matrix_job_is_drift(self) -> None:
+        self._write_fixture(include_porcelain=False)
+        problems = self._problems()
+        self.assertTrue(
+            any("no porcelain gate" in p for p in problems)
         )
 
     def test_fragment_missing_from_pull_request_paths_is_drift(self) -> None:
