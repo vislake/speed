@@ -27,7 +27,7 @@ import (
 // "signer.local" is registered below, in this package's own init(), rather
 // than through a subpackage: LocalSigner already lives in go/pki's root
 // package (it is the module's zero-external-dependency default, not an
-// optional add-on -- see local_signer.go), so splitting it into a
+// optional add-on -- see signer_local.go), so splitting it into a
 // subpackage would buy no dependency isolation the way the redis/s3 splits
 // did. See localSignerFromConfig's own doc comment for what building it
 // from a flat pkgcore.Config, rather than the *gorm.DB Module already
@@ -59,7 +59,7 @@ func init() {
 		Name: "signer.local",
 		// LocalSigner does NOT declare pkgcore.KeyNeverLeavesBoundary: Sign
 		// decrypts the private key into this process's memory for the
-		// duration of the crypto/ed25519 call -- see local_signer.go's own
+		// duration of the crypto/ed25519 call -- see signer_local.go's own
 		// doc comment.
 		Capabilities: 0,
 		New:          localSignerFromConfig,

@@ -96,6 +96,6 @@ func TestLocalSigner_Destroy_RemovesTheKey(t *testing.T) {
 }
 
 // compile-time check that *LocalSigner satisfies Signer -- also asserted in
-// local_signer.go itself; repeated here so the test file documents the
+// signer_local.go itself; repeated here so the test file documents the
 // contract it exercises.
 var _ Signer = (*LocalSigner)(nil)
