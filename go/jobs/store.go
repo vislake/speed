@@ -4,13 +4,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"strings"
 	"time"
 	"unicode/utf8"
 
 	"github.com/google/uuid"
 	"gorm.io/gorm"
 
+	"github.com/vislake/speed/go/dbkit"
 	obs "github.com/vislake/speed/go/observability"
 	"github.com/vislake/speed/go/pkgcore"
 	"github.com/vislake/speed/go/pkgcore/apperr"
@@ -450,87 +450,69 @@ func ensureJobsSchema(ctx context.Context, db *gorm.DB) error {
 	return nil
 }
 
-// ensureQueueWritersStaleAtColumn brings a queue_writers table created by a
-// release that predated the stale_at column (see createQueueWritersTableSQL
-// and acquireWriterRegistration) up to the current shape, portably across
-// both dbkit dialects, with the identical technique
-// ensureJobsClaimedByColumn uses for the jobs table: PostgreSQL supports
-// ADD COLUMN IF NOT EXISTS natively; SQLite does not, so the sqlite path
-// probes PRAGMA table_info first and alters only when the column is
-// absent. A table freshly created from createQueueWritersTableSQL already
-// carries the column and the probe answers "present", skipping the alter.
-// Existing rows keep NULL stale_at -- the marker acquireWriterRegistration
-// reads as "written by a pre-column release" -- which is exactly why the
-// column is added nullable rather than with a constant default: no constant
-// could truthfully say when a pre-existing row's owner goes stale.
-func ensureQueueWritersStaleAtColumn(ctx context.Context, db *gorm.DB) error {
+// ensureColumn adds column to table when a table an older release created
+// does not carry it yet -- the one schema shape ensureJobsSchema's CREATE
+// TABLE IF NOT EXISTS bootstrapping cannot evolve: a table that already
+// exists. PostgreSQL supports ADD COLUMN IF NOT EXISTS natively, so the
+// non-sqlite path executes the guarded statement unconditionally; SQLite
+// does not, so its path probes the column through columnPresent first and
+// executes the plain statement only when the column is absent. A table
+// freshly created from its current CREATE TABLE statement already carries
+// every column, so both paths no-op on it. columnDef is the column's
+// definition tail, type included (TIMESTAMP, or the claimed_by definition
+// with its VARCHAR(64) and empty-string default), assembled here into the
+// per-dialect statement so the two spellings cannot drift apart.
+func ensureColumn(ctx context.Context, db *gorm.DB, table, column, columnDef string) error {
 	if db.Name() != "sqlite" {
 		// postgres (the only other dbkit dialect): native IF NOT EXISTS.
-		if err := db.WithContext(ctx).Exec(`ALTER TABLE ` + queueWritersTable + ` ADD COLUMN IF NOT EXISTS stale_at TIMESTAMP`).Error; err != nil {
-			return fmt.Errorf("jobs: add queue_writers stale_at column: %w", err)
+		if err := db.WithContext(ctx).Exec(`ALTER TABLE ` + table + ` ADD COLUMN IF NOT EXISTS ` + column + ` ` + columnDef).Error; err != nil {
+			return fmt.Errorf("jobs: add %s column: %w", column, err)
 		}
 		return nil
 	}
-	var columns []struct {
-		Name string `gorm:"column:name"`
+	present, err := columnPresent(ctx, db, table, column)
+	if err != nil {
+		return err
 	}
-	if err := db.WithContext(ctx).Raw(`PRAGMA table_info(` + queueWritersTable + `)`).Scan(&columns).Error; err != nil {
-		return fmt.Errorf("jobs: probe queue_writers table columns: %w", err)
+	if present {
+		return nil
 	}
-	for _, c := range columns {
-		if c.Name == "stale_at" {
-			return nil
-		}
-	}
-	if err := db.WithContext(ctx).Exec(`ALTER TABLE ` + queueWritersTable + ` ADD COLUMN stale_at TIMESTAMP`).Error; err != nil {
-		return fmt.Errorf("jobs: add queue_writers stale_at column: %w", err)
+	if err := db.WithContext(ctx).Exec(`ALTER TABLE ` + table + ` ADD COLUMN ` + column + ` ` + columnDef).Error; err != nil {
+		return fmt.Errorf("jobs: add %s column: %w", column, err)
 	}
 	return nil
+}
+
+// ensureQueueWritersStaleAtColumn brings a queue_writers table created by a
+// release that predated the stale_at column (see createQueueWritersTableSQL
+// and acquireWriterRegistration) up to the current shape through
+// ensureColumn. Existing rows keep NULL stale_at -- the marker
+// acquireWriterRegistration reads as "written by a pre-column release" --
+// which is exactly why the column is added nullable rather than with a
+// constant default: no constant could truthfully say when a pre-existing
+// row's owner goes stale.
+func ensureQueueWritersStaleAtColumn(ctx context.Context, db *gorm.DB) error {
+	return ensureColumn(ctx, db, queueWritersTable, "stale_at", "TIMESTAMP")
 }
 
 // ensureJobsClaimedByColumn brings a jobs table created by a release that
 // predated the claimed_by ownership column (see jobRecord.ClaimedBy) up to
-// the current shape, portably across both dbkit dialects: PostgreSQL
-// supports ADD COLUMN IF NOT EXISTS natively; SQLite does not, so the sqlite
-// path probes PRAGMA table_info first and alters only when the column is
-// absent. A table freshly created from createJobsTableSQL already carries
-// the column and the probe answers "present", skipping the alter. The jobs
-// table is bootstrapped with CREATE TABLE IF NOT EXISTS rather than through
+// the current shape through ensureColumn. The jobs table is bootstrapped
+// with CREATE TABLE IF NOT EXISTS rather than through
 // dbkit.MigrationRegistry (see createJobsTableSQL's own doc comment), so
 // this in-place column add is the migration story for exactly the one shape
 // that bootstrapping cannot evolve: a table that already exists.
 func ensureJobsClaimedByColumn(ctx context.Context, db *gorm.DB) error {
-	if db.Name() != "sqlite" {
-		// postgres (the only other dbkit dialect): native IF NOT EXISTS.
-		if err := db.WithContext(ctx).Exec(`ALTER TABLE ` + jobsTable + ` ADD COLUMN IF NOT EXISTS claimed_by VARCHAR(64) NOT NULL DEFAULT ''`).Error; err != nil {
-			return fmt.Errorf("jobs: add claimed_by column: %w", err)
-		}
-		return nil
-	}
-	var columns []struct {
-		Name string `gorm:"column:name"`
-	}
-	if err := db.WithContext(ctx).Raw(`PRAGMA table_info(` + jobsTable + `)`).Scan(&columns).Error; err != nil {
-		return fmt.Errorf("jobs: probe jobs table columns: %w", err)
-	}
-	for _, c := range columns {
-		if c.Name == "claimed_by" {
-			return nil
-		}
-	}
-	if err := db.WithContext(ctx).Exec(`ALTER TABLE ` + jobsTable + ` ADD COLUMN claimed_by VARCHAR(64) NOT NULL DEFAULT ''`).Error; err != nil {
-		return fmt.Errorf("jobs: add claimed_by column: %w", err)
-	}
-	return nil
+	return ensureColumn(ctx, db, jobsTable, "claimed_by", "VARCHAR(64) NOT NULL DEFAULT ''")
 }
 
-// jobsColumnPresent reports whether the jobs table already carries a column
-// named column, portably across both dbkit dialects: SQLite answers from
-// PRAGMA table_info, PostgreSQL from information_schema.columns scoped to
-// the current schema. A table that does not exist at all reports absent (the
-// statements that create it run first in ensureJobsSchema), so the answer is
-// only ever consumed after the table is known to exist.
-func jobsColumnPresent(ctx context.Context, db *gorm.DB, column string) (bool, error) {
+// columnPresent reports whether table already carries a column named
+// column, portably across both dbkit dialects: SQLite answers from PRAGMA
+// table_info, PostgreSQL from information_schema.columns scoped to the
+// current schema. A table that does not exist at all reports absent (the
+// statements that create it run first in ensureJobsSchema), so the answer
+// is only ever consumed after the table is known to exist.
+func columnPresent(ctx context.Context, db *gorm.DB, table, column string) (bool, error) {
 	if db.Name() != "sqlite" {
 		// postgres (the only other dbkit dialect).
 		var probe struct {
@@ -538,18 +520,18 @@ func jobsColumnPresent(ctx context.Context, db *gorm.DB, column string) (bool, e
 		}
 		err := db.WithContext(ctx).
 			Raw(`SELECT COUNT(*) AS count FROM information_schema.columns
-				WHERE table_schema = current_schema() AND table_name = ? AND column_name = ?`, jobsTable, column).
+				WHERE table_schema = current_schema() AND table_name = ? AND column_name = ?`, table, column).
 			Scan(&probe).Error
 		if err != nil {
-			return false, fmt.Errorf("jobs: probe jobs table columns: %w", err)
+			return false, fmt.Errorf("jobs: probe %s table columns: %w", table, err)
 		}
 		return probe.Count > 0, nil
 	}
 	var columns []struct {
 		Name string `gorm:"column:name"`
 	}
-	if err := db.WithContext(ctx).Raw(`PRAGMA table_info(` + jobsTable + `)`).Scan(&columns).Error; err != nil {
-		return false, fmt.Errorf("jobs: probe jobs table columns: %w", err)
+	if err := db.WithContext(ctx).Raw(`PRAGMA table_info(` + table + `)`).Scan(&columns).Error; err != nil {
+		return false, fmt.Errorf("jobs: probe %s table columns: %w", table, err)
 	}
 	for _, c := range columns {
 		if c.Name == column {
@@ -588,7 +570,7 @@ func jobsColumnPresent(ctx context.Context, db *gorm.DB, column string) (bool, e
 // events. The WHERE ... terminal_published_at IS NULL guard makes the
 // backfill statement itself idempotent regardless.
 func ensureJobsTerminalPublishedAtColumn(ctx context.Context, db *gorm.DB) error {
-	present, err := jobsColumnPresent(ctx, db, "terminal_published_at")
+	present, err := columnPresent(ctx, db, jobsTable, "terminal_published_at")
 	if err != nil {
 		return err
 	}
@@ -858,32 +840,6 @@ func markAttemptStarted(ctx context.Context, db *gorm.DB, id string, now time.Ti
 		}).Error
 }
 
-// fitColumnValue renders v storable in a column of at most maxRunes
-// characters, mirroring the same-shaped helper go/dbkit/audit ships for
-// its own descriptive columns (repository.go's fitColumnValue -- that one
-// is unexported and this module does not depend on dbkit, so the cut is
-// copied, not imported). cut reports whether the value had to be
-// shortened; a value that only needed invalid-UTF-8 sanitization reports
-// cut=false, so the caller can say which change happened (the warning's
-// reason attribute). Invalid UTF-8 runs are sanitized to the Unicode
-// replacement character (one per consecutive run, so two arbitrary byte
-// runs never concatenate into a different valid value), then the value is
-// cut at maxRunes runes when it is longer -- never at maxRunes bytes,
-// which could split a multi-byte character and store garbage a UTF-8
-// PostgreSQL would refuse with 22021. A value that is already valid UTF-8
-// and within the bound is returned unchanged.
-func fitColumnValue(v string, maxRunes int) (fitted string, cut bool) {
-	if len(v) <= maxRunes && utf8.ValidString(v) {
-		return v, false
-	}
-	runes := []rune(strings.ToValidUTF8(v, "\uFFFD"))
-	cut = len(runes) > maxRunes
-	if cut {
-		runes = runes[:maxRunes]
-	}
-	return string(runes), cut
-}
-
 // fitDescriptiveText is the write-side choke point every persistence of a
 // descriptive message on the jobs table passes through (updateProgress's
 // progress_msg below, completeRetrying's and completeDeadLetter's
@@ -912,7 +868,7 @@ func fitColumnValue(v string, maxRunes int) (fitted string, cut bool) {
 // that would otherwise be unrecordable once the database had stored the
 // cut silently -- leaves an operator-recoverable trace.
 func fitDescriptiveText(ctx context.Context, jobID, column string, v string, maxRunes int) string {
-	fitted, cut := fitColumnValue(v, maxRunes)
+	fitted, cut := dbkit.FitColumnValue(v, maxRunes)
 	if fitted == v {
 		return fitted
 	}

@@ -241,7 +241,7 @@ func TestEnsureJobsSchema_StepFailures_ReturnWrappedErrors(t *testing.T) {
 	staleFailures := 1
 	injectRawFailures(db, &staleFailures, "ADD COLUMN stale_at", errFaultInjection)
 	err = ensureJobsSchema(ctx, db)
-	if err == nil || !strings.Contains(err.Error(), "add queue_writers stale_at column") {
+	if err == nil || !strings.Contains(err.Error(), "add stale_at column") {
 		t.Fatalf("ensureJobsSchema(legacy stale_at alter fails) error = %v, want a wrapped error naming the column add", err)
 	}
 
