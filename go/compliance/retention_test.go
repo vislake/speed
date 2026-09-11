@@ -757,9 +757,26 @@ func TestRetentionSweepHandler_TypeAndFailedSweep(t *testing.T) {
 // startRetentionSweepWindowQueue starts a real StandaloneQueue over its
 // own fresh database with fast intervals, registering cleanup, and
 // returns both the queue and its database.
+//
+// The database's pool is pinned to one connection: these tests read and
+// write the queue's own database from the test goroutine while the
+// queue's dispatcher and writer heartbeat tick over it every poll
+// interval, and on one SQLite file a multi-connection pool lets a losing
+// statement's bounded busy budget expire under load, surfacing as a
+// SQLITE_BUSY lock error no window-key assertion is about -- the
+// immediate read-then-write upgrade refusal is that hazard's second
+// face. One connection serializes every statement inside database/sql's
+// pool, where waiting is an ordinary queue that cannot surface as a lock
+// error; the enqueue semantics under test do not care how many
+// connections carried the statements.
 func startRetentionSweepWindowQueue(t *testing.T) (*jobs.StandaloneQueue, *gorm.DB) {
 	t.Helper()
 	db := testutil.NewDB(t)
+	sqlDB, err := db.DB()
+	if err != nil {
+		t.Fatalf("reaching the database's pool: %v", err)
+	}
+	sqlDB.SetMaxOpenConns(1)
 	q := jobs.NewStandaloneQueue(db,
 		jobs.WithPollInterval(5*time.Millisecond),
 		jobs.WithWorkerCount(1),
