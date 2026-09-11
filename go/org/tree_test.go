@@ -1928,7 +1928,7 @@ func TestTreeService_ConcurrentCreateChildAndDelete_NeverOrphansAChild(t *testin
 // serialize on whichever row they lock first rather than mixing per-row
 // last-writer-wins; a real PostgreSQL deadlock between two such calls
 // locking in opposite orders is handled by withRetry (concurrency.go) and
-// separately proven in integration_test/postgres_concurrent_move_test.go.
+// separately proven in integration_test/postgres_concurrency_test.go.
 func TestTreeService_ConcurrentMoveAndMove_TreeInvariantHolds(t *testing.T) {
 	const rounds = 100
 	for round := 0; round < rounds; round++ {
