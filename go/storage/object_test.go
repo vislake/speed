@@ -37,7 +37,7 @@ import (
 // pipeline's settled order, as whole lifecycles.
 //
 // The harness attaches the fakes by assigning svc.host directly: attach() is
-// typed to *pkgcore.Registry, and module_test.go proves the real attachment
+// typed to *pkgcore.ComponentRegistry, and module_test.go proves the real attachment
 // through Module.Register. White-box access is deliberate -- the service's
 // policy (cfg) and host seams are unexported by design.
 
@@ -138,7 +138,7 @@ func (b *recordingBus) Subscribe(string, pkgcore.EventHandler) {}
 
 var _ pkgcore.EventBus = (*recordingBus)(nil)
 
-// fakeHost stands in for the bootstrapped *pkgcore.Registry the service reads
+// fakeHost stands in for the bootstrapped *pkgcore.ComponentRegistry the service reads
 // its seams from (hostSeams). attach() is typed to the registry itself; module
 // tests prove that path, this file proves the service's behaviour against the
 // interface slice it actually depends on.

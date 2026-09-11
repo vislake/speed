@@ -9,6 +9,7 @@ import (
 	"github.com/vislake/speed/go/config"
 	"github.com/vislake/speed/go/dbkit/audit"
 	"github.com/vislake/speed/go/pkgcore"
+	"github.com/vislake/speed/go/pkgcore/componenttest"
 )
 
 // testItemChangedEvent is the fixture config.ItemChangedEvent every test in
@@ -35,7 +36,7 @@ func testItemChangedEvent() config.ItemChangedEvent {
 func TestModule_OnConfigItemChanged_PersistsAnAuditRow(t *testing.T) {
 	auditRepo := newTestAuditRepo(t)
 	m := NewModule(auditRepo, WithQueue(&recordingQueue{}))
-	reg, err := pkgcore.NewKernel().Bootstrap(context.Background(), m)
+	reg, err := componenttest.DeclareModules(m)
 	if err != nil {
 		t.Fatalf("Bootstrap: %v", err)
 	}
@@ -94,7 +95,7 @@ func TestModule_OnConfigItemChanged_PersistsAnAuditRow(t *testing.T) {
 func TestModule_OnConfigItemChanged_IsIdempotentAcrossRedelivery(t *testing.T) {
 	auditRepo := newTestAuditRepo(t)
 	m := NewModule(auditRepo, WithQueue(&recordingQueue{}))
-	reg, err := pkgcore.NewKernel().Bootstrap(context.Background(), m)
+	reg, err := componenttest.DeclareModules(m)
 	if err != nil {
 		t.Fatalf("Bootstrap: %v", err)
 	}
@@ -244,7 +245,7 @@ func TestModule_OnConfigItemChanged_ScopeMissingWireMap_MatchesConfigsOwnDrop(t 
 	auditRepo := audit.NewRepository(db)
 	compMod := NewModule(auditRepo, WithQueue(&recordingQueue{}))
 	configMod := config.NewModule(db, config.WithPollInterval(0))
-	reg, err := pkgcore.NewKernel().Bootstrap(context.Background(), compMod, configMod)
+	reg, err := componenttest.DeclareModules(compMod, configMod)
 	if err != nil {
 		t.Fatalf("Bootstrap: %v", err)
 	}

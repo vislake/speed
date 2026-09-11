@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/vislake/speed/go/pkgcore"
+	"github.com/vislake/speed/go/pkgcore/componenttest"
 )
 
 func TestModule_Name(t *testing.T) {
@@ -115,10 +116,10 @@ func TestModule_OpenAPISpec_IsNonEmptyAndDescribesNotesPath(t *testing.T) {
 // goal: "genuinely exercise the registry surface rather than only its
 // minimum"), not only reg.Routes.Mount.
 func TestModule_Register_DeclaresRoutesPermissionsEventsAndAuditActions(t *testing.T) {
-	reg := pkgcore.NewRegistry(pkgcore.NewMemoryEventBus(), pkgcore.NewMemoryKVStore(), pkgcore.NewConsoleMailer())
+	reg := componenttest.NewRegistry()
 	m := NewModule(nil)
 
-	if err := m.Register(reg); err != nil {
+	if err := componenttest.DeclareInto(reg, m); err != nil {
 		t.Fatalf("Register() error = %v", err)
 	}
 
@@ -172,7 +173,6 @@ func TestModule_Register_DeclaresRoutesPermissionsEventsAndAuditActions(t *testi
 // compile-time check that *Module satisfies pkgcore.Module -- redundant
 // with module.go's own assertion, kept here too as a visible part of this
 // file's own test surface.
-var _ pkgcore.Module = (*Module)(nil)
 
 // TestModule_WithSubjectResolver_WiresTheSeam pins the one constructor
 // option: a Module built with WithSubjectResolver carries the resolver
@@ -206,10 +206,10 @@ func TestModule_WithSubjectResolver_WiresTheSeam(t *testing.T) {
 // test; this test proves the *declarations*, the meaning the reference
 // app's own endpoints will serve.
 func TestModule_Register_DeclaresConfigSchemaAndFeatureFlags(t *testing.T) {
-	reg := pkgcore.NewRegistry(pkgcore.NewMemoryEventBus(), pkgcore.NewMemoryKVStore(), pkgcore.NewConsoleMailer())
+	reg := componenttest.NewRegistry()
 	m := NewModule(nil)
 
-	if err := m.Register(reg); err != nil {
+	if err := componenttest.DeclareInto(reg, m); err != nil {
 		t.Fatalf("Register() error = %v", err)
 	}
 

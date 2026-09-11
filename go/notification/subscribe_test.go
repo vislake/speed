@@ -37,6 +37,7 @@ import (
 	"testing"
 
 	"github.com/vislake/speed/go/pkgcore"
+	"github.com/vislake/speed/go/pkgcore/componenttest"
 )
 
 // TestHubSubscription_OtherEventTypesNeverReachAConnection proves the
@@ -53,7 +54,7 @@ func TestHubSubscription_OtherEventTypesNeverReachAConnection(t *testing.T) {
 	module := NewModule(db, testModuleOptions(t)...)
 	reg := newHostRegistry(t)
 
-	if err := module.Register(reg); err != nil {
+	if err := componenttest.DeclareInto(reg, module); err != nil {
 		t.Fatalf("Register: %v", err)
 	}
 
@@ -116,7 +117,7 @@ func TestHubSubscription_UndeliverableAnnouncementsAreDroppedTotally(t *testing.
 	module := NewModule(db, testModuleOptions(t)...)
 	reg := newHostRegistry(t)
 
-	if err := module.Register(reg); err != nil {
+	if err := componenttest.DeclareInto(reg, module); err != nil {
 		t.Fatalf("Register: %v", err)
 	}
 

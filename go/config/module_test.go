@@ -14,6 +14,7 @@ import (
 
 	"github.com/vislake/speed/go/dbkit"
 	"github.com/vislake/speed/go/pkgcore"
+	"github.com/vislake/speed/go/pkgcore/componenttest"
 )
 
 // Tests for module.go's Module wiring: what Register declares (routes in
@@ -34,7 +35,6 @@ type fakeHostModule struct {
 	flags []pkgcore.FeatureFlag
 }
 
-var _ pkgcore.Module = (*fakeHostModule)(nil)
 
 func (f *fakeHostModule) Name() string        { return f.name }
 func (f *fakeHostModule) DependsOn() []string { return nil }
@@ -46,7 +46,7 @@ func (f *fakeHostModule) OpenAPISpec() []byte {
 	return nil
 }
 
-func (f *fakeHostModule) Register(reg pkgcore.Registrar) error {
+func (f *fakeHostModule) Register(reg *pkgcore.ComponentRegistry) error {
 	if err := reg.ConfigSeat().Add(f.items...); err != nil {
 		return err
 	}
@@ -82,8 +82,8 @@ func openModuleTestDB(t *testing.T) *gorm.DB {
 
 // newPlainRegistry returns a registry built over throwaway in-memory seams,
 // the way a host that never wired a real bus or KV store does.
-func newPlainRegistry() *pkgcore.Registry {
-	return pkgcore.NewRegistry(pkgcore.NewMemoryEventBus(), pkgcore.NewMemoryKVStore(), pkgcore.NewConsoleMailer())
+func newPlainRegistry() *pkgcore.ComponentRegistry {
+	return componenttest.NewRegistry()
 }
 
 // TestModule_OpenAPISpec_DeclaresBothEndpointPaths pins the fragment's
@@ -106,7 +106,7 @@ func TestModule_OpenAPISpec_DeclaresBothEndpointPaths(t *testing.T) {
 func TestModule_Register_MountsBothConfigRoutesInOrder(t *testing.T) {
 	reg := newPlainRegistry()
 	m := NewModule(nil)
-	if err := m.Register(reg); err != nil {
+	if err := componenttest.DeclareInto(reg, m); err != nil {
 		t.Fatalf("Register: %v", err)
 	}
 
@@ -126,7 +126,7 @@ func TestModule_Register_MountsBothConfigRoutesInOrder(t *testing.T) {
 
 func TestModule_Register_DeclaresTheChangeEventAndAuditAction(t *testing.T) {
 	reg := newPlainRegistry()
-	if err := NewModule(nil).Register(reg); err != nil {
+	if err := componenttest.DeclareInto(reg, NewModule(nil)); err != nil {
 		t.Fatalf("Register: %v", err)
 	}
 
@@ -152,7 +152,7 @@ func TestModule_Register_DeclaresTheSystemWritePurpose(t *testing.T) {
 	// Attach's ScopeSystem entitlement asks the context for a system reason
 	// whose purpose the module itself declared. Register must make that
 	// purpose valid, so the entitlement is usable on a bootstrapped host.
-	if err := NewModule(nil).Register(newPlainRegistry()); err != nil {
+	if err := componenttest.DeclareInto(newPlainRegistry(), NewModule(nil)); err != nil {
 		t.Fatalf("Register: %v", err)
 	}
 	if _, err := pkgcore.WithSystemContext(context.Background(), pkgcore.SystemReason{
@@ -177,7 +177,7 @@ func TestKernelBootstrap_FailsOnAnUnresolvedFlagDependency(t *testing.T) {
 		},
 	}
 
-	_, err := pkgcore.NewKernel().Bootstrap(context.Background(), configModule, host)
+	_, err := componenttest.DeclareModules(configModule, host)
 	if err == nil {
 		t.Fatal("Bootstrap succeeded with an unresolved flag dependency; the graph must fail closed")
 	}
@@ -206,13 +206,14 @@ func TestKernelBootstrap_AttachServesTheAssembledHostSchema(t *testing.T) {
 		},
 	}
 
-	reg, err := pkgcore.NewKernel().Bootstrap(context.Background(), host, configModule)
-	if err != nil {
-		t.Fatalf("Bootstrap: %v", err)
-	}
-	svc, err := configModule.Attach(reg)
-	if err != nil {
-		t.Fatalf("Attach: %v", err)
+	reg := componenttest.NewRegistry()
+	var svc *Service
+	if err := componenttest.DeclareAll(reg, host.Register, configModule.Register, func(r *pkgcore.ComponentRegistry) error {
+		attached, attachErr := configModule.Attach(r)
+		svc = attached
+		return attachErr
+	}); err != nil {
+		t.Fatalf("declare and attach: %v", err)
 	}
 
 	if name, err := GetTyped[string](svc, context.Background(), "brand.site_name"); err != nil || name != "Smile Studio" {

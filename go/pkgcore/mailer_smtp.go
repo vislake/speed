@@ -502,3 +502,19 @@ func newSMTPMailerFromFields(host string, port int, username, password, replyTo 
 		ReplyTo:            replyTo,
 	}), nil
 }
+
+// parseSMTPTLSMode maps a configuration string onto an SMTPTLSMode,
+// defaulting to SMTPTLSModeAuto -- the same default the zero-value
+// SMTPConfig.TLSMode carries -- for an unset value.
+func parseSMTPTLSMode(raw string) (SMTPTLSMode, error) {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "", "auto":
+		return SMTPTLSModeAuto, nil
+	case "starttls":
+		return SMTPTLSModeStartTLS, nil
+	case "implicit", "implicit_tls":
+		return SMTPTLSModeImplicitTLS, nil
+	default:
+		return 0, fmt.Errorf("invalid \"tls_mode\" %q: want one of \"auto\", \"starttls\", \"implicit\"", raw)
+	}
+}

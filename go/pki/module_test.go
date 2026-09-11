@@ -8,6 +8,7 @@ import (
 
 	"github.com/vislake/speed/go/jobs"
 	"github.com/vislake/speed/go/pkgcore"
+	"github.com/vislake/speed/go/pkgcore/componenttest"
 )
 
 func TestModule_Identity(t *testing.T) {
@@ -107,7 +108,7 @@ func TestModule_Locales_ShipsBothLanguages(t *testing.T) {
 // runs there.
 func TestModule_Register_DeclaresItsSurface(t *testing.T) {
 	db := newTestDB(t)
-	reg, err := pkgcore.NewKernel().Bootstrap(context.Background(), NewModule(db))
+	reg, err := componenttest.DeclareModules(NewModule(db))
 	if err != nil {
 		t.Fatalf("Bootstrap: %v", err)
 	}
@@ -195,7 +196,7 @@ func TestModule_Register_WithQueue_ClaimsTheExpiryScanHandler(t *testing.T) {
 	m := NewModule(db, WithQueue(stubQueue{}))
 	t.Cleanup(func() { _ = m.Close() })
 
-	reg, err := pkgcore.NewKernel().Bootstrap(context.Background(), m)
+	reg, err := componenttest.DeclareModules(m)
 	if err != nil {
 		t.Fatalf("Bootstrap: %v", err)
 	}
@@ -224,7 +225,7 @@ func TestModule_Register_WithQueue_ClaimsTheExpiryScanHandler(t *testing.T) {
 // does not share its data with the catalog it checks.
 func TestModule_Register_RevokePermissionsAreSplitByDataDomain(t *testing.T) {
 	db := newTestDB(t)
-	reg, err := pkgcore.NewKernel().Bootstrap(context.Background(), NewModule(db))
+	reg, err := componenttest.DeclareModules(NewModule(db))
 	if err != nil {
 		t.Fatalf("Bootstrap: %v", err)
 	}
@@ -257,7 +258,7 @@ func TestModule_Register_RevokePermissionsAreSplitByDataDomain(t *testing.T) {
 // alongside a module that declares its own permissions and audit actions --
 // the real host shape -- rather than only in isolation.
 func TestModule_Register_CoexistsWithAnotherModule(t *testing.T) {
-	reg, err := pkgcore.NewKernel().Bootstrap(context.Background(), NewModule(newTestDB(t)), neighbourModule{})
+	reg, err := componenttest.DeclareModules(NewModule(newTestDB(t)), neighbourModule{})
 	if err != nil {
 		t.Fatalf("Bootstrap: %v", err)
 	}
@@ -269,12 +270,8 @@ func TestModule_Register_CoexistsWithAnotherModule(t *testing.T) {
 // safe: any database call inside Register would panic here.
 func TestModule_Register_PerformsNoIO(t *testing.T) {
 	m := NewModule(nil)
-	reg := pkgcore.NewRegistry(
-		pkgcore.NewMemoryEventBus(),
-		pkgcore.NewMemoryKVStore(),
-		pkgcore.NewConsoleMailer(),
-	)
-	if err := m.Register(reg); err != nil {
+	reg := componenttest.NewRegistry()
+	if err := componenttest.DeclareInto(reg, m); err != nil {
 		t.Fatalf("Register against a nil database: %v", err)
 	}
 }
@@ -287,13 +284,9 @@ func TestModule_Register_PerformsNoIO(t *testing.T) {
 // tasks' own windows. A queue-less module declares neither, the same gate
 // its handler registration uses: no declaration may outlive its executor.
 func TestModule_Register_DeclaresBothPeriodicSchedules(t *testing.T) {
-	reg := pkgcore.NewRegistry(
-		pkgcore.NewMemoryEventBus(),
-		pkgcore.NewMemoryKVStore(),
-		pkgcore.NewConsoleMailer(),
-	)
+	reg := componenttest.NewRegistry()
 	m := NewModule(newTestDB(t), WithQueue(&recordingQueue{}))
-	if err := m.Register(reg); err != nil {
+	if err := componenttest.DeclareInto(reg, m); err != nil {
 		t.Fatalf("Register: %v", err)
 	}
 
@@ -309,11 +302,7 @@ func TestModule_Register_DeclaresBothPeriodicSchedules(t *testing.T) {
 	}
 
 	// A queue-less module registers no handlers, so it declares nothing.
-	queueless := pkgcore.NewRegistry(
-		pkgcore.NewMemoryEventBus(),
-		pkgcore.NewMemoryKVStore(),
-		pkgcore.NewConsoleMailer(),
-	)
+	queueless := componenttest.NewRegistry()
 	if err := NewModule(newTestDB(t)).Register(queueless); err != nil {
 		t.Fatalf("Register without a queue: %v", err)
 	}
@@ -345,11 +334,10 @@ func (neighbourModule) DependsOn() []string  { return nil }
 func (neighbourModule) Migrations() embed.FS { return embed.FS{} }
 func (neighbourModule) Locales() embed.FS    { return embed.FS{} }
 func (neighbourModule) OpenAPISpec() []byte  { return nil }
-func (neighbourModule) Register(reg pkgcore.Registrar) error {
+func (neighbourModule) Register(reg *pkgcore.ComponentRegistry) error {
 	return reg.PermissionsSeat().Add("neighbour:read")
 }
 
-var _ pkgcore.Module = neighbourModule{}
 
 // fakeSigner is a minimal Signer double used only to prove WithSigner wires
 // through.
@@ -392,7 +380,7 @@ var _ jobs.Queue = stubQueue{}
 func TestModule_Register_DeclaresItsBootstrapKey(t *testing.T) {
 	t.Parallel()
 
-	reg := pkgcore.NewRegistry(pkgcore.NewMemoryEventBus(), pkgcore.NewMemoryKVStore(), pkgcore.NewConsoleMailer())
+	reg := componenttest.NewRegistry()
 	if err := NewModule(newTestDB(t)).Register(reg); err != nil {
 		t.Fatalf("Register: %v", err)
 	}

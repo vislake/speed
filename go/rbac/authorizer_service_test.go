@@ -9,6 +9,7 @@ import (
 	"gorm.io/gorm"
 
 	"github.com/vislake/speed/go/pkgcore"
+	"github.com/vislake/speed/go/pkgcore/componenttest"
 	"github.com/vislake/speed/go/pkgcore/apperr"
 )
 
@@ -55,7 +56,7 @@ func newTestService(t *testing.T, opts ...Option) *Service {
 
 // newTestServiceWithRegistry is newTestService plus the registry, for the
 // tests that need to subscribe to the events the Service publishes.
-func newTestServiceWithRegistry(t *testing.T, opts ...Option) (*Service, *pkgcore.Registry) {
+func newTestServiceWithRegistry(t *testing.T, opts ...Option) (*Service, *pkgcore.ComponentRegistry) {
 	t.Helper()
 	return attachTestService(t, newRBACTestDB(t), opts...)
 }
@@ -64,7 +65,7 @@ func newTestServiceWithRegistry(t *testing.T, opts ...Option) (*Service, *pkgcor
 // Services can be attached to the SAME database -- the shape a
 // multi-replica deployment has, and what the cross-replica invalidation
 // tests need.
-func attachTestService(t *testing.T, db *gorm.DB, opts ...Option) (*Service, *pkgcore.Registry) {
+func attachTestService(t *testing.T, db *gorm.DB, opts ...Option) (*Service, *pkgcore.ComponentRegistry) {
 	t.Helper()
 
 	reg := newPlainRegistry()
@@ -72,7 +73,7 @@ func attachTestService(t *testing.T, db *gorm.DB, opts ...Option) (*Service, *pk
 		t.Fatalf("declaring the host's permissions: %v", err)
 	}
 	module := NewModule(db, opts...)
-	if err := module.Register(reg); err != nil {
+	if err := componenttest.DeclareInto(reg, module); err != nil {
 		t.Fatalf("Register: %v", err)
 	}
 	svc, err := module.Attach(reg)
@@ -304,7 +305,7 @@ func TestService_RevokeOnOneReplica_InvalidatesTheOther(t *testing.T) {
 
 // attachReplica attaches one more Service to a shared database and
 // registry, the way a second process would.
-func attachReplica(t *testing.T, db *gorm.DB, reg *pkgcore.Registry) *Service {
+func attachReplica(t *testing.T, db *gorm.DB, reg *pkgcore.ComponentRegistry) *Service {
 	t.Helper()
 	module := NewModule(db)
 	svc, err := module.Attach(reg)
@@ -377,12 +378,13 @@ func TestService_PublishFailure_IsReportedAndTheCacheIsStillInvalidated(t *testi
 	// still be reported so the caller knows the other replicas were not
 	// told.
 	db := newRBACTestDB(t)
-	reg := pkgcore.NewRegistry(&failingBus{}, pkgcore.NewMemoryKVStore(), pkgcore.NewConsoleMailer())
+	reg := componenttest.NewRegistry()
+	reg.Put(&failingBus{})
 	if err := reg.Permissions.Add(testPermissions...); err != nil {
 		t.Fatalf("declaring permissions: %v", err)
 	}
 	module := NewModule(db)
-	if err := module.Register(reg); err != nil {
+	if err := componenttest.DeclareInto(reg, module); err != nil {
 		t.Fatalf("Register: %v", err)
 	}
 	svc, err := module.Attach(reg)

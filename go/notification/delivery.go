@@ -293,7 +293,7 @@ type deliveryHost interface {
 	Locales() *i18n.Catalog
 }
 
-var _ deliveryHost = (pkgcore.Registrar)(nil)
+var _ deliveryHost = (*pkgcore.ComponentRegistry)(nil)
 
 // DeliveryService is the module's outbound-delivery pipeline: the decision
 // layer that turns a Dispatch into per-channel sends, and the jobs.Handler
@@ -436,7 +436,7 @@ func registerDeliveryMetrics() (metric.Int64Counter, metric.Float64Histogram) {
 // it in its third phase, after the module's own declarations succeeded, so
 // the catalog is read from the registry at call time -- never captured here,
 // when reg.Locales() is still nil.
-func (s *DeliveryService) attachHost(reg pkgcore.Registrar) {
+func (s *DeliveryService) attachHost(reg *pkgcore.ComponentRegistry) {
 	s.host = reg
 }
 

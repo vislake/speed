@@ -1,13 +1,14 @@
 package redis_test
 
-// Runnable documentation for the Redis-backed EventBus, compiled and
+// Runnable documentation for this package's constructors, compiled and
 // executed by `go test` like every other package's examples, so an API
-// change that invalidates the documented usage fails the build instead of
-// silently rotting.
+// change that invalidates the documented usage fails the build instead
+// of silently rotting. The package's component descriptor -- the
+// component a composition configuration selects as its module's
+// implementation -- is exercised by the package's own component_test.go.
 
 import (
 	"context"
-	"crypto/tls"
 	"fmt"
 
 	"github.com/redis/go-redis/v9"
@@ -42,71 +43,4 @@ func ExampleNewEventBus() {
 	fmt.Println("bus wired and reading; no event was published")
 	// Output:
 	// bus wired and reading; no event was published
-}
-
-// ExampleFromAddr shows the bare-injection path's one-step constructor: a
-// host holding nothing but the deployment's Redis address gets the bus --
-// over a client FromAddr builds and owns -- and the capability declaration
-// pkgcore.WithEventBus takes, in one call, instead of hand-assembling the
-// go-redis client and then the bus over it. The address points at a closed
-// port so this example stays hermetic: nothing dials until something
-// subscribes. The returned value's Close stops the bus's readers and
-// releases that client, so the host calls it at shutdown -- the kernel
-// never closes an injected seam.
-func ExampleFromAddr() {
-	bus, caps, err := eventbusredis.FromAddr("127.0.0.1:1")
-	if err != nil {
-		fmt.Println("from addr:", err)
-		return
-	}
-	defer func() { _ = bus.Close() }()
-
-	// The pair a host passes to pkgcore.WithEventBus.
-	fmt.Println(caps)
-	// Output:
-	// MultiReplicaSafe|SurvivesRestart
-}
-
-// Example demonstrates the package's self-registration: importing it for
-// side effect -- as a distributed-mode host does with a blank import when it
-// wants pkgcore.WithPreset(pkgcore.PresetDistributed) to resolve the
-// "eventbus" seam -- makes "eventbus.redis" build through pkgcore's shared
-// EventBusRegistry, the database/sql-style driver pattern this package
-// follows.
-func Example() {
-	bus, caps, err := pkgcore.EventBusRegistry.Build("eventbus.redis", pkgcore.Config{})
-	fmt.Println(err, bus != nil, caps)
-
-	// Output:
-	// <nil> true MultiReplicaSafe|SurvivesRestart
-}
-
-// ExampleRegistration shows the name-registration path for a typed
-// configuration the flat pkgcore.Config cannot express: the host builds the
-// client itself -- here carrying TLS material -- wraps it in the
-// registration factory, registers it under a name of its own (the built-in
-// "eventbus.redis" name is taken), and names that registration in a Preset
-// entry. The host keeps ownership: the factory's New returns the bare bus
-// over the host's client, so Kernel.Shutdown never touches either, and the
-// host closes both when it shuts down. Nothing here dials, because
-// go-redis connects lazily.
-func ExampleRegistration() {
-	client := redis.NewClient(&redis.Options{
-		Addr:      "redis.internal:6379",
-		TLSConfig: &tls.Config{MinVersion: tls.VersionTLS12},
-	})
-	defer client.Close()
-
-	name := "eventbus.redis.host"
-	if err := pkgcore.EventBusRegistry.Register(eventbusredis.Registration(name, client)); err != nil {
-		fmt.Println("register:", err)
-		return
-	}
-
-	preset := pkgcore.PresetStandalone.With("eventbus", pkgcore.SeamPreset{Implementation: name})
-	reg, err := pkgcore.NewKernel(pkgcore.WithPreset(preset)).Bootstrap(context.Background())
-	fmt.Println(err, reg.EventBus() != nil)
-
-	// Output:
-	// <nil> true
 }

@@ -1,9 +1,11 @@
 package postgres_test
 
-// Runnable documentation for the PostgreSQL-backed KVStore, compiled and
+// Runnable documentation for this package's constructors, compiled and
 // executed by `go test` like every other package's examples, so an API
-// change that invalidates the documented usage fails the build instead of
-// silently rotting.
+// change that invalidates the documented usage fails the build instead
+// of silently rotting. The package's component descriptor -- the
+// component a composition configuration selects as its module's
+// implementation -- is exercised by the package's own component_test.go.
 
 import (
 	"context"
@@ -74,53 +76,4 @@ func ExampleWithClock() {
 	fmt.Println("store wired; its expiries are judged by the database clock, never this one")
 	// Output:
 	// store wired; its expiries are judged by the database clock, never this one
-}
-
-// Example demonstrates the package's self-registration: importing it for
-// side effect -- as a distributed-mode host does with a blank import when it
-// wants a custom Preset naming "kv.postgres" to resolve the "kv" seam --
-// makes "kv.postgres" build through pkgcore's shared KVStoreRegistry, the
-// database/sql-style driver pattern kv/redis and eventbus/postgres also
-// follow.
-func Example() {
-	store, caps, err := pkgcore.KVStoreRegistry.Build("kv.postgres", pkgcore.Config{
-		"dsn": "postgres://user:pass@127.0.0.1:1/db",
-	})
-	fmt.Println(err, store != nil, caps)
-
-	// Output:
-	// <nil> true MultiReplicaSafe|SurvivesRestart
-}
-
-// ExampleRegistration shows the name-registration path for a typed
-// configuration the flat pkgcore.Config cannot express: the host builds the
-// pool itself -- here with a DSN carrying its own TLS parameters, the shape
-// strings squeezed into keys cannot express -- wraps it in the registration
-// factory, registers it under a name of its own (the built-in "kv.postgres"
-// name is taken), and names that registration in a Preset entry. The host
-// keeps ownership: the factory's New returns the bare store over the host's
-// pool, so Kernel.Shutdown never touches either, and the host closes both
-// when it shuts down. pgxpool.New dials nothing, so the closed-port DSN
-// keeps this example hermetic; the store's table must already exist (see
-// kvpostgres.EnsureSchema) before its first operation.
-func ExampleRegistration() {
-	pool, err := pgxpool.New(context.Background(), "postgres://user:pass@127.0.0.1:1/db")
-	if err != nil {
-		fmt.Println("pool:", err)
-		return
-	}
-	defer pool.Close()
-
-	name := "kv.postgres.host"
-	if regErr := pkgcore.KVStoreRegistry.Register(kvpostgres.Registration(name, pool)); regErr != nil {
-		fmt.Println("register:", regErr)
-		return
-	}
-
-	preset := pkgcore.PresetStandalone.With("kv", pkgcore.SeamPreset{Implementation: name})
-	reg, err := pkgcore.NewKernel(pkgcore.WithPreset(preset)).Bootstrap(context.Background())
-	fmt.Println(err, reg.KVStore() != nil)
-
-	// Output:
-	// <nil> true
 }

@@ -390,7 +390,7 @@ func (m *Module) OpenAPISpec() []byte { return openAPISpecYAML }
 // rbac.role_binding.assigned/revoked, and RoleService's wrapper calls
 // them exactly as any other caller would, so admin declares no audit
 // action of its own for either.
-func (m *Module) Register(reg pkgcore.Registrar) error {
+func (m *Module) Register(reg *pkgcore.ComponentRegistry) error {
 	if m.authnModule == nil {
 		return ErrAuthnServiceRequired
 	}
@@ -514,5 +514,3 @@ func (m *Module) Register(reg pkgcore.Registrar) error {
 	return nil
 }
 
-// compile-time check that *Module satisfies pkgcore.Module.
-var _ pkgcore.Module = (*Module)(nil)

@@ -535,7 +535,7 @@ func (m *Module) OpenAPISpec() []byte { return openAPISpecYAML }
 //   - the invitation email enabled with no sender address or no link builder
 //     (ErrInvitationMailRequired), because the message could not be rendered
 //     into anything a recipient could act on.
-func (m *Module) Register(reg pkgcore.Registrar) error {
+func (m *Module) Register(reg *pkgcore.ComponentRegistry) error {
 	if m.emailIndexer == nil {
 		return ErrEmailIndexerRequired
 	}
@@ -595,5 +595,3 @@ func (m *Module) attach(host hostSeams) {
 	m.invites.host = host
 }
 
-// compile-time check that *Module satisfies pkgcore.Module.
-var _ pkgcore.Module = (*Module)(nil)

@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/vislake/speed/go/pkgcore"
+	"github.com/vislake/speed/go/pkgcore/componenttest"
 )
 
 // recordingQueue is the Queue fake the scheduler tests drive: it records
@@ -70,12 +71,15 @@ func (l *recordingLister) callCount() int {
 	return l.calls
 }
 
-// newTestSchedules returns a real Registry's Schedules seat carrying decls,
-// so the tests exercise the seat the scheduler actually reads.
+// newTestSchedules returns a real registry's Schedules seat carrying decls,
+// seeded inside the one Init stage the seat accepts writes in, so the tests
+// exercise the seat the scheduler actually reads.
 func newTestSchedules(t *testing.T, decls ...pkgcore.PeriodicTask) pkgcore.PeriodicTaskRegistrar {
 	t.Helper()
-	reg := pkgcore.NewRegistry(pkgcore.NewMemoryEventBus(), pkgcore.NewMemoryKVStore(), pkgcore.NewConsoleMailer())
-	if err := reg.Schedules.Add(decls...); err != nil {
+	reg := componenttest.NewRegistry()
+	if err := componenttest.DeclareAll(reg, func(r *pkgcore.ComponentRegistry) error {
+		return r.Schedules.Add(decls...)
+	}); err != nil {
 		t.Fatalf("seeding the Schedules seat: %v", err)
 	}
 	return reg.Schedules

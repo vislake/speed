@@ -12,6 +12,7 @@ import (
 
 	"github.com/vislake/speed/go/dbkit"
 	"github.com/vislake/speed/go/pkgcore"
+	"github.com/vislake/speed/go/pkgcore/componenttest"
 	"github.com/vislake/speed/go/pkgcore/apperr"
 )
 
@@ -48,7 +49,7 @@ func newWebhookTestService(t *testing.T, opts ...Option) (*Module, *Service) {
 	}
 	m := NewModule(newWebhookTestDB(t), append(base, opts...)...)
 	reg := newTestRegistry(t)
-	if err := m.Register(reg); err != nil {
+	if err := componenttest.DeclareInto(reg, m); err != nil {
 		t.Fatalf("Register: %v", err)
 	}
 	svc, err := m.Attach(reg)

@@ -9,6 +9,7 @@ import (
 
 	"github.com/vislake/speed/go/dbkit"
 	"github.com/vislake/speed/go/pkgcore"
+	"github.com/vislake/speed/go/pkgcore/componenttest"
 	"github.com/vislake/speed/go/rbac"
 )
 
@@ -45,7 +46,7 @@ func Example() {
 		return
 	}
 
-	registry, err := pkgcore.NewKernel().Bootstrap(ctx, module)
+	registry, err := componenttest.DeclareModules(module)
 	if err != nil {
 		fmt.Println("bootstrap:", err)
 		return
@@ -93,7 +94,7 @@ func ExampleService_DeclaredPermissions() {
 		return
 	}
 
-	registry, err := pkgcore.NewKernel().Bootstrap(ctx, module)
+	registry, err := componenttest.DeclareModules(module)
 	if err != nil {
 		fmt.Println("bootstrap:", err)
 		return
@@ -440,7 +441,7 @@ func newExampleService(ctx context.Context, dsn string, resolver rbac.SubtreeRes
 		return nil, err
 	}
 
-	registry, err := pkgcore.NewKernel().Bootstrap(ctx, module, notesLikeModule{})
+	registry, err := componenttest.DeclareModules(module, notesLikeModule{})
 	if err != nil {
 		return nil, err
 	}
@@ -458,7 +459,7 @@ func (notesLikeModule) Migrations() embed.FS { return embed.FS{} }
 func (notesLikeModule) Locales() embed.FS    { return embed.FS{} }
 func (notesLikeModule) OpenAPISpec() []byte  { return nil }
 
-func (notesLikeModule) Register(reg pkgcore.Registrar) error {
+func (notesLikeModule) Register(reg *pkgcore.ComponentRegistry) error {
 	return reg.PermissionsSeat().Add("notes:read", "notes:write")
 }
 

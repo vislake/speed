@@ -7,7 +7,6 @@ import (
 	"gorm.io/gorm"
 
 	"github.com/vislake/speed/go/dbkit"
-	"github.com/vislake/speed/go/pkgcore"
 )
 
 // Migration declares one module's embedded migration set for Migrate: the
@@ -67,20 +66,11 @@ func Migrate(t *testing.T, db *gorm.DB, dialect dbkit.Dialect, migrations ...Mig
 	}
 }
 
-// migrationModule adapts one Migration to the pkgcore.Module interface
+// migrationModule adapts one Migration to the migratable shape
 // MigrationRegistry consumes. Only Name and Migrations carry information:
-// the remaining methods return the zero values, which the registry never
-// reads for a module it is only applying (Register builds the dependency
-// graph on Name and DependsOn, and DependsOn is nil per Migration's own
-// doc comment).
+// DependsOn is nil per Migration's own doc comment.
 type migrationModule Migration
 
-func (m migrationModule) Name() string                     { return m.Module }
-func (migrationModule) DependsOn() []string                { return nil }
-func (m migrationModule) Migrations() embed.FS             { return m.FS }
-func (migrationModule) Locales() embed.FS                  { return embed.FS{} }
-func (migrationModule) OpenAPISpec() []byte                { return nil }
-func (migrationModule) Register(_ pkgcore.Registrar) error { return nil }
-
-// compile-time check that migrationModule satisfies pkgcore.Module.
-var _ pkgcore.Module = migrationModule{}
+func (m migrationModule) Name() string         { return m.Module }
+func (migrationModule) DependsOn() []string    { return nil }
+func (m migrationModule) Migrations() embed.FS { return m.FS }

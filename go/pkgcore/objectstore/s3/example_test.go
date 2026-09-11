@@ -1,12 +1,13 @@
 package s3_test
 
-// Runnable documentation for the S3-backed ObjectStore, compiled and
+// Runnable documentation for this package's constructors, compiled and
 // executed by `go test` like every other package's examples, so an API
-// change that invalidates the documented usage fails the build instead of
-// silently rotting.
+// change that invalidates the documented usage fails the build instead
+// of silently rotting. The package's component descriptor -- the
+// component a composition configuration selects as its module's
+// implementation -- is exercised by the package's own component_test.go.
 
 import (
-	"context"
 	"fmt"
 
 	"github.com/vislake/speed/go/pkgcore"
@@ -71,53 +72,4 @@ func ExampleFromConfig() {
 	fmt.Println(store != nil, caps)
 	// Output:
 	// true MultiReplicaSafe|SurvivesRestart
-}
-
-// Example demonstrates the package's self-registration: importing it for
-// side effect -- as a distributed-mode host does with a blank import when it
-// wants pkgcore.WithPreset(pkgcore.PresetDistributed) to resolve the
-// "objectstore" seam -- makes "objectstore.s3" build through pkgcore's
-// shared ObjectStoreRegistry, the database/sql-style driver pattern this
-// package follows.
-func Example() {
-	cfg := pkgcore.Config{"endpoint": "s3.example.com", "bucket": "objects", "access_key": "ak", "secret_key": "sk"}
-	store, caps, err := pkgcore.ObjectStoreRegistry.Build("objectstore.s3", cfg)
-	fmt.Println(err, store != nil, caps)
-
-	// Output:
-	// <nil> true MultiReplicaSafe|SurvivesRestart
-}
-
-// ExampleRegistration shows the name-registration path for this seam, where
-// the typed configuration is the Config itself: the host assembles it in
-// code -- here from credentials resolved by its own secret machinery -- and
-// wraps it in the registration factory instead of flattening it into the
-// string-keyed pkgcore.Config. The factory's result registers under a name
-// of the host's own (the built-in "objectstore.s3" name is taken) and is
-// named in a Preset entry. The host keeps ownership: the factory's New
-// returns the bare store, so Kernel.Shutdown never touches it, and there is
-// no client this package would close. Nothing here dials; the service is
-// contacted on the store's first operation.
-func ExampleRegistration() {
-	storeCfg := s3.Config{
-		Endpoint:  "s3.internal:9000",
-		Bucket:    "objects",
-		AccessKey: "access-key",
-		SecretKey: "secret-key",
-		Region:    "us-east-1",
-		UseSSL:    true,
-	}
-
-	name := "objectstore.s3.prod"
-	if err := pkgcore.ObjectStoreRegistry.Register(s3.Registration(name, storeCfg)); err != nil {
-		fmt.Println("register:", err)
-		return
-	}
-
-	preset := pkgcore.PresetStandalone.With("objectstore", pkgcore.SeamPreset{Implementation: name})
-	reg, err := pkgcore.NewKernel(pkgcore.WithPreset(preset)).Bootstrap(context.Background())
-	fmt.Println(err, reg.ObjectStore() != nil)
-
-	// Output:
-	// <nil> true
 }

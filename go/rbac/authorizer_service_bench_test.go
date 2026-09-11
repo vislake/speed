@@ -22,6 +22,7 @@ import (
 
 	"github.com/vislake/speed/go/dbkit"
 	"github.com/vislake/speed/go/pkgcore"
+	"github.com/vislake/speed/go/pkgcore/componenttest"
 )
 
 // serviceBenchSink keeps the last decision reachable so the compiler cannot
@@ -74,12 +75,12 @@ func newBenchService(b *testing.B) *Service {
 		b.Fatalf("applying the rbac migrations: %v", regErr)
 	}
 
-	reg := pkgcore.NewRegistry(pkgcore.NewMemoryEventBus(), pkgcore.NewMemoryKVStore(), pkgcore.NewConsoleMailer())
+	reg := componenttest.NewRegistry()
 	if addErr := reg.Permissions.Add(testPermissions...); addErr != nil {
 		b.Fatalf("declaring the host's permissions: %v", addErr)
 	}
 	module := NewModule(db)
-	if regErr := module.Register(reg); regErr != nil {
+	if regErr := componenttest.DeclareInto(reg, module); regErr != nil {
 		b.Fatalf("Register: %v", regErr)
 	}
 	svc, attachErr := module.Attach(reg)

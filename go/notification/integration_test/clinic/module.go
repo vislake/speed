@@ -47,7 +47,7 @@ func (m *Module) OpenAPISpec() []byte { return nil }
 // the preference service reads the registrar live (see notification's
 // attachTypes), so this Add is safe however the module graph orders the
 // two Register calls.
-func (m *Module) Register(reg pkgcore.Registrar) error {
+func (m *Module) Register(reg *pkgcore.ComponentRegistry) error {
 	return reg.NotificationsSeat().Add(pkgcore.NotificationType{
 		Key:             AppointmentReminderKey,
 		Group:           "appointments",
@@ -56,5 +56,3 @@ func (m *Module) Register(reg pkgcore.Registrar) error {
 	})
 }
 
-// compile-time check that *Module satisfies pkgcore.Module.
-var _ pkgcore.Module = (*Module)(nil)

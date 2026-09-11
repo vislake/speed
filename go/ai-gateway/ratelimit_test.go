@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/vislake/speed/go/pkgcore"
+	"github.com/vislake/speed/go/pkgcore/componenttest"
 	"github.com/vislake/speed/go/pkgcore/apperr"
 	"github.com/vislake/speed/go/ratelimit"
 )
@@ -182,7 +183,7 @@ func TestGateway_RateLimiter_UnderlyingStoreError_WrapsAsInternal(t *testing.T) 
 // proof for its identical hostSeams field.
 func TestModule_Register_AttachesGatewayHost(t *testing.T) {
 	m := NewModule(newTestDB(t))
-	if _, err := pkgcore.NewKernel().Bootstrap(context.Background(), m); err != nil {
+	if _, err := componenttest.DeclareModules(m); err != nil {
 		t.Fatalf("Bootstrap: %v", err)
 	}
 	if m.Gateway().host == nil {

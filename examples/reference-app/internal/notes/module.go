@@ -256,7 +256,7 @@ func (m *Module) OpenAPISpec() []byte { return openAPISpecYAML }
 // just reading a field off reg. The bus is not actually called (no
 // Publish) until a real HTTP request creates a note; see handler.go's
 // NotesCreateNote method.
-func (m *Module) Register(reg pkgcore.Registrar) error {
+func (m *Module) Register(reg *pkgcore.ComponentRegistry) error {
 	if err := reg.AuditActionsSeat().Add(AuditActionNoteCreate); err != nil {
 		return err
 	}
@@ -337,5 +337,3 @@ func (m *Module) Register(reg pkgcore.Registrar) error {
 	return nil
 }
 
-// compile-time check that *Module satisfies pkgcore.Module.
-var _ pkgcore.Module = (*Module)(nil)

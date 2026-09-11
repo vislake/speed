@@ -18,6 +18,7 @@ import (
 	"github.com/vislake/speed/go/dbkit"
 	"github.com/vislake/speed/go/metering"
 	"github.com/vislake/speed/go/pkgcore"
+	"github.com/vislake/speed/go/pkgcore/componenttest"
 )
 
 // adminMigrationModule is the minimal pkgcore.Module the example below
@@ -35,7 +36,7 @@ func (adminMigrationModule) DependsOn() []string              { return nil }
 func (adminMigrationModule) Migrations() embed.FS             { return migrations.FS }
 func (adminMigrationModule) Locales() embed.FS                { return embed.FS{} }
 func (adminMigrationModule) OpenAPISpec() []byte              { return nil }
-func (adminMigrationModule) Register(pkgcore.Registrar) error { return nil }
+func (adminMigrationModule) Register(*pkgcore.ComponentRegistry) error { return nil }
 
 // ExampleUsageService_Summary demonstrates the cross-tenant usage
 // dashboard's metering leg (UsageService.Summary) against REAL
@@ -73,7 +74,11 @@ func ExampleUsageService_Summary() {
 	// dbkit.MigrationRegistry applies metering's own table set from zero.
 	meteringModule := metering.NewModule(db)
 	registry := dbkit.NewMigrationRegistry()
-	for _, m := range []pkgcore.Module{meteringModule, adminMigrationModule{}} {
+	for _, m := range []interface {
+		Name() string
+		DependsOn() []string
+		Migrations() embed.FS
+	}{meteringModule, adminMigrationModule{}} {
 		if regErr := registry.Register(m); regErr != nil {
 			fmt.Println("register migrations:", regErr)
 			return
@@ -90,7 +95,7 @@ func ExampleUsageService_Summary() {
 	// This example composes the service directly rather than through a
 	// full Module graph; a real host never does either step itself.
 	pkgcore.RegisterSystemPurpose(SystemPurposeAdminCrossTenant)
-	reg := pkgcore.NewRegistry(pkgcore.NewMemoryEventBus(), pkgcore.NewMemoryKVStore(), pkgcore.NewConsoleMailer())
+	reg := componenttest.NewRegistry()
 
 	// One tenant in admin's own ledger (the manual-registration path), and
 	// one real metering event folded into that tenant's real

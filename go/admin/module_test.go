@@ -26,6 +26,7 @@ import (
 	"github.com/vislake/speed/go/org"
 	orgmigrations "github.com/vislake/speed/go/org/migrations"
 	"github.com/vislake/speed/go/pkgcore"
+	"github.com/vislake/speed/go/pkgcore/componenttest"
 	"github.com/vislake/speed/go/pkgcore/apperr"
 	"github.com/vislake/speed/go/rbac"
 	rbacmigrations "github.com/vislake/speed/go/rbac/migrations"
@@ -49,7 +50,7 @@ func (fakeUserAddressResolver) Resolve(context.Context, string) (notification.Us
 // existing two-call-site destructuring assignment to grow another blank
 // identifier.
 type testAdminEnv struct {
-	Registry *pkgcore.Registry
+	Registry *pkgcore.ComponentRegistry
 	Admin    *Module
 
 	// Authn is the real, Register()-ed *authn.Module wired into adminModule
@@ -211,8 +212,7 @@ func buildTestAdminModule(t *testing.T) testAdminEnv {
 		WithBilling(billingModule),
 	)
 
-	reg, err := pkgcore.NewKernel().Bootstrap(t.Context(),
-		authnModule, orgModule, complianceModule, notificationModule, adminModule,
+	reg, err := componenttest.DeclareModules(authnModule, orgModule, complianceModule, notificationModule, adminModule,
 		rbacModule, sharingModule, meteringModule, billingModule,
 	)
 	if err != nil {
@@ -423,7 +423,7 @@ func TestModule_Register_MissingMandatoryOption_RefusesByName(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			m := NewModule(env.DB, tc.opts...)
-			if err := m.Register(reg); !apperr.HasCode(err, tc.want) {
+			if err := componenttest.DeclareInto(reg, m); !apperr.HasCode(err, tc.want) {
 				t.Fatalf("Register() error = %v, want %s", err, tc.want)
 			}
 		})

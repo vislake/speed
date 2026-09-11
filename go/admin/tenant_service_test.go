@@ -9,16 +9,17 @@ import (
 	"github.com/vislake/speed/go/dbkit/audit"
 	"github.com/vislake/speed/go/org"
 	"github.com/vislake/speed/go/pkgcore"
+	"github.com/vislake/speed/go/pkgcore/componenttest"
 	"github.com/vislake/speed/go/pkgcore/apperr"
 	"github.com/vislake/speed/go/tenancy"
 )
 
-// newTestRegistry returns a *pkgcore.Registry over an in-process bus, an
+// newTestRegistry returns a *pkgcore.ComponentRegistry over an in-process bus, an
 // in-memory KVStore and a console mailer -- everything TenantService and
 // ImpersonationService need attached in these tests, mirroring every
 // other module's identical construction for its own service tests.
-func newTestRegistry() *pkgcore.Registry {
-	return pkgcore.NewRegistry(pkgcore.NewMemoryEventBus(), pkgcore.NewMemoryKVStore(), pkgcore.NewConsoleMailer())
+func newTestRegistry() *pkgcore.ComponentRegistry {
+	return componenttest.NewRegistry()
 }
 
 // TestTenantService_HandleOrgNodeCreated_RootNode_LazilyRegisters is the

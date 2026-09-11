@@ -31,6 +31,7 @@ import (
 	_ "github.com/vislake/speed/go/dbkit/dialect/sqlite"
 	"github.com/vislake/speed/go/jobs"
 	"github.com/vislake/speed/go/pkgcore"
+	"github.com/vislake/speed/go/pkgcore/componenttest"
 	"github.com/vislake/speed/go/storage"
 
 	aigateway "github.com/vislake/speed/go/ai-gateway"
@@ -246,7 +247,7 @@ func Example_generateImage() {
 		return
 	}
 
-	reg, err := pkgcore.NewKernel().Bootstrap(ctx, storageModule, module)
+	reg, err := componenttest.DeclareModules(storageModule, module)
 	if err != nil {
 		fmt.Println("bootstrap:", err)
 		return

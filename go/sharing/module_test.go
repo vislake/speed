@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/vislake/speed/go/pkgcore"
+	"github.com/vislake/speed/go/pkgcore/componenttest"
 )
 
 func TestModule_Identity(t *testing.T) {
@@ -82,7 +83,7 @@ func TestModule_Locales_ShipsBothLanguages(t *testing.T) {
 // validation, which only runs there.
 func TestModule_Register_DeclaresItsSurface(t *testing.T) {
 	db := newTestDB(t)
-	reg, err := pkgcore.NewKernel().Bootstrap(context.Background(), NewModule(db))
+	reg, err := componenttest.DeclareModules(NewModule(db))
 	if err != nil {
 		t.Fatalf("Bootstrap: %v", err)
 	}
@@ -163,7 +164,7 @@ func TestModule_Register_MountsHandlerBuiltAfterOptions(t *testing.T) {
 	db := newTestDB(t)
 	resolver := fakeResourceResolver{mime: "text/plain", body: "hello"}
 	m := NewModule(db, WithResourceResolver(resolver))
-	if _, err := pkgcore.NewKernel().Bootstrap(context.Background(), m); err != nil {
+	if _, err := componenttest.DeclareModules(m); err != nil {
 		t.Fatalf("Bootstrap: %v", err)
 	}
 	if m.Handler() == nil {
@@ -190,7 +191,7 @@ func TestModule_Register_MountsHandlerBuiltAfterOptions(t *testing.T) {
 // TestModule_Register_CoexistsWithAnotherModule proves sharing bootstraps
 // alongside a module that declares its own permissions and audit actions.
 func TestModule_Register_CoexistsWithAnotherModule(t *testing.T) {
-	reg, err := pkgcore.NewKernel().Bootstrap(context.Background(), NewModule(newTestDB(t)), neighbourModule{})
+	reg, err := componenttest.DeclareModules(NewModule(newTestDB(t)), neighbourModule{})
 	if err != nil {
 		t.Fatalf("Bootstrap: %v", err)
 	}
@@ -202,12 +203,8 @@ func TestModule_Register_CoexistsWithAnotherModule(t *testing.T) {
 // safe: any database call inside Register would panic here.
 func TestModule_Register_PerformsNoIO(t *testing.T) {
 	m := NewModule(nil)
-	reg := pkgcore.NewRegistry(
-		pkgcore.NewMemoryEventBus(),
-		pkgcore.NewMemoryKVStore(),
-		pkgcore.NewConsoleMailer(),
-	)
-	if err := m.Register(reg); err != nil {
+	reg := componenttest.NewRegistry()
+	if err := componenttest.DeclareInto(reg, m); err != nil {
 		t.Fatalf("Register against a nil database: %v", err)
 	}
 }
@@ -220,12 +217,8 @@ func TestModule_Register_PerformsNoIO(t *testing.T) {
 // module's own window cadence.
 func TestModule_Register_DeclaresTheExpirySweepSchedule(t *testing.T) {
 	m := NewModule(newTestDB(t), WithQueue(&recordingQueue{}))
-	reg := pkgcore.NewRegistry(
-		pkgcore.NewMemoryEventBus(),
-		pkgcore.NewMemoryKVStore(),
-		pkgcore.NewConsoleMailer(),
-	)
-	if err := m.Register(reg); err != nil {
+	reg := componenttest.NewRegistry()
+	if err := componenttest.DeclareInto(reg, m); err != nil {
 		t.Fatalf("Register: %v", err)
 	}
 
@@ -268,8 +261,7 @@ func (neighbourModule) DependsOn() []string  { return nil }
 func (neighbourModule) Migrations() embed.FS { return embed.FS{} }
 func (neighbourModule) Locales() embed.FS    { return embed.FS{} }
 func (neighbourModule) OpenAPISpec() []byte  { return nil }
-func (neighbourModule) Register(reg pkgcore.Registrar) error {
+func (neighbourModule) Register(reg *pkgcore.ComponentRegistry) error {
 	return reg.PermissionsSeat().Add("neighbour:read")
 }
 
-var _ pkgcore.Module = neighbourModule{}

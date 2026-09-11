@@ -16,6 +16,7 @@ import (
 	"github.com/vislake/speed/go/dbkit"
 	"github.com/vislake/speed/go/dbkit/audit"
 	"github.com/vislake/speed/go/pkgcore"
+	"github.com/vislake/speed/go/pkgcore/componenttest"
 	"github.com/vislake/speed/go/pkgcore/apperr"
 	"github.com/vislake/speed/go/pkgcore/i18n"
 	"github.com/vislake/speed/go/ratelimit"
@@ -164,7 +165,7 @@ func (m *recordingMailer) messages() []pkgcore.Mail {
 	return append([]pkgcore.Mail(nil), m.sent...)
 }
 
-// testHost is a stand-in for the host's *pkgcore.Registry: the four seams
+// testHost is a stand-in for the host's *pkgcore.ComponentRegistry: the four seams
 // ContactService reads at call time, each backed by the standalone
 // deployment mode's own implementation. It mirrors org's events test host
 // one for one; the compile-time assertion pins that it satisfies the
@@ -221,8 +222,13 @@ func newContactEnv(t *testing.T) *contactEnv {
 		host:   newTestHost(t),
 		smsBuf: new(bytes.Buffer),
 	}
-	reg := pkgcore.NewRegistry(env.host.bus, env.host.kv, env.host.mailer)
-	if err := reg.AuditActions.Add(contactAuditActionDecls...); err != nil {
+	reg := pkgcore.NewComponentRegistry()
+	reg.Put(env.host.bus)
+	reg.Put(env.host.kv)
+	reg.Put(env.host.mailer)
+	if err := componenttest.Declare(reg, func(r *pkgcore.ComponentRegistry) error {
+		return r.AuditActions.Add(contactAuditActionDecls...)
+	}); err != nil {
 		t.Fatalf("register the contact audit actions: %v", err)
 	}
 	env.svc.sms = pkgcore.NewConsoleSMSSender(env.smsBuf)

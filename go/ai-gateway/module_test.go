@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/vislake/speed/go/pkgcore"
+	"github.com/vislake/speed/go/pkgcore/componenttest"
 )
 
 func TestModule_Name(t *testing.T) {
@@ -25,8 +26,9 @@ func TestModule_DependsOn_Nil(t *testing.T) {
 func TestModule_Register_DeclaresTheSurface(t *testing.T) {
 	m := NewModule(newTestDB(t))
 	bus := pkgcore.NewMemoryEventBus()
-	reg := pkgcore.NewRegistry(bus, pkgcore.NewMemoryKVStore(), pkgcore.NewConsoleMailer())
-	if err := m.Register(reg); err != nil {
+	reg := componenttest.NewRegistry()
+	reg.Put(bus)
+	if err := componenttest.DeclareInto(reg, m); err != nil {
 		t.Fatalf("Register: %v", err)
 	}
 	for _, want := range []string{PermissionRead, PermissionWrite, PermissionManagePlatform} {
@@ -67,18 +69,18 @@ func TestModule_GatewayAndCredentials_EndToEnd(t *testing.T) {
 	}
 }
 
-// newTestRegistry returns a fresh *pkgcore.Registry over in-memory
+// newTestRegistry returns a fresh *pkgcore.ComponentRegistry over in-memory
 // infrastructure -- enough for Register to run against without a real
 // event bus, KV store or mailer.
-func newTestRegistry() *pkgcore.Registry {
-	return pkgcore.NewRegistry(pkgcore.NewMemoryEventBus(), pkgcore.NewMemoryKVStore(), pkgcore.NewConsoleMailer())
+func newTestRegistry() *pkgcore.ComponentRegistry {
+	return componenttest.NewRegistry()
 }
 
 func TestModule_Register_ImageJobHandler_RegisteredOnlyWhenWired(t *testing.T) {
 	db := newTestDB(t)
 	moduleWithImages := NewModule(db, WithImageGeneration(&recordingImageQueue{}, newTestStorageObjectService(t)))
 	reg := newTestRegistry()
-	if err := moduleWithImages.Register(reg); err != nil {
+	if err := componenttest.DeclareInto(reg, moduleWithImages); err != nil {
 		t.Fatalf("Register: %v", err)
 	}
 	if _, ok := reg.Jobs.Handlers()[TaskTypeImageGenerate]; !ok {

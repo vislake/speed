@@ -14,6 +14,7 @@ import (
 	"gorm.io/gorm"
 
 	"github.com/vislake/speed/go/pkgcore"
+	"github.com/vislake/speed/go/pkgcore/componenttest"
 	"github.com/vislake/speed/go/pkgcore/apperr"
 )
 
@@ -387,8 +388,7 @@ func TestModule_Register_DoesNotDeclareAuthnsEvent(t *testing.T) {
 // alongside a module that declares its own permissions, audit actions and
 // events -- the real host shape -- rather than only in isolation.
 func TestModule_Register_CoexistsWithAnotherModule(t *testing.T) {
-	reg, err := pkgcore.NewKernel().
-		Bootstrap(context.Background(), newWiredModule(t, nil), neighbourModule{})
+	reg, err := componenttest.DeclareModules(newWiredModule(t, nil), neighbourModule{})
 	if err != nil {
 		t.Fatalf("Bootstrap: %v", err)
 	}
@@ -400,12 +400,8 @@ func TestModule_Register_CoexistsWithAnotherModule(t *testing.T) {
 // any database call inside Register would panic here.
 func TestModule_Register_PerformsNoIO(t *testing.T) {
 	m := newWiredModule(t, nil)
-	reg := pkgcore.NewRegistry(
-		pkgcore.NewMemoryEventBus(),
-		pkgcore.NewMemoryKVStore(),
-		pkgcore.NewConsoleMailer(),
-	)
-	if err := m.Register(reg); err != nil {
+	reg := componenttest.NewRegistry()
+	if err := componenttest.DeclareInto(reg, m); err != nil {
 		t.Fatalf("Register against a nil database: %v", err)
 	}
 }
@@ -437,14 +433,13 @@ func (neighbourModule) DependsOn() []string  { return nil }
 func (neighbourModule) Migrations() embed.FS { return embed.FS{} }
 func (neighbourModule) Locales() embed.FS    { return embed.FS{} }
 func (neighbourModule) OpenAPISpec() []byte  { return nil }
-func (neighbourModule) Register(reg pkgcore.Registrar) error {
+func (neighbourModule) Register(reg *pkgcore.ComponentRegistry) error {
 	if err := reg.PermissionsSeat().Add("neighbour:read"); err != nil {
 		return err
 	}
 	return reg.AuditActionsSeat().Add("neighbour.thing.do")
 }
 
-var _ pkgcore.Module = neighbourModule{}
 
 // assertContainsAll fails t unless got holds every entry in want.
 func assertContainsAll(t *testing.T, got, want []string) {
@@ -481,10 +476,9 @@ func newWiredModule(t *testing.T, db *gorm.DB, opts ...Option) *Module {
 // Bootstrap rather than calling Register on a hand-built Registry is
 // deliberate: it is the only path that also merges the locale files and so
 // proves they survive i18n.Builder.AddModule's parity validation.
-func bootstrapTestModule(t *testing.T, opts ...Option) *pkgcore.Registry {
+func bootstrapTestModule(t *testing.T, opts ...Option) *pkgcore.ComponentRegistry {
 	t.Helper()
-	reg, err := pkgcore.NewKernel().
-		Bootstrap(context.Background(), newWiredModule(t, nil, opts...))
+	reg, err := componenttest.DeclareModules(newWiredModule(t, nil, opts...))
 	if err != nil {
 		t.Fatalf("Bootstrap: %v", err)
 	}
@@ -496,8 +490,7 @@ func bootstrapTestModule(t *testing.T, opts ...Option) *pkgcore.Registry {
 // queryable column refuses to boot without the key that makes the column
 // queryable, rather than starting and failing on the first write.
 func TestModule_Register_RefusesAnIndexerlessBoot(t *testing.T) {
-	_, err := pkgcore.NewKernel().
-		Bootstrap(context.Background(), NewModule(nil))
+	_, err := componenttest.DeclareModules(NewModule(nil))
 	if !apperr.HasCode(err, ErrEmailIndexerRequired.Code) {
 		t.Fatalf("Bootstrap without an email indexer error = %v, want org.email_indexer_required", err)
 	}
@@ -519,8 +512,7 @@ func TestModule_Register_RefusesAMailerlessBootWhileTheEmailIsOn(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			opts := append([]Option{WithEmailIndexer(newTestEmailIndexer(t))}, tc.opts...)
-			_, err := pkgcore.NewKernel().
-				Bootstrap(context.Background(), NewModule(nil, opts...))
+			_, err := componenttest.DeclareModules(NewModule(nil, opts...))
 			if !apperr.HasCode(err, ErrInvitationMailRequired.Code) {
 				t.Fatalf("Bootstrap error = %v, want org.invitation_mail_required", err)
 			}
@@ -532,8 +524,7 @@ func TestModule_Register_RefusesAMailerlessBootWhileTheEmailIsOn(t *testing.T) {
 // host uses once something else delivers the invitation: no sender address,
 // no link builder, and the boot succeeds.
 func TestModule_Register_EmailDisabled_NeedsNoMailWiring(t *testing.T) {
-	_, err := pkgcore.NewKernel().
-		Bootstrap(context.Background(), NewModule(nil,
+	_, err := componenttest.DeclareModules(NewModule(nil,
 			WithEmailIndexer(newTestEmailIndexer(t)),
 			WithInvitationEmailDisabled(),
 		))
@@ -593,8 +584,7 @@ func TestModule_Register_DeclaresTheMembershipSurface(t *testing.T) {
 // the way authn would and observing the effect.
 func TestModule_Register_SubscribesToTheAuthnEvent(t *testing.T) {
 	m := newWiredModule(t, newInvitationTestDB(t))
-	reg, err := pkgcore.NewKernel().
-		Bootstrap(context.Background(), m)
+	reg, err := componenttest.DeclareModules(m)
 	if err != nil {
 		t.Fatalf("Bootstrap: %v", err)
 	}

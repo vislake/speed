@@ -425,9 +425,9 @@ func (r *ComponentRegistry) Verify(ctx context.Context) error {
 // seats close again, and the assembly's closing validation runs over the
 // finished declarations: the one-key-one-layer check between the selected
 // components' BootstrapKeys and the runtime configuration seat, the
-// feature-graph check (over the same seat the module Registry's own
-// bootstrap validates), and the system-purpose collection, which registers
-// every selected component's declared purposes together.
+// feature-graph check (ValidateFeatureGraph over the Features seat), and
+// the system-purpose collection, which registers every selected component's
+// declared purposes together.
 func (r *ComponentRegistry) Init(ctx context.Context) error {
 	if err := r.beginStage(stageInit); err != nil {
 		return err
@@ -447,11 +447,10 @@ func (r *ComponentRegistry) Init(ctx context.Context) error {
 	}
 	r.closeSeats()
 
-	facade := r.seatFacade()
 	if err := r.validateOneLayerPerKey(); err != nil {
 		return r.failStage(ctx, stageInit, "", err)
 	}
-	if err := ValidateFeatureGraph(facade); err != nil {
+	if err := ValidateFeatureGraph(r.Features); err != nil {
 		return r.failStage(ctx, stageInit, "", err)
 	}
 	if err := r.registerSystemPurposes(); err != nil {
@@ -786,15 +785,6 @@ func (r *ComponentRegistry) seatRead() seatSet {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	return r.seats
-}
-
-// seatFacade wraps the seat registrar set in a Registry so the validators
-// that already run over a finished module Registry (the feature-graph check)
-// can run over a finished component assembly's seats identically. Only the
-// fields those validators read are carried.
-func (r *ComponentRegistry) seatFacade() *Registry {
-	seats := r.seatRead()
-	return &Registry{Config: seats.config, Features: seats.features}
 }
 
 // validateOneLayerPerKey refuses a key declared on two layers: a selected

@@ -9,6 +9,7 @@ package app
 // silently falling back to the registration's defaults at boot.
 
 import (
+	"context"
 	"strconv"
 	"strings"
 	"testing"
@@ -97,15 +98,33 @@ func TestS3ObjectStoreConfig_CarriesTheConfiguredValuesAndResolves(t *testing.T)
 			if len(values) != len(tc.want) {
 				t.Errorf("block carries %d keys (%v), want exactly %d", len(values), values, len(tc.want))
 			}
-			store, capabilities, err := pkgcore.ObjectStoreRegistry.Build("objectstore.s3", values)
+			reg := pkgcore.NewComponentRegistry()
+			descriptor, ok := registeredComponent(reg, "objectstore.s3")
+			if !ok {
+				t.Fatal("the \"objectstore.s3\" component is not registered")
+			}
+			reg.Put(pkgcore.NewComponentConfig(nil).
+				With("components", pkgcore.ComponentConfig{}.With("objectstore.s3", s3ObjectStoreConfig(tc.cfg))).
+				With("strict", true))
+			if err := reg.Register(descriptor); err != nil {
+				t.Fatalf("register the %q component: %v", descriptor.Name, err)
+			}
+			ctx := context.Background()
+			if err := reg.Prepare(ctx); err != nil {
+				t.Fatalf("the configured block does not plan through %q: %v", "objectstore.s3", err)
+			}
+			if err := reg.Construct(ctx); err != nil {
+				t.Fatalf("the configured block does not construct through %q: %v", "objectstore.s3", err)
+			}
+			store, err := pkgcore.Get[pkgcore.ObjectStore](reg)
 			if err != nil {
-				t.Fatalf("the configured composition does not resolve through the %q registration: %v", "objectstore.s3", err)
+				t.Fatalf("resolution answered no ObjectStore: %v", err)
 			}
 			if store == nil {
 				t.Error("resolution answered a nil ObjectStore")
 			}
-			if capabilities != objectstores3.Capabilities {
-				t.Errorf("resolved capabilities = %v, want the registration's declared %v", capabilities, objectstores3.Capabilities)
+			if descriptor.Capabilities != objectstores3.Capabilities {
+				t.Errorf("the component declares capabilities %v, want the exported constant %v", descriptor.Capabilities, objectstores3.Capabilities)
 			}
 		})
 	}
@@ -124,9 +143,24 @@ func TestS3ObjectStoreConfig_UnrecognizedBucketLookupFailsResolution(t *testing.
 		S3SecretKey:    "secret-key",
 		S3BucketLookup: "dns",
 	}
-	_, _, err := pkgcore.ObjectStoreRegistry.Build("objectstore.s3", s3BlockValues(t, s3ObjectStoreConfig(cfg)))
+	reg := pkgcore.NewComponentRegistry()
+	descriptor, ok := registeredComponent(reg, "objectstore.s3")
+	if !ok {
+		t.Fatal("the \"objectstore.s3\" component is not registered")
+	}
+	reg.Put(pkgcore.NewComponentConfig(nil).
+		With("components", pkgcore.ComponentConfig{}.With("objectstore.s3", s3ObjectStoreConfig(cfg))).
+		With("strict", true))
+	if err := reg.Register(descriptor); err != nil {
+		t.Fatalf("register the %q component: %v", descriptor.Name, err)
+	}
+	ctx := context.Background()
+	if err := reg.Prepare(ctx); err != nil {
+		t.Fatalf("the plan refused the block before construction: %v", err)
+	}
+	err := reg.Construct(ctx)
 	if err == nil {
-		t.Fatal("a bucket_lookup outside the registration's accepted set resolved, want a refusal naming the key")
+		t.Fatal("a bucket_lookup outside the component's accepted set constructed, want a refusal naming the key")
 	}
 	if !strings.Contains(err.Error(), "bucket_lookup") {
 		t.Errorf("refusal %q does not name the bucket_lookup key", err)

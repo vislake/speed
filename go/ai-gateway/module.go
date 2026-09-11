@@ -172,7 +172,7 @@ func (m *Module) OpenAPISpec() []byte { return openAPISpecYAML }
 // NewModule's options configured -- is mounted at apiPath.
 // reg.Routes.Mount is a plain registration, no I/O, so Register's no-I/O
 // contract stands.
-func (m *Module) Register(reg pkgcore.Registrar) error {
+func (m *Module) Register(reg *pkgcore.ComponentRegistry) error {
 	if err := reg.PermissionsSeat().Add(PermissionRead, PermissionWrite, PermissionManagePlatform); err != nil {
 		return err
 	}
@@ -196,5 +196,3 @@ func (m *Module) Register(reg pkgcore.Registrar) error {
 	return nil
 }
 
-// compile-time check that *Module satisfies pkgcore.Module.
-var _ pkgcore.Module = (*Module)(nil)

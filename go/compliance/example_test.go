@@ -30,6 +30,7 @@ import (
 	auditmigrations "github.com/vislake/speed/go/dbkit/audit/migrations"
 	"github.com/vislake/speed/go/jobs"
 	"github.com/vislake/speed/go/pkgcore"
+	"github.com/vislake/speed/go/pkgcore/componenttest"
 
 	"github.com/vislake/speed/go/compliance"
 )
@@ -62,7 +63,7 @@ func (m *exampleNotesModule) DependsOn() []string  { return nil }
 func (m *exampleNotesModule) Migrations() embed.FS { return embed.FS{} }
 func (m *exampleNotesModule) Locales() embed.FS    { return embed.FS{} }
 func (m *exampleNotesModule) OpenAPISpec() []byte  { return nil }
-func (m *exampleNotesModule) Register(reg pkgcore.Registrar) error {
+func (m *exampleNotesModule) Register(reg *pkgcore.ComponentRegistry) error {
 	return reg.RetentionSeat().Add(pkgcore.RetentionParticipant{
 		Name: "example_notes.note",
 		Sweep: func(ctx context.Context, _ pkgcore.TenantID, cutoff time.Time) (int, error) {
@@ -93,7 +94,6 @@ func (m *exampleNotesModule) Register(reg pkgcore.Registrar) error {
 	})
 }
 
-var _ pkgcore.Module = (*exampleNotesModule)(nil)
 
 // exampleAuditModule feeds dbkit/audit's own embedded migrations to
 // dbkit.MigrationRegistry -- the same shape module_test.go's fakeAuditModule
@@ -106,9 +106,8 @@ func (exampleAuditModule) DependsOn() []string              { return nil }
 func (exampleAuditModule) Migrations() embed.FS             { return auditmigrations.FS }
 func (exampleAuditModule) Locales() embed.FS                { return embed.FS{} }
 func (exampleAuditModule) OpenAPISpec() []byte              { return nil }
-func (exampleAuditModule) Register(pkgcore.Registrar) error { return nil }
+func (exampleAuditModule) Register(*pkgcore.ComponentRegistry) error { return nil }
 
-var _ pkgcore.Module = exampleAuditModule{}
 
 // Example wires compliance.Module alongside a fake business module, seeds
 // one soft-deleted row well past the retention window, sweeps it, and
@@ -160,7 +159,7 @@ func Example() {
 	// need), so wrapping the migrated connection is enough.
 	m := compliance.NewModule(audit.NewRepository(db), compliance.WithQueue(exampleNoopQueue{}))
 
-	reg, err := pkgcore.NewKernel().Bootstrap(ctx, m, notes)
+	reg, err := componenttest.DeclareModules(m, notes)
 	if err != nil {
 		fmt.Println("bootstrap:", err)
 		return
@@ -298,7 +297,7 @@ func ExampleNewConfigReader() {
 		fmt.Println("before Attach:", readErr)
 	}
 
-	reg, err := pkgcore.NewKernel().Bootstrap(ctx, m, configModule)
+	reg, err := componenttest.DeclareModules(m, configModule)
 	if err != nil {
 		fmt.Println("bootstrap:", err)
 		return

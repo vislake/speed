@@ -7,20 +7,25 @@ import (
 
 	"github.com/vislake/speed/go/dbkit"
 	"github.com/vislake/speed/go/pkgcore"
+	"github.com/vislake/speed/go/pkgcore/componenttest"
 )
 
-// newTestRegistry returns a fresh *pkgcore.Registry wired with in-memory
+// newTestRegistry returns a fresh *pkgcore.ComponentRegistry wired with in-memory
 // infrastructure, giving this file's tests a real
 // pkgcore.AuditActionRegistrar (reg.AuditActions) and a real
-// pkgcore.EventBus (reg.Events.Bus()) without depending on anything this
-// package cannot construct on its own -- mirroring go/config's own
-// module_test.go newTestRegistry helper.
-func newTestRegistry() *pkgcore.Registry {
-	return pkgcore.NewRegistry(pkgcore.NewMemoryEventBus(), pkgcore.NewMemoryKVStore(), pkgcore.NewConsoleMailer())
+// pkgcore.EventBus (reg.Events.Bus()), with declares driven inside the one
+// Init stage the declaration seats accept writes in.
+func newTestRegistry(t *testing.T, declares ...func(*pkgcore.ComponentRegistry) error) *pkgcore.ComponentRegistry {
+	t.Helper()
+	reg := componenttest.NewRegistry()
+	if err := componenttest.DeclareAll(reg, declares...); err != nil {
+		t.Fatalf("componenttest: declare: %v", err)
+	}
+	return reg
 }
 
 func TestEmit_UnregisteredAction_ReturnsErrActionNotRegistered(t *testing.T) {
-	reg := newTestRegistry()
+	reg := newTestRegistry(t)
 
 	err := Emit(context.Background(), reg.Events.Bus(), reg.AuditActions, Input{Action: "notes.note.create"})
 	if !errors.Is(err, ErrActionNotRegistered) {
@@ -29,11 +34,10 @@ func TestEmit_UnregisteredAction_ReturnsErrActionNotRegistered(t *testing.T) {
 }
 
 func TestEmit_RegisteredAction_PublishesRecordedEvent(t *testing.T) {
-	reg := newTestRegistry()
 	const action = "notes.note.create"
-	if err := reg.AuditActions.Add(action); err != nil {
-		t.Fatalf("AuditActions.Add() error = %v", err)
-	}
+	reg := newTestRegistry(t, func(r *pkgcore.ComponentRegistry) error {
+		return r.AuditActions.Add(action)
+	})
 
 	var got RecordedEvent
 	var receivedType string
@@ -91,11 +95,10 @@ func TestEmit_RegisteredAction_PublishesRecordedEvent(t *testing.T) {
 }
 
 func TestEmit_NoActorOrOnBehalfOfOrTenantInContext_LeavesThemAtZeroValue(t *testing.T) {
-	reg := newTestRegistry()
 	const action = "notes.note.create"
-	if err := reg.AuditActions.Add(action); err != nil {
-		t.Fatalf("AuditActions.Add() error = %v", err)
-	}
+	reg := newTestRegistry(t, func(r *pkgcore.ComponentRegistry) error {
+		return r.AuditActions.Add(action)
+	})
 
 	var got RecordedEvent
 	reg.Events.Subscribe(EventRecorded, func(_ context.Context, evt pkgcore.Event) error {
@@ -129,11 +132,10 @@ func TestEmit_NoActorOrOnBehalfOfOrTenantInContext_LeavesThemAtZeroValue(t *test
 // RecordedEvent carries the trio, exactly as it carries Actor and TenantID,
 // so the persister on the other side of the bus can store them.
 func TestEmit_RequestMetadataInContext_CarriesTheTrio(t *testing.T) {
-	reg := newTestRegistry()
 	const action = "notes.note.create"
-	if err := reg.AuditActions.Add(action); err != nil {
-		t.Fatalf("AuditActions.Add() error = %v", err)
-	}
+	reg := newTestRegistry(t, func(r *pkgcore.ComponentRegistry) error {
+		return r.AuditActions.Add(action)
+	})
 
 	var got RecordedEvent
 	reg.Events.Subscribe(EventRecorded, func(_ context.Context, evt pkgcore.Event) error {
@@ -174,11 +176,10 @@ func (b failingBus) Publish(context.Context, pkgcore.Event) error {
 var _ pkgcore.EventBus = failingBus{}
 
 func TestEmit_PublishFailure_ReturnsError(t *testing.T) {
-	reg := newTestRegistry()
 	const action = "notes.note.create"
-	if err := reg.AuditActions.Add(action); err != nil {
-		t.Fatalf("AuditActions.Add() error = %v", err)
-	}
+	reg := newTestRegistry(t, func(r *pkgcore.ComponentRegistry) error {
+		return r.AuditActions.Add(action)
+	})
 
 	publishErr := errors.New("bus unavailable")
 	err := Emit(context.Background(), failingBus{err: publishErr}, reg.AuditActions, Input{Action: action})

@@ -20,6 +20,7 @@ import (
 	"github.com/vislake/speed/go/dbkit/audit"
 	obs "github.com/vislake/speed/go/observability"
 	"github.com/vislake/speed/go/pkgcore"
+	"github.com/vislake/speed/go/pkgcore/componenttest"
 	"github.com/vislake/speed/go/pkgcore/apperr"
 )
 
@@ -40,11 +41,11 @@ func newTestHandler(t *testing.T, extra ...Option) (*Handler, *serviceFixture) {
 // recordAudit's real callers, handler.go), rather than every one of
 // newTestHandler's many callers that do not.
 //
-// The bus and pkgcore.Registry built here are deliberately separate from
+// The bus and pkgcore.ComponentRegistry built here are deliberately separate from
 // serviceFixture's own internal one (newServiceFixtureWithKV's local
 // "bus" variable, which Service publishes its OWN business events on):
 // nothing about testing Handler.recordAudit requires sharing it, and a
-// real *pkgcore.Registry (pkgcore.NewRegistry) is the same construction
+// real *pkgcore.ComponentRegistry (pkgcore.NewRegistry) is the same construction
 // module.go's own Register runs against in production, giving a real
 // AuditActionRegistrar rather than a hand-rolled stand-in.
 func newAuditTestHandler(t *testing.T, extra ...Option) (*Handler, *serviceFixture, *testutil.EventRecorder) {
@@ -55,7 +56,8 @@ func newAuditTestHandler(t *testing.T, extra ...Option) (*Handler, *serviceFixtu
 	recorder := testutil.NewEventRecorder()
 	recorder.Subscribe(bus, audit.EventRecorded)
 
-	reg := pkgcore.NewRegistry(bus, pkgcore.NewMemoryKVStore(), pkgcore.NewConsoleMailer())
+	reg := componenttest.NewRegistry()
+	reg.Put(bus)
 	if err := reg.AuditActions.Add(auditActions...); err != nil {
 		t.Fatalf("AuditActions.Add() error = %v", err)
 	}

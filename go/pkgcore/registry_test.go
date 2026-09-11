@@ -1,59 +1,17 @@
 package pkgcore
 
 import (
-	"bytes"
 	"context"
-	"embed"
 	"errors"
 	"go/ast"
 	"go/parser"
 	"go/token"
-	"io"
-	"log/slog"
 	"net/http"
-	"slices"
 	"strings"
 	"sync"
 	"testing"
 	"time"
-
-	"github.com/vislake/speed/go/pkgcore/i18n"
-	"github.com/vislake/speed/go/pkgcore/locales"
 )
-
-// regTestModule is a minimal Module used to drive Bootstrap without pulling in
-// a real business module.
-type regTestModule struct {
-	name     string
-	deps     []string
-	register func(reg Registrar) error
-}
-
-func (m regTestModule) Name() string         { return m.name }
-func (m regTestModule) DependsOn() []string  { return m.deps }
-func (m regTestModule) Migrations() embed.FS { return embed.FS{} }
-func (m regTestModule) Locales() embed.FS    { return embed.FS{} }
-func (m regTestModule) OpenAPISpec() []byte  { return nil }
-
-func (m regTestModule) Register(reg Registrar) error {
-	if m.register == nil {
-		return nil
-	}
-	return m.register(reg)
-}
-
-// regTestRecorder builds a module that appends its own name to order when it
-// registers, so that a test can assert the registration sequence.
-func regTestRecorder(name string, deps []string, order *[]string) regTestModule {
-	return regTestModule{
-		name: name,
-		deps: deps,
-		register: func(Registrar) error {
-			*order = append(*order, name)
-			return nil
-		},
-	}
-}
 
 // regTestHandler is a comparable http.Handler, so a test can assert which
 // handler ended up mounted at which path.
@@ -61,132 +19,51 @@ type regTestHandler struct{ id string }
 
 func (regTestHandler) ServeHTTP(http.ResponseWriter, *http.Request) {}
 
-// regTestBus stands in for a distributed, broker-backed EventBus. It is a
-// distinct type from the standalone in-memory bus on purpose, so that a test
-// can assert which bus a registry or kernel actually ended up wired to.
-type regTestBus struct {
-	mu         sync.Mutex
-	subscribed []string
-	published  []Event
+// seatRegistrars bundles the gate-free in-memory registrars the declaration
+// seats are built on, so a registrar's own contract -- ordering, duplicate
+// refusal, validation, copy-on-read -- can be exercised without driving an
+// assembly through the seats' stage gate. The gate itself is the component
+// assembly's (component_registry.go), pinned by its own suites.
+type seatRegistrars struct {
+	Routes        *memoryRouteRegistrar
+	Config        *memoryConfigRegistrar
+	Features      *memoryFeatureRegistrar
+	Permissions   *memoryPermissionRegistrar
+	Jobs          *memoryJobRegistrar
+	Notifications *memoryNotificationRegistrar
+	Events        *memoryEventRegistrar
+	AuditActions  *memoryAuditActionRegistrar
+	Retention     *memoryRetentionRegistrar
+	Schedules     *memoryScheduleRegistrar
 }
 
-func newRegTestBus() *regTestBus { return &regTestBus{} }
-
-func (b *regTestBus) Subscribe(eventType string, _ EventHandler) {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	b.subscribed = append(b.subscribed, eventType)
-}
-
-func (b *regTestBus) Publish(_ context.Context, evt Event) error {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	b.published = append(b.published, evt)
-	return nil
-}
-
-func (b *regTestBus) subscriptions() []string {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	return slices.Clone(b.subscribed)
-}
-
-// regTestKVStore stands in for a distributed, Redis-backed KVStore. Like
-// regTestBus, it is a distinct type from the standalone in-memory store on
-// purpose, so a test can assert which store a registry or kernel actually
-// ended up wired to. Only Set is exercised by the tests below, so the
-// remaining KVStore methods are trivial stubs rather than a full fake
-// implementation.
-type regTestKVStore struct {
-	mu   sync.Mutex
-	sets []string
-}
-
-func newRegTestKVStore() *regTestKVStore { return &regTestKVStore{} }
-
-func (s *regTestKVStore) Get(context.Context, string) ([]byte, bool, error) {
-	return nil, false, nil
-}
-
-func (s *regTestKVStore) Set(_ context.Context, key string, _ []byte, _ time.Duration) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.sets = append(s.sets, key)
-	return nil
-}
-
-func (s *regTestKVStore) Delete(context.Context, string) error { return nil }
-
-func (s *regTestKVStore) IncrByFloat(context.Context, string, float64) (float64, error) {
-	return 0, nil
-}
-
-func (s *regTestKVStore) IncrByFloatWithTTL(context.Context, string, float64, time.Duration) (float64, error) {
-	return 0, nil
-}
-
-func (s *regTestKVStore) CompareAndSwap(context.Context, string, []byte, []byte) (bool, error) {
-	return false, nil
-}
-
-func (s *regTestKVStore) setKeys() []string {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return slices.Clone(s.sets)
-}
-
-func TestNewRegistry_WiresEveryRegistrar(t *testing.T) {
-	bus := NewMemoryEventBus()
-	kv := NewMemoryKVStore()
-	reg := NewRegistry(bus, kv, NewConsoleMailer())
-
-	if reg.RoutesSeat() == nil {
-		t.Error("Routes registrar is nil")
-	}
-	if reg.ConfigSeat() == nil {
-		t.Error("Config registrar is nil")
-	}
-	if reg.FeaturesSeat() == nil {
-		t.Error("Features registrar is nil")
-	}
-	if reg.PermissionsSeat() == nil {
-		t.Error("Permissions registrar is nil")
-	}
-	if reg.JobsSeat() == nil {
-		t.Error("Jobs registrar is nil")
-	}
-	if reg.NotificationsSeat() == nil {
-		t.Error("Notifications registrar is nil")
-	}
-	if reg.EventsSeat() == nil {
-		t.Error("Events registrar is nil")
-	}
-	if reg.AuditActionsSeat() == nil {
-		t.Error("AuditActions registrar is nil")
-	}
-	if reg.RetentionSeat() == nil {
-		t.Error("Retention registrar is nil")
-	}
-	if reg.SchedulesSeat() == nil {
-		t.Error("Schedules registrar is nil")
-	}
-	if reg.EventBus() != bus {
-		t.Errorf("EventBus() = %v, want the bus NewRegistry was given", reg.EventBus())
-	}
-	if reg.KVStore() != kv {
-		t.Errorf("KVStore() = %v, want the store NewRegistry was given", reg.KVStore())
+func newSeatRegistrars() *seatRegistrars {
+	return &seatRegistrars{
+		Routes:        &memoryRouteRegistrar{},
+		Config:        &memoryConfigRegistrar{keys: make(map[string]struct{})},
+		Features:      &memoryFeatureRegistrar{keys: make(map[string]struct{})},
+		Permissions:   &memoryPermissionRegistrar{perms: make(map[string]struct{})},
+		Jobs:          &memoryJobRegistrar{handlers: make(map[string]any)},
+		Notifications: &memoryNotificationRegistrar{keys: make(map[string]struct{})},
+		Events:        &memoryEventRegistrar{bus: NewMemoryEventBus(), types: make(map[string]struct{})},
+		AuditActions:  &memoryAuditActionRegistrar{actions: make(map[string]struct{})},
+		Retention:     &memoryRetentionRegistrar{names: make(map[string]struct{})},
+		Schedules:     &memoryScheduleRegistrar{types: make(map[string]struct{})},
 	}
 }
+
+// EventBus returns the bus the Events registrar installs subscriptions on.
+func (r *seatRegistrars) EventBus() EventBus { return r.Events.Bus() }
 
 func TestRouteRegistrar_Mount_RecordsRoutesInOrder(t *testing.T) {
-	reg := NewRegistry(NewMemoryEventBus(), NewMemoryKVStore(), NewConsoleMailer())
+	reg := newSeatRegistrars()
 
 	billing := regTestHandler{id: "billing"}
 	org := regTestHandler{id: "org"}
-	reg.RoutesSeat().Mount("/api/v1/billing", billing)
-	reg.RoutesSeat().Mount("/api/v1/org", org)
+	reg.Routes.Mount("/api/v1/billing", billing)
+	reg.Routes.Mount("/api/v1/org", org)
 
-	routes := reg.RoutesSeat().Routes()
+	routes := reg.Routes.Routes()
 	if len(routes) != 2 {
 		t.Fatalf("Routes() returned %d routes, want 2", len(routes))
 	}
@@ -206,13 +83,13 @@ func TestRouteRegistrar_Mount_RecordsRoutesInOrder(t *testing.T) {
 }
 
 func TestRouteRegistrar_Routes_ReturnsCopy(t *testing.T) {
-	reg := NewRegistry(NewMemoryEventBus(), NewMemoryKVStore(), NewConsoleMailer())
-	reg.RoutesSeat().Mount("/api/v1/billing", regTestHandler{id: "billing"})
+	reg := newSeatRegistrars()
+	reg.Routes.Mount("/api/v1/billing", regTestHandler{id: "billing"})
 
-	mutated := reg.RoutesSeat().Routes()
+	mutated := reg.Routes.Routes()
 	mutated[0].Path = "/hijacked"
 
-	if got := reg.RoutesSeat().Routes()[0].Path; got != "/api/v1/billing" {
+	if got := reg.Routes.Routes()[0].Path; got != "/api/v1/billing" {
 		t.Errorf("mutating the returned slice changed the registry: path = %q, want %q", got, "/api/v1/billing")
 	}
 }
@@ -252,14 +129,14 @@ func TestConfigRegistrar_Add_DuplicateKeyReturnsError(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			reg := NewRegistry(NewMemoryEventBus(), NewMemoryKVStore(), NewConsoleMailer())
+			reg := newSeatRegistrars()
 			if len(tt.first) > 0 {
-				if err := reg.ConfigSeat().Add(tt.first...); err != nil {
+				if err := reg.Config.Add(tt.first...); err != nil {
 					t.Fatalf("first Add() error = %v, want nil", err)
 				}
 			}
 
-			err := reg.ConfigSeat().Add(tt.second...)
+			err := reg.Config.Add(tt.second...)
 			if tt.wantErr {
 				if !errors.Is(err, ErrDuplicateConfigKey) {
 					t.Fatalf("Add() error = %v, want it to wrap ErrDuplicateConfigKey", err)
@@ -268,7 +145,7 @@ func TestConfigRegistrar_Add_DuplicateKeyReturnsError(t *testing.T) {
 					t.Errorf("Add() error = %q, want it to name the key %q", err, tt.wantKey)
 				}
 				// A rejected call must register nothing from that call.
-				if got := len(reg.ConfigSeat().Items()); got != len(tt.first) {
+				if got := len(reg.Config.Items()); got != len(tt.first) {
 					t.Errorf("after a rejected Add() there are %d items, want %d", got, len(tt.first))
 				}
 				return
@@ -276,7 +153,7 @@ func TestConfigRegistrar_Add_DuplicateKeyReturnsError(t *testing.T) {
 			if err != nil {
 				t.Fatalf("Add() error = %v, want nil", err)
 			}
-			if got := len(reg.ConfigSeat().Items()); got != len(tt.first)+len(tt.second) {
+			if got := len(reg.Config.Items()); got != len(tt.first)+len(tt.second) {
 				t.Errorf("Items() returned %d items, want %d", got, len(tt.first)+len(tt.second))
 			}
 		})
@@ -284,7 +161,7 @@ func TestConfigRegistrar_Add_DuplicateKeyReturnsError(t *testing.T) {
 }
 
 func TestConfigRegistrar_Items_PreservesDeclaration(t *testing.T) {
-	reg := NewRegistry(NewMemoryEventBus(), NewMemoryKVStore(), NewConsoleMailer())
+	reg := newSeatRegistrars()
 	want := ConfigItem{
 		Key:         "billing.api_key",
 		Type:        "string",
@@ -294,11 +171,11 @@ func TestConfigRegistrar_Items_PreservesDeclaration(t *testing.T) {
 		Group:       "billing.secrets",
 	}
 
-	if err := reg.ConfigSeat().Add(want); err != nil {
+	if err := reg.Config.Add(want); err != nil {
 		t.Fatalf("Add() error = %v, want nil", err)
 	}
 
-	items := reg.ConfigSeat().Items()
+	items := reg.Config.Items()
 	if len(items) != 1 {
 		t.Fatalf("Items() returned %d items, want 1", len(items))
 	}
@@ -352,14 +229,14 @@ func TestRetentionRegistrar_Add_RefusesNilSweep(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			reg := NewRegistry(NewMemoryEventBus(), NewMemoryKVStore(), NewConsoleMailer())
+			reg := newSeatRegistrars()
 			if len(tt.seed) > 0 {
-				if err := reg.RetentionSeat().Add(tt.seed...); err != nil {
+				if err := reg.Retention.Add(tt.seed...); err != nil {
 					t.Fatalf("seed Add() error = %v, want nil", err)
 				}
 			}
 
-			err := reg.RetentionSeat().Add(tt.call...)
+			err := reg.Retention.Add(tt.call...)
 			if !errors.Is(err, tt.wantErr) {
 				t.Fatalf("Add() error = %v, want it to wrap %v", err, tt.wantErr)
 			}
@@ -368,7 +245,7 @@ func TestRetentionRegistrar_Add_RefusesNilSweep(t *testing.T) {
 			}
 			// A rejected call must store nothing from that call, leaving
 			// only the seed participants registered.
-			if got := len(reg.RetentionSeat().Participants()); got != tt.wantStored {
+			if got := len(reg.Retention.Participants()); got != tt.wantStored {
 				t.Errorf("after the refused Add() there are %d participants, want %d", got, tt.wantStored)
 			}
 		})
@@ -420,14 +297,14 @@ func TestRetentionRegistrar_Add_RefusesNilErase(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			reg := NewRegistry(NewMemoryEventBus(), NewMemoryKVStore(), NewConsoleMailer())
+			reg := newSeatRegistrars()
 			if len(tt.seed) > 0 {
-				if err := reg.RetentionSeat().Add(tt.seed...); err != nil {
+				if err := reg.Retention.Add(tt.seed...); err != nil {
 					t.Fatalf("seed Add() error = %v, want nil", err)
 				}
 			}
 
-			err := reg.RetentionSeat().Add(tt.call...)
+			err := reg.Retention.Add(tt.call...)
 			if !errors.Is(err, tt.wantErr) {
 				t.Fatalf("Add() error = %v, want it to wrap %v", err, tt.wantErr)
 			}
@@ -436,7 +313,7 @@ func TestRetentionRegistrar_Add_RefusesNilErase(t *testing.T) {
 			}
 			// A rejected call must store nothing from that call, leaving
 			// only the seed participants registered.
-			if got := len(reg.RetentionSeat().Participants()); got != tt.wantStored {
+			if got := len(reg.Retention.Participants()); got != tt.wantStored {
 				t.Errorf("after the refused Add() there are %d participants, want %d", got, tt.wantStored)
 			}
 		})
@@ -476,12 +353,12 @@ func TestRetentionRegistrar_Add_ExportMayStayNil(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			reg := NewRegistry(NewMemoryEventBus(), NewMemoryKVStore(), NewConsoleMailer())
-			if err := reg.RetentionSeat().Add(tt.participant); err != nil {
+			reg := newSeatRegistrars()
+			if err := reg.Retention.Add(tt.participant); err != nil {
 				t.Fatalf("Add() error = %v, want nil for a participant carrying both mandatory callbacks", err)
 			}
 
-			got := reg.RetentionSeat().Participants()
+			got := reg.Retention.Participants()
 			if len(got) != 1 {
 				t.Fatalf("Participants() returned %d participants, want 1", len(got))
 			}
@@ -581,8 +458,8 @@ func TestConfigRegistrar_Add_InvalidDeclarationReturnsError(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			reg := NewRegistry(NewMemoryEventBus(), NewMemoryKVStore(), NewConsoleMailer())
-			err := reg.ConfigSeat().Add(tt.item)
+			reg := newSeatRegistrars()
+			err := reg.Config.Add(tt.item)
 			if !errors.Is(err, ErrInvalidConfigItem) {
 				t.Fatalf("Add() error = %v, want it to wrap ErrInvalidConfigItem", err)
 			}
@@ -590,7 +467,7 @@ func TestConfigRegistrar_Add_InvalidDeclarationReturnsError(t *testing.T) {
 				t.Errorf("Add() error = %q, want it to contain %q", err, tt.wantSub)
 			}
 			// A rejected call must register nothing from that call.
-			if got := len(reg.ConfigSeat().Items()); got != 0 {
+			if got := len(reg.Config.Items()); got != 0 {
 				t.Errorf("after a rejected Add() there are %d items, want 0", got)
 			}
 		})
@@ -598,7 +475,7 @@ func TestConfigRegistrar_Add_InvalidDeclarationReturnsError(t *testing.T) {
 }
 
 func TestConfigRegistrar_Add_RangeDeclarationRoundTrips(t *testing.T) {
-	reg := NewRegistry(NewMemoryEventBus(), NewMemoryKVStore(), NewConsoleMailer())
+	reg := newSeatRegistrars()
 	items := []ConfigItem{
 		{
 			Key:         "billing.retry_limit",
@@ -621,11 +498,11 @@ func TestConfigRegistrar_Add_RangeDeclarationRoundTrips(t *testing.T) {
 		{Key: "org.trial_days", Type: "int", Min: 0},
 	}
 
-	if err := reg.ConfigSeat().Add(items...); err != nil {
+	if err := reg.Config.Add(items...); err != nil {
 		t.Fatalf("Add() error = %v, want nil", err)
 	}
 
-	got := reg.ConfigSeat().Items()
+	got := reg.Config.Items()
 	if len(got) != len(items) {
 		t.Fatalf("Items() returned %d items, want %d", len(got), len(items))
 	}
@@ -637,62 +514,49 @@ func TestConfigRegistrar_Add_RangeDeclarationRoundTrips(t *testing.T) {
 }
 
 func TestConfigRegistrar_Add_RejectedCallRegistersNothing(t *testing.T) {
-	reg := NewRegistry(NewMemoryEventBus(), NewMemoryKVStore(), NewConsoleMailer())
+	reg := newSeatRegistrars()
 	valid := ConfigItem{Key: "billing.retry_limit", Type: "int", Default: 3}
 	invalid := ConfigItem{Key: "billing.retry_limit", Type: "int", Default: "3"}
 
-	err := reg.ConfigSeat().Add(valid, invalid)
+	err := reg.Config.Add(valid, invalid)
 	if !errors.Is(err, ErrInvalidConfigItem) {
 		t.Fatalf("Add() error = %v, want it to wrap ErrInvalidConfigItem", err)
 	}
 	// A rejected call registers nothing, not even the valid sibling.
-	if got := len(reg.ConfigSeat().Items()); got != 0 {
+	if got := len(reg.Config.Items()); got != 0 {
 		t.Errorf("after a rejected Add() there are %d items, want 0", got)
 	}
 
 	// The valid sibling alone is registrable afterwards, proving the
 	// rejection left no partial state behind.
-	if err := reg.ConfigSeat().Add(valid); err != nil {
+	if err := reg.Config.Add(valid); err != nil {
 		t.Fatalf("Add(valid) error = %v, want nil", err)
 	}
-	if got := len(reg.ConfigSeat().Items()); got != 1 {
+	if got := len(reg.Config.Items()); got != 1 {
 		t.Errorf("Items() returned %d items, want 1", got)
 	}
 }
 
-func TestPermissionRegistrar_Add_DuplicateAcrossModulesReturnsError(t *testing.T) {
-	reg := NewRegistry(NewMemoryEventBus(), NewMemoryKVStore(), NewConsoleMailer())
+func TestPermissionRegistrar_Add_DuplicateAcrossDeclarationsReturnsError(t *testing.T) {
+	reg := newSeatRegistrars()
 
-	// Two modules register through the same shared Registry, as Bootstrap does.
-	billing := regTestModule{
-		name: "billing",
-		register: func(reg Registrar) error {
-			return reg.PermissionsSeat().Add("billing:read", "billing:manage")
-		},
-	}
-	// A copy-paste mistake: the org module claims a billing permission.
-	org := regTestModule{
-		name: "org",
-		deps: []string{"billing"},
-		register: func(reg Registrar) error {
-			return reg.PermissionsSeat().Add("org:read", "billing:manage")
-		},
+	// Two declaration turns write into the same shared seat, as the assembly
+	// drives them.
+	if err := reg.Permissions.Add("billing:read", "billing:manage"); err != nil {
+		t.Fatalf("first Add() error = %v, want nil", err)
 	}
 
-	if err := billing.Register(reg); err != nil {
-		t.Fatalf("billing.Register() error = %v, want nil", err)
-	}
-
-	err := org.Register(reg)
+	// A copy-paste mistake: the second declaration claims a billing permission.
+	err := reg.Permissions.Add("org:read", "billing:manage")
 	if !errors.Is(err, ErrDuplicatePermission) {
-		t.Fatalf("org.Register() error = %v, want it to wrap ErrDuplicatePermission", err)
+		t.Fatalf("second Add() error = %v, want it to wrap ErrDuplicatePermission", err)
 	}
 	if !strings.Contains(err.Error(), "billing:manage") {
 		t.Errorf("error = %q, want it to name the duplicated permission %q", err, "billing:manage")
 	}
 
 	// The rejected call must not have registered its other permission either.
-	got := reg.PermissionsSeat().Permissions()
+	got := reg.Permissions.Permissions()
 	want := []string{"billing:manage", "billing:read"}
 	if len(got) != len(want) {
 		t.Fatalf("Permissions() = %v, want %v", got, want)
@@ -705,12 +569,12 @@ func TestPermissionRegistrar_Add_DuplicateAcrossModulesReturnsError(t *testing.T
 }
 
 func TestPermissionRegistrar_Permissions_IsSorted(t *testing.T) {
-	reg := NewRegistry(NewMemoryEventBus(), NewMemoryKVStore(), NewConsoleMailer())
-	if err := reg.PermissionsSeat().Add("org:read", "billing:manage", "admin:impersonate"); err != nil {
+	reg := newSeatRegistrars()
+	if err := reg.Permissions.Add("org:read", "billing:manage", "admin:impersonate"); err != nil {
 		t.Fatalf("Add() error = %v, want nil", err)
 	}
 
-	got := reg.PermissionsSeat().Permissions()
+	got := reg.Permissions.Permissions()
 	want := []string{"admin:impersonate", "billing:manage", "org:read"}
 	if len(got) != len(want) {
 		t.Fatalf("Permissions() = %v, want %v", got, want)
@@ -723,15 +587,15 @@ func TestPermissionRegistrar_Permissions_IsSorted(t *testing.T) {
 }
 
 func TestJobRegistrar_Handle_DuplicateJobTypeReturnsError(t *testing.T) {
-	reg := NewRegistry(NewMemoryEventBus(), NewMemoryKVStore(), NewConsoleMailer())
+	reg := newSeatRegistrars()
 	first := regTestHandler{id: "first"}
 	second := regTestHandler{id: "second"}
 
-	if err := reg.JobsSeat().Handle("billing.invoice.generate", first); err != nil {
+	if err := reg.Jobs.Handle("billing.invoice.generate", first); err != nil {
 		t.Fatalf("Handle() error = %v, want nil", err)
 	}
 
-	err := reg.JobsSeat().Handle("billing.invoice.generate", second)
+	err := reg.Jobs.Handle("billing.invoice.generate", second)
 	if !errors.Is(err, ErrDuplicateJobType) {
 		t.Fatalf("Handle() error = %v, want it to wrap ErrDuplicateJobType", err)
 	}
@@ -740,14 +604,14 @@ func TestJobRegistrar_Handle_DuplicateJobTypeReturnsError(t *testing.T) {
 	}
 
 	// The first handler must survive the rejected registration.
-	handlers := reg.JobsSeat().Handlers()
+	handlers := reg.Jobs.Handlers()
 	if got := handlers["billing.invoice.generate"]; got != any(first) {
 		t.Errorf("handler = %v, want the originally registered %v", got, first)
 	}
 }
 
 func TestNotificationRegistrar_Add_DuplicateKeyReturnsError(t *testing.T) {
-	reg := NewRegistry(NewMemoryEventBus(), NewMemoryKVStore(), NewConsoleMailer())
+	reg := newSeatRegistrars()
 	paid := NotificationType{
 		Key:             "billing.invoice_paid",
 		Group:           "billing",
@@ -755,16 +619,16 @@ func TestNotificationRegistrar_Add_DuplicateKeyReturnsError(t *testing.T) {
 		Unsubscribable:  true,
 	}
 
-	if err := reg.NotificationsSeat().Add(paid); err != nil {
+	if err := reg.Notifications.Add(paid); err != nil {
 		t.Fatalf("Add() error = %v, want nil", err)
 	}
 
-	err := reg.NotificationsSeat().Add(NotificationType{Key: "billing.invoice_paid", Group: "other"})
+	err := reg.Notifications.Add(NotificationType{Key: "billing.invoice_paid", Group: "other"})
 	if !errors.Is(err, ErrDuplicateNotificationType) {
 		t.Fatalf("Add() error = %v, want it to wrap ErrDuplicateNotificationType", err)
 	}
 
-	types := reg.NotificationsSeat().Types()
+	types := reg.Notifications.Types()
 	if len(types) != 1 {
 		t.Fatalf("Types() returned %d types, want 1", len(types))
 	}
@@ -774,16 +638,16 @@ func TestNotificationRegistrar_Add_DuplicateKeyReturnsError(t *testing.T) {
 }
 
 func TestAuditActionRegistrar_Add_DuplicateReturnsErrorAndSorts(t *testing.T) {
-	reg := NewRegistry(NewMemoryEventBus(), NewMemoryKVStore(), NewConsoleMailer())
-	if err := reg.AuditActionsSeat().Add("org.member.removed", "billing.plan.changed"); err != nil {
+	reg := newSeatRegistrars()
+	if err := reg.AuditActions.Add("org.member.removed", "billing.plan.changed"); err != nil {
 		t.Fatalf("Add() error = %v, want nil", err)
 	}
 
-	if err := reg.AuditActionsSeat().Add("billing.plan.changed"); !errors.Is(err, ErrDuplicateAuditAction) {
+	if err := reg.AuditActions.Add("billing.plan.changed"); !errors.Is(err, ErrDuplicateAuditAction) {
 		t.Fatalf("Add() error = %v, want it to wrap ErrDuplicateAuditAction", err)
 	}
 
-	got := reg.AuditActionsSeat().Actions()
+	got := reg.AuditActions.Actions()
 	want := []string{"billing.plan.changed", "org.member.removed"}
 	if len(got) != len(want) {
 		t.Fatalf("Actions() = %v, want %v", got, want)
@@ -796,11 +660,11 @@ func TestAuditActionRegistrar_Add_DuplicateReturnsErrorAndSorts(t *testing.T) {
 }
 
 func TestEventRegistrar_Subscribe_IsBackedByTheRegistryEventBus(t *testing.T) {
-	reg := NewRegistry(NewMemoryEventBus(), NewMemoryKVStore(), NewConsoleMailer())
+	reg := newSeatRegistrars()
 
 	var mu sync.Mutex
 	var received []Event
-	reg.EventsSeat().Subscribe("org.member.invited", func(_ context.Context, evt Event) error {
+	reg.Events.Subscribe("org.member.invited", func(_ context.Context, evt Event) error {
 		mu.Lock()
 		defer mu.Unlock()
 		received = append(received, evt)
@@ -809,7 +673,7 @@ func TestEventRegistrar_Subscribe_IsBackedByTheRegistryEventBus(t *testing.T) {
 
 	// Several subscribers on one event type are expected, not a conflict.
 	var secondCalls int
-	reg.EventsSeat().Subscribe("org.member.invited", func(context.Context, Event) error {
+	reg.Events.Subscribe("org.member.invited", func(context.Context, Event) error {
 		mu.Lock()
 		defer mu.Unlock()
 		secondCalls++
@@ -871,14 +735,14 @@ func TestFeatureRegistrar_Add_DuplicateKeyReturnsError(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			reg := NewRegistry(NewMemoryEventBus(), NewMemoryKVStore(), NewConsoleMailer())
+			reg := newSeatRegistrars()
 			if len(tt.first) > 0 {
-				if err := reg.FeaturesSeat().Add(tt.first...); err != nil {
+				if err := reg.Features.Add(tt.first...); err != nil {
 					t.Fatalf("first Add() error = %v, want nil", err)
 				}
 			}
 
-			err := reg.FeaturesSeat().Add(tt.second...)
+			err := reg.Features.Add(tt.second...)
 			if tt.wantErr {
 				if !errors.Is(err, ErrDuplicateFeatureFlag) {
 					t.Fatalf("Add() error = %v, want it to wrap ErrDuplicateFeatureFlag", err)
@@ -887,7 +751,7 @@ func TestFeatureRegistrar_Add_DuplicateKeyReturnsError(t *testing.T) {
 					t.Errorf("Add() error = %q, want it to name the key %q", err, tt.wantKey)
 				}
 				// A rejected call must register nothing from that call.
-				if got := len(reg.FeaturesSeat().Flags()); got != len(tt.first) {
+				if got := len(reg.Features.Flags()); got != len(tt.first) {
 					t.Errorf("after a rejected Add() there are %d flags, want %d", got, len(tt.first))
 				}
 				return
@@ -895,55 +759,25 @@ func TestFeatureRegistrar_Add_DuplicateKeyReturnsError(t *testing.T) {
 			if err != nil {
 				t.Fatalf("Add() error = %v, want nil", err)
 			}
-			if got := len(reg.FeaturesSeat().Flags()); got != len(tt.first)+len(tt.second) {
+			if got := len(reg.Features.Flags()); got != len(tt.first)+len(tt.second) {
 				t.Errorf("Flags() returned %d flags, want %d", got, len(tt.first)+len(tt.second))
 			}
 		})
 	}
 }
 
-// TestBootstrap_DuplicateFeatureFlagAcrossModules_ReturnsError is the
-// cross-module shape of the same refusal: two modules each claiming one
-// flag key with contradictory defaults must fail Bootstrap.
-func TestBootstrap_DuplicateFeatureFlagAcrossModules_ReturnsError(t *testing.T) {
-	billing := regTestModule{
-		name: "billing",
-		register: func(reg Registrar) error {
-			return reg.FeaturesSeat().Add(FeatureFlag{Key: "billing.dunning", Default: true})
-		},
-	}
-	org := regTestModule{
-		name: "org",
-		deps: []string{"billing"},
-		register: func(reg Registrar) error {
-			return reg.FeaturesSeat().Add(FeatureFlag{Key: "billing.dunning", Default: false})
-		},
-	}
-
-	reg, err := NewKernel().Bootstrap(context.Background(), org, billing)
-	if !errors.Is(err, ErrDuplicateFeatureFlag) {
-		t.Fatalf("Bootstrap() error = %v, want it to wrap ErrDuplicateFeatureFlag", err)
-	}
-	if reg != nil {
-		t.Error("Bootstrap() returned a registry alongside the error, want nil")
-	}
-	if !strings.Contains(err.Error(), "org") {
-		t.Errorf("error = %q, want it to name the module that registered the duplicate", err)
-	}
-}
-
 func TestEventRegistrar_Publishes_RecordsTheDeclaredCatalog(t *testing.T) {
-	reg := NewRegistry(NewMemoryEventBus(), NewMemoryKVStore(), NewConsoleMailer())
+	reg := newSeatRegistrars()
 
 	want := []EventDecl{
 		{Type: "billing.invoice.paid", PayloadType: "billing.InvoicePaid", Description: "An invoice was paid in full."},
 		{Type: "billing.subscription.cancelled", PayloadType: "billing.SubscriptionCancelled", Description: "A subscription was cancelled."},
 	}
-	if err := reg.EventsSeat().Publishes(want...); err != nil {
+	if err := reg.Events.Publishes(want...); err != nil {
 		t.Fatalf("Publishes() error = %v, want nil", err)
 	}
 
-	got := reg.EventsSeat().Published()
+	got := reg.Events.Published()
 	if len(got) != len(want) {
 		t.Fatalf("Published() returned %d events, want %d", len(got), len(want))
 	}
@@ -956,7 +790,7 @@ func TestEventRegistrar_Publishes_RecordsTheDeclaredCatalog(t *testing.T) {
 	// The catalog is what integration maps to its public schema, so a caller
 	// must not be able to edit it through the returned slice.
 	got[0].Type = "hijacked"
-	if reg.EventsSeat().Published()[0].Type != want[0].Type {
+	if reg.Events.Published()[0].Type != want[0].Type {
 		t.Error("mutating the returned slice changed the registry")
 	}
 }
@@ -998,14 +832,14 @@ func TestEventRegistrar_Publishes_DuplicateTypeReturnsError(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			reg := NewRegistry(NewMemoryEventBus(), NewMemoryKVStore(), NewConsoleMailer())
+			reg := newSeatRegistrars()
 			if len(tt.first) > 0 {
-				if err := reg.EventsSeat().Publishes(tt.first...); err != nil {
+				if err := reg.Events.Publishes(tt.first...); err != nil {
 					t.Fatalf("first Publishes() error = %v, want nil", err)
 				}
 			}
 
-			err := reg.EventsSeat().Publishes(tt.second...)
+			err := reg.Events.Publishes(tt.second...)
 			if tt.wantErr {
 				if !errors.Is(err, ErrDuplicateEventType) {
 					t.Fatalf("Publishes() error = %v, want it to wrap ErrDuplicateEventType", err)
@@ -1013,7 +847,7 @@ func TestEventRegistrar_Publishes_DuplicateTypeReturnsError(t *testing.T) {
 				if !strings.Contains(err.Error(), tt.wantType) {
 					t.Errorf("Publishes() error = %q, want it to name the type %q", err, tt.wantType)
 				}
-				if got := len(reg.EventsSeat().Published()); got != len(tt.first) {
+				if got := len(reg.Events.Published()); got != len(tt.first) {
 					t.Errorf("after a rejected Publishes() there are %d events, want %d", got, len(tt.first))
 				}
 				return
@@ -1021,116 +855,11 @@ func TestEventRegistrar_Publishes_DuplicateTypeReturnsError(t *testing.T) {
 			if err != nil {
 				t.Fatalf("Publishes() error = %v, want nil", err)
 			}
-			if got := len(reg.EventsSeat().Published()); got != len(tt.first)+len(tt.second) {
+			if got := len(reg.Events.Published()); got != len(tt.first)+len(tt.second) {
 				t.Errorf("Published() returned %d events, want %d", got, len(tt.first)+len(tt.second))
 			}
 		})
 	}
-}
-
-// TestRegistry_EventBus_FollowsTheEventsRegistrar pins the invariant that a
-// substituted Events registrar takes the bus with it: EventBus() must return
-// the substituted registrar's bus, never a separately stored construction
-// bus that replacing Events would leave behind -- publishers and
-// subscribers would end up on different buses with no error.
-func TestRegistry_EventBus_FollowsTheEventsRegistrar(t *testing.T) {
-	reg := NewRegistry(NewMemoryEventBus(), NewMemoryKVStore(), NewConsoleMailer())
-
-	distributed := newRegTestBus()
-	reg.Events = &memoryEventRegistrar{bus: distributed, types: make(map[string]struct{})}
-
-	if reg.EventBus() != distributed {
-		t.Fatalf("EventBus() = %v, want the substituted registrar's bus", reg.EventBus())
-	}
-
-	reg.EventsSeat().Subscribe("billing.invoice.paid", func(context.Context, Event) error { return nil })
-	got := reg.EventBus().(*regTestBus).subscriptions()
-	if len(got) != 1 || got[0] != "billing.invoice.paid" {
-		t.Errorf("substituted bus recorded subscriptions %v, want [billing.invoice.paid]", got)
-	}
-}
-
-func TestRegistry_EventBus_ZeroValueRegistryReturnsNil(t *testing.T) {
-	if bus := (&Registry{}).EventBus(); bus != nil {
-		t.Errorf("EventBus() = %v, want nil for a registry with no Events registrar", bus)
-	}
-}
-
-// TestRegistry_KVStore_ZeroValueRegistryReturnsNil mirrors
-// TestRegistry_EventBus_ZeroValueRegistryReturnsNil. Unlike EventBus, KVStore
-// is not derived from a registrar: kv is a plain field, so a zero-value
-// Registry returns nil the same way any zero-value interface field does, with
-// no explicit nil-registrar guard needed inside KVStore() itself.
-func TestRegistry_KVStore_ZeroValueRegistryReturnsNil(t *testing.T) {
-	if kv := (&Registry{}).KVStore(); kv != nil {
-		t.Errorf("KVStore() = %v, want nil for a registry with no kv wired in", kv)
-	}
-}
-
-// TestRegistry_Mailer_ZeroValueRegistryReturnsNil mirrors
-// TestRegistry_KVStore_ZeroValueRegistryReturnsNil for the mail seam: mailer
-// is a plain field for the same reason kv is, so the zero-value Registry
-// answers nil the same way.
-func TestRegistry_Mailer_ZeroValueRegistryReturnsNil(t *testing.T) {
-	if mailer := (&Registry{}).Mailer(); mailer != nil {
-		t.Errorf("Mailer() = %v, want nil for a registry with no mailer wired in", mailer)
-	}
-}
-
-// TestRegistry_ObjectStore_ZeroValueRegistryReturnsNil mirrors
-// TestRegistry_Mailer_ZeroValueRegistryReturnsNil for the object-store seam:
-// objectStore is a plain field for the same reason mailer's is, so the
-// zero-value Registry answers nil the same way.
-func TestRegistry_ObjectStore_ZeroValueRegistryReturnsNil(t *testing.T) {
-	if store := (&Registry{}).ObjectStore(); store != nil {
-		t.Errorf("ObjectStore() = %v, want nil for a registry with no store wired in", store)
-	}
-}
-
-// TestRegistry_ObjectStore_NewRegistryBuiltRegistryReturnsNil pins the
-// accessor's contract that only a Bootstrap-built registry carries an object
-// store. NewRegistry's three-argument signature predates the seam and cannot
-// accept one, so a registry built by hand answers nil until Bootstrap fills
-// the field in, before any module registration runs.
-func TestRegistry_ObjectStore_NewRegistryBuiltRegistryReturnsNil(t *testing.T) {
-	reg := NewRegistry(NewMemoryEventBus(), NewMemoryKVStore(), NewConsoleMailer())
-	if store := reg.ObjectStore(); store != nil {
-		t.Errorf("ObjectStore() = %v, want nil until Bootstrap resolves one", store)
-	}
-}
-
-func TestNewRegistry_NilBus_Panics(t *testing.T) {
-	defer func() {
-		if recover() == nil {
-			t.Error("NewRegistry(nil) did not panic, want a panic rather than a registry that drops every event")
-		}
-	}()
-
-	NewRegistry(nil, NewMemoryKVStore(), NewConsoleMailer())
-}
-
-// TestNewRegistry_NilKVStore_Panics mirrors TestNewRegistry_NilBus_Panics for
-// the key-value seam.
-func TestNewRegistry_NilKVStore_Panics(t *testing.T) {
-	defer func() {
-		if recover() == nil {
-			t.Error("NewRegistry(nil) did not panic, want a panic rather than a registry whose KVStore() panics on first use")
-		}
-	}()
-
-	NewRegistry(NewMemoryEventBus(), nil, NewConsoleMailer())
-}
-
-// TestNewRegistry_NilMailer_Panics mirrors TestNewRegistry_NilBus_Panics and
-// TestNewRegistry_NilKVStore_Panics for the mail seam.
-func TestNewRegistry_NilMailer_Panics(t *testing.T) {
-	defer func() {
-		if recover() == nil {
-			t.Error("NewRegistry(nil) did not panic, want a panic rather than a registry whose Mailer() accepts every mail and sends nothing")
-		}
-	}()
-
-	NewRegistry(NewMemoryEventBus(), NewMemoryKVStore(), nil)
 }
 
 func TestValidateFeatureGraph(t *testing.T) {
@@ -1190,12 +919,12 @@ func TestValidateFeatureGraph(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			reg := NewRegistry(NewMemoryEventBus(), NewMemoryKVStore(), NewConsoleMailer())
-			if err := reg.FeaturesSeat().Add(tt.flags...); err != nil {
+			reg := newSeatRegistrars()
+			if err := reg.Features.Add(tt.flags...); err != nil {
 				t.Fatalf("Features.Add() error = %v, want nil", err)
 			}
 
-			err := ValidateFeatureGraph(reg)
+			err := ValidateFeatureGraph(reg.Features)
 			if !tt.wantErr {
 				if err != nil {
 					t.Fatalf("ValidateFeatureGraph() error = %v, want nil", err)
@@ -1217,728 +946,6 @@ func TestValidateFeatureGraph(t *testing.T) {
 func TestValidateFeatureGraph_UnwiredRegistry_ReturnsError(t *testing.T) {
 	if err := ValidateFeatureGraph(nil); err == nil {
 		t.Error("ValidateFeatureGraph(nil) error = nil, want an error")
-	}
-	if err := ValidateFeatureGraph(&Registry{}); err == nil {
-		t.Error("ValidateFeatureGraph(&Registry{}) error = nil, want an error")
-	}
-}
-
-func TestBootstrap_ValidChain_RegistersInDependencyOrder(t *testing.T) {
-	tests := []struct {
-		name    string
-		modules func(order *[]string) []Module
-		want    []string
-	}{
-		{
-			name: "a linear chain registers leaf first",
-			modules: func(order *[]string) []Module {
-				return []Module{
-					regTestRecorder("a", []string{"b"}, order),
-					regTestRecorder("b", []string{"c"}, order),
-					regTestRecorder("c", nil, order),
-				}
-			},
-			want: []string{"c", "b", "a"},
-		},
-		{
-			name: "input order does not change the result",
-			modules: func(order *[]string) []Module {
-				return []Module{
-					regTestRecorder("c", nil, order),
-					regTestRecorder("a", []string{"b"}, order),
-					regTestRecorder("b", []string{"c"}, order),
-				}
-			},
-			want: []string{"c", "b", "a"},
-		},
-		{
-			name: "a diamond registers each module exactly once",
-			modules: func(order *[]string) []Module {
-				return []Module{
-					regTestRecorder("app", []string{"left", "right"}, order),
-					regTestRecorder("left", []string{"core"}, order),
-					regTestRecorder("right", []string{"core"}, order),
-					regTestRecorder("core", nil, order),
-				}
-			},
-			want: []string{"core", "left", "right", "app"},
-		},
-		{
-			name: "independent modules keep their input order",
-			modules: func(order *[]string) []Module {
-				return []Module{
-					regTestRecorder("first", nil, order),
-					regTestRecorder("second", nil, order),
-				}
-			},
-			want: []string{"first", "second"},
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			var order []string
-			kernel := NewKernel()
-
-			reg, err := kernel.Bootstrap(context.Background(), tt.modules(&order)...)
-			if err != nil {
-				t.Fatalf("Bootstrap() error = %v, want nil", err)
-			}
-			if reg == nil {
-				t.Fatal("Bootstrap() returned a nil registry")
-			}
-			if len(order) != len(tt.want) {
-				t.Fatalf("registration order = %v, want %v", order, tt.want)
-			}
-			for i := range tt.want {
-				if order[i] != tt.want[i] {
-					t.Fatalf("registration order = %v, want %v", order, tt.want)
-				}
-			}
-		})
-	}
-}
-
-// depChainModule is a minimal Module used only by the dependency-chain-order
-// tests below. It is defined separately from regTestModule so these tests
-// stay independent of that fixture's own assumptions.
-type depChainModule struct {
-	name  string
-	deps  []string
-	order *[]string
-}
-
-func (m depChainModule) Name() string         { return m.name }
-func (m depChainModule) DependsOn() []string  { return m.deps }
-func (m depChainModule) Migrations() embed.FS { return embed.FS{} }
-func (m depChainModule) Locales() embed.FS    { return embed.FS{} }
-func (m depChainModule) OpenAPISpec() []byte  { return nil }
-
-// Register records the order in which the kernel drove the modules. Bootstrap
-// registers sequentially, so no synchronisation is needed here.
-func (m depChainModule) Register(_ Registrar) error {
-	*m.order = append(*m.order, m.name)
-	return nil
-}
-
-func depChainMod(name string, deps []string, order *[]string) depChainModule {
-	return depChainModule{name: name, deps: deps, order: order}
-}
-
-// assertDependencyOrder checks the property the topological sort actually
-// promises: every module appears after each of its declared dependencies, and
-// each module is registered exactly once. Asserting the property rather than a
-// hardcoded slice keeps the test honest for graphs with several valid orders.
-func assertDependencyOrder(t *testing.T, order []string, deps map[string][]string) {
-	t.Helper()
-
-	position := make(map[string]int, len(order))
-	for i, name := range order {
-		if prev, dup := position[name]; dup {
-			t.Errorf("module %q registered twice, at %d and %d", name, prev, i)
-			continue
-		}
-		position[name] = i
-	}
-	if len(position) != len(deps) {
-		t.Errorf("registered %d distinct modules, want %d (order: %v)", len(position), len(deps), order)
-	}
-	for name, on := range deps {
-		self, ok := position[name]
-		if !ok {
-			t.Errorf("module %q was never registered (order: %v)", name, order)
-			continue
-		}
-		for _, dep := range on {
-			at, ok := position[dep]
-			if !ok {
-				t.Errorf("dependency %q of %q was never registered (order: %v)", dep, name, order)
-				continue
-			}
-			if at > self {
-				t.Errorf("module %q (position %d) was registered before its dependency %q (position %d); order: %v",
-					name, self, dep, at, order)
-			}
-		}
-	}
-}
-
-// TestBootstrap_DependencyChainsLongerThanOneHop confirms the topological sort
-// follows a chain all the way down rather than only ordering a single pair.
-// TestBootstrap_ValidChain_RegistersInDependencyOrder above covers a
-// three-module chain; these cases push the chain to five modules, pass the
-// modules in an order that is the exact reverse of the answer, and add a
-// diamond where one module is reached by two different paths and so must
-// still be registered exactly once.
-func TestBootstrap_DependencyChainsLongerThanOneHop(t *testing.T) {
-	t.Parallel()
-
-	tests := []struct {
-		name string
-		deps map[string][]string
-		// input is the order the modules are handed to Bootstrap.
-		input []string
-		// want is the single correct order, or nil when several are valid and
-		// only the ordering property is asserted.
-		want []string
-	}{
-		{
-			name:  "three modules chained a->b->c",
-			deps:  map[string][]string{"a": {"b"}, "b": {"c"}, "c": nil},
-			input: []string{"a", "b", "c"},
-			want:  []string{"c", "b", "a"},
-		},
-		{
-			name:  "five modules chained a->b->c->d->e",
-			deps:  map[string][]string{"a": {"b"}, "b": {"c"}, "c": {"d"}, "d": {"e"}, "e": nil},
-			input: []string{"a", "b", "c", "d", "e"},
-			want:  []string{"e", "d", "c", "b", "a"},
-		},
-		{
-			name:  "a five module chain handed over in reverse still sorts",
-			deps:  map[string][]string{"a": {"b"}, "b": {"c"}, "c": {"d"}, "d": {"e"}, "e": nil},
-			input: []string{"e", "d", "c", "b", "a"},
-			want:  []string{"e", "d", "c", "b", "a"},
-		},
-		{
-			name: "a transitive dependency two hops down is still ordered first",
-			deps: map[string][]string{"top": {"mid"}, "mid": {"leaf"}, "leaf": nil, "loner": nil},
-			// "loner" is unrelated, so it must not disturb the chain.
-			input: []string{"loner", "top", "mid", "leaf"},
-			want:  []string{"loner", "leaf", "mid", "top"},
-		},
-		{
-			name: "a diamond registers the shared base exactly once",
-			deps: map[string][]string{
-				"app":   {"left", "right"},
-				"left":  {"base"},
-				"right": {"base"},
-				"base":  nil,
-			},
-			input: []string{"app", "left", "right", "base"},
-			// base -> left -> right -> app is the only order the input
-			// ordering can produce, but the property check is what matters.
-			want: nil,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-
-			var order []string
-			modules := make([]Module, 0, len(tt.input))
-			for _, name := range tt.input {
-				modules = append(modules, depChainMod(name, tt.deps[name], &order))
-			}
-
-			reg, err := NewKernel().Bootstrap(context.Background(), modules...)
-			if err != nil {
-				t.Fatalf("Bootstrap returned an error: %v", err)
-			}
-			if reg == nil {
-				t.Fatal("Bootstrap returned a nil registry with a nil error")
-			}
-			assertDependencyOrder(t, order, tt.deps)
-			if tt.want != nil && !slices.Equal(order, tt.want) {
-				t.Errorf("registration order = %v, want %v", order, tt.want)
-			}
-		})
-	}
-}
-
-func TestBootstrap_DependencyCycle_ErrorNamesTheCycle(t *testing.T) {
-	tests := []struct {
-		name    string
-		modules []Module
-		want    []string
-	}{
-		{
-			name: "two modules depending on each other",
-			modules: []Module{
-				regTestModule{name: "a", deps: []string{"b"}},
-				regTestModule{name: "b", deps: []string{"a"}},
-			},
-			want: []string{"a", "b", "a"},
-		},
-		{
-			name: "three modules forming a cycle",
-			modules: []Module{
-				regTestModule{name: "a", deps: []string{"b"}},
-				regTestModule{name: "b", deps: []string{"c"}},
-				regTestModule{name: "c", deps: []string{"a"}},
-			},
-			want: []string{"a", "b", "c", "a"},
-		},
-		{
-			name: "a module depending on itself",
-			modules: []Module{
-				regTestModule{name: "a", deps: []string{"a"}},
-			},
-			want: []string{"a", "a"},
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			kernel := NewKernel()
-
-			reg, err := kernel.Bootstrap(context.Background(), tt.modules...)
-			if !errors.Is(err, ErrDependencyCycle) {
-				t.Fatalf("Bootstrap() error = %v, want it to wrap ErrDependencyCycle", err)
-			}
-			if reg != nil {
-				t.Error("Bootstrap() returned a registry alongside the error, want nil")
-			}
-
-			wantChain := strings.Join(tt.want, " -> ")
-			if !strings.Contains(err.Error(), wantChain) {
-				t.Errorf("error = %q, want it to contain the cycle %q", err, wantChain)
-			}
-		})
-	}
-}
-
-func TestBootstrap_DependencyNotInModuleList_ErrorNamesBothModules(t *testing.T) {
-	kernel := NewKernel()
-
-	reg, err := kernel.Bootstrap(context.Background(),
-		regTestModule{name: "billing", deps: []string{"metering"}},
-		regTestModule{name: "org"},
-	)
-
-	if !errors.Is(err, ErrMissingDependency) {
-		t.Fatalf("Bootstrap() error = %v, want it to wrap ErrMissingDependency", err)
-	}
-	if reg != nil {
-		t.Error("Bootstrap() returned a registry alongside the error, want nil")
-	}
-	for _, want := range []string{"billing", "metering"} {
-		if !strings.Contains(err.Error(), want) {
-			t.Errorf("error = %q, want it to name %q", err, want)
-		}
-	}
-}
-
-// TestBootstrap_DeepChainMissingTailIsReported makes sure the sort does not
-// lose a broken edge simply because it sits several hops down a chain, which a
-// sort that only inspected direct dependencies could miss.
-func TestBootstrap_DeepChainMissingTailIsReported(t *testing.T) {
-	t.Parallel()
-
-	var order []string
-	// d depends on "e", which is never handed to Bootstrap.
-	modules := []Module{
-		depChainMod("a", []string{"b"}, &order),
-		depChainMod("b", []string{"c"}, &order),
-		depChainMod("c", []string{"d"}, &order),
-		depChainMod("d", []string{"e"}, &order),
-	}
-
-	reg, err := NewKernel().Bootstrap(context.Background(), modules...)
-	if err == nil {
-		t.Fatal("Bootstrap succeeded, want an error naming the missing dependency")
-	}
-	if reg != nil {
-		t.Error("Bootstrap returned a non-nil registry alongside an error")
-	}
-	if len(order) != 0 {
-		t.Errorf("modules were registered before the graph was validated: %v", order)
-	}
-}
-
-func TestBootstrap_DuplicateModuleName_ReturnsError(t *testing.T) {
-	kernel := NewKernel()
-
-	_, err := kernel.Bootstrap(context.Background(),
-		regTestModule{name: "billing"},
-		regTestModule{name: "billing"},
-	)
-
-	if !errors.Is(err, ErrDuplicateModuleName) {
-		t.Fatalf("Bootstrap() error = %v, want it to wrap ErrDuplicateModuleName", err)
-	}
-	if !strings.Contains(err.Error(), "billing") {
-		t.Errorf("error = %q, want it to name %q", err, "billing")
-	}
-}
-
-func TestBootstrap_RegisterFails_WrapsModuleNameAndStops(t *testing.T) {
-	var order []string
-	failure := errors.New("schema declaration is broken")
-
-	failing := regTestModule{
-		name: "billing",
-		register: func(Registrar) error {
-			order = append(order, "billing")
-			return failure
-		},
-	}
-	// "org" depends on "billing", so it registers strictly after the failure.
-	later := regTestRecorder("org", []string{"billing"}, &order)
-
-	kernel := NewKernel()
-	reg, err := kernel.Bootstrap(context.Background(), later, failing)
-
-	if !errors.Is(err, failure) {
-		t.Fatalf("Bootstrap() error = %v, want it to wrap the module error", err)
-	}
-	if !strings.Contains(err.Error(), "billing") {
-		t.Errorf("error = %q, want it to name the failing module %q", err, "billing")
-	}
-	if reg != nil {
-		t.Error("Bootstrap() returned a registry alongside the error, want nil")
-	}
-	if len(order) != 1 || order[0] != "billing" {
-		t.Errorf("registration order = %v, want registration to stop after %q", order, "billing")
-	}
-}
-
-func TestBootstrap_UnresolvedFeatureDependency_ReturnsError(t *testing.T) {
-	// The flag graph only breaks once both modules have registered, which is
-	// exactly why Bootstrap validates it at the end rather than inside Add.
-	billing := regTestModule{
-		name: "billing",
-		register: func(reg Registrar) error {
-			return reg.FeaturesSeat().Add(FeatureFlag{
-				Key:       "billing.dunning",
-				DependsOn: []string{"metering.usage"},
-			})
-		},
-	}
-	org := regTestModule{
-		name: "org",
-		register: func(reg Registrar) error {
-			return reg.FeaturesSeat().Add(FeatureFlag{Key: "org.workspaces"})
-		},
-	}
-
-	kernel := NewKernel()
-	reg, err := kernel.Bootstrap(context.Background(), billing, org)
-
-	if !errors.Is(err, ErrUnresolvedFeatureDependency) {
-		t.Fatalf("Bootstrap() error = %v, want it to wrap ErrUnresolvedFeatureDependency", err)
-	}
-	if reg != nil {
-		t.Error("Bootstrap() returned a registry alongside the error, want nil")
-	}
-	if !strings.Contains(err.Error(), "metering.usage") {
-		t.Errorf("error = %q, want it to name the unresolved flag %q", err, "metering.usage")
-	}
-}
-
-func TestBootstrap_SharesOneRegistryAcrossModules(t *testing.T) {
-	billing := regTestModule{
-		name: "billing",
-		register: func(reg Registrar) error {
-			reg.RoutesSeat().Mount("/api/v1/billing", regTestHandler{id: "billing"})
-			if err := reg.PermissionsSeat().Add("billing:read"); err != nil {
-				return err
-			}
-			return reg.FeaturesSeat().Add(FeatureFlag{Key: "billing.dunning"})
-		},
-	}
-	org := regTestModule{
-		name: "org",
-		deps: []string{"billing"},
-		register: func(reg Registrar) error {
-			reg.RoutesSeat().Mount("/api/v1/org", regTestHandler{id: "org"})
-			if err := reg.PermissionsSeat().Add("org:read"); err != nil {
-				return err
-			}
-			// Depends on a flag the module registered before it declared.
-			return reg.FeaturesSeat().Add(FeatureFlag{
-				Key:       "org.workspaces",
-				DependsOn: []string{"billing.dunning"},
-			})
-		},
-	}
-
-	kernel := NewKernel()
-	reg, err := kernel.Bootstrap(context.Background(), org, billing)
-	if err != nil {
-		t.Fatalf("Bootstrap() error = %v, want nil", err)
-	}
-
-	if got := len(reg.RoutesSeat().Routes()); got != 2 {
-		t.Errorf("Routes() returned %d routes, want both modules' routes", got)
-	}
-	if got := len(reg.PermissionsSeat().Permissions()); got != 2 {
-		t.Errorf("Permissions() returned %d permissions, want both modules' permissions", got)
-	}
-	if got := len(reg.FeaturesSeat().Flags()); got != 2 {
-		t.Errorf("Flags() returned %d flags, want both modules' flags", got)
-	}
-}
-
-func TestBootstrap_CancelledContext_StopsBeforeRegistering(t *testing.T) {
-	var order []string
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
-
-	// KVStore, Mailer and ObjectStore are wired too, declared MultiReplicaSafe
-	// so the capability check passes: the distributed mode requires it of
-	// every seam, and this test's subject is the context-cancellation check,
-	// not capability validation.
-	kernel := NewKernel(WithDeploymentMode(DeploymentModeDistributed),
-		WithEventBus(newRegTestBus(), MultiReplicaSafe), WithKVStore(NewMemoryKVStore(), MultiReplicaSafe),
-		WithMailer(NewConsoleMailer(), MultiReplicaSafe), WithObjectStore(NewLocalObjectStore(t.TempDir()), MultiReplicaSafe))
-	reg, err := kernel.Bootstrap(ctx, regTestRecorder("billing", nil, &order))
-
-	if !errors.Is(err, context.Canceled) {
-		t.Fatalf("Bootstrap() error = %v, want it to wrap context.Canceled", err)
-	}
-	if reg != nil {
-		t.Error("Bootstrap() returned a registry alongside the error, want nil")
-	}
-	if len(order) != 0 {
-		t.Errorf("modules registered = %v, want none", order)
-	}
-}
-
-func TestKernel_DeploymentMode_ReportsTheConfiguredDeploymentMode(t *testing.T) {
-	for _, want := range []DeploymentMode{DeploymentModeStandalone, DeploymentModeDistributed} {
-		if got := NewKernel(WithDeploymentMode(want)).DeploymentMode(); got != want {
-			t.Errorf("DeploymentMode() = %q, want %q", got, want)
-		}
-	}
-}
-
-// TestBootstrap_DistributedModeWithMemoryEventBus_FailsCapabilityCheck pins
-// the deployment-mode capability rule: the built-in "eventbus.memory"
-// implementation is single-process, so a distributed-mode kernel that
-// resolves to it (the PresetStandalone default, since nothing was injected
-// and no wider Preset was chosen) must refuse to assemble instead of
-// handing every module a bus its replicas cannot share. Bootstrap answers
-// ErrCapabilityUnsatisfied, naming the seam, implementation, missing
-// capability and mode.
-func TestBootstrap_DistributedModeWithMemoryEventBus_FailsCapabilityCheck(t *testing.T) {
-	var order []string
-
-	reg, err := NewKernel(WithDeploymentMode(DeploymentModeDistributed)).Bootstrap(context.Background(), regTestRecorder("billing", nil, &order))
-
-	if !errors.Is(err, ErrCapabilityUnsatisfied) {
-		t.Fatalf("Bootstrap() error = %v, want it to wrap ErrCapabilityUnsatisfied", err)
-	}
-	for _, want := range []string{"eventbus", "eventbus.memory", "MultiReplicaSafe", "distributed"} {
-		if !strings.Contains(err.Error(), want) {
-			t.Errorf("error = %q, want it to name %q", err, want)
-		}
-	}
-	if reg != nil {
-		t.Error("Bootstrap() returned a registry alongside the error, want nil")
-	}
-	if len(order) != 0 {
-		t.Errorf("modules registered = %v, want none before the wiring was validated", order)
-	}
-}
-
-// TestBootstrap_DistributedModeWithMemoryKVStore_FailsCapabilityCheck mirrors
-// TestBootstrap_DistributedModeWithMemoryEventBus_FailsCapabilityCheck for the
-// KVStore seam: the built-in "kv.memory" implementation is single-process, so
-// a distributed-mode kernel that resolves to it must refuse to assemble
-// instead of handing every module a store its replicas cannot share. The bus
-// and mailer are injected and declared MultiReplicaSafe here so their checks
-// inside Bootstrap, which run first, pass and the failure actually exercises
-// the KVStore check instead of masking it.
-func TestBootstrap_DistributedModeWithMemoryKVStore_FailsCapabilityCheck(t *testing.T) {
-	var order []string
-
-	kernel := NewKernel(WithDeploymentMode(DeploymentModeDistributed),
-		WithEventBus(NewMemoryEventBus(), MultiReplicaSafe), WithMailer(NewConsoleMailer(), MultiReplicaSafe))
-	reg, err := kernel.Bootstrap(context.Background(), regTestRecorder("billing", nil, &order))
-
-	if !errors.Is(err, ErrCapabilityUnsatisfied) {
-		t.Fatalf("Bootstrap() error = %v, want it to wrap ErrCapabilityUnsatisfied", err)
-	}
-	for _, want := range []string{"kv", "kv.memory", "MultiReplicaSafe", "distributed"} {
-		if !strings.Contains(err.Error(), want) {
-			t.Errorf("error = %q, want it to name %q", err, want)
-		}
-	}
-	if reg != nil {
-		t.Error("Bootstrap() returned a registry alongside the error, want nil")
-	}
-	if len(order) != 0 {
-		t.Errorf("modules registered = %v, want none before the wiring was validated", order)
-	}
-}
-
-// TestBootstrap_PresetEntryConfigReachesRegistrationNew pins the preset
-// channel itself, end to end: the Config a SeamPreset entry carries is what
-// the entry's Registration.New is called with, through a real
-// Kernel.Bootstrap. A regression to building every preset-resolved seam with
-// an empty Config -- the channel's original empty state -- leaves the fake's
-// recorded Config nil and this test naming the difference. The fake
-// registers under a name unique to this test (SeamRegistry has no
-// unregister; the registration persists harmlessly, exactly like
-// kernel_shutdown_test.go's lifecycle fakes).
-func TestBootstrap_PresetEntryConfigReachesRegistrationNew(t *testing.T) {
-	const name = "test.preset.channel.probe"
-	var got Config
-	if err := KVStoreRegistry.Register(Registration[KVStore]{
-		Name: name,
-		New: func(cfg Config) (KVStore, error) {
-			got = cfg
-			return NewMemoryKVStore(), nil
-		},
-	}); err != nil {
-		t.Fatalf("register %q on KVStoreRegistry: %v", name, err)
-	}
-
-	preset := PresetStandalone.With(presetKeyKVStore, SeamPreset{
-		Implementation: name,
-		Config:         Config{"addr": "redis.internal:6380", "db": "3"},
-	})
-	if _, err := NewKernel(WithPreset(preset)).Bootstrap(context.Background()); err != nil {
-		t.Fatalf("Bootstrap() error = %v, want nil", err)
-	}
-
-	if len(got) != 2 || got["addr"] != "redis.internal:6380" || got["db"] != "3" {
-		t.Errorf("Registration.New received Config %v, want the entry's own {addr: redis.internal:6380, db: 3}", got)
-	}
-}
-
-func TestBootstrap_WiresTheDeploymentModeEventBusIntoTheRegistry(t *testing.T) {
-	tests := []struct {
-		name string
-		// kernel receives the injectable stand-in for a distributed bus, and
-		// reports whether the assembled registry must end up wired to it.
-		kernel       func(injected EventBus) *Kernel
-		wantInjected bool
-	}{
-		{
-			name:   "the standalone deployment mode falls back to the in-memory bus",
-			kernel: func(EventBus) *Kernel { return NewKernel() },
-		},
-		{
-			name:         "an injected bus replaces the standalone default",
-			kernel:       func(injected EventBus) *Kernel { return NewKernel(WithEventBus(injected, 0)) },
-			wantInjected: true,
-		},
-		{
-			name: "the distributed deployment mode uses the injected bus",
-			kernel: func(injected EventBus) *Kernel {
-				// KVStore, Mailer and ObjectStore are wired too, declared
-				// MultiReplicaSafe so their capability checks pass: this table
-				// exercises the EventBus seam specifically, and the distributed
-				// mode also requires the other seams to satisfy the same
-				// capability, so leaving them unwired (or under-declared) would
-				// fail Bootstrap before the EventBus wiring under test even runs.
-				return NewKernel(WithDeploymentMode(DeploymentModeDistributed), WithEventBus(injected, MultiReplicaSafe), WithKVStore(NewMemoryKVStore(), MultiReplicaSafe), WithMailer(NewConsoleMailer(), MultiReplicaSafe), WithObjectStore(NewLocalObjectStore(t.TempDir()), MultiReplicaSafe))
-			},
-			wantInjected: true,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			injected := newRegTestBus()
-			subscriber := regTestModule{
-				name: "billing",
-				register: func(reg Registrar) error {
-					reg.EventsSeat().Subscribe("org.member.invited", func(context.Context, Event) error { return nil })
-					return nil
-				},
-			}
-
-			reg, err := tt.kernel(injected).Bootstrap(context.Background(), subscriber)
-			if err != nil {
-				t.Fatalf("Bootstrap() error = %v, want nil", err)
-			}
-			if reg.EventBus() == nil {
-				t.Fatal("EventBus() is nil")
-			}
-			if tt.wantInjected {
-				if reg.EventBus() != EventBus(injected) {
-					t.Fatalf("EventBus() = %v, want the bus wired into the kernel", reg.EventBus())
-				}
-				// The module subscribed through reg.Events, so the bus the
-				// host publishes into is the one that got the subscription.
-				if got := injected.subscriptions(); len(got) != 1 || got[0] != "org.member.invited" {
-					t.Errorf("wired bus recorded subscriptions %v, want [org.member.invited]", got)
-				}
-				return
-			}
-			if reg.EventBus() == EventBus(injected) {
-				t.Error("EventBus() returned the bus that was never wired in")
-			}
-			if got := len(injected.subscriptions()); got != 0 {
-				t.Errorf("uninjected bus recorded %d subscriptions, want 0", got)
-			}
-		})
-	}
-}
-
-// TestBootstrap_WiresTheDeploymentModeKVStoreIntoTheRegistry mirrors
-// TestBootstrap_WiresTheDeploymentModeEventBusIntoTheRegistry for the KVStore
-// seam: the same three scenarios (standalone default, an injected override on
-// the standalone deployment mode, and the distributed mode, which has no
-// default of its own). The bus, Mailer and ObjectStore are wired
-// unconditionally in the distributed case here, for the same reason the bus
-// table wires KVStore in its own distributed case: this table exercises
-// KVStore specifically, and the distributed mode requires all four seams.
-func TestBootstrap_WiresTheDeploymentModeKVStoreIntoTheRegistry(t *testing.T) {
-	tests := []struct {
-		name string
-		// kernel receives the injectable stand-in for a distributed store,
-		// and reports whether the assembled registry must end up wired to it.
-		kernel       func(injected KVStore) *Kernel
-		wantInjected bool
-	}{
-		{
-			name:   "the standalone deployment mode falls back to the in-memory store",
-			kernel: func(KVStore) *Kernel { return NewKernel() },
-		},
-		{
-			name:         "an injected store replaces the standalone default",
-			kernel:       func(injected KVStore) *Kernel { return NewKernel(WithKVStore(injected, 0)) },
-			wantInjected: true,
-		},
-		{
-			name: "the distributed deployment mode uses the injected store",
-			kernel: func(injected KVStore) *Kernel {
-				return NewKernel(WithDeploymentMode(DeploymentModeDistributed), WithEventBus(NewMemoryEventBus(), MultiReplicaSafe), WithKVStore(injected, MultiReplicaSafe), WithMailer(NewConsoleMailer(), MultiReplicaSafe), WithObjectStore(NewLocalObjectStore(t.TempDir()), MultiReplicaSafe))
-			},
-			wantInjected: true,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			injected := newRegTestKVStore()
-			writer := regTestModule{
-				name: "billing",
-				register: func(reg Registrar) error {
-					return reg.KVStore().Set(context.Background(), "billing:seeded", []byte("1"), 0)
-				},
-			}
-
-			reg, err := tt.kernel(injected).Bootstrap(context.Background(), writer)
-			if err != nil {
-				t.Fatalf("Bootstrap() error = %v, want nil", err)
-			}
-			if reg.KVStore() == nil {
-				t.Fatal("KVStore() is nil")
-			}
-			if tt.wantInjected {
-				if reg.KVStore() != KVStore(injected) {
-					t.Fatalf("KVStore() = %v, want the store wired into the kernel", reg.KVStore())
-				}
-				// The module wrote through reg.KVStore(), so the store the
-				// host wired in is the one that actually received the write.
-				if got := injected.setKeys(); len(got) != 1 || got[0] != "billing:seeded" {
-					t.Errorf("wired store recorded sets %v, want [billing:seeded]", got)
-				}
-				return
-			}
-			if reg.KVStore() == KVStore(injected) {
-				t.Error("KVStore() returned the store that was never wired in")
-			}
-			if got := len(injected.setKeys()); got != 0 {
-				t.Errorf("uninjected store recorded %d sets, want 0", got)
-			}
-		})
 	}
 }
 
@@ -1971,433 +978,10 @@ func (m *accumulatingMailer) Send(ctx context.Context, mail Mail) error {
 	return nil
 }
 
-// TestBootstrap_StatelessSeamSkipsWarning_StatefulBitlessSeamWarns pins the
-// Stateless/SurvivesRestart warning distinction at the Bootstrap layer for
-// the mailer seam: a boot whose mailer seam
-// resolves to a Stateless implementation must print no restart warning for
-// it, while a boot whose mailer seam resolves to an implementation that
-// holds state without declaring SurvivesRestart must print one, naming the
-// seam. The two halves use the same slog capture and the same
-// WithMailer-shaped injection the existing
-// TestBootstrap_WarnsOncePerNonSurvivingStatefulSeam uses for the preset
-// shape; these two exercises are the injected-host-implementation half that
-// test cannot reach (a host injecting an implementation declares its caps
-// itself, so the distinction between Stateless and bitless-stateful is the
-// host's to get right — and this is the pin that keeps warnIfNotDurable
-// honest about it). The default preset seams still warn in both boots
-// (eventbus.memory, kv.memory, objectstore.local), so each half asserts
-// only about the mailer seam's own line.
-func TestBootstrap_StatelessSeamSkipsWarning_StatefulBitlessSeamWarns(t *testing.T) {
-	bootOutput := func(opts ...KernelOption) string {
-		var buf bytes.Buffer
-		previous := slog.Default()
-		slog.SetDefault(slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelWarn})))
-		defer slog.SetDefault(previous)
-
-		if _, err := NewKernel(opts...).Bootstrap(context.Background()); err != nil {
-			t.Fatalf("Bootstrap() error = %v, want nil", err)
-		}
-		return buf.String()
-	}
-
-	t.Run("a_stateless_mailer_boot_produces_no_restart_warning", func(t *testing.T) {
-		out := bootOutput(WithMailer(NewConsoleMailer(), Stateless))
-		if strings.Contains(out, "seam=mailer") {
-			t.Errorf("bootstrap logged %q, want no restart warning for the stateless injected mailer", out)
-		}
-	})
-
-	t.Run("a_stateful_bitless_mailer_boot_warns_naming_the_seam", func(t *testing.T) {
-		out := bootOutput(WithMailer(&accumulatingMailer{}, 0))
-		if !strings.Contains(out, "seam=mailer") {
-			t.Errorf("bootstrap logged %q, want a restart warning naming the mailer seam for a stateful implementation without SurvivesRestart", out)
-		}
-	})
-}
-
-func TestBootstrap_WarnsOncePerNonSurvivingStatefulSeam(t *testing.T) {
-	var buf bytes.Buffer
-	previous := slog.Default()
-	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelWarn})))
-	defer slog.SetDefault(previous)
-
-	reg, err := NewKernel().Bootstrap(context.Background())
-	if err != nil {
-		t.Fatalf("Bootstrap() error = %v, want nil", err)
-	}
-	if reg == nil {
-		t.Fatal("Bootstrap() returned a nil registry alongside a nil error")
-	}
-
-	out := buf.String()
-	for _, want := range []string{"eventbus.memory", "kv.memory", "objectstore.local"} {
-		if !strings.Contains(out, want) {
-			t.Errorf("standalone bootstrap logged %q, want a restart warning naming %q", out, want)
-		}
-	}
-	if strings.Contains(out, "mailer.console") {
-		t.Errorf("standalone bootstrap logged %q, want no restart warning for the stateless mailer.console", out)
-	}
-}
-
-// TestBootstrap_LogsOneInfoLineNamingEveryResolvedSeam pins Bootstrap's
-// seam-composition visibility: after the four seams resolve, Bootstrap logs
-// ONE Info line naming seam -> implementation for all four, preset-resolved
-// and injected alike. warnIfNotDurable's restart warnings cannot carry that
-// visibility -- they sit on the durability axis and stay silent about a
-// Stateless implementation like mailer.console, which is exactly the
-// silence that lets a standalone install that forgot
-// WithMailer(NewSMTPMailer(...)) start up printing its verification codes
-// to stdout and reporting success. The line is fact, not judgement, so it
-// has no such hole: a boot with no WithMailer logs mailer=mailer.console
-// (the unwired shape: the line still names the console default the seam
-// resolved to), and a boot whose mailer seam is wired logs mailer=<injected>
-// instead -- the discriminator between "chose the console" and "forgot the
-// wiring".
-//
-// The slog default logger is process-global, so the test swaps it for a
-// capture handler and restores it on the way out. It must not run in
-// parallel with another test that bootstraps a Kernel; the package's
-// t.Parallel tests only resume after every sequential test has finished, so
-// this one never overlaps them.
-func TestBootstrap_LogsOneInfoLineNamingEveryResolvedSeam(t *testing.T) {
-	bootOutput := func(opts ...KernelOption) string {
-		var buf bytes.Buffer
-		previous := slog.Default()
-		slog.SetDefault(slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelInfo})))
-		defer slog.SetDefault(previous)
-
-		if _, err := NewKernel(opts...).Bootstrap(context.Background()); err != nil {
-			t.Fatalf("Bootstrap() error = %v, want nil", err)
-		}
-		return buf.String()
-	}
-
-	t.Run("a_default_standalone_boot_names_all_four_preset_implementations", func(t *testing.T) {
-		out := bootOutput()
-		for _, want := range []string{
-			"pkgcore: bootstrapped seam composition",
-			"eventbus=eventbus.memory",
-			"kv=kv.memory",
-			"mailer=mailer.console",
-			"objectstore=objectstore.local",
-		} {
-			if !strings.Contains(out, want) {
-				t.Errorf("bootstrap logged %q, want an Info composition line mentioning %q", out, want)
-			}
-		}
-	})
-
-	t.Run("a_boot_with_an_injected_mailer_names_it_as_injected", func(t *testing.T) {
-		out := bootOutput(WithMailer(NewConsoleMailer(), Stateless))
-		if !strings.Contains(out, "mailer=<injected>") {
-			t.Errorf("bootstrap logged %q, want the composition line to name the injected mailer as <injected>", out)
-		}
-		if strings.Contains(out, "mailer=mailer.console") {
-			t.Errorf("bootstrap logged %q, want no composition entry claiming the mailer seam is mailer.console when one was injected", out)
-		}
-		if !strings.Contains(out, "kv=kv.memory") {
-			t.Errorf("bootstrap logged %q, want the composition line to still name the unwired kv seam's preset implementation", out)
-		}
-	})
-}
-
-func TestBootstrap_UnknownDeploymentMode_ReturnsError(t *testing.T) {
-	var order []string
-
-	reg, err := NewKernel(WithDeploymentMode(DeploymentMode("staging"))).Bootstrap(context.Background(), regTestRecorder("billing", nil, &order))
-
-	if !errors.Is(err, ErrInvalidDeploymentMode) {
-		t.Fatalf("Bootstrap() error = %v, want it to wrap ErrInvalidDeploymentMode", err)
-	}
-	if reg != nil {
-		t.Error("Bootstrap() returned a registry alongside the error, want nil")
-	}
-	if !strings.Contains(err.Error(), "staging") {
-		t.Errorf("error = %q, want it to name the unknown deployment mode", err)
-	}
-	if len(order) != 0 {
-		t.Errorf("modules registered = %v, want none", order)
-	}
-}
-
-// TestSeamOptions_PanicOnNilValue pins the nil rule's consistency across
-// every door that accepts a seam value in this file: NewRegistry panics on a
-// nil argument (a registry whose Mailer() sends nothing and reports success
-// is the alternative it refuses), and each With* option must refuse a nil
-// the same way. A nil option value would silently leave the Preset's
-// resolution in place -- the forgot-mailer hazard exactly: a host whose
-// wiring produced a nil mailer (an SMTP construction that failed, a config
-// lookup that found nothing) believes it wired SMTP while every
-// verification code prints to stdout and reports success, and only the
-// boot's seam-composition Info line (mailer=<injected> never appears) would
-// give the mistake away. A host that genuinely wants the Preset's
-// resolution for a seam omits the option instead of passing nil.
-func TestSeamOptions_PanicOnNilValue(t *testing.T) {
-	tests := []struct {
-		name       string
-		optionName string
-		kernel     func() *Kernel
-	}{
-		{"eventbus", "WithEventBus", func() *Kernel { return NewKernel(WithEventBus(nil, MultiReplicaSafe)) }},
-		{"kv", "WithKVStore", func() *Kernel { return NewKernel(WithKVStore(nil, MultiReplicaSafe)) }},
-		{"mailer", "WithMailer", func() *Kernel { return NewKernel(WithMailer(nil, MultiReplicaSafe)) }},
-		{"objectstore", "WithObjectStore", func() *Kernel { return NewKernel(WithObjectStore(nil, MultiReplicaSafe)) }},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			defer func() {
-				r := recover()
-				if r == nil {
-					t.Fatal("NewKernel with a nil seam value did not panic, want it to")
-				}
-				msg, ok := r.(string)
-				if !ok {
-					t.Fatalf("panic value is %T %v, want a string naming the option", r, r)
-				}
-				if !strings.Contains(msg, tt.optionName) || !strings.Contains(msg, "requires a non-nil") {
-					t.Errorf("panic message %q does not name %s and its non-nil requirement", msg, tt.optionName)
-				}
-			}()
-			tt.kernel()
-		})
-	}
-}
-
-// TestBootstrap_DistributedModeWithConsoleMailer_FailsCapabilityCheck mirrors
-// TestBootstrap_DistributedModeWithMemoryEventBus_FailsCapabilityCheck and its
-// KVStore counterpart for the mail seam: the built-in "mailer.console"
-// implementation prints to a process's stdout, so a distributed-mode kernel
-// that resolves to it must refuse to assemble instead of handing every module
-// a mailer whose output nobody reads. Bus and KVStore are injected and
-// declared MultiReplicaSafe here so their checks inside Bootstrap, which run
-// first, pass and the failure actually exercises the Mailer check instead of
-// masking it.
-func TestBootstrap_DistributedModeWithConsoleMailer_FailsCapabilityCheck(t *testing.T) {
-	var order []string
-
-	kernel := NewKernel(WithDeploymentMode(DeploymentModeDistributed),
-		WithEventBus(NewMemoryEventBus(), MultiReplicaSafe), WithKVStore(NewMemoryKVStore(), MultiReplicaSafe))
-	reg, err := kernel.Bootstrap(context.Background(), regTestRecorder("billing", nil, &order))
-
-	if !errors.Is(err, ErrCapabilityUnsatisfied) {
-		t.Fatalf("Bootstrap() error = %v, want it to wrap ErrCapabilityUnsatisfied", err)
-	}
-	for _, want := range []string{"mailer", "mailer.console", "MultiReplicaSafe", "distributed"} {
-		if !strings.Contains(err.Error(), want) {
-			t.Errorf("error = %q, want it to name %q", err, want)
-		}
-	}
-	if reg != nil {
-		t.Error("Bootstrap() returned a registry alongside the error, want nil")
-	}
-	if len(order) != 0 {
-		t.Errorf("modules registered = %v, want none before the wiring was validated", order)
-	}
-}
-
-// TestBootstrap_DistributedModeWithLocalObjectStore_FailsCapabilityCheck
-// mirrors TestBootstrap_DistributedModeWithConsoleMailer_FailsCapabilityCheck
-// and its seam-wise counterparts for the object-store seam: the built-in
-// "objectstore.local" implementation is a directory on one host's disk, so a
-// distributed-mode kernel that resolves to it must refuse to assemble instead
-// of handing every module a store whose objects its replicas can never see.
-// Bus, KVStore and Mailer are injected and declared MultiReplicaSafe here so
-// their checks inside Bootstrap, which run first, pass and the failure
-// actually exercises the ObjectStore check instead of masking it.
-func TestBootstrap_DistributedModeWithLocalObjectStore_FailsCapabilityCheck(t *testing.T) {
-	var order []string
-
-	kernel := NewKernel(WithDeploymentMode(DeploymentModeDistributed),
-		WithEventBus(NewMemoryEventBus(), MultiReplicaSafe), WithKVStore(NewMemoryKVStore(), MultiReplicaSafe), WithMailer(NewConsoleMailer(), MultiReplicaSafe))
-	reg, err := kernel.Bootstrap(context.Background(), regTestRecorder("billing", nil, &order))
-
-	if !errors.Is(err, ErrCapabilityUnsatisfied) {
-		t.Fatalf("Bootstrap() error = %v, want it to wrap ErrCapabilityUnsatisfied", err)
-	}
-	for _, want := range []string{"objectstore", "objectstore.local", "MultiReplicaSafe", "distributed"} {
-		if !strings.Contains(err.Error(), want) {
-			t.Errorf("error = %q, want it to name %q", err, want)
-		}
-	}
-	if reg != nil {
-		t.Error("Bootstrap() returned a registry alongside the error, want nil")
-	}
-	if len(order) != 0 {
-		t.Errorf("modules registered = %v, want none before the wiring was validated", order)
-	}
-}
-
-// TestBootstrap_WiresTheDeploymentModeMailerIntoTheRegistry mirrors
-// TestBootstrap_WiresTheDeploymentModeEventBusIntoTheRegistry and its KVStore
-// counterpart for the mail seam: the same three scenarios (standalone
-// default, an injected override on the standalone deployment mode, and the
-// distributed mode, which has no default of its own). Bus and KVStore are
-// wired unconditionally in the distributed case here, for the same reason the
-// other tables wire their seams: this table exercises Mailer specifically,
-// and the distributed mode requires all of them.
-func TestBootstrap_WiresTheDeploymentModeMailerIntoTheRegistry(t *testing.T) {
-	tests := []struct {
-		name string
-		// kernel receives the injectable stand-in for a distributed mailer,
-		// and reports whether the assembled registry must end up wired to it.
-		kernel       func(injected Mailer) *Kernel
-		wantInjected bool
-	}{
-		{
-			name:   "the standalone deployment mode falls back to the console mailer",
-			kernel: func(Mailer) *Kernel { return NewKernel() },
-		},
-		{
-			name:         "an injected mailer replaces the standalone default",
-			kernel:       func(injected Mailer) *Kernel { return NewKernel(WithMailer(injected, 0)) },
-			wantInjected: true,
-		},
-		{
-			name: "the distributed deployment mode uses the injected mailer",
-			kernel: func(injected Mailer) *Kernel {
-				return NewKernel(WithDeploymentMode(DeploymentModeDistributed), WithEventBus(NewMemoryEventBus(), MultiReplicaSafe), WithKVStore(NewMemoryKVStore(), MultiReplicaSafe), WithMailer(injected, MultiReplicaSafe), WithObjectStore(NewLocalObjectStore(t.TempDir()), MultiReplicaSafe))
-			},
-			wantInjected: true,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			var out bytes.Buffer
-			injected := newConsoleMailer(&out)
-
-			reg, err := tt.kernel(injected).Bootstrap(context.Background())
-			if err != nil {
-				t.Fatalf("Bootstrap() error = %v, want nil", err)
-			}
-			if reg.Mailer() == nil {
-				t.Fatal("Mailer() is nil")
-			}
-			if !tt.wantInjected {
-				if reg.Mailer() == Mailer(injected) {
-					t.Error("Mailer() returned the mailer that was never wired in")
-				}
-				return
-			}
-			if reg.Mailer() != Mailer(injected) {
-				t.Fatalf("Mailer() = %v, want the mailer wired into the kernel", reg.Mailer())
-			}
-			// The registry hands out the kernel's mailer, so sending through
-			// it must reach the writer of the mailer the host wired in.
-			err = reg.Mailer().Send(context.Background(), Mail{
-				From:    "ops@example.com",
-				To:      []string{"ada@example.com"},
-				Subject: "wiring check",
-				Text:    "the injected mailer was reached",
-			})
-			if err != nil {
-				t.Fatalf("Send() error = %v, want nil", err)
-			}
-			if got := out.String(); !strings.Contains(got, "[mail] from: ops@example.com") {
-				t.Errorf("wired mailer output = %q, want it to carry the sent message", got)
-			}
-		})
-	}
-}
-
-// TestBootstrap_WiresTheDeploymentModeObjectStoreIntoTheRegistry mirrors
-// TestBootstrap_WiresTheDeploymentModeMailerIntoTheRegistry and its older
-// counterparts for the object-store seam: the same three scenarios
-// (standalone default, an injected override on the standalone deployment
-// mode, and the distributed mode, which has no default of its own). The
-// standalone default is a throwaway directory the kernel creates for itself,
-// so it cannot be recognised by identity across bootstraps the way the
-// in-memory bus and KVStore can; the table asserts behaviour instead, by
-// storing an object through the assembled registry and asking each store
-// whether it received it.
-func TestBootstrap_WiresTheDeploymentModeObjectStoreIntoTheRegistry(t *testing.T) {
-	tests := []struct {
-		name string
-		// kernel receives the injectable stand-in for a distributed store,
-		// and reports whether the assembled registry must end up wired to it.
-		kernel       func(injected ObjectStore) *Kernel
-		wantInjected bool
-	}{
-		{
-			name:   "the standalone deployment mode falls back to a private store",
-			kernel: func(ObjectStore) *Kernel { return NewKernel() },
-		},
-		{
-			name: "an injected store replaces the standalone default",
-			kernel: func(injected ObjectStore) *Kernel {
-				return NewKernel(WithObjectStore(injected, 0))
-			},
-			wantInjected: true,
-		},
-		{
-			name: "the distributed deployment mode uses the injected store",
-			kernel: func(injected ObjectStore) *Kernel {
-				return NewKernel(WithDeploymentMode(DeploymentModeDistributed), WithEventBus(NewMemoryEventBus(), MultiReplicaSafe), WithKVStore(NewMemoryKVStore(), MultiReplicaSafe), WithMailer(NewConsoleMailer(), MultiReplicaSafe), WithObjectStore(injected, MultiReplicaSafe))
-			},
-			wantInjected: true,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			injected := NewLocalObjectStore(t.TempDir())
-
-			// bootstrapErr: the many inner if-init errs below must not shadow
-			// an outer one, so the outer name steps aside.
-			reg, bootstrapErr := tt.kernel(injected).Bootstrap(context.Background())
-			if bootstrapErr != nil {
-				t.Fatalf("Bootstrap() error = %v, want nil", bootstrapErr)
-			}
-			if reg.ObjectStore() == nil {
-				t.Fatal("ObjectStore() is nil")
-			}
-			// The registry hands out the kernel's store, so storing through it
-			// must reach the store the host wired in and no other.
-			if err := reg.ObjectStore().PutObject(context.Background(), "wiring/check", strings.NewReader("reached")); err != nil {
-				t.Fatalf("PutObject() error = %v, want nil", err)
-			}
-			if tt.wantInjected {
-				if reg.ObjectStore() != ObjectStore(injected) {
-					t.Fatalf("ObjectStore() = %v, want the store wired into the kernel", reg.ObjectStore())
-				}
-				reader, err := injected.GetObject(context.Background(), "wiring/check")
-				if err != nil {
-					t.Errorf("wired store GetObject() error = %v, want the object the module stored", err)
-					return
-				}
-				body, err := io.ReadAll(reader)
-				if closeErr := reader.Close(); err == nil {
-					err = closeErr
-				}
-				if err != nil {
-					t.Errorf("reading the wired store back failed: %v", err)
-					return
-				}
-				if got := string(body); got != "reached" {
-					t.Errorf("wired store holds %q, want %q", got, "reached")
-				}
-				return
-			}
-			if reg.ObjectStore() == ObjectStore(injected) {
-				t.Error("ObjectStore() returned the store that was never wired in")
-			}
-			reader, err := injected.GetObject(context.Background(), "wiring/check")
-			if err == nil {
-				reader.Close()
-				t.Error("uninjected store holds the fallback object, want ErrObjectNotFound: the fallback store must be private to the kernel")
-			} else if !errors.Is(err, ErrObjectNotFound) {
-				t.Errorf("uninjected store GetObject() error = %v, want ErrObjectNotFound", err)
-			}
-		})
-	}
-}
-
 func TestRegistry_ConcurrentRegistration_IsRaceFree(t *testing.T) {
 	const goroutines = 8
 
-	reg := NewRegistry(NewMemoryEventBus(), NewMemoryKVStore(), NewConsoleMailer())
+	reg := newSeatRegistrars()
 	var wg sync.WaitGroup
 	wg.Add(goroutines)
 
@@ -2405,202 +989,57 @@ func TestRegistry_ConcurrentRegistration_IsRaceFree(t *testing.T) {
 		go func(i int) {
 			defer wg.Done()
 			id := string(rune('a' + i))
-			reg.RoutesSeat().Mount("/api/v1/"+id, regTestHandler{id: id})
-			if err := reg.PermissionsSeat().Add(id + ":read"); err != nil {
+			reg.Routes.Mount("/api/v1/"+id, regTestHandler{id: id})
+			if err := reg.Permissions.Add(id + ":read"); err != nil {
 				t.Errorf("Permissions.Add() error = %v, want nil", err)
 			}
-			if err := reg.AuditActionsSeat().Add(id + ".created"); err != nil {
+			if err := reg.AuditActions.Add(id + ".created"); err != nil {
 				t.Errorf("AuditActions.Add() error = %v, want nil", err)
 			}
-			if err := reg.JobsSeat().Handle(id+".job", regTestHandler{id: id}); err != nil {
+			if err := reg.Jobs.Handle(id+".job", regTestHandler{id: id}); err != nil {
 				t.Errorf("Jobs.Handle() error = %v, want nil", err)
 			}
-			if err := reg.ConfigSeat().Add(ConfigItem{Key: id + ".key", Type: "string"}); err != nil {
+			if err := reg.Config.Add(ConfigItem{Key: id + ".key", Type: "string"}); err != nil {
 				t.Errorf("Config.Add() error = %v, want nil", err)
 			}
-			if err := reg.FeaturesSeat().Add(FeatureFlag{Key: id + ".flag"}); err != nil {
+			if err := reg.Features.Add(FeatureFlag{Key: id + ".flag"}); err != nil {
 				t.Errorf("Features.Add() error = %v, want nil", err)
 			}
-			if err := reg.EventsSeat().Publishes(EventDecl{Type: id + ".created"}); err != nil {
+			if err := reg.Events.Publishes(EventDecl{Type: id + ".created"}); err != nil {
 				t.Errorf("Events.Publishes() error = %v, want nil", err)
 			}
 		}(i)
 	}
 	wg.Wait()
 
-	if got := len(reg.RoutesSeat().Routes()); got != goroutines {
+	if got := len(reg.Routes.Routes()); got != goroutines {
 		t.Errorf("Routes() returned %d routes, want %d", got, goroutines)
 	}
-	if got := len(reg.PermissionsSeat().Permissions()); got != goroutines {
+	if got := len(reg.Permissions.Permissions()); got != goroutines {
 		t.Errorf("Permissions() returned %d permissions, want %d", got, goroutines)
 	}
-	if got := len(reg.AuditActionsSeat().Actions()); got != goroutines {
+	if got := len(reg.AuditActions.Actions()); got != goroutines {
 		t.Errorf("Actions() returned %d actions, want %d", got, goroutines)
 	}
-	if got := len(reg.JobsSeat().Handlers()); got != goroutines {
+	if got := len(reg.Jobs.Handlers()); got != goroutines {
 		t.Errorf("Handlers() returned %d handlers, want %d", got, goroutines)
 	}
-	if got := len(reg.ConfigSeat().Items()); got != goroutines {
+	if got := len(reg.Config.Items()); got != goroutines {
 		t.Errorf("Items() returned %d items, want %d", got, goroutines)
 	}
-	if got := len(reg.FeaturesSeat().Flags()); got != goroutines {
+	if got := len(reg.Features.Flags()); got != goroutines {
 		t.Errorf("Flags() returned %d flags, want %d", got, goroutines)
 	}
-	if got := len(reg.EventsSeat().Published()); got != goroutines {
+	if got := len(reg.Events.Published()); got != goroutines {
 		t.Errorf("Published() returned %d events, want %d", got, goroutines)
 	}
-	if err := ValidateFeatureGraph(reg); err != nil {
+	if err := ValidateFeatureGraph(reg.Features); err != nil {
 		t.Errorf("ValidateFeatureGraph() error = %v, want nil", err)
 	}
 }
 
-// localeBundleModule is a Module that ships a real Locales() bundle, so a
-// bootstrap test can drive the catalog merge against actual files instead of
-// the empty embed.FS every other test double returns.
-type localeBundleModule struct {
-	name string
-}
-
-func (m localeBundleModule) Name() string         { return m.name }
-func (m localeBundleModule) DependsOn() []string  { return nil }
-func (m localeBundleModule) Migrations() embed.FS { return embed.FS{} }
-func (m localeBundleModule) Locales() embed.FS    { return locales.FS }
-func (m localeBundleModule) OpenAPISpec() []byte  { return nil }
-
-func (m localeBundleModule) Register(Registrar) error { return nil }
-
-// localeBundleModule.Locales returns the pkgcore seed bundle through its own
-// locales package, so this merge test consumes the same bytes the package
-// ships to consumers.
-func TestBootstrap_AssemblesCatalogFromModuleLocaleFiles(t *testing.T) {
-	reg, err := NewKernel().Bootstrap(context.Background(),
-		localeBundleModule{name: "pkgcore"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	catalog := reg.Locales()
-	if catalog == nil {
-		t.Fatal("reg.Locales() = nil after Bootstrap, want the merged catalog")
-	}
-	text, err := catalog.Lookup(i18n.LocaleENUS, "pkgcore.seed.params",
-		map[string]any{"Name": "bootstrap"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(text, "bootstrap") {
-		t.Errorf("en-US seed.params through the bootstrapped registry = %q", text)
-	}
-	zhText, err := catalog.LookupPlural(i18n.LocaleZHCN, "pkgcore.seed.plural", 3,
-		map[string]any{"Count": 3})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if zhText == "" || zhText == text {
-		t.Errorf("zh-CN seed.plural = %q, want a real zh-CN rendering", zhText)
-	}
-}
-
-func TestBootstrap_EmptyLocaleFilesYieldEmptyCatalog_HandBuiltRegistryStaysNil(t *testing.T) {
-	// Every other test double ships an empty Locales() embed.FS, which
-	// contributes no messages: Bootstrap still succeeds, and the registry it
-	// produces carries an empty catalog -- one that renders nothing, but is
-	// still a catalog, because Bootstrap always installs the frozen merge.
-	// A hand-built Registry, by contrast, never has a catalog at all: the
-	// seam is installed by Bootstrap alone, exactly like ObjectStore.
-	reg, err := NewKernel().Bootstrap(context.Background(),
-		regTestModule{name: "empty"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	catalog := reg.Locales()
-	if catalog == nil {
-		t.Fatal("reg.Locales() = nil after Bootstrap, want an empty catalog")
-	}
-	if got := catalog.Locales(); len(got) != 0 {
-		t.Errorf("catalog.Locales() = %v after a bootstrap with no locale files, want none", got)
-	}
-	handBuilt := NewRegistry(NewMemoryEventBus(), NewMemoryKVStore(), NewConsoleMailer())
-	if catalog := handBuilt.Locales(); catalog != nil {
-		t.Errorf("hand-built Registry.Locales() = %v, want nil", catalog)
-	}
-}
-
-// TestRetentionParticipant_DocContractTellsAuthorsWhereErrorTextGoes pins
-// the compliance error-text contract on RetentionParticipant's doc comment:
-// the seam is how a host's own participants register against (reg.Retention.Add
-// is how a consumer project contributes a participant), so its doc comment
-// is the one place a participant author learns where the error their
-// Sweep/Erase/Export callback returns actually goes. It must state that
-// the compliance layer records the text only in its in-process results and
-// structured logs, and classifies it -- never records it verbatim -- in
-// the audit record and (on the export path) the delivered export
-// manifest. A doc comment that said nothing about the returned err would
-// leave a participant author unable to know their error text gets
-// serialized into the export deliverable and the permanent audit table --
-// the gap every assertion below guards.
-func TestRetentionParticipant_DocContractTellsAuthorsWhereErrorTextGoes(t *testing.T) {
-	fset := token.NewFileSet()
-	f, err := parser.ParseFile(fset, "registry.go", nil, parser.ParseComments)
-	if err != nil {
-		t.Fatalf("parse registry.go: %v", err)
-	}
-
-	var typeDoc, sweepDoc, exportDoc string
-	ast.Inspect(f, func(n ast.Node) bool {
-		gd, ok := n.(*ast.GenDecl)
-		if !ok || gd.Tok != token.TYPE {
-			return true
-		}
-		for _, spec := range gd.Specs {
-			ts, ok := spec.(*ast.TypeSpec)
-			if !ok || ts.Name.Name != "RetentionParticipant" {
-				continue
-			}
-			// A standalone (non-parenthesized) type declaration carries its
-			// doc comment on the GenDecl; a grouped one would carry it on
-			// the TypeSpec. Read whichever the parser attached it to.
-			if gd.Doc != nil {
-				typeDoc = gd.Doc.Text()
-			} else if ts.Doc != nil {
-				typeDoc = ts.Doc.Text()
-			}
-			if st, ok := ts.Type.(*ast.StructType); ok {
-				for _, field := range st.Fields.List {
-					if field.Doc == nil {
-						continue
-					}
-					for _, name := range field.Names {
-						switch name.Name {
-						case "Sweep":
-							sweepDoc = field.Doc.Text()
-						case "Export":
-							exportDoc = field.Doc.Text()
-						}
-					}
-				}
-			}
-			return false
-		}
-		return true
-	})
-
-	for _, want := range []string{"error text", "never", "audit", "export manifest"} {
-		if !strings.Contains(typeDoc, want) {
-			t.Errorf("RetentionParticipant type doc does not state where a callback's error text goes (missing %q)", want)
-		}
-	}
-	for name, doc := range map[string]string{"Sweep": sweepDoc, "Export": exportDoc} {
-		if !strings.Contains(doc, "type's doc comment") {
-			t.Errorf("RetentionParticipant.%s field doc does not point its author at the type-level error-text contract", name)
-		}
-	}
-	if !strings.Contains(exportDoc, "manifest") {
-		t.Errorf("RetentionParticipant.Export field doc does not warn that the error text must never reach the export manifest")
-	}
-}
-
 func TestScheduleRegistrar_Add_DeclaresInOrder(t *testing.T) {
-	reg := NewRegistry(NewMemoryEventBus(), NewMemoryKVStore(), NewConsoleMailer())
+	reg := newSeatRegistrars()
 
 	perTenantSweep := PeriodicTask{
 		Type:      "storage.expiry_sweep",
@@ -2615,11 +1054,11 @@ func TestScheduleRegistrar_Add_DeclaresInOrder(t *testing.T) {
 		KeyPrefix:      "pki.expiry_scan:",
 		PlatformTenant: TenantID("_pki_platform_scan"),
 	}
-	if err := reg.SchedulesSeat().Add(perTenantSweep, platformScan); err != nil {
+	if err := reg.Schedules.Add(perTenantSweep, platformScan); err != nil {
 		t.Fatalf("Add: %v", err)
 	}
 
-	decls := reg.SchedulesSeat().Declarations()
+	decls := reg.Schedules.Declarations()
 	if len(decls) != 2 {
 		t.Fatalf("Declarations() returned %d declarations, want 2", len(decls))
 	}
@@ -2629,7 +1068,7 @@ func TestScheduleRegistrar_Add_DeclaresInOrder(t *testing.T) {
 
 	// A declaration read is a copy: mutating it changes nothing.
 	decls[0].Type = "hijacked"
-	if got := reg.SchedulesSeat().Declarations()[0].Type; got != perTenantSweep.Type {
+	if got := reg.Schedules.Declarations()[0].Type; got != perTenantSweep.Type {
 		t.Errorf("mutating the returned slice changed the registry: type = %q, want %q", got, perTenantSweep.Type)
 	}
 }
@@ -2665,18 +1104,18 @@ func TestScheduleRegistrar_Add_RejectsDuplicateType(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			reg := NewRegistry(NewMemoryEventBus(), NewMemoryKVStore(), NewConsoleMailer())
+			reg := newSeatRegistrars()
 			if len(tt.seed) > 0 {
-				if err := reg.SchedulesSeat().Add(tt.seed...); err != nil {
+				if err := reg.Schedules.Add(tt.seed...); err != nil {
 					t.Fatalf("seeding: Add(%v) = %v, want nil", tt.seed, err)
 				}
 			}
 
-			err := reg.SchedulesSeat().Add(tt.call...)
+			err := reg.Schedules.Add(tt.call...)
 			if !errors.Is(err, ErrDuplicatePeriodicTask) {
 				t.Fatalf("Add(%v) = %v, want an error wrapping ErrDuplicatePeriodicTask", tt.call, err)
 			}
-			if got := len(reg.SchedulesSeat().Declarations()); got != tt.wantStored {
+			if got := len(reg.Schedules.Declarations()); got != tt.wantStored {
 				t.Errorf("stored declarations after the failed call = %d, want %d", got, tt.wantStored)
 			}
 		})
@@ -2738,20 +1177,81 @@ func TestScheduleRegistrar_Add_RejectsContradictoryDeclaration(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			reg := NewRegistry(NewMemoryEventBus(), NewMemoryKVStore(), NewConsoleMailer())
+			reg := newSeatRegistrars()
 			if len(tt.seed) > 0 {
-				if err := reg.SchedulesSeat().Add(tt.seed...); err != nil {
+				if err := reg.Schedules.Add(tt.seed...); err != nil {
 					t.Fatalf("seeding: Add(%v) = %v, want nil", tt.seed, err)
 				}
 			}
 
-			err := reg.SchedulesSeat().Add(tt.call...)
+			err := reg.Schedules.Add(tt.call...)
 			if !errors.Is(err, ErrInvalidPeriodicTask) {
 				t.Fatalf("Add(%v) = %v, want an error wrapping ErrInvalidPeriodicTask", tt.call, err)
 			}
-			if got := len(reg.SchedulesSeat().Declarations()); got != len(tt.seed) {
+			if got := len(reg.Schedules.Declarations()); got != len(tt.seed) {
 				t.Errorf("stored declarations after the failed call = %d, want %d (the seed alone)", got, len(tt.seed))
 			}
 		})
+	}
+}
+
+func TestRetentionParticipant_DocContractTellsAuthorsWhereErrorTextGoes(t *testing.T) {
+	fset := token.NewFileSet()
+	f, err := parser.ParseFile(fset, "registry.go", nil, parser.ParseComments)
+	if err != nil {
+		t.Fatalf("parse registry.go: %v", err)
+	}
+
+	var typeDoc, sweepDoc, exportDoc string
+	ast.Inspect(f, func(n ast.Node) bool {
+		gd, ok := n.(*ast.GenDecl)
+		if !ok || gd.Tok != token.TYPE {
+			return true
+		}
+		for _, spec := range gd.Specs {
+			ts, ok := spec.(*ast.TypeSpec)
+			if !ok || ts.Name.Name != "RetentionParticipant" {
+				continue
+			}
+			// A standalone (non-parenthesized) type declaration carries its
+			// doc comment on the GenDecl; a grouped one would carry it on
+			// the TypeSpec. Read whichever the parser attached it to.
+			if gd.Doc != nil {
+				typeDoc = gd.Doc.Text()
+			} else if ts.Doc != nil {
+				typeDoc = ts.Doc.Text()
+			}
+			if st, ok := ts.Type.(*ast.StructType); ok {
+				for _, field := range st.Fields.List {
+					if field.Doc == nil {
+						continue
+					}
+					for _, name := range field.Names {
+						switch name.Name {
+						case "Sweep":
+							sweepDoc = field.Doc.Text()
+						case "Export":
+							exportDoc = field.Doc.Text()
+						}
+					}
+				}
+			}
+			return false
+		}
+		return true
+	})
+
+	for _, want := range []string{"error text", "never", "audit", "export manifest"} {
+		if !strings.Contains(typeDoc, want) {
+			t.Errorf("RetentionParticipant type doc does not state where a callback's error text goes (missing %q)", want)
+		}
+	}
+	for name, doc := range map[string]string{"Sweep": sweepDoc, "Export": exportDoc} {
+		if !strings.Contains(doc, "type's doc comment") {
+			t.Errorf("RetentionParticipant.%s field doc does not point its author at the type-level error-text contract", name)
+		}
+	}
+	if !strings.Contains(exportDoc, "manifest") {
+		t.Errorf("RetentionParticipant.Export field doc does not warn that the error text must never reach the export manifest")
 	}
 }

@@ -17,6 +17,7 @@ import (
 	"github.com/vislake/speed/go/dbkit"
 	obs "github.com/vislake/speed/go/observability"
 	"github.com/vislake/speed/go/pkgcore"
+	"github.com/vislake/speed/go/pkgcore/componenttest"
 	"github.com/vislake/speed/go/pkgcore/apperr"
 )
 
@@ -132,21 +133,28 @@ func attachServiceForTest(t *testing.T, db *gorm.DB, cipher *dbkit.Cipher, items
 	t.Helper()
 	pkgcore.RegisterSystemPurpose(SystemPurposeSystemWrite)
 	bus := pkgcore.NewMemoryEventBus()
-	reg := pkgcore.NewRegistry(bus, pkgcore.NewMemoryKVStore(), pkgcore.NewConsoleMailer())
-	if err := reg.Config.Add(items...); err != nil {
-		t.Fatalf("reg.Config.Add: %v", err)
-	}
-	if err := reg.Features.Add(flags...); err != nil {
-		t.Fatalf("reg.Features.Add: %v", err)
-	}
+	reg := componenttest.NewRegistryWithBus(bus)
 	moduleOpts := []Option{WithPollInterval(0)}
 	if cipher != nil {
 		moduleOpts = append(moduleOpts, WithCipher(cipher))
 	}
 	moduleOpts = append(moduleOpts, opts...)
-	svc, err := NewModule(db, moduleOpts...).Attach(reg)
-	if err != nil {
-		t.Fatalf("Attach: %v", err)
+	// Attach runs inside the same Init stage: it wires the Service and
+	// installs its subscriptions, and both are seat writes the window owns.
+	var svc *Service
+	if err := componenttest.DeclareAll(reg,
+		func(r *pkgcore.ComponentRegistry) error { return r.Config.Add(items...) },
+		func(r *pkgcore.ComponentRegistry) error { return r.Features.Add(flags...) },
+		func(r *pkgcore.ComponentRegistry) error {
+			attached, attachErr := NewModule(db, moduleOpts...).Attach(r)
+			if attachErr != nil {
+				return attachErr
+			}
+			svc = attached
+			return nil
+		},
+	); err != nil {
+		t.Fatalf("declare and attach: %v", err)
 	}
 	return svc, bus
 }

@@ -381,7 +381,7 @@ func TestMigrateFailureRemovesAFreshlyCreatedDatabaseFile(t *testing.T) {
 		{
 			name:    "config",
 			modPath: modulePrefix + "config",
-			construct: func(db *gorm.DB) (pkgcore.Module, error) {
+			construct: func(db *gorm.DB) (migrationSet, error) {
 				return nil, errors.New("injected construct failure")
 			},
 		},
@@ -464,7 +464,7 @@ func TestFullUniverseLedgerCountsMatchTheModulesOwnMigrationTrees(t *testing.T) 
 	// come from migrationUniverse's own constructors. Construction performs
 	// no I/O and touches nothing -- the modules exist so Migrations() can be
 	// read.
-	modules := make(map[string]pkgcore.Module, len(migrationUniverse))
+	modules := make(map[string]migrationSet, len(migrationUniverse))
 	authnMod, pkiMod, err := buildAuthnAndPKI(gdb)
 	if err != nil {
 		t.Fatalf("construct the %s and %s modules: %v", authnModuleName, pkiModuleName, err)

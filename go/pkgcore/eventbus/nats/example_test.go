@@ -1,14 +1,14 @@
 package nats_test
 
-// Runnable documentation for the NATS-backed EventBus, compiled and executed
-// by `go test` like every other package's examples, so an API change that
-// invalidates the documented usage fails the build instead of silently
-// rotting. Mirrors eventbus/redis/example_test.go's own two examples.
+// Runnable documentation for this package's constructors, compiled and
+// executed by `go test` like every other package's examples, so an API
+// change that invalidates the documented usage fails the build instead
+// of silently rotting. The package's component descriptor -- the
+// component a composition configuration selects as its module's
+// implementation -- is exercised by the package's own component_test.go.
 
 import (
 	"context"
-	"crypto/tls"
-	"crypto/x509"
 	"fmt"
 
 	natslib "github.com/nats-io/nats.go"
@@ -48,55 +48,4 @@ func ExampleNewEventBus() {
 	fmt.Println("bus wired and reading; no event was published")
 	// Output:
 	// bus wired and reading; no event was published
-}
-
-// Example demonstrates the package's self-registration: importing it for
-// side effect makes "eventbus.nats" build through pkgcore's shared
-// EventBusRegistry, the database/sql-style driver pattern this package
-// follows -- mirroring eventbus/redis's identical Example. Unlike
-// "eventbus.redis", no Preset points the "eventbus" seam at this name; a
-// host wanting it calls EventBusRegistry.Build("eventbus.nats", cfg)
-// explicitly, exactly as here.
-func Example() {
-	bus, caps, err := pkgcore.EventBusRegistry.Build("eventbus.nats", pkgcore.Config{})
-	fmt.Println(err, bus != nil, caps)
-
-	// Output:
-	// <nil> true MultiReplicaSafe|SurvivesRestart
-}
-
-// ExampleRegistration shows the name-registration path for a typed
-// configuration the flat pkgcore.Config cannot express: the host dials the
-// connection itself -- here with a private CA pool -- wraps it in the
-// registration factory, registers it under a name of its own (the built-in
-// "eventbus.nats" name is taken), and names that registration in a Preset
-// entry. The host keeps ownership: the factory's New returns the bare bus
-// over the host's connection, so Kernel.Shutdown never touches either, and
-// the host closes both when it shuts down. The URL points at a closed port
-// so this example stays hermetic: RetryOnFailedConnect keeps the dial from
-// failing synchronously, and no event is published here anyway.
-func ExampleRegistration() {
-	conn, err := natslib.Connect("127.0.0.1:1",
-		natslib.RetryOnFailedConnect(true),
-		natslib.MaxReconnects(-1),
-		natslib.Secure(&tls.Config{MinVersion: tls.VersionTLS12, RootCAs: x509.NewCertPool()}),
-	)
-	if err != nil {
-		fmt.Println("connect:", err)
-		return
-	}
-	defer conn.Close()
-
-	name := "eventbus.nats.host"
-	if regErr := pkgcore.EventBusRegistry.Register(eventbusnats.Registration(name, conn)); regErr != nil {
-		fmt.Println("register:", regErr)
-		return
-	}
-
-	preset := pkgcore.PresetStandalone.With("eventbus", pkgcore.SeamPreset{Implementation: name})
-	reg, err := pkgcore.NewKernel(pkgcore.WithPreset(preset)).Bootstrap(context.Background())
-	fmt.Println(err, reg.EventBus() != nil)
-
-	// Output:
-	// <nil> true
 }

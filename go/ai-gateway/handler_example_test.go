@@ -29,6 +29,7 @@ import (
 	// dbkit.DialectSQLite so dbkit.Open below has a driver to build from.
 	_ "github.com/vislake/speed/go/dbkit/dialect/sqlite"
 	"github.com/vislake/speed/go/pkgcore"
+	"github.com/vislake/speed/go/pkgcore/componenttest"
 
 	aigateway "github.com/vislake/speed/go/ai-gateway"
 )
@@ -73,8 +74,8 @@ func ExampleHandler() {
 		return
 	}
 
-	reg := pkgcore.NewRegistry(pkgcore.NewMemoryEventBus(), pkgcore.NewMemoryKVStore(), pkgcore.NewConsoleMailer())
-	if regErr := m.Register(reg); regErr != nil {
+	reg := componenttest.NewRegistry()
+	if regErr := componenttest.DeclareInto(reg, m); regErr != nil {
 		fmt.Println("register module:", regErr)
 		return
 	}

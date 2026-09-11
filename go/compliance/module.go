@@ -243,7 +243,7 @@ func (m *Module) OpenAPISpec() []byte { return nil }
 // construction time (NewModule's own Option application), and its absence
 // is never a reason to refuse Register -- see WithSharing's own doc
 // comment for why that check is Export's own, call-time responsibility.
-func (m *Module) Register(reg pkgcore.Registrar) error {
+func (m *Module) Register(reg *pkgcore.ComponentRegistry) error {
 	if m.queue == nil {
 		return ErrQueueRequired
 	}
@@ -309,8 +309,6 @@ func (m *Module) Register(reg pkgcore.Registrar) error {
 	return reg.SchedulesSeat().Add(retentionSweepSchedule)
 }
 
-// compile-time check that *Module satisfies pkgcore.Module.
-var _ pkgcore.Module = (*Module)(nil)
 
 // compile-time check that *sharing.Service satisfies SharingCreator
 // structurally, so a host constructing a Module with WithSharing can pass

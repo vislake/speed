@@ -18,6 +18,7 @@ import (
 
 	"github.com/vislake/speed/go/dbkit"
 	"github.com/vislake/speed/go/pkgcore"
+	"github.com/vislake/speed/go/pkgcore/componenttest"
 
 	"github.com/vislake/speed/go/sharing"
 )
@@ -55,9 +56,9 @@ func Example() {
 	}
 
 	// Bootstrap wires the module's permissions, audit action, event
-	// catalog and config schema onto a real *pkgcore.Registry, and attaches
+	// catalog and config schema onto a real *pkgcore.ComponentRegistry, and attaches
 	// that registry to the module's Service -- the same path a host takes.
-	if _, bootErr := pkgcore.NewKernel().Bootstrap(ctx, module); bootErr != nil {
+	if _, bootErr := componenttest.DeclareModules(module); bootErr != nil {
 		fmt.Println("bootstrap:", bootErr)
 		return
 	}
@@ -129,7 +130,7 @@ func ExampleService_List() {
 		fmt.Println("apply migrations:", applyErr)
 		return
 	}
-	if _, bootErr := pkgcore.NewKernel().Bootstrap(ctx, module); bootErr != nil {
+	if _, bootErr := componenttest.DeclareModules(module); bootErr != nil {
 		fmt.Println("bootstrap:", bootErr)
 		return
 	}

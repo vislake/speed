@@ -16,6 +16,7 @@ import (
 	"github.com/vislake/speed/go/dbkit/dbtest"
 	"github.com/vislake/speed/go/jobs"
 	"github.com/vislake/speed/go/pkgcore"
+	"github.com/vislake/speed/go/pkgcore/componenttest"
 	"github.com/vislake/speed/go/pkgcore/apperr"
 
 	"github.com/vislake/speed/go/compliance/internal/testutil"
@@ -33,9 +34,8 @@ func (fakeAuditModule) DependsOn() []string              { return nil }
 func (fakeAuditModule) Migrations() embed.FS             { return migrations.FS }
 func (fakeAuditModule) Locales() embed.FS                { return embed.FS{} }
 func (fakeAuditModule) OpenAPISpec() []byte              { return nil }
-func (fakeAuditModule) Register(pkgcore.Registrar) error { return nil }
+func (fakeAuditModule) Register(*pkgcore.ComponentRegistry) error { return nil }
 
-var _ pkgcore.Module = fakeAuditModule{}
 
 // newTestAuditDB returns a migrated SQLite *gorm.DB carrying audit_events,
 // for building a *audit.Repository in tests.
@@ -83,7 +83,7 @@ var _ jobs.Queue = (*recordingQueue)(nil)
 // a Module built with no queue fails Bootstrap with ErrQueueRequired.
 func TestModule_Register_RefusesAQueuelessBoot(t *testing.T) {
 	m := NewModule(newTestAuditRepo(t))
-	_, err := pkgcore.NewKernel().Bootstrap(context.Background(), m)
+	_, err := componenttest.DeclareModules(m)
 	if !apperr.HasCode(err, ErrQueueRequired.Code) {
 		t.Fatalf("Bootstrap without a queue error = %v, want %s", err, ErrQueueRequired.Code)
 	}
@@ -94,7 +94,7 @@ func TestModule_Register_RefusesAQueuelessBoot(t *testing.T) {
 // permissions, and all three audit actions.
 func TestModule_Register_DeclaresItsSurface(t *testing.T) {
 	m := NewModule(newTestAuditRepo(t), WithQueue(&recordingQueue{}))
-	reg, err := pkgcore.NewKernel().Bootstrap(context.Background(), m)
+	reg, err := componenttest.DeclareModules(m)
 	if err != nil {
 		t.Fatalf("Bootstrap: %v", err)
 	}
@@ -134,7 +134,7 @@ func TestModule_Register_DeclaresItsSurface(t *testing.T) {
 // taskTypeRetentionSweep.
 func TestModule_Register_WiresTheRetentionSweepJobHandler(t *testing.T) {
 	m := NewModule(newTestAuditRepo(t), WithQueue(&recordingQueue{}))
-	reg, err := pkgcore.NewKernel().Bootstrap(context.Background(), m)
+	reg, err := componenttest.DeclareModules(m)
 	if err != nil {
 		t.Fatalf("Bootstrap: %v", err)
 	}
@@ -154,7 +154,7 @@ func TestModule_Register_WiresTheRetentionSweepJobHandler(t *testing.T) {
 // are non-nil, so a call into any of them does not panic on a nil field.
 func TestModule_Register_WiresServicesFromTheRegistry(t *testing.T) {
 	m := NewModule(newTestAuditRepo(t), WithQueue(&recordingQueue{}))
-	if _, err := pkgcore.NewKernel().Bootstrap(context.Background(), m); err != nil {
+	if _, err := componenttest.DeclareModules(m); err != nil {
 		t.Fatalf("Bootstrap: %v", err)
 	}
 	if m.Retention().retention == nil || m.Retention().bus == nil || m.Retention().actions == nil {
@@ -177,7 +177,7 @@ func TestModule_Register_WiresServicesFromTheRegistry(t *testing.T) {
 // wiring.
 func TestModule_Register_RegistersItsOwnExportManifestCleanupParticipant(t *testing.T) {
 	m := NewModule(newTestAuditRepo(t), WithQueue(&recordingQueue{}))
-	reg, err := pkgcore.NewKernel().Bootstrap(context.Background(), m)
+	reg, err := componenttest.DeclareModules(m)
 	if err != nil {
 		t.Fatalf("Bootstrap: %v", err)
 	}
@@ -201,7 +201,7 @@ func TestModule_Register_RegistersItsOwnExportManifestCleanupParticipant(t *test
 // attaches the given SharingCreator onto ExportService directly at
 // construction time -- unlike the registry-derived seams
 // TestModule_Register_WiresServicesFromTheRegistry checks, this one needs
-// no Bootstrap at all, since WithSharing is not a pkgcore.Registry seam
+// no Bootstrap at all, since WithSharing is not a pkgcore.ComponentRegistry seam
 // (module.go's Register doc comment explains why).
 func TestModule_WithSharing_WiresExportServiceSharing(t *testing.T) {
 	fake := &fakeSharingCreator{}
@@ -248,12 +248,12 @@ func TestModule_NameAndOpenAPISpec(t *testing.T) {
 func TestModule_Register_DuplicateDeclarationsArePropagated(t *testing.T) {
 	cases := []struct {
 		name      string
-		preseed   func(t *testing.T, reg *pkgcore.Registry)
+		preseed   func(t *testing.T, reg *pkgcore.ComponentRegistry)
 		wantError error
 	}{
 		{
 			name: "config item",
-			preseed: func(t *testing.T, reg *pkgcore.Registry) {
+			preseed: func(t *testing.T, reg *pkgcore.ComponentRegistry) {
 				if err := reg.ConfigSeat().Add(configItemDecls[0]); err != nil {
 					t.Fatalf("preseed config item: %v", err)
 				}
@@ -262,7 +262,7 @@ func TestModule_Register_DuplicateDeclarationsArePropagated(t *testing.T) {
 		},
 		{
 			name: "permission",
-			preseed: func(t *testing.T, reg *pkgcore.Registry) {
+			preseed: func(t *testing.T, reg *pkgcore.ComponentRegistry) {
 				if err := reg.PermissionsSeat().Add(PermissionAuditRead); err != nil {
 					t.Fatalf("preseed permission: %v", err)
 				}
@@ -271,7 +271,7 @@ func TestModule_Register_DuplicateDeclarationsArePropagated(t *testing.T) {
 		},
 		{
 			name: "audit action",
-			preseed: func(t *testing.T, reg *pkgcore.Registry) {
+			preseed: func(t *testing.T, reg *pkgcore.ComponentRegistry) {
 				if err := reg.AuditActionsSeat().Add(AuditActionRetentionSweep); err != nil {
 					t.Fatalf("preseed audit action: %v", err)
 				}
@@ -280,7 +280,7 @@ func TestModule_Register_DuplicateDeclarationsArePropagated(t *testing.T) {
 		},
 		{
 			name: "reserved retention participant name",
-			preseed: func(t *testing.T, reg *pkgcore.Registry) {
+			preseed: func(t *testing.T, reg *pkgcore.ComponentRegistry) {
 				p := pkgcore.RetentionParticipant{Name: exportManifestsParticipantName, Sweep: testutil.NoopSweep, Erase: testutil.NoopErase}
 				if err := reg.RetentionSeat().Add(p); err != nil {
 					t.Fatalf("preseed retention participant: %v", err)
@@ -291,10 +291,10 @@ func TestModule_Register_DuplicateDeclarationsArePropagated(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			reg := pkgcore.NewRegistry(pkgcore.NewMemoryEventBus(), pkgcore.NewMemoryKVStore(), pkgcore.NewConsoleMailer())
+			reg := componenttest.NewRegistry()
 			tc.preseed(t, reg)
 			m := NewModule(newTestAuditRepo(t), WithQueue(&recordingQueue{}))
-			err := m.Register(reg)
+			err := componenttest.DeclareInto(reg, m)
 			if !errors.Is(err, tc.wantError) {
 				t.Fatalf("Register over a preseeded registry error = %v, want %v", err, tc.wantError)
 			}
@@ -309,9 +309,9 @@ func TestModule_Register_DuplicateDeclarationsArePropagated(t *testing.T) {
 // at the module's own window cadence, the schedule point this module does
 // not run itself.
 func TestModule_Register_DeclaresTheRetentionSweepSchedule(t *testing.T) {
-	reg := pkgcore.NewRegistry(pkgcore.NewMemoryEventBus(), pkgcore.NewMemoryKVStore(), pkgcore.NewConsoleMailer())
+	reg := componenttest.NewRegistry()
 	m := NewModule(newTestAuditRepo(t), WithQueue(&recordingQueue{}))
-	if err := m.Register(reg); err != nil {
+	if err := componenttest.DeclareInto(reg, m); err != nil {
 		t.Fatalf("Register: %v", err)
 	}
 

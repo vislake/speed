@@ -11,6 +11,7 @@ import (
 
 	"github.com/vislake/speed/go/authn/internal/testutil"
 	"github.com/vislake/speed/go/pkgcore"
+	"github.com/vislake/speed/go/pkgcore/componenttest"
 )
 
 // newTestModule builds a Module with the mandatory options supplied.
@@ -33,8 +34,8 @@ func newTestModule(t *testing.T, extra ...Option) *Module {
 
 // newTestRegistry returns a Registry wired to the standalone deployment
 // mode's own implementations, which double as the test doubles.
-func newTestRegistry() *pkgcore.Registry {
-	return pkgcore.NewRegistry(pkgcore.NewMemoryEventBus(), pkgcore.NewMemoryKVStore(), pkgcore.NewConsoleMailer())
+func newTestRegistry() *pkgcore.ComponentRegistry {
+	return componenttest.NewRegistry()
 }
 
 func TestModule_Identity(t *testing.T) {
@@ -119,7 +120,7 @@ func TestModule_RegisterDeclaresItsSurface(t *testing.T) {
 
 	module := newTestModule(t)
 	reg := newTestRegistry()
-	if err := module.Register(reg); err != nil {
+	if err := componenttest.DeclareInto(reg, module); err != nil {
 		t.Fatalf("Register() error = %v", err)
 	}
 
@@ -274,10 +275,10 @@ func TestModule_RegisterTwiceReportsTheCollision(t *testing.T) {
 
 	module := newTestModule(t)
 	reg := newTestRegistry()
-	if err := module.Register(reg); err != nil {
+	if err := componenttest.DeclareInto(reg, module); err != nil {
 		t.Fatalf("the first Register() error = %v", err)
 	}
-	if err := module.Register(reg); err == nil {
+	if err := componenttest.DeclareInto(reg, module); err == nil {
 		t.Fatal("the second Register() on the same registry error = nil, want a duplicate-declaration error")
 	}
 }
@@ -560,7 +561,7 @@ func TestModule_RegisterDeclaresItsBootstrapKeys(t *testing.T) {
 
 	module := newTestModule(t)
 	reg := newTestRegistry()
-	if err := module.Register(reg); err != nil {
+	if err := componenttest.DeclareInto(reg, module); err != nil {
 		t.Fatalf("Register() error = %v", err)
 	}
 

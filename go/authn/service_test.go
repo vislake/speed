@@ -21,6 +21,7 @@ import (
 	"github.com/vislake/speed/go/authn/internal/testutil"
 	"github.com/vislake/speed/go/dbkit/audit"
 	"github.com/vislake/speed/go/pkgcore"
+	"github.com/vislake/speed/go/pkgcore/componenttest"
 	"github.com/vislake/speed/go/pkgcore/apperr"
 	"github.com/vislake/speed/go/tenancy"
 )
@@ -1029,7 +1030,7 @@ func TestService_Refresh_ActualReplayStillRevokesTheFamily(t *testing.T) {
 // leave a trace anyone can query afterwards too. It drives the real service
 // path -- register, sign in, refresh (which rotates the family), then
 // present the now-consumed token again -- through the same construction a
-// host uses (a Module registered on a real pkgcore.Registry, exactly
+// host uses (a Module registered on a real pkgcore.ComponentRegistry, exactly
 // module.go's Register runs in production, so the registrar wiring under
 // test is the real one), and asserts the response lands in the audit trail:
 // an authn.session.revoke record with Success=false and RevokeReasonReplay
@@ -1053,8 +1054,9 @@ func TestService_Refresh_ActualReplay_LeavesADurableAuditRecord(t *testing.T) {
 	bus := pkgcore.NewMemoryEventBus()
 	recorder := testutil.NewEventRecorder()
 	recorder.Subscribe(bus, audit.EventRecorded, EventSessionReplayDetected, EventSessionRevoked)
-	reg := pkgcore.NewRegistry(bus, pkgcore.NewMemoryKVStore(), pkgcore.NewConsoleMailer())
-	if err := module.Register(reg); err != nil {
+	reg := componenttest.NewRegistry()
+	reg.Put(bus)
+	if err := componenttest.DeclareInto(reg, module); err != nil {
 		t.Fatalf("Register() error = %v", err)
 	}
 	svc := module.Service()

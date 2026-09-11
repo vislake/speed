@@ -16,6 +16,7 @@ import (
 
 	"github.com/vislake/speed/go/org"
 	"github.com/vislake/speed/go/pkgcore"
+	"github.com/vislake/speed/go/pkgcore/componenttest"
 	"github.com/vislake/speed/go/pkgcore/apperr"
 )
 
@@ -209,9 +210,10 @@ func (c *deleteEventCapture) nodeDeleted(tenant pkgcore.TenantID, nodeID string)
 func wiredOrgTree(t *testing.T, db *gorm.DB) (*org.TreeService, *org.MemberService, *deleteEventCapture) {
 	t.Helper()
 	bus := pkgcore.NewMemoryEventBus()
-	reg := pkgcore.NewRegistry(bus, pkgcore.NewMemoryKVStore(), pkgcore.NewConsoleMailer())
+	reg := componenttest.NewRegistry()
+	reg.Put(bus)
 	m := org.NewModule(db, org.WithEmailIndexer(newIndexer(t)), org.WithInvitationEmailDisabled())
-	if err := m.Register(reg); err != nil {
+	if err := componenttest.DeclareInto(reg, m); err != nil {
 		t.Fatalf("module Register: %v", err)
 	}
 	capture := &deleteEventCapture{}

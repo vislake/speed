@@ -42,6 +42,23 @@ var ErrMissingDependency = errors.New("dbkit: missing module dependency")
 // neither DialectPostgres nor DialectSQLite.
 var ErrUnknownDialect = errors.New("dbkit: unknown migration dialect")
 
+// migratable is the shape MigrationRegistry consumes: a module name, the
+// names it depends on, and its embedded migration set. It is declared here,
+// structurally, instead of naming a module contract: dbkit sits above
+// pkgcore in the dependency graph and reads only these three things, so any
+// module type satisfies it as written, and MigrationRegistry stays usable
+// from the test fixtures and migration suites that build throwaway modules.
+type migratable interface {
+	// Name is the module's unique name; the schema_migrations table records
+	// it per applied set.
+	Name() string
+	// DependsOn names the modules whose sets apply before this one's.
+	DependsOn() []string
+	// Migrations carries the module's versioned SQL migrations, one
+	// subdirectory per dialect ("postgres", "sqlite").
+	Migrations() embed.FS
+}
+
 // schemaMigrationsTable is the name of the table MigrationRegistry uses to
 // record which (module, filename) migration files have already been
 // applied, so that re-running Apply is idempotent.
@@ -86,7 +103,7 @@ type schemaMigration struct {
 func (schemaMigration) TableName() string { return schemaMigrationsTable }
 
 // MigrationRegistry aggregates the SQL migrations declared by every
-// registered pkgcore.Module and applies them, in dependency order, against a
+// registered migratable and applies them, in dependency order, against a
 // target database.
 //
 // Each registered module's Migrations() embed.FS is expected to contain SQL
@@ -101,7 +118,7 @@ func (schemaMigration) TableName() string { return schemaMigrationsTable }
 // A *MigrationRegistry is safe for concurrent use.
 type MigrationRegistry struct {
 	mu      sync.Mutex
-	modules []pkgcore.Module
+	modules []migratable
 	byName  map[string]struct{}
 }
 
@@ -114,8 +131,7 @@ func NewMigrationRegistry() *MigrationRegistry {
 // Register adds m to the registry.
 //
 // It reads m.Name(), m.DependsOn() and m.Migrations() itself, at Apply time
-// -- a pkgcore.Module is self-describing, so callers never pass those
-// separately.
+// -- the value is self-describing, so callers never pass those separately.
 //
 // Register returns an error, and registers nothing, when m is nil, when
 // m.Name() is empty, or when a module with the same Name was already
@@ -125,7 +141,7 @@ func NewMigrationRegistry() *MigrationRegistry {
 // module not yet seen is not knowable as "missing" until the full set has
 // been registered. Cycle and missing-dependency detection therefore both
 // happen in Apply, once that is true.
-func (r *MigrationRegistry) Register(m pkgcore.Module) error {
+func (r *MigrationRegistry) Register(m migratable) error {
 	if m == nil {
 		return ErrNilModule
 	}
@@ -281,7 +297,7 @@ func ApplyMigrations(ctx context.Context, reg *pkgcore.ComponentRegistry) error 
 // migrationSource is one named migration set to apply: the name the
 // schema_migrations ledger records its files under, and the embed.FS
 // carrying them. Both registration paths produce sources -- Apply converts
-// each registered pkgcore.Module (name from Name(), set from Migrations()),
+// each registered migratable (name from Name(), set from Migrations()),
 // ApplyMigrations each selected component's Asset (name and set as the
 // component declared them) -- so the ledger semantics are identical
 // whichever path a boot takes.
@@ -605,28 +621,26 @@ const (
 // ties among modules with no dependency relationship, which keeps the apply
 // order stable across runs given the same registrations.
 //
-// This is the same depth-first-search, three-color traversal
-// go/pkgcore/registry.go's sortModulesByDependency uses to order modules for
-// Kernel.Bootstrap. dbkit reimplements it against pkgcore.Module directly,
-// rather than importing that function, because it is unexported there --
-// and even if it were exported, pkgcore must never gain a dependency on
-// dbkit, so this one piece of logic has to be duplicated rather than
-// shared. Register already rejects a duplicate module Name at registration
-// time, so unlike pkgcore's version this one does not need to detect that
-// case again.
-func sortModulesByDependency(modules []pkgcore.Module) ([]pkgcore.Module, error) {
-	byName := make(map[string]pkgcore.Module, len(modules))
+// The component assembly orders components by their Requires edges, a
+// different graph entirely; this traversal orders the registered migration
+// sets by module dependency, so dbkit carries its own copy against the
+// migratable shape rather than sharing the assembly's planner. Register
+// already rejects a duplicate module Name at registration time, so unlike
+// the assembly's planner this one does not need to detect that case
+// again.
+func sortModulesByDependency(modules []migratable) ([]migratable, error) {
+	byName := make(map[string]migratable, len(modules))
 	state := make(map[string]moduleVisitState, len(modules))
 	for _, m := range modules {
 		byName[m.Name()] = m
 		state[m.Name()] = moduleUnvisited
 	}
 
-	ordered := make([]pkgcore.Module, 0, len(modules))
+	ordered := make([]migratable, 0, len(modules))
 	visitPath := make([]string, 0, len(modules))
 
-	var visit func(m pkgcore.Module) error
-	visit = func(m pkgcore.Module) error {
+	var visit func(m migratable) error
+	visit = func(m migratable) error {
 		name := m.Name()
 		switch state[name] {
 		case moduleVisited:

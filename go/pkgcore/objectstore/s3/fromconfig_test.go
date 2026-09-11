@@ -5,17 +5,14 @@ import (
 	"errors"
 	"strings"
 	"testing"
-
-	"github.com/vislake/speed/go/pkgcore"
 )
 
 // TestFromConfig_BuildsTheStoreAndDeclaresTheCapabilities drives the
-// one-step contract of the bare-injection path: FromConfig alone yields a
-// working store together with this package's declared capabilities, so the
-// injection pair pkgcore.WithObjectStore takes comes out of one call. The
-// store's own context check runs before any request, so a cancelled context
-// fails an operation with the context's error -- the usable-store proof
-// that needs no service, matching the store's own hermetic unit tests.
+// one-step contract: FromConfig alone yields a working store together with
+// this package's declared capabilities. The store's own context check runs
+// before any request, so a cancelled context fails an operation with the
+// context's error -- the usable-store proof that needs no service, matching
+// the store's own hermetic unit tests.
 func TestFromConfig_BuildsTheStoreAndDeclaresTheCapabilities(t *testing.T) {
 	store, caps, err := FromConfig(configForTests())
 	if err != nil {
@@ -28,11 +25,6 @@ func TestFromConfig_BuildsTheStoreAndDeclaresTheCapabilities(t *testing.T) {
 		t.Errorf("FromConfig capabilities = %v, want the exported Capabilities constant %v", caps, Capabilities)
 	}
 
-	// The returned pair must be exactly what the injection path takes; this
-	// line is the compile-time half of the contract (WithObjectStore returns
-	// the option without applying it, so nothing runs here).
-	_ = pkgcore.WithObjectStore(store, caps)
-
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	_, err = store.GetObject(ctx, "some/key")
@@ -43,10 +35,10 @@ func TestFromConfig_BuildsTheStoreAndDeclaresTheCapabilities(t *testing.T) {
 
 // TestFromConfig_MissingFieldReturnsError pins each individually-missing
 // field as an error, never the panic NewObjectStore's own unusable-wiring
-// convention would raise for the same configuration: the caller assembling
-// a Kernel's options can still abandon them, so the judgment comes back as
-// a value. The failure path reports no store and no capability, so a caller
-// that ignored the error cannot wire a half-built pair.
+// convention would raise for the same configuration: the caller whose
+// configuration may still be abandoned gets the judgment back as a value.
+// The failure path reports no store and no capability, so a caller that
+// ignored the error cannot hold a half-built pair.
 func TestFromConfig_MissingFieldReturnsError(t *testing.T) {
 	tests := []struct {
 		name   string

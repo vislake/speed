@@ -38,6 +38,7 @@ import (
 
 	"github.com/vislake/speed/go/dbkit"
 	"github.com/vislake/speed/go/pkgcore"
+	"github.com/vislake/speed/go/pkgcore/componenttest"
 	"github.com/vislake/speed/go/rbac"
 
 	"github.com/vislake/speed/go/admin"
@@ -110,7 +111,7 @@ func ExampleModule_AttachRBAC() {
 		return
 	}
 
-	registry, err := pkgcore.NewKernel().Bootstrap(ctx, rbacModule)
+	registry, err := componenttest.DeclareModules(rbacModule)
 	if err != nil {
 		fmt.Println("bootstrap:", err)
 		return

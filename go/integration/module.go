@@ -487,7 +487,7 @@ func (m *Module) OpenAPISpec() []byte { return openAPISpecYAML }
 // webhookDeliveryHandler already use immediately below for the identical
 // reason -- see handler.go's own "Built differently from every other
 // module's Handler" doc comment for the full argument.
-func (m *Module) Register(reg pkgcore.Registrar) error {
+func (m *Module) Register(reg *pkgcore.ComponentRegistry) error {
 	if err := reg.PermissionsSeat().Add(PermissionRead, PermissionManage, PermissionWebhookRead, PermissionWebhookManage); err != nil {
 		return err
 	}
@@ -586,7 +586,7 @@ var (
 // other module contributed.
 //
 // A second Attach on the same Module fails with ErrAlreadyAttached.
-func (m *Module) Attach(reg pkgcore.Registrar) (*Service, error) {
+func (m *Module) Attach(reg *pkgcore.ComponentRegistry) (*Service, error) {
 	if m.service != nil {
 		return nil, ErrAlreadyAttached
 	}
@@ -633,5 +633,3 @@ func (m *Module) Attach(reg pkgcore.Registrar) (*Service, error) {
 	return svc, nil
 }
 
-// compile-time check that *Module satisfies pkgcore.Module.
-var _ pkgcore.Module = (*Module)(nil)

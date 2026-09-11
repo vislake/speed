@@ -9,6 +9,7 @@ import (
 	"github.com/vislake/speed/go/app"
 	obs "github.com/vislake/speed/go/observability"
 	"github.com/vislake/speed/go/pkgcore"
+	"github.com/vislake/speed/go/pkgcore/componenttest"
 	"github.com/vislake/speed/go/rbac"
 	"github.com/vislake/speed/go/tenancy"
 )
@@ -26,20 +27,19 @@ func (m *routesModule) DependsOn() []string  { return nil }
 func (m *routesModule) Migrations() embed.FS { return embed.FS{} }
 func (m *routesModule) Locales() embed.FS    { return embed.FS{} }
 func (m *routesModule) OpenAPISpec() []byte  { return nil }
-func (m *routesModule) Register(reg pkgcore.Registrar) error {
+func (m *routesModule) Register(reg *pkgcore.ComponentRegistry) error {
 	for _, route := range m.routes {
 		reg.RoutesSeat().Mount(route.Path, route.Handler)
 	}
 	return nil
 }
 
-var _ pkgcore.Module = (*routesModule)(nil)
 
 // testRegistry bootstraps a kernel over the modules, returning the registry
 // Standard derives its partition from.
-func testRegistry(t *testing.T, modules ...pkgcore.Module) *pkgcore.Registry {
+func testRegistry(t *testing.T, modules ...componenttest.Declarer) *pkgcore.ComponentRegistry {
 	t.Helper()
-	reg, err := pkgcore.NewKernel().Bootstrap(context.Background(), modules...)
+	reg, err := componenttest.DeclareModules(modules...)
 	if err != nil {
 		t.Fatalf("Bootstrap: %v", err)
 	}

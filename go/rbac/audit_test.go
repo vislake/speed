@@ -23,7 +23,7 @@ import (
 // module's audit emissions publish. The in-memory bus delivers
 // synchronously inside the emitting write, so when the write returns, the
 // recorder holds every row it produced.
-func recordAuditEvents(reg *pkgcore.Registry) *eventRecorder {
+func recordAuditEvents(reg *pkgcore.ComponentRegistry) *eventRecorder {
 	rec := &eventRecorder{}
 	reg.Events.Subscribe(audit.EventRecorded, rec.record)
 	return rec

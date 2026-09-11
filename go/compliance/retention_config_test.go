@@ -11,6 +11,7 @@ import (
 	"github.com/vislake/speed/go/dbkit"
 	"github.com/vislake/speed/go/dbkit/dbtest"
 	"github.com/vislake/speed/go/pkgcore"
+	"github.com/vislake/speed/go/pkgcore/componenttest"
 )
 
 // configModuleStub feeds go/config's own embedded migrations to
@@ -26,13 +27,12 @@ func (configModuleStub) DependsOn() []string              { return nil }
 func (configModuleStub) Migrations() embed.FS             { return configmigrations.FS }
 func (configModuleStub) Locales() embed.FS                { return embed.FS{} }
 func (configModuleStub) OpenAPISpec() []byte              { return nil }
-func (configModuleStub) Register(pkgcore.Registrar) error { return nil }
+func (configModuleStub) Register(*pkgcore.ComponentRegistry) error { return nil }
 
-var _ pkgcore.Module = configModuleStub{}
 
 // newRetentionConfigService returns a live *config.Service over a freshly
 // migrated configs table, attached the way a host attaches one: a real
-// config.Module registered on a real pkgcore.Registry, its schema frozen
+// config.Module registered on a real pkgcore.ComponentRegistry, its schema frozen
 // by Attach. withComplianceItems controls whether compliance's own
 // Register ran on that registry first -- the schema then carries
 // ConfigDefaultRetentionWindow (the shape of every real host, which
@@ -52,14 +52,14 @@ func newRetentionConfigService(t *testing.T, withComplianceItems bool) *config.S
 		t.Fatalf("apply config migrations: %v", err)
 	}
 
-	reg := pkgcore.NewRegistry(pkgcore.NewMemoryEventBus(), pkgcore.NewMemoryKVStore(), pkgcore.NewConsoleMailer())
+	reg := componenttest.NewRegistry()
 	cfgModule := config.NewModule(db)
-	if err := cfgModule.Register(reg); err != nil {
+	if err := componenttest.DeclareInto(reg, cfgModule); err != nil {
 		t.Fatalf("config.Module.Register: %v", err)
 	}
 	if withComplianceItems {
 		m := NewModule(newTestAuditRepo(t), WithQueue(&recordingQueue{}))
-		if err := m.Register(reg); err != nil {
+		if err := componenttest.DeclareInto(reg, m); err != nil {
 			t.Fatalf("compliance.Module.Register: %v", err)
 		}
 	}

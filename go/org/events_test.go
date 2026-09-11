@@ -80,7 +80,7 @@ func (m *recordingMailer) messages() []pkgcore.Mail {
 	return append([]pkgcore.Mail(nil), m.sent...)
 }
 
-// testHost is a stand-in for the host's *pkgcore.Registry: the four seams
+// testHost is a stand-in for the host's *pkgcore.ComponentRegistry: the four seams
 // org reads at call time, each backed by the standalone deployment mode's own
 // implementation, which is exactly what the deployment-mode design promises
 // a unit test can use instead of a double.
@@ -94,7 +94,7 @@ type testHost struct {
 func (h *testHost) KVStore() pkgcore.KVStore { return h.kv }
 
 // Mailer returns a genuinely nil interface when no mailer is wired, rather
-// than a non-nil interface wrapping a nil pointer. A real *pkgcore.Registry
+// than a non-nil interface wrapping a nil pointer. A real *pkgcore.ComponentRegistry
 // behaves that way, and a fake that did not would let a nil-mailer test call
 // straight through into a nil method receiver.
 func (h *testHost) Mailer() pkgcore.Mailer {

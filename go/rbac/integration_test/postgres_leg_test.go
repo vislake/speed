@@ -45,6 +45,7 @@ import (
 	// has a driver to build from.
 	_ "github.com/vislake/speed/go/dbkit/dialect/postgres"
 	"github.com/vislake/speed/go/pkgcore"
+	"github.com/vislake/speed/go/pkgcore/componenttest"
 	"github.com/vislake/speed/go/rbac"
 	"github.com/vislake/speed/go/tenancy/tenancytest"
 )
@@ -119,12 +120,13 @@ func openRBACPostgres(t *testing.T, ctx context.Context, pgContainer *postgres.P
 func attachRBACService(t *testing.T, db *gorm.DB, bus pkgcore.EventBus, opts ...rbac.Option) *rbac.Service {
 	t.Helper()
 
-	reg := pkgcore.NewRegistry(bus, pkgcore.NewMemoryKVStore(), pkgcore.NewConsoleMailer())
+	reg := componenttest.NewRegistry()
+	reg.Put(bus)
 	if err := reg.Permissions.Add(hostPermissions...); err != nil {
 		t.Fatalf("declaring the host's permissions: %v", err)
 	}
 	module := rbac.NewModule(db, append([]rbac.Option{rbac.WithCacheTTL(time.Hour)}, opts...)...)
-	if err := module.Register(reg); err != nil {
+	if err := componenttest.DeclareInto(reg, module); err != nil {
 		t.Fatalf("Register: %v", err)
 	}
 	svc, err := module.Attach(reg)

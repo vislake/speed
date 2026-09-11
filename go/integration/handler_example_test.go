@@ -21,6 +21,7 @@ import (
 
 	"github.com/vislake/speed/go/dbkit"
 	"github.com/vislake/speed/go/pkgcore"
+	"github.com/vislake/speed/go/pkgcore/componenttest"
 
 	"github.com/vislake/speed/go/integration"
 )
@@ -67,8 +68,8 @@ func ExampleHandler() {
 		return
 	}
 
-	reg := pkgcore.NewRegistry(pkgcore.NewMemoryEventBus(), pkgcore.NewMemoryKVStore(), pkgcore.NewConsoleMailer())
-	if regErr := m.Register(reg); regErr != nil {
+	reg := componenttest.NewRegistry()
+	if regErr := componenttest.DeclareInto(reg, m); regErr != nil {
 		fmt.Println("register module:", regErr)
 		return
 	}

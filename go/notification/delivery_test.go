@@ -49,6 +49,7 @@ import (
 	"github.com/vislake/speed/go/jobs"
 	"github.com/vislake/speed/go/notification/locales"
 	"github.com/vislake/speed/go/pkgcore"
+	"github.com/vislake/speed/go/pkgcore/componenttest"
 	"github.com/vislake/speed/go/pkgcore/apperr"
 	"github.com/vislake/speed/go/pkgcore/i18n"
 )
@@ -163,8 +164,13 @@ func newDeliveryEnv(t *testing.T) *deliveryEnv {
 	prefs.attachTypes(fixtureRegistrar{types: fixtureTypes})
 
 	contacts := NewContactService(db)
-	reg := pkgcore.NewRegistry(host.bus, host.kv, host.mailer)
-	if err := reg.AuditActions.Add(contactAuditActionDecls...); err != nil {
+	reg := pkgcore.NewComponentRegistry()
+	reg.Put(host.bus)
+	reg.Put(host.kv)
+	reg.Put(host.mailer)
+	if err := componenttest.Declare(reg, func(r *pkgcore.ComponentRegistry) error {
+		return r.AuditActions.Add(contactAuditActionDecls...)
+	}); err != nil {
 		t.Fatalf("register the contact audit actions: %v", err)
 	}
 	contacts.sms = sms

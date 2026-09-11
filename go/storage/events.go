@@ -42,7 +42,7 @@ type hostSeams interface {
 }
 
 // compile-time check that the declaration face covers the seam.
-var _ hostSeams = (pkgcore.Registrar)(nil)
+var _ hostSeams = (*pkgcore.ComponentRegistry)(nil)
 
 // serviceHost is embedded by every storage service (ObjectService,
 // DeriveService, LifecycleService). It carries the registry slice the
@@ -60,7 +60,7 @@ type serviceHost struct {
 // It is called exactly once, by Module.Register, and performs no I/O: it
 // stores the registry, and the store and bus are read from it at call time
 // so the service always uses the registry's final wiring.
-func (h *serviceHost) attach(reg pkgcore.Registrar) { h.host = reg }
+func (h *serviceHost) attach(reg *pkgcore.ComponentRegistry) { h.host = reg }
 
 // requireStore returns the object store the registry resolved, or fails
 // closed: no registry attached yet, or a registry carrying no store, means

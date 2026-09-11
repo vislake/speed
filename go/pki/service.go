@@ -178,7 +178,7 @@ func NewService(signer Signer, signerName string, signingKeys *SigningKeyReposit
 // Called from Module.Register, which -- per pkgcore.Module's own contract
 // -- performs no I/O: this is a plain field assignment plus a subscription
 // registration, exactly like go/storage's serviceHost.attach.
-func (s *Service) attachBus(reg pkgcore.Registrar) {
+func (s *Service) attachBus(reg *pkgcore.ComponentRegistry) {
 	s.bus = reg.EventBus()
 	reg.EventsSeat().Subscribe(EventSigningKeyStaged, s.onSigningKeyLifecycleEvent)
 	reg.EventsSeat().Subscribe(EventSigningKeyActivated, s.onSigningKeyLifecycleEvent)

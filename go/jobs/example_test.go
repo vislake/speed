@@ -21,6 +21,7 @@ import (
 	"github.com/vislake/speed/go/dbkit"
 	"github.com/vislake/speed/go/jobs"
 	"github.com/vislake/speed/go/pkgcore"
+	"github.com/vislake/speed/go/pkgcore/componenttest"
 )
 
 // exampleGreeter is a jobs.Handler that greets whoever Task.Payload names,
@@ -258,7 +259,7 @@ func ExampleWire() {
 		return
 	}
 
-	reg := pkgcore.NewRegistry(pkgcore.NewMemoryEventBus(), pkgcore.NewMemoryKVStore(), pkgcore.NewConsoleMailer())
+	reg := componenttest.NewRegistry()
 	err = reg.Jobs.Handle("greet", exampleGreeter{})
 	if err != nil {
 		fmt.Println("declare handler:", err)
@@ -417,7 +418,7 @@ func ExampleScheduler() {
 	// registered. Declaring means scheduled -- a host that starts a
 	// scheduler over the seat runs exactly this declaration.
 	sweeps := &exampleSweepRuns{ran: make(chan string, 1)}
-	reg := pkgcore.NewRegistry(pkgcore.NewMemoryEventBus(), pkgcore.NewMemoryKVStore(), pkgcore.NewConsoleMailer())
+	reg := componenttest.NewRegistry()
 	if err = reg.Jobs.Handle(sweeps.Type(), sweeps); err != nil {
 		fmt.Println("declare handler:", err)
 		return

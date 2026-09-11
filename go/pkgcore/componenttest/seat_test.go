@@ -15,7 +15,7 @@ import (
 // as production refuses it.
 func TestDuringInitOpensTheSeatsForTheDeclaration(t *testing.T) {
 	reg := pkgcore.NewComponentRegistry()
-	DuringInit(t, reg, func(r pkgcore.Registrar) error {
+	DuringInit(t, reg, func(r *pkgcore.ComponentRegistry) error {
 		if err := r.ConfigSeat().Add(pkgcore.ConfigItem{Key: "helped.item", Type: "string", Description: "d"}); err != nil {
 			return err
 		}

@@ -15,6 +15,7 @@ import (
 	"github.com/vislake/speed/go/dbkit"
 	_ "github.com/vislake/speed/go/dbkit/dialect/sqlite" // registers dbkit.DialectSQLite for dbkit.Open
 	"github.com/vislake/speed/go/pkgcore"
+	"github.com/vislake/speed/go/pkgcore/componenttest"
 	"github.com/vislake/speed/go/pki"
 	"github.com/vislake/speed/go/tenancy"
 )
@@ -731,8 +732,7 @@ func buildComposedHandler(t *testing.T, shape composedShape) http.Handler {
 	if err != nil {
 		t.Fatalf("authn.NewModule: %v", err)
 	}
-	reg, err := pkgcore.NewKernel(pkgcore.WithDeploymentMode(pkgcore.DeploymentModeStandalone)).
-		Bootstrap(ctx, pkiModule, authnModule)
+	reg, err := componenttest.DeclareModules(pkiModule, authnModule)
 	if err != nil {
 		t.Fatalf("bootstrap: %v", err)
 	}

@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/vislake/speed/go/pkgcore"
+	"github.com/vislake/speed/go/pkgcore/componenttest"
 	"github.com/vislake/speed/go/ratelimit"
 )
 
@@ -36,7 +37,7 @@ func newTestModuleWithService(t *testing.T) (*Module, *Service) {
 	t.Helper()
 	m := NewModule(newTestDB(t))
 	reg := newTestRegistry(t)
-	if err := m.Register(reg); err != nil {
+	if err := componenttest.DeclareInto(reg, m); err != nil {
 		t.Fatalf("Register: %v", err)
 	}
 	svc, err := m.Attach(reg)
@@ -158,7 +159,7 @@ func TestAuthMiddleware_WithAuthenticationGuard_ForgedRequestsPayTheLimit(t *tes
 
 	m := NewModule(newTestDB(t), WithAuthenticationGuard(guard))
 	reg := newTestRegistry(t)
-	if err := m.Register(reg); err != nil {
+	if err := componenttest.DeclareInto(reg, m); err != nil {
 		t.Fatalf("Register: %v", err)
 	}
 	if _, err := m.Attach(reg); err != nil {

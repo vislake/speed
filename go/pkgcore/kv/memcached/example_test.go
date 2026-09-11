@@ -1,12 +1,13 @@
 package memcached_test
 
-// Runnable documentation for the Memcached-backed KVStore, compiled and
+// Runnable documentation for this package's constructors, compiled and
 // executed by `go test` like every other package's examples, so an API
-// change that invalidates the documented usage fails the build instead of
-// silently rotting.
+// change that invalidates the documented usage fails the build instead
+// of silently rotting. The package's component descriptor -- the
+// component a composition configuration selects as its module's
+// implementation -- is exercised by the package's own component_test.go.
 
 import (
-	"context"
 	"fmt"
 
 	"github.com/bradfitz/gomemcache/memcache"
@@ -39,46 +40,4 @@ func ExampleNewKVStore() {
 	fmt.Println("store wired; Memcached holds no state that survives a restart")
 	// Output:
 	// store wired; Memcached holds no state that survives a restart
-}
-
-// Example demonstrates the package's self-registration: importing it for
-// side effect makes "kv.memcached" build through pkgcore's shared
-// KVStoreRegistry, the database/sql-style driver pattern kv/redis's own
-// register.go follows. Unlike "kv.redis", no built-in Preset names this
-// implementation -- a host that wants it wires it explicitly, exactly as
-// this example does.
-func Example() {
-	store, caps, err := pkgcore.KVStoreRegistry.Build("kv.memcached", pkgcore.Config{})
-	fmt.Println(err, store != nil, caps)
-
-	// Output:
-	// <nil> true MultiReplicaSafe
-}
-
-// ExampleRegistration shows the name-registration path for a configuration
-// the flat pkgcore.Config cannot express -- here a per-server topology
-// assembled in code, the shape a host reaches for when the server list is
-// computed rather than configured. The host builds the client itself, wraps
-// it in the registration factory, registers it under a name of its own (the
-// built-in "kv.memcached" name is taken), and names that registration in a
-// Preset entry. The host keeps ownership: the factory's New returns the
-// bare store over the host's client, so Kernel.Shutdown never touches
-// either, and the host closes both when it shuts down. Nothing here dials;
-// gomemcache connects per operation.
-func ExampleRegistration() {
-	client := memcache.New("cache-a.internal:11211", "cache-b.internal:11211")
-	defer client.Close()
-
-	name := "kv.memcached.host"
-	if err := pkgcore.KVStoreRegistry.Register(kvmemcached.Registration(name, client)); err != nil {
-		fmt.Println("register:", err)
-		return
-	}
-
-	preset := pkgcore.PresetStandalone.With("kv", pkgcore.SeamPreset{Implementation: name})
-	reg, err := pkgcore.NewKernel(pkgcore.WithPreset(preset)).Bootstrap(context.Background())
-	fmt.Println(err, reg.KVStore() != nil)
-
-	// Output:
-	// <nil> true
 }

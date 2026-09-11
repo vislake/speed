@@ -23,16 +23,14 @@ type objectStoreLocalConfig struct {
 // objectStoreLocalComponent is the component descriptor for
 // "objectstore.local", the local-directory store a composition configuration
 // selects as the "objectstore" module's implementation; it registers itself
-// from this file's init. Capabilities are deliberately 0, the same
-// under-declaration the seam registration documents at length
-// (objectstore_registry.go): one registration covers both the throwaway
-// temporary-directory default and a host-supplied persistent directory, and
-// under-declaring is the safe direction -- no deployment mode requires the
-// bit, and a host with a persistent directory can inject its store directly
-// when it wants the durability banner gone. Its New funnels through
-// newLocalObjectStoreFromDirectory, the same construction the flat seam
-// adapter uses, and its Close releases the temporary directory when the
-// component created one (a host-supplied directory carries no closer).
+// from this file's init. Capabilities are deliberately 0: one component
+// covers both the throwaway temporary-directory default and a host-supplied
+// persistent directory, and under-declaring is the safe direction -- no
+// deployment mode requires the bit, and a host with a persistent directory
+// can select its own provider component when it wants the durability bit
+// declared. Its New funnels through newLocalObjectStoreFromDirectory, and
+// its Close releases the temporary directory when the component created one
+// (a host-supplied directory carries no closer).
 var objectStoreLocalComponent = Component{
 	Name:         "objectstore.local",
 	Module:       "objectstore",
@@ -478,4 +476,51 @@ func (r *localObjectReader) Read(p []byte) (int, error) {
 
 func (r *localObjectReader) Close() error {
 	return r.file.Close()
+}
+
+// newLocalObjectStoreFromDirectory builds "objectstore.local" for directory,
+// the single construction path the component funnels through. An empty
+// directory falls back to a fresh private temporary directory whose removal
+// the returned value owns (see closableObjectStore); a non-empty one is the
+// host's own directory and the store never carries a closer for it.
+func newLocalObjectStoreFromDirectory(directory string) (ObjectStore, error) {
+	if directory == "" {
+		created, err := os.MkdirTemp("", "pkgcore-object-store-*")
+		if err != nil {
+			return nil, fmt.Errorf("pkgcore: builtin objectstore.local seam: %w", err)
+		}
+		// The temp directory was created by this construction and is owned
+		// by it: the returned value's Close() error removes the directory
+		// again, so the assembly's Close stage (or a failed construction's
+		// rollback, which closes what it built) does not leak the throwaway
+		// tree. A store over a host-supplied directory never carries a
+		// closer: that directory is the host's data, which nothing here may
+		// delete.
+		store := NewLocalObjectStore(created)
+		return &closableObjectStore{ObjectStore: store, removeRoot: func() error {
+			return os.RemoveAll(created)
+		}}, nil
+	}
+	return NewLocalObjectStore(directory), nil
+}
+
+// closableObjectStore is the value "objectstore.local" produces when it
+// created the store's directory itself: the store itself (whose promoted
+// methods satisfy ObjectStore) plus the Close() error method that removes
+// the temporary directory the construction created. A host that calls
+// NewLocalObjectStore itself keeps owning its directory, exactly as that
+// constructor's own doc comment promises, and calls Close on the result
+// only when it wants the throwaway tree gone.
+type closableObjectStore struct {
+	ObjectStore
+	removeRoot func() error
+}
+
+// Close removes the temporary directory the construction created. Nothing
+// may use the store after Close; a host shuts its seams down last.
+func (s *closableObjectStore) Close() error {
+	if s.removeRoot != nil {
+		return s.removeRoot()
+	}
+	return nil
 }

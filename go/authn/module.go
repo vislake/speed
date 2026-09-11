@@ -855,7 +855,7 @@ func (m *Module) Service() *Service { return m.svc }
 // SystemPurposes, and the assembly registers it when its Init stage closes
 // (the transition bridge registers it inside the module's own registration
 // turn on the module path).
-func (m *Module) Register(reg pkgcore.Registrar) error {
+func (m *Module) Register(reg *pkgcore.ComponentRegistry) error {
 	svc, err := NewService(m.db, reg.EventBus(), reg.KVStore(), m.opts...)
 	if err != nil {
 		return err
@@ -1137,5 +1137,3 @@ func socialCredentialItems() []pkgcore.ConfigItem {
 	return items
 }
 
-// compile-time check that *Module satisfies pkgcore.Module.
-var _ pkgcore.Module = (*Module)(nil)

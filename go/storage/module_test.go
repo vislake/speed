@@ -13,6 +13,7 @@ import (
 
 	"github.com/vislake/speed/go/jobs"
 	"github.com/vislake/speed/go/pkgcore"
+	"github.com/vislake/speed/go/pkgcore/componenttest"
 	"github.com/vislake/speed/go/pkgcore/apperr"
 
 	"github.com/vislake/speed/go/storage/internal/testutil"
@@ -182,8 +183,7 @@ func TestModule_Register_DoesNotDeclareForeignEvents(t *testing.T) {
 // alongside a module that declares its own permissions, audit actions and
 // events -- the real host shape -- rather than only in isolation.
 func TestModule_Register_CoexistsWithAnotherModule(t *testing.T) {
-	reg, err := pkgcore.NewKernel().
-		Bootstrap(context.Background(), newWiredModule(t, nil), neighbourModule{})
+	reg, err := componenttest.DeclareModules(newWiredModule(t, nil), neighbourModule{})
 	if err != nil {
 		t.Fatalf("Bootstrap: %v", err)
 	}
@@ -195,12 +195,8 @@ func TestModule_Register_CoexistsWithAnotherModule(t *testing.T) {
 // any database call inside Register would panic here.
 func TestModule_Register_PerformsNoIO(t *testing.T) {
 	m := newWiredModule(t, nil)
-	reg := pkgcore.NewRegistry(
-		pkgcore.NewMemoryEventBus(),
-		pkgcore.NewMemoryKVStore(),
-		pkgcore.NewConsoleMailer(),
-	)
-	if err := m.Register(reg); err != nil {
+	reg := componenttest.NewRegistry()
+	if err := componenttest.DeclareInto(reg, m); err != nil {
 		t.Fatalf("Register against a nil database: %v", err)
 	}
 }
@@ -212,12 +208,8 @@ func TestModule_Register_PerformsNoIO(t *testing.T) {
 // at the module's own window cadence.
 func TestModule_Register_DeclaresTheExpirySweepSchedule(t *testing.T) {
 	m := newWiredModule(t, nil)
-	reg := pkgcore.NewRegistry(
-		pkgcore.NewMemoryEventBus(),
-		pkgcore.NewMemoryKVStore(),
-		pkgcore.NewConsoleMailer(),
-	)
-	if err := m.Register(reg); err != nil {
+	reg := componenttest.NewRegistry()
+	if err := componenttest.DeclareInto(reg, m); err != nil {
 		t.Fatalf("Register: %v", err)
 	}
 
@@ -232,8 +224,7 @@ func TestModule_Register_DeclaresTheExpirySweepSchedule(t *testing.T) {
 // queue to finish their processing refuses to boot at Register time, the
 // same shape org's indexer-required refusal takes.
 func TestModule_Register_RefusesAQueuelessBoot(t *testing.T) {
-	_, err := pkgcore.NewKernel().
-		Bootstrap(context.Background(), NewModule(nil))
+	_, err := componenttest.DeclareModules(NewModule(nil))
 	if !apperr.HasCode(err, ErrQueueRequired.Code) {
 		t.Fatalf("Bootstrap without a queue error = %v, want storage.queue_required", err)
 	}
@@ -260,8 +251,7 @@ func TestModule_Register_RefusesAnUnadmittableAllowedType(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			_, err := pkgcore.NewKernel().
-				Bootstrap(context.Background(), newWiredModule(t, nil, WithAllowedTypes(tc.types...)))
+			_, err := componenttest.DeclareModules(newWiredModule(t, nil, WithAllowedTypes(tc.types...)))
 			if !apperr.HasCode(err, ErrAllowedTypeUnsupported.Code) {
 				t.Fatalf("Bootstrap with allowed types %v error = %v, want storage.allowed_type_unsupported", tc.types, err)
 			}
@@ -276,13 +266,12 @@ func TestModule_Register_RefusesAnUnadmittableAllowedType(t *testing.T) {
 // the default it was born enforcing.
 func TestModule_Register_AdmitsTheDefaultAllowlistAndOnlyIt(t *testing.T) {
 	t.Run("no WithAllowedTypes option", func(t *testing.T) {
-		if _, err := pkgcore.NewKernel().Bootstrap(context.Background(), newWiredModule(t, nil)); err != nil {
+		if _, err := componenttest.DeclareModules(newWiredModule(t, nil)); err != nil {
 			t.Fatalf("Bootstrap with the default allowlist: %v", err)
 		}
 	})
 	t.Run("the full safety set spelled out", func(t *testing.T) {
-		if _, err := pkgcore.NewKernel().Bootstrap(context.Background(),
-			newWiredModule(t, nil, WithAllowedTypes("image/jpeg", "image/png"))); err != nil {
+		if _, err := componenttest.DeclareModules(newWiredModule(t, nil, WithAllowedTypes("image/jpeg", "image/png"))); err != nil {
 			t.Fatalf("Bootstrap with the safety-covered allowlist: %v", err)
 		}
 	})
@@ -494,7 +483,7 @@ func TestModule_Register_WiresTheServiceHostSeams(t *testing.T) {
 		t.Fatal("the services hold a registry before Register; they must fail closed until the module registers")
 	}
 
-	reg, err := pkgcore.NewKernel().Bootstrap(context.Background(), m)
+	reg, err := componenttest.DeclareModules(m)
 	if err != nil {
 		t.Fatalf("Bootstrap: %v", err)
 	}
@@ -556,7 +545,7 @@ func TestModule_Register_WiresTheServiceHostSeams(t *testing.T) {
 // module performs, which those service-side tests cannot see.
 func TestModule_Register_RegistersTheServicesJobHandlers(t *testing.T) {
 	m := newWiredModule(t, nil)
-	reg, err := pkgcore.NewKernel().Bootstrap(context.Background(), m)
+	reg, err := componenttest.DeclareModules(m)
 	if err != nil {
 		t.Fatalf("Bootstrap: %v", err)
 	}
@@ -626,14 +615,13 @@ func (neighbourModule) DependsOn() []string  { return nil }
 func (neighbourModule) Migrations() embed.FS { return embed.FS{} }
 func (neighbourModule) Locales() embed.FS    { return embed.FS{} }
 func (neighbourModule) OpenAPISpec() []byte  { return nil }
-func (neighbourModule) Register(reg pkgcore.Registrar) error {
+func (neighbourModule) Register(reg *pkgcore.ComponentRegistry) error {
 	if err := reg.PermissionsSeat().Add("neighbour:read"); err != nil {
 		return err
 	}
 	return reg.AuditActionsSeat().Add("neighbour.thing.do")
 }
 
-var _ pkgcore.Module = neighbourModule{}
 
 // assertContainsAll fails t unless got holds every entry in want.
 func assertContainsAll(t *testing.T, got, want []string) {
@@ -665,10 +653,9 @@ func newWiredModule(t *testing.T, db *gorm.DB, opts ...Option) *Module {
 // Bootstrap rather than calling Register on a hand-built Registry is
 // deliberate: it is the only path that also merges the locale files and so
 // proves they survive i18n.Builder.AddModule's parity validation.
-func bootstrapTestModule(t *testing.T, opts ...Option) *pkgcore.Registry {
+func bootstrapTestModule(t *testing.T, opts ...Option) *pkgcore.ComponentRegistry {
 	t.Helper()
-	reg, err := pkgcore.NewKernel().
-		Bootstrap(context.Background(), newWiredModule(t, nil, opts...))
+	reg, err := componenttest.DeclareModules(newWiredModule(t, nil, opts...))
 	if err != nil {
 		t.Fatalf("Bootstrap: %v", err)
 	}

@@ -62,6 +62,7 @@ import (
 	"github.com/vislake/speed/go/jobs"
 	"github.com/vislake/speed/go/notification"
 	"github.com/vislake/speed/go/pkgcore"
+	"github.com/vislake/speed/go/pkgcore/componenttest"
 	"github.com/vislake/speed/go/pkgcore/apperr"
 	"github.com/vislake/speed/go/tenancy/tenancytest"
 )
@@ -318,7 +319,7 @@ func openNotificationPostgres(t *testing.T, ctx context.Context, pgContainer *po
 // pkgcore.NewKernel() exactly as a standalone host boots it. Bootstrap
 // runs the module's Register (seam validation, declarations, attachments)
 // and assembles the merged catalog; the returned registry is the host's.
-func bootModule(t *testing.T, ctx context.Context, db *gorm.DB) (*notification.Module, *pkgcore.Registry, *bytes.Buffer) {
+func bootModule(t *testing.T, ctx context.Context, db *gorm.DB) (*notification.Module, *pkgcore.ComponentRegistry, *bytes.Buffer) {
 	t.Helper()
 
 	smsBuf := new(bytes.Buffer)
@@ -330,7 +331,7 @@ func bootModule(t *testing.T, ctx context.Context, db *gorm.DB) (*notification.M
 		notification.WithDeliveryQueue(&stubQueue{}),
 		notification.WithUserAddressResolver(&stubUserResolver{byUser: map[string]notification.UserAddresses{}}),
 	)
-	reg, err := pkgcore.NewKernel().Bootstrap(ctx, module)
+	reg, err := componenttest.DeclareModules(module)
 	if err != nil {
 		t.Fatalf("Kernel.Bootstrap: %v", err)
 	}

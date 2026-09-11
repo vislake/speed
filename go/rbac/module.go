@@ -176,7 +176,7 @@ func (m *Module) OpenAPISpec() []byte { return nil }
 // The permission CATALOG is deliberately not read here: other modules may
 // register after this one, so the snapshot must be taken once every module
 // has declared, which is what Attach does.
-func (m *Module) Register(reg pkgcore.Registrar) error {
+func (m *Module) Register(reg *pkgcore.ComponentRegistry) error {
 	if err := reg.PermissionsSeat().Add(PermissionRead, PermissionManage); err != nil {
 		return err
 	}
@@ -199,7 +199,7 @@ func (m *Module) Register(reg pkgcore.Registrar) error {
 // diverge from the first -- which, for the set that decides whether a
 // grant is legal, is a security-relevant difference rather than a
 // cosmetic one.
-func (m *Module) Attach(reg pkgcore.Registrar) (*Service, error) {
+func (m *Module) Attach(reg *pkgcore.ComponentRegistry) (*Service, error) {
 	if m.service != nil {
 		return nil, ErrAlreadyAttached
 	}
@@ -282,5 +282,3 @@ func (m *Module) Attach(reg pkgcore.Registrar) (*Service, error) {
 	return svc, nil
 }
 
-// compile-time check that *Module satisfies pkgcore.Module.
-var _ pkgcore.Module = (*Module)(nil)

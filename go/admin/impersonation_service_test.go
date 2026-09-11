@@ -20,6 +20,7 @@ import (
 	"github.com/vislake/speed/go/notification"
 	obs "github.com/vislake/speed/go/observability"
 	"github.com/vislake/speed/go/pkgcore"
+	"github.com/vislake/speed/go/pkgcore/componenttest"
 	"github.com/vislake/speed/go/pkgcore/apperr"
 	"github.com/vislake/speed/go/rbac"
 	rbacmigrations "github.com/vislake/speed/go/rbac/migrations"
@@ -50,7 +51,7 @@ func (f *fakeNotifier) Dispatch(ctx context.Context, d notification.Dispatch) (j
 // only in-package wiring can produce, since Start refuses outright any
 // service attach never ran on; see
 // TestImpersonationService_Start_UnwiredService_Refused).
-func newTestImpersonationService(t *testing.T, notifier Notifier) (*ImpersonationService, *pkgcore.Registry) {
+func newTestImpersonationService(t *testing.T, notifier Notifier) (*ImpersonationService, *pkgcore.ComponentRegistry) {
 	t.Helper()
 	// RegisterSystemPurpose is process-global and idempotent -- see its own
 	// doc comment -- so calling it here, in every test that exercises
@@ -97,7 +98,7 @@ func newAttachedRBAC(t *testing.T, db *gorm.DB) *rbac.Service {
 	t.Helper()
 	dbtest.Migrate(t, db, dbkit.DialectSQLite, dbtest.Migration{Module: "rbac", FS: rbacmigrations.FS})
 	rbacModule := rbac.NewModule(db)
-	reg, err := pkgcore.NewKernel().Bootstrap(t.Context(), rbacModule)
+	reg, err := componenttest.DeclareModules(rbacModule)
 	if err != nil {
 		t.Fatalf("bootstrap the rbac module: %v", err)
 	}

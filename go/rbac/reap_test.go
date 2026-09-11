@@ -28,7 +28,7 @@ type removedMember struct {
 // registry's bus, under the tenant the removal happened in. The in-memory
 // bus runs every subscriber synchronously inside Publish, so when this
 // helper returns, every reap the event triggers has already happened.
-func publishMemberRemoved(t *testing.T, reg *pkgcore.Registry, tenant pkgcore.TenantID, payload any) {
+func publishMemberRemoved(t *testing.T, reg *pkgcore.ComponentRegistry, tenant pkgcore.TenantID, payload any) {
 	t.Helper()
 	bus := reg.Events.Bus()
 	if bus == nil {
@@ -401,7 +401,7 @@ type deletedNode struct {
 // the tenant the delete happened in. The in-memory bus runs every
 // subscriber synchronously inside Publish, so when this helper returns,
 // every reap the event triggers has already happened.
-func publishNodeDeleted(t *testing.T, reg *pkgcore.Registry, tenant pkgcore.TenantID, payload any) {
+func publishNodeDeleted(t *testing.T, reg *pkgcore.ComponentRegistry, tenant pkgcore.TenantID, payload any) {
 	t.Helper()
 	bus := reg.Events.Bus()
 	if bus == nil {
@@ -855,7 +855,7 @@ type restoredMember struct {
 // bus runs every subscriber synchronously inside Publish, so when this
 // helper returns, every re-instatement the event triggers has already
 // happened.
-func publishMemberRestored(t *testing.T, reg *pkgcore.Registry, tenant pkgcore.TenantID, payload any) {
+func publishMemberRestored(t *testing.T, reg *pkgcore.ComponentRegistry, tenant pkgcore.TenantID, payload any) {
 	t.Helper()
 	bus := reg.Events.Bus()
 	if bus == nil {
@@ -1494,7 +1494,7 @@ type restoredNode struct {
 // under the tenant the restore happened in. The in-memory bus runs every
 // subscriber synchronously inside Publish, so when this helper returns,
 // every re-instatement the event triggers has already happened.
-func publishNodeRestored(t *testing.T, reg *pkgcore.Registry, tenant pkgcore.TenantID, payload any) {
+func publishNodeRestored(t *testing.T, reg *pkgcore.ComponentRegistry, tenant pkgcore.TenantID, payload any) {
 	t.Helper()
 	bus := reg.Events.Bus()
 	if bus == nil {

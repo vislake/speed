@@ -9,6 +9,7 @@ import (
 
 	"github.com/vislake/speed/go/dbkit/audit"
 	"github.com/vislake/speed/go/pkgcore"
+	"github.com/vislake/speed/go/pkgcore/componenttest"
 	"github.com/vislake/speed/go/pkgcore/apperr"
 	"github.com/vislake/speed/go/tenancy"
 
@@ -16,7 +17,7 @@ import (
 )
 
 // newErasureServiceWith returns an ErasureService wired directly over a
-// hand-built pkgcore.Registry carrying exactly the given participants,
+// hand-built pkgcore.ComponentRegistry carrying exactly the given participants,
 // plus a subscriber capturing every audit.RecordedEvent published on the
 // bus (dbkit/audit.Emit's own EventRecorded), so a test can assert an
 // erasure is actually audited without a real database-backed
@@ -35,7 +36,8 @@ func newErasureServiceWith(t *testing.T, participants ...pkgcore.RetentionPartic
 // the erasure's own audit emit) that a healthy memory bus can never reach.
 func newErasureServiceOn(t *testing.T, bus pkgcore.EventBus, participants ...pkgcore.RetentionParticipant) (*ErasureService, *[]audit.RecordedEvent) {
 	t.Helper()
-	reg := pkgcore.NewRegistry(bus, pkgcore.NewMemoryKVStore(), pkgcore.NewConsoleMailer())
+	reg := componenttest.NewRegistry()
+	reg.Put(bus)
 	if err := reg.AuditActions.Add(AuditActionErasureRequest); err != nil {
 		t.Fatalf("declare audit action: %v", err)
 	}
@@ -61,7 +63,7 @@ func newErasureServiceOn(t *testing.T, bus pkgcore.EventBus, participants ...pkg
 }
 
 // newErasureHarness returns an ErasureService wired directly over a
-// hand-built pkgcore.Registry (see newErasureServiceWith) plus one
+// hand-built pkgcore.ComponentRegistry (see newErasureServiceWith) plus one
 // registered testutil.FakeNote participant and its own migrated SQLite
 // database, ready for seeding rows directly.
 func newErasureHarness(t *testing.T) (*ErasureService, *testutil.FakeRepository, *[]audit.RecordedEvent) {

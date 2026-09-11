@@ -19,6 +19,7 @@ import (
 	"github.com/vislake/speed/go/dbkit/audit"
 	obs "github.com/vislake/speed/go/observability"
 	"github.com/vislake/speed/go/pkgcore"
+	"github.com/vislake/speed/go/pkgcore/componenttest"
 )
 
 // stubSubjectResolver is a fixed-answer SubjectResolver for handler tests:
@@ -39,7 +40,7 @@ func (s stubSubjectResolver) Subject(r *http.Request) (string, bool) {
 // database and a real in-memory pkgcore.EventBus, so tests can assert on
 // both the HTTP response and the event actually published -- not a mock of
 // either. The AuditActionRegistrar it hands to NewHandler comes from a real
-// *pkgcore.Registry with AuditActionNoteCreate already declared on it,
+// *pkgcore.ComponentRegistry with AuditActionNoteCreate already declared on it,
 // exactly as module.go's Register does before ever constructing a Handler
 // -- not a hand-rolled fake -- so a test exercising audit.Emit's own
 // action-validation path (TestHandler_Create_ValidText_RecordsAuditEvent)
@@ -60,7 +61,8 @@ func newTestHandlerWithSubject(t *testing.T, subject SubjectResolver) (*Handler,
 	t.Helper()
 	repo := newMigratedRepository(t)
 	bus := pkgcore.NewMemoryEventBus()
-	reg := pkgcore.NewRegistry(bus, pkgcore.NewMemoryKVStore(), pkgcore.NewConsoleMailer())
+	reg := componenttest.NewRegistry()
+	reg.Put(bus)
 	if err := reg.AuditActions.Add(AuditActionNoteCreate); err != nil {
 		t.Fatalf("declare %q on a fresh AuditActionRegistrar: %v", AuditActionNoteCreate, err)
 	}
@@ -203,7 +205,7 @@ func TestHandler_Create_UnresolvedSubject_ReturnsUnauthorized(t *testing.T) {
 // TestHandler_Create_ValidText_RecordsAuditEvent proves NotesCreateNote's
 // recordNoteCreatedAudit call actually reaches audit.Emit and publishes a
 // real audit.RecordedEvent -- at the Handler-unit level, against the real
-// in-memory pkgcore.EventBus and the real *pkgcore.Registry-sourced
+// in-memory pkgcore.EventBus and the real *pkgcore.ComponentRegistry-sourced
 // AuditActionRegistrar newTestHandler builds (not a fake), so a broken
 // wiring between NewHandler's auditActions parameter and audit.Emit's own
 // validation would fail this test. The full, end-to-end proof that this

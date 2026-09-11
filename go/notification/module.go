@@ -412,7 +412,7 @@ func (m *Module) OpenAPISpec() []byte { return openAPISpecYAML }
 // Register is called, so the handler is built from the host's final
 // wiring, and each declaration arrives with the producer that needs it,
 // exactly as errors.go's doc comment says of error codes.
-func (m *Module) Register(reg pkgcore.Registrar) error {
+func (m *Module) Register(reg *pkgcore.ComponentRegistry) error {
 	if m.sms == nil {
 		return ErrSMSSenderRequired
 	}
@@ -499,5 +499,3 @@ var bootstrapKeyDecl = pkgcore.BootstrapKey{
 	Group:       moduleName,
 }
 
-// compile-time check that *Module satisfies pkgcore.Module.
-var _ pkgcore.Module = (*Module)(nil)

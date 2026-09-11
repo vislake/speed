@@ -706,3 +706,43 @@ func TestNewLocalObjectStore_PanicsOnAnUnusableDirectory(t *testing.T) {
 		NewLocalObjectStore(path)
 	})
 }
+
+// TestNewLocalObjectStoreFromDirectory_EmptyDirectoryFallsBackToATemporaryOne pins
+// the throwaway-by-default behaviour: an empty directory argument must not
+// fail, and must still produce a usable store.
+func TestNewLocalObjectStoreFromDirectory_EmptyDirectoryFallsBackToATemporaryOne(t *testing.T) {
+	store, err := newLocalObjectStoreFromDirectory("")
+	if err != nil {
+		t.Fatalf("newLocalObjectStoreFromDirectory(empty) error = %v, want nil", err)
+	}
+	if store == nil {
+		t.Fatal("newLocalObjectStoreFromDirectory(empty) returned a nil store")
+	}
+}
+
+// TestNewLocalObjectStoreFromDirectory_DirectoryIsHonoured pins the other half:
+// a host that names a persistent directory gets a store over that exact
+// directory, so objects survive a restart -- the whole point of setting it.
+func TestNewLocalObjectStoreFromDirectory_DirectoryIsHonoured(t *testing.T) {
+	dir := t.TempDir()
+	store, err := newLocalObjectStoreFromDirectory(dir)
+	if err != nil {
+		t.Fatalf("newLocalObjectStoreFromDirectory() error = %v, want nil", err)
+	}
+
+	if putErr := store.PutObject(t.Context(), "k", strings.NewReader("v")); putErr != nil {
+		t.Fatalf("PutObject() error = %v, want nil", putErr)
+	}
+	// A second store opened over the same directory must read back what the
+	// first one wrote: proof the directory was actually honoured, not routed
+	// somewhere else (a fresh temporary directory, for instance).
+	second, err := newLocalObjectStoreFromDirectory(dir)
+	if err != nil {
+		t.Fatalf("newLocalObjectStoreFromDirectory() (second open) error = %v, want nil", err)
+	}
+	reader, err := second.GetObject(t.Context(), "k")
+	if err != nil {
+		t.Fatalf("GetObject() error = %v, want nil", err)
+	}
+	defer reader.Close()
+}

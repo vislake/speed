@@ -18,6 +18,7 @@ import (
 	// file in this directory into a single binary.
 	_ "github.com/vislake/speed/go/dbkit/dialect/sqlite"
 	"github.com/vislake/speed/go/pkgcore"
+	"github.com/vislake/speed/go/pkgcore/componenttest"
 	"github.com/vislake/speed/go/pkgcore/apperr"
 )
 
@@ -28,7 +29,6 @@ import (
 // module's, into the one schema it serves.
 type brandModule struct{}
 
-var _ pkgcore.Module = (*brandModule)(nil)
 
 func (*brandModule) Name() string         { return "brand" }
 func (*brandModule) DependsOn() []string  { return nil }
@@ -36,7 +36,7 @@ func (*brandModule) Migrations() embed.FS { return embed.FS{} }
 func (*brandModule) Locales() embed.FS    { return embed.FS{} }
 func (*brandModule) OpenAPISpec() []byte  { return nil }
 
-func (*brandModule) Register(reg pkgcore.Registrar) error {
+func (*brandModule) Register(reg *pkgcore.ComponentRegistry) error {
 	if err := reg.ConfigSeat().Add(pkgcore.ConfigItem{
 		Key:         "brand.site_name",
 		Type:        "string",
@@ -85,8 +85,7 @@ func Example() {
 	// Bootstrap walks the module graph, calling Register on each; Attach is
 	// called exactly once afterwards and freezes the union of everything
 	// declared into a schema the service serves.
-	reg, err := pkgcore.NewKernel().
-		Bootstrap(ctx, &brandModule{}, configModule)
+	reg, err := componenttest.DeclareModules(&brandModule{}, configModule)
 	if err != nil {
 		panic(err)
 	}
@@ -154,7 +153,7 @@ func ExampleService_Describe() {
 		panic(err)
 	}
 
-	reg, err := pkgcore.NewKernel().Bootstrap(ctx, &brandModule{}, configModule)
+	reg, err := componenttest.DeclareModules(&brandModule{}, configModule)
 	if err != nil {
 		panic(err)
 	}
@@ -182,7 +181,6 @@ func ExampleService_Describe() {
 // export's delivery window) reads through Service.TenantDuration.
 type shareExpiryModule struct{}
 
-var _ pkgcore.Module = (*shareExpiryModule)(nil)
 
 func (*shareExpiryModule) Name() string         { return "share-expiry" }
 func (*shareExpiryModule) DependsOn() []string  { return nil }
@@ -190,7 +188,7 @@ func (*shareExpiryModule) Migrations() embed.FS { return embed.FS{} }
 func (*shareExpiryModule) Locales() embed.FS    { return embed.FS{} }
 func (*shareExpiryModule) OpenAPISpec() []byte  { return nil }
 
-func (*shareExpiryModule) Register(reg pkgcore.Registrar) error {
+func (*shareExpiryModule) Register(reg *pkgcore.ComponentRegistry) error {
 	return reg.ConfigSeat().Add(pkgcore.ConfigItem{
 		Key:         "share.default_expiry",
 		Type:        "duration",
@@ -225,7 +223,7 @@ func ExampleService_TenantDuration() {
 	if err = migrations.Apply(ctx, db, dbkit.DialectSQLite); err != nil {
 		panic(err)
 	}
-	reg, err := pkgcore.NewKernel().Bootstrap(ctx, &shareExpiryModule{}, configModule)
+	reg, err := componenttest.DeclareModules(&shareExpiryModule{}, configModule)
 	if err != nil {
 		panic(err)
 	}
@@ -323,7 +321,7 @@ func ExampleModule_Handle() {
 		fmt.Println("before Attach:", appErr.Code)
 	}
 
-	reg, err := pkgcore.NewKernel().Bootstrap(ctx, &brandModule{}, configModule)
+	reg, err := componenttest.DeclareModules(&brandModule{}, configModule)
 	if err != nil {
 		panic(err)
 	}

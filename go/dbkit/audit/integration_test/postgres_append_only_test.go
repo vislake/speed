@@ -36,9 +36,8 @@ func (fakeAuditModule) DependsOn() []string              { return nil }
 func (fakeAuditModule) Migrations() embed.FS             { return migrations.FS }
 func (fakeAuditModule) Locales() embed.FS                { return embed.FS{} }
 func (fakeAuditModule) OpenAPISpec() []byte              { return nil }
-func (fakeAuditModule) Register(pkgcore.Registrar) error { return nil }
+func (fakeAuditModule) Register(*pkgcore.ComponentRegistry) error { return nil }
 
-var _ pkgcore.Module = fakeAuditModule{}
 
 // newMigratedPostgresAuditDB returns a *gorm.DB (via dbtest.NewPostgres,
 // which itself calls t.Skip when no Docker daemon is reachable) with

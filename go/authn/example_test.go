@@ -17,6 +17,7 @@ import (
 	"github.com/vislake/speed/go/authn/internal/totp"
 	"github.com/vislake/speed/go/dbkit"
 	"github.com/vislake/speed/go/pkgcore"
+	"github.com/vislake/speed/go/pkgcore/componenttest"
 	"github.com/vislake/speed/go/pkgcore/apperr"
 	"github.com/vislake/speed/go/tenancy"
 )
@@ -324,8 +325,8 @@ func ExampleNewModule() {
 		panic(err)
 	}
 
-	registry := pkgcore.NewRegistry(pkgcore.NewMemoryEventBus(), pkgcore.NewMemoryKVStore(), pkgcore.NewConsoleMailer())
-	if err := module.Register(registry); err != nil {
+	registry := componenttest.NewRegistry()
+	if err := componenttest.DeclareInto(registry, module); err != nil {
 		panic(err)
 	}
 
@@ -357,7 +358,7 @@ var _ authn.MembershipReader = exampleMemberships{}
 // exampleModule builds a fully registered Module over a fresh in-memory
 // database, for the examples below that need a working Service rather than
 // just NewModule's own return value.
-func exampleModule(ctx context.Context) (*authn.Module, *pkgcore.Registry) {
+func exampleModule(ctx context.Context) (*authn.Module, *pkgcore.ComponentRegistry) {
 	cipher, err := dbkit.NewCipher(make([]byte, 32))
 	if err != nil {
 		panic(err)
@@ -395,8 +396,8 @@ func exampleModule(ctx context.Context) (*authn.Module, *pkgcore.Registry) {
 		panic(err)
 	}
 
-	registry := pkgcore.NewRegistry(pkgcore.NewMemoryEventBus(), pkgcore.NewMemoryKVStore(), pkgcore.NewConsoleMailer())
-	if err := module.Register(registry); err != nil {
+	registry := componenttest.NewRegistry()
+	if err := componenttest.DeclareInto(registry, module); err != nil {
 		panic(err)
 	}
 	return module, registry

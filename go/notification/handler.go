@@ -109,7 +109,7 @@ type handlerHost interface {
 	Locales() *i18n.Catalog
 }
 
-var _ handlerHost = (pkgcore.Registrar)(nil)
+var _ handlerHost = (*pkgcore.ComponentRegistry)(nil)
 
 type Handler struct {
 	// inbox is the inbox's repository, the same instance Module's delivery
@@ -194,7 +194,7 @@ func NewHandler(inbox *Repository, prefs *PreferenceService, contacts *ContactSe
 // calls it after every module has registered, so the catalog Handler reads
 // at request time (h.catalog) is the merged one -- read from the registry
 // at call time, never captured here, when reg.Locales() is still nil.
-func (h *Handler) attachHost(reg pkgcore.Registrar) {
+func (h *Handler) attachHost(reg *pkgcore.ComponentRegistry) {
 	h.host = reg
 }
 

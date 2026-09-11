@@ -14,6 +14,7 @@ import (
 	"github.com/vislake/speed/go/dbkit/audit"
 	"github.com/vislake/speed/go/dbkit/dbtest"
 	"github.com/vislake/speed/go/pkgcore"
+	"github.com/vislake/speed/go/pkgcore/componenttest"
 	"github.com/vislake/speed/go/pkgcore/apperr"
 	"github.com/vislake/speed/go/sharing"
 	sharingmigrations "github.com/vislake/speed/go/sharing/migrations"
@@ -53,7 +54,7 @@ func (f *fakeSharingCreator) Create(_ context.Context, p sharing.CreateParams) (
 var _ SharingCreator = (*fakeSharingCreator)(nil)
 
 // newExportHarness returns an ExportService wired directly over a
-// hand-built pkgcore.Registry, a real pkgcore.NewLocalObjectStore rooted
+// hand-built pkgcore.ComponentRegistry, a real pkgcore.NewLocalObjectStore rooted
 // at t.TempDir(), and a fakeSharingCreator standing in for go/sharing.
 func newExportHarness(t *testing.T) (*ExportService, *testutil.FakeRepository, pkgcore.ObjectStore, *fakeSharingCreator) {
 	t.Helper()
@@ -87,7 +88,8 @@ func newExportHarnessSeamed(t *testing.T, bus pkgcore.EventBus, store pkgcore.Ob
 	if store == nil {
 		store = pkgcore.NewLocalObjectStore(t.TempDir())
 	}
-	reg := pkgcore.NewRegistry(bus, pkgcore.NewMemoryKVStore(), pkgcore.NewConsoleMailer())
+	reg := componenttest.NewRegistry()
+	reg.Put(bus)
 	if err := reg.AuditActionsSeat().Add(AuditActionExportRequest); err != nil {
 		t.Fatalf("declare audit action: %v", err)
 	}
@@ -587,16 +589,15 @@ func (sharingModuleStub) DependsOn() []string              { return nil }
 func (sharingModuleStub) Migrations() embed.FS             { return sharingmigrations.FS }
 func (sharingModuleStub) Locales() embed.FS                { return embed.FS{} }
 func (sharingModuleStub) OpenAPISpec() []byte              { return nil }
-func (sharingModuleStub) Register(pkgcore.Registrar) error { return nil }
+func (sharingModuleStub) Register(*pkgcore.ComponentRegistry) error { return nil }
 
-var _ pkgcore.Module = sharingModuleStub{}
 
 // newRealSharingService returns a *sharing.Service wired the way a real
 // host wires one: go/sharing's own real, versioned migration files applied
 // from zero through the real dbkit.MigrationRegistry -- the identical
 // construction newTestAuditDB (module_test.go) uses for dbkit/audit --
 // then sharing.NewModule(db).Register attached against a real
-// pkgcore.Registry, exactly as Kernel.Bootstrap would attach it for a real
+// pkgcore.ComponentRegistry, exactly as Kernel.Bootstrap would attach it for a real
 // host. Going through Register (rather than calling sharing.NewService
 // directly) is deliberate: it exercises sharing's actual Create/Access
 // implementation fully attached, so this test's event-publish and
@@ -613,9 +614,9 @@ func newRealSharingService(t *testing.T) *sharing.Service {
 		t.Fatalf("apply sharing migrations: %v", err)
 	}
 
-	reg := pkgcore.NewRegistry(pkgcore.NewMemoryEventBus(), pkgcore.NewMemoryKVStore(), pkgcore.NewConsoleMailer())
+	reg := componenttest.NewRegistry()
 	sharingModule := sharing.NewModule(db)
-	if err := sharingModule.Register(reg); err != nil {
+	if err := componenttest.DeclareInto(reg, sharingModule); err != nil {
 		t.Fatalf("sharing.Module.Register: %v", err)
 	}
 	return sharingModule.Service()

@@ -2,10 +2,12 @@ package config
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
 	"github.com/vislake/speed/go/pkgcore"
+	"github.com/vislake/speed/go/pkgcore/componenttest"
 )
 
 // Tests for handle.go: the lazy read handle's identity across the module's
@@ -28,23 +30,24 @@ func TestModule_Handle_IsStableAcrossTheModuleLife(t *testing.T) {
 	}
 
 	reg := newPlainRegistry()
-	if err := reg.Config.Add(serviceTestSchemaItems...); err != nil {
-		t.Fatalf("reg.Config.Add: %v", err)
-	}
-	if err := reg.Features.Add(serviceTestSchemaFlags...); err != nil {
-		t.Fatalf("reg.Features.Add: %v", err)
-	}
-	if err := module.Register(reg); err != nil {
-		t.Fatalf("Register: %v", err)
-	}
-	if between := module.Handle(); between != early {
-		t.Fatal("Handle() changed across Register; a host capturing it at assembly would lose its reads")
-	}
-	if _, err := module.Attach(reg); err != nil {
-		t.Fatalf("Attach: %v", err)
-	}
-	if after := module.Handle(); after != early {
-		t.Fatal("Handle() changed across Attach; a host capturing it at assembly would lose its reads")
+	if err := componenttest.DeclareAll(reg,
+		func(r *pkgcore.ComponentRegistry) error { return r.Config.Add(serviceTestSchemaItems...) },
+		func(r *pkgcore.ComponentRegistry) error { return r.Features.Add(serviceTestSchemaFlags...) },
+		module.Register,
+		func(r *pkgcore.ComponentRegistry) error {
+			if between := module.Handle(); between != early {
+				return errors.New("Handle() changed across Register; a host capturing it at assembly would lose its reads")
+			}
+			if _, attachErr := module.Attach(r); attachErr != nil {
+				return attachErr
+			}
+			if after := module.Handle(); after != early {
+				return errors.New("Handle() changed across Attach; a host capturing it at assembly would lose its reads")
+			}
+			return nil
+		},
+	); err != nil {
+		t.Fatalf("declare and attach: %v", err)
 	}
 }
 
@@ -75,8 +78,10 @@ func TestHandle_ReadsBeforeAttach_FailClosedWithErrServiceNotAttached(t *testing
 // failed" contract.
 func TestHandle_ReadsAfterAFailedAttach_FailClosedWithErrServiceNotAttached(t *testing.T) {
 	reg := newPlainRegistry()
-	if err := reg.Features.Add(serviceTestSchemaFlags...); err != nil {
-		t.Fatalf("reg.Features.Add: %v", err)
+	if err := componenttest.DeclareAll(reg, func(r *pkgcore.ComponentRegistry) error {
+		return r.Features.Add(serviceTestSchemaFlags...)
+	}); err != nil {
+		t.Fatalf("declare the schema: %v", err)
 	}
 	module := NewModule(nil, WithPollInterval(0))
 	if _, err := module.Attach(reg); err == nil {
@@ -110,15 +115,17 @@ func TestHandle_ReadsAfterAttach_ResolveThroughTheService(t *testing.T) {
 	handle := module.Handle()
 
 	reg := newPlainRegistry()
-	if err := reg.Config.Add(serviceTestSchemaItems...); err != nil {
-		t.Fatalf("reg.Config.Add: %v", err)
-	}
-	if err := reg.Features.Add(serviceTestSchemaFlags...); err != nil {
-		t.Fatalf("reg.Features.Add: %v", err)
-	}
-	svc, err := module.Attach(reg)
-	if err != nil {
-		t.Fatalf("Attach: %v", err)
+	var svc *Service
+	if err := componenttest.DeclareAll(reg,
+		func(r *pkgcore.ComponentRegistry) error { return r.Config.Add(serviceTestSchemaItems...) },
+		func(r *pkgcore.ComponentRegistry) error { return r.Features.Add(serviceTestSchemaFlags...) },
+		func(r *pkgcore.ComponentRegistry) error {
+			attached, attachErr := module.Attach(r)
+			svc = attached
+			return attachErr
+		},
+	); err != nil {
+		t.Fatalf("declare and attach: %v", err)
 	}
 
 	ctx := context.Background()

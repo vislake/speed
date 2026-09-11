@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/vislake/speed/go/pkgcore"
+	"github.com/vislake/speed/go/pkgcore/componenttest"
 )
 
 func TestModule_Identity(t *testing.T) {
@@ -165,7 +166,7 @@ func TestModule_Locales_ShipsBothLanguages(t *testing.T) {
 // validation, which only runs there.
 func TestModule_Register_DeclaresItsSurface(t *testing.T) {
 	m := NewModule(newTestDB(t))
-	reg, err := pkgcore.NewKernel().Bootstrap(context.Background(), m)
+	reg, err := componenttest.DeclareModules(m)
 	if err != nil {
 		t.Fatalf("Bootstrap: %v", err)
 	}
@@ -226,7 +227,7 @@ func TestModule_Register_DeclaresItsSurface(t *testing.T) {
 // alongside a module that declares its own config and events -- the real
 // host shape -- rather than only in isolation.
 func TestModule_Register_CoexistsWithAnotherModule(t *testing.T) {
-	reg, err := pkgcore.NewKernel().Bootstrap(context.Background(), NewModule(newTestDB(t)), neighbourModule{})
+	reg, err := componenttest.DeclareModules(NewModule(newTestDB(t)), neighbourModule{})
 	if err != nil {
 		t.Fatalf("Bootstrap: %v", err)
 	}
@@ -242,12 +243,8 @@ func TestModule_Register_CoexistsWithAnotherModule(t *testing.T) {
 // be safe: any database call inside Register would panic here.
 func TestModule_Register_PerformsNoIO(t *testing.T) {
 	m := NewModule(nil)
-	reg := pkgcore.NewRegistry(
-		pkgcore.NewMemoryEventBus(),
-		pkgcore.NewMemoryKVStore(),
-		pkgcore.NewConsoleMailer(),
-	)
-	if err := m.Register(reg); err != nil {
+	reg := componenttest.NewRegistry()
+	if err := componenttest.DeclareInto(reg, m); err != nil {
 		t.Fatalf("Register against a nil database: %v", err)
 	}
 }
@@ -289,7 +286,7 @@ func (neighbourModule) DependsOn() []string  { return nil }
 func (neighbourModule) Migrations() embed.FS { return embed.FS{} }
 func (neighbourModule) Locales() embed.FS    { return embed.FS{} }
 func (neighbourModule) OpenAPISpec() []byte  { return nil }
-func (neighbourModule) Register(reg pkgcore.Registrar) error {
+func (neighbourModule) Register(reg *pkgcore.ComponentRegistry) error {
 	return reg.ConfigSeat().Add(pkgcore.ConfigItem{
 		Key:         "neighbour.some_setting",
 		Type:        "bool",
@@ -299,4 +296,3 @@ func (neighbourModule) Register(reg pkgcore.Registrar) error {
 	})
 }
 
-var _ pkgcore.Module = neighbourModule{}

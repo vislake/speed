@@ -40,6 +40,7 @@ import (
 	_ "github.com/vislake/speed/go/dbkit/dialect/postgres"
 	"github.com/vislake/speed/go/integration"
 	"github.com/vislake/speed/go/pkgcore"
+	"github.com/vislake/speed/go/pkgcore/componenttest"
 )
 
 // testWebhookCipherKey is the AES key WebhookSecretSerializerName is
@@ -135,8 +136,8 @@ func attachIntegrationService(t *testing.T, db *gorm.DB) *integration.Service {
 	t.Helper()
 
 	m := integration.NewModule(db)
-	reg := pkgcore.NewRegistry(pkgcore.NewMemoryEventBus(), pkgcore.NewMemoryKVStore(), pkgcore.NewConsoleMailer())
-	if err := m.Register(reg); err != nil {
+	reg := componenttest.NewRegistry()
+	if err := componenttest.DeclareInto(reg, m); err != nil {
 		t.Fatalf("Register: %v", err)
 	}
 	svc, err := m.Attach(reg)

@@ -9,6 +9,7 @@ import (
 
 	"github.com/vislake/speed/go/dbkit/audit"
 	"github.com/vislake/speed/go/pkgcore"
+	"github.com/vislake/speed/go/pkgcore/componenttest"
 	"github.com/vislake/speed/go/pkgcore/apperr"
 )
 
@@ -78,7 +79,7 @@ func attachedService(t *testing.T, opts ...Option) *Service {
 	t.Helper()
 	m := NewModule(newTestDB(t), opts...)
 	reg := newTestRegistry(t)
-	if err := m.Register(reg); err != nil {
+	if err := componenttest.DeclareInto(reg, m); err != nil {
 		t.Fatalf("Register: %v", err)
 	}
 	svc, err := m.Attach(reg)
@@ -89,13 +90,13 @@ func attachedService(t *testing.T, opts ...Option) *Service {
 }
 
 // testService builds a *Service directly (bypassing Module.Attach, which
-// needs a full *pkgcore.Registry from a real Bootstrap) over a fresh
+// needs a full *pkgcore.ComponentRegistry from a real Bootstrap) over a fresh
 // migrated SQLite database, an in-memory EventBus and a fixed clock, so
 // every test in this file is deterministic and needs no wall-clock
 // tolerance.
 func testService(t *testing.T, permissions PermissionLister, membership MembershipChecker, now time.Time) *Service {
 	t.Helper()
-	reg := pkgcore.NewRegistry(pkgcore.NewMemoryEventBus(), pkgcore.NewMemoryKVStore(), pkgcore.NewConsoleMailer())
+	reg := componenttest.NewRegistry()
 	if err := reg.AuditActions.Add(auditActionDecls...); err != nil {
 		t.Fatalf("register audit actions: %v", err)
 	}

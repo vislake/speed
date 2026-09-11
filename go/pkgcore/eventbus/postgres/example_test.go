@@ -1,9 +1,11 @@
 package postgres_test
 
-// Runnable documentation for the PostgreSQL-backed EventBus, compiled and
+// Runnable documentation for this package's constructors, compiled and
 // executed by `go test` like every other package's examples, so an API
-// change that invalidates the documented usage fails the build instead of
-// silently rotting.
+// change that invalidates the documented usage fails the build instead
+// of silently rotting. The package's component descriptor -- the
+// component a composition configuration selects as its module's
+// implementation -- is exercised by the package's own component_test.go.
 
 import (
 	"context"
@@ -56,51 +58,4 @@ func ExampleNewEventBus() {
 	fmt.Println("bus wired and listening; no event was published")
 	// Output:
 	// bus wired and listening; no event was published
-}
-
-// Example demonstrates the package's self-registration: importing it for
-// side effect makes "eventbus.postgres" build through pkgcore's shared
-// EventBusRegistry, the database/sql-style driver pattern eventbus/redis
-// also follows.
-func Example() {
-	bus, caps, err := pkgcore.EventBusRegistry.Build("eventbus.postgres", pkgcore.Config{
-		"dsn":        "postgres://user:pass@127.0.0.1:1/db",
-		"replica_id": "replica-1",
-	})
-	fmt.Println(err, bus != nil, caps)
-
-	// Output:
-	// <nil> true MultiReplicaSafe|SurvivesRestart
-}
-
-// ExampleRegistration shows the name-registration path for a typed
-// configuration the flat pkgcore.Config cannot express: the host builds the
-// pool itself -- here with a DSN carrying its own TLS parameters, the shape
-// strings squeezed into keys cannot express -- wraps it in the registration
-// factory with the replica's stable ID, registers it under a name of its
-// own (the built-in "eventbus.postgres" name is taken), and names that
-// registration in a Preset entry. The host keeps ownership: the factory's
-// New returns the bare bus over the host's pool, so Kernel.Shutdown never
-// touches either, and the host closes both when it shuts down. pgxpool.New
-// dials nothing, so the closed-port DSN keeps this example hermetic.
-func ExampleRegistration() {
-	pool, err := pgxpool.New(context.Background(), "postgres://user:pass@127.0.0.1:1/db")
-	if err != nil {
-		fmt.Println("pool:", err)
-		return
-	}
-	defer pool.Close()
-
-	name := "eventbus.postgres.host"
-	if regErr := pkgcore.EventBusRegistry.Register(eventbuspostgres.Registration(name, pool, "replica-host")); regErr != nil {
-		fmt.Println("register:", regErr)
-		return
-	}
-
-	preset := pkgcore.PresetStandalone.With("eventbus", pkgcore.SeamPreset{Implementation: name})
-	reg, err := pkgcore.NewKernel(pkgcore.WithPreset(preset)).Bootstrap(context.Background())
-	fmt.Println(err, reg.EventBus() != nil)
-
-	// Output:
-	// <nil> true
 }

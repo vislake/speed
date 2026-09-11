@@ -11,6 +11,7 @@ import (
 	"github.com/vislake/speed/go/dbkit"
 	"github.com/vislake/speed/go/dbkit/audit"
 	"github.com/vislake/speed/go/pkgcore"
+	"github.com/vislake/speed/go/pkgcore/componenttest"
 	"github.com/vislake/speed/go/tenancy/tenancytest"
 )
 
@@ -1209,7 +1210,7 @@ func TestSSOService_SaveConfig_AcceptsValuesAtTheColumnWidths(t *testing.T) {
 // consumer-shaped proof that AuditActionSSOConfigure is genuinely emitted:
 // SaveConfig has no in-repo caller beyond this test, so the emission would
 // otherwise go unproven. The write is driven through the same construction
-// a host uses -- a Module registered on a real pkgcore.Registry, exactly
+// a host uses -- a Module registered on a real pkgcore.ComponentRegistry, exactly
 // module.go's Register runs in production -- and the rows land on the
 // shared bus under the declared action.
 //
@@ -1231,8 +1232,9 @@ func TestSSOService_SaveConfig_RecordsTheWriteAsAuditActionSSOConfigure(t *testi
 	bus := pkgcore.NewMemoryEventBus()
 	recorder := testutil.NewEventRecorder()
 	recorder.Subscribe(bus, audit.EventRecorded)
-	reg := pkgcore.NewRegistry(bus, pkgcore.NewMemoryKVStore(), pkgcore.NewConsoleMailer())
-	if err := module.Register(reg); err != nil {
+	reg := componenttest.NewRegistry()
+	reg.Put(bus)
+	if err := componenttest.DeclareInto(reg, module); err != nil {
 		t.Fatalf("Register() error = %v", err)
 	}
 	svc := module.Service()

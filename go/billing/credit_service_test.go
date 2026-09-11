@@ -9,6 +9,7 @@ import (
 
 	"github.com/vislake/speed/go/dbkit/audit"
 	"github.com/vislake/speed/go/pkgcore"
+	"github.com/vislake/speed/go/pkgcore/componenttest"
 	"github.com/vislake/speed/go/pkgcore/apperr"
 )
 
@@ -28,7 +29,8 @@ func newCreditService(t *testing.T) *CreditService {
 func newAuditedCreditService(t *testing.T) (svc *CreditService, received chan pkgcore.Event) {
 	t.Helper()
 	bus := pkgcore.NewMemoryEventBus()
-	reg := pkgcore.NewRegistry(bus, pkgcore.NewMemoryKVStore(), pkgcore.NewConsoleMailer())
+	reg := componenttest.NewRegistry()
+	reg.Put(bus)
 	if err := reg.AuditActions.Add(
 		AuditActionCreditGrant,
 		AuditActionCreditDeductReserve,

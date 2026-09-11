@@ -10,6 +10,7 @@ import (
 
 	"github.com/vislake/speed/go/jobs"
 	"github.com/vislake/speed/go/pkgcore"
+	"github.com/vislake/speed/go/pkgcore/componenttest"
 )
 
 // This file pins the window semantics of the expiry-sweep idempotency key
@@ -281,7 +282,7 @@ func TestModule_EnqueueExpirySweep_LaterWindowSweepRefundsAnOverageReservation(t
 	// Wire svc to a real in-memory registry the way Module.Register would
 	// (newTestService's own body), so Create's rate-limit read and the
 	// sweep's event publish have the host seams they read at call time.
-	reg := pkgcore.NewRegistry(pkgcore.NewMemoryEventBus(), pkgcore.NewMemoryKVStore(), pkgcore.NewConsoleMailer())
+	reg := componenttest.NewRegistry()
 	if err := reg.AuditActions.Add(AuditActionSensitiveShareCreate); err != nil {
 		t.Fatalf("AuditActions.Add: %v", err)
 	}

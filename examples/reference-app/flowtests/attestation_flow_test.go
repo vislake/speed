@@ -251,7 +251,7 @@ func TestX509Attestation_SimulationOutputSharedThroughTheChainVerifiedGate(t *te
 	// Leg 7: the external-verifier leg. The platform regenerates the
 	// issuing authority's CRL (CAService.GenerateCRL over the same
 	// database -- the module declares CRL regeneration on the
-	// pkgcore.Registry.Schedules seat, so the app's host, which runs a
+	// pkgcore.ComponentRegistry.Schedules seat, so the app's host, which runs a
 	// jobs.Scheduler over the finished registry's declarations,
 	// schedules it by declaration; this leg's explicit call pins the
 	// document it reads), and the test fetches the document over pki's

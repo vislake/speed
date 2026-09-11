@@ -13,7 +13,7 @@ import (
 //
 // The console mailer prints every message to stdout (NewConsoleMailer's own
 // doc comment), the same trade-off every other module's test suite already
-// accepts when it wires one into a test pkgcore.Registry (e.g.
+// accepts when it wires one into a test pkgcore.ComponentRegistry (e.g.
 // go/rbac/module_test.go, go/config/module_test.go) — nothing this suite
 // checks depends on what gets printed, and the printed record is harmless
 // test noise, not a failure.

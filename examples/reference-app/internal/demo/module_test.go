@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/vislake/speed/go/pkgcore"
+	"github.com/vislake/speed/go/pkgcore/componenttest"
 )
 
 // TestModule_Name reports the module's registry identity.
@@ -85,7 +86,7 @@ func TestModule_Locales_ContainBothNotificationTypeTemplates(t *testing.T) {
 // type (notes' own type comment points at demo.patient_reminder as the
 // unsubscribable-false contrast).
 func TestModule_Register_DeclaresBothNotificationTypes(t *testing.T) {
-	reg := pkgcore.NewRegistry(pkgcore.NewMemoryEventBus(), pkgcore.NewMemoryKVStore(), pkgcore.NewConsoleMailer())
+	reg := componenttest.NewRegistry()
 	if err := NewModule().Register(reg); err != nil {
 		t.Fatalf("Register() error = %v", err)
 	}
@@ -125,4 +126,3 @@ func TestModule_Register_DeclaresBothNotificationTypes(t *testing.T) {
 // compile-time check that *Module satisfies pkgcore.Module -- redundant
 // with module.go's own assertion, kept here too as a visible part of this
 // file's own test surface.
-var _ pkgcore.Module = (*Module)(nil)

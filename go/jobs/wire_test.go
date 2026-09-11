@@ -17,14 +17,20 @@ import (
 
 	"github.com/vislake/speed/go/dbkit/dbtest"
 	"github.com/vislake/speed/go/pkgcore"
+	"github.com/vislake/speed/go/pkgcore/componenttest"
 	"github.com/vislake/speed/go/pkgcore/apperr"
 )
 
-// wireTestRegistry returns a real pkgcore.Registry over in-memory seams: the
-// registrar shape Kernel.Bootstrap fills and a host hands to Wire.
-func wireTestRegistry(t *testing.T) *pkgcore.Registry {
+// wireTestRegistry returns a real pkgcore.ComponentRegistry over in-memory
+// seams with declares driven inside a real Init stage: the registrar shape
+// the assembly fills and a host hands to Wire.
+func wireTestRegistry(t *testing.T, declares ...func(*pkgcore.ComponentRegistry) error) *pkgcore.ComponentRegistry {
 	t.Helper()
-	return pkgcore.NewRegistry(pkgcore.NewMemoryEventBus(), pkgcore.NewMemoryKVStore(), pkgcore.NewConsoleMailer())
+	reg := componenttest.NewRegistry()
+	if err := componenttest.DeclareAll(reg, declares...); err != nil {
+		t.Fatalf("declare into the registry: %v", err)
+	}
+	return reg
 }
 
 // queueTableExists reports whether table is present on db.
@@ -53,12 +59,14 @@ func echoHandler(jobType string) Handler {
 func TestWire_RegistersDeclaredHandlersAndCreatesTheQueueTables(t *testing.T) {
 	db := dbtest.NewSQLite(t)
 	q := NewStandaloneQueue(db)
-	reg := wireTestRegistry(t)
-	for _, jobType := range []string{"wire.first", "wire.second"} {
-		if err := reg.Jobs.Handle(jobType, echoHandler(jobType)); err != nil {
-			t.Fatalf("declare handler %q on the registry: %v", jobType, err)
+	reg := wireTestRegistry(t, func(r *pkgcore.ComponentRegistry) error {
+		for _, jobType := range []string{"wire.first", "wire.second"} {
+			if err := r.Jobs.Handle(jobType, echoHandler(jobType)); err != nil {
+				return err
+			}
 		}
-	}
+		return nil
+	})
 
 	if err := Wire(context.Background(), q, reg.Jobs); err != nil {
 		t.Fatalf("Wire() error = %v", err)
@@ -85,10 +93,9 @@ func TestWire_DeclaredHandlerRunsEndToEnd(t *testing.T) {
 	ctx := context.Background()
 	db := dbtest.NewSQLite(t)
 	q := NewStandaloneQueue(db, WithPollInterval(5*time.Millisecond), WithWorkerCount(1))
-	reg := wireTestRegistry(t)
-	if err := reg.Jobs.Handle("wire.echo", echoHandler("wire.echo")); err != nil {
-		t.Fatalf("declare handler on the registry: %v", err)
-	}
+	reg := wireTestRegistry(t, func(r *pkgcore.ComponentRegistry) error {
+		return r.Jobs.Handle("wire.echo", echoHandler("wire.echo"))
+	})
 
 	if err := Wire(ctx, q, reg.Jobs); err != nil {
 		t.Fatalf("Wire() error = %v", err)
@@ -163,10 +170,9 @@ func TestWire_WithoutDeclaredHandlers_CreatesTheQueueTables(t *testing.T) {
 func TestWire_RefusesEntryThatIsNotAHandler(t *testing.T) {
 	db := dbtest.NewSQLite(t)
 	q := NewStandaloneQueue(db)
-	reg := wireTestRegistry(t)
-	if err := reg.Jobs.Handle("wire.bad", "not a handler"); err != nil {
-		t.Fatalf("declare the bad entry on the registry: %v", err)
-	}
+	reg := wireTestRegistry(t, func(r *pkgcore.ComponentRegistry) error {
+		return r.Jobs.Handle("wire.bad", "not a handler")
+	})
 
 	err := Wire(context.Background(), q, reg.Jobs)
 	if err == nil {
@@ -188,10 +194,9 @@ func TestWire_RepeatedCall_IsRefused(t *testing.T) {
 	ctx := context.Background()
 	db := dbtest.NewSQLite(t)
 	q := NewStandaloneQueue(db)
-	reg := wireTestRegistry(t)
-	if err := reg.Jobs.Handle("wire.once", echoHandler("wire.once")); err != nil {
-		t.Fatalf("declare handler on the registry: %v", err)
-	}
+	reg := wireTestRegistry(t, func(r *pkgcore.ComponentRegistry) error {
+		return r.Jobs.Handle("wire.once", echoHandler("wire.once"))
+	})
 
 	if err := Wire(ctx, q, reg.Jobs); err != nil {
 		t.Fatalf("first Wire() error = %v", err)

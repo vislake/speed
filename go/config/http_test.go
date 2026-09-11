@@ -18,6 +18,7 @@ import (
 	"github.com/vislake/speed/go/config/api"
 	"github.com/vislake/speed/go/dbkit"
 	"github.com/vislake/speed/go/pkgcore"
+	"github.com/vislake/speed/go/pkgcore/componenttest"
 	"github.com/vislake/speed/go/tenancy"
 )
 
@@ -78,7 +79,7 @@ func (r staticHostResolver) Resolve(req *http.Request) (pkgcore.TenantID, error)
 // below Path" and net/http serves a bare exact-path request directly only
 // when the exact pattern is registered (see the reference app's
 // mountModuleRoutes).
-func mountRoutes(reg *pkgcore.Registry) *http.ServeMux {
+func mountRoutes(reg *pkgcore.ComponentRegistry) *http.ServeMux {
 	mux := http.NewServeMux()
 	for _, route := range reg.Routes.Routes() {
 		mux.Handle(route.Path, route.Handler)
@@ -98,26 +99,37 @@ func mountRoutes(reg *pkgcore.Registry) *http.ServeMux {
 func newHTTPHarnessWithItems(t *testing.T, resolver tenancy.Resolver, items []pkgcore.ConfigItem, flags []pkgcore.FeatureFlag, kv pkgcore.KVStore) (*Service, *http.ServeMux) {
 	t.Helper()
 	pkgcore.RegisterSystemPurpose(SystemPurposeSystemWrite)
-	reg := pkgcore.NewRegistry(pkgcore.NewMemoryEventBus(), kv, pkgcore.NewConsoleMailer())
-	if err := reg.Config.Add(items...); err != nil {
-		t.Fatalf("reg.Config.Add: %v", err)
-	}
-	if err := reg.Features.Add(flags...); err != nil {
-		t.Fatalf("reg.Features.Add: %v", err)
-	}
+	reg := pkgcore.NewComponentRegistry()
+	reg.Put(pkgcore.NewMemoryEventBus())
+	reg.Put(kv)
+	reg.Put(pkgcore.NewConsoleMailer())
 	opts := []Option{WithCipher(buildTestCipher(t)), WithPollInterval(0)}
 	if resolver != nil {
 		opts = append(opts, WithResolver(resolver))
 	}
 	module := NewModule(openHTTPTestDB(t), opts...)
-	if err := module.Register(reg); err != nil {
-		t.Fatalf("Register: %v", err)
+	// The whole declaration turn -- the schema, the module's Register, its
+	// Attach and the route mounts -- runs inside one Init stage: every one
+	// of those is a seat write the window owns.
+	var svc *Service
+	var mux *http.ServeMux
+	if err := componenttest.DeclareAll(reg,
+		func(r *pkgcore.ComponentRegistry) error { return r.Config.Add(items...) },
+		func(r *pkgcore.ComponentRegistry) error { return r.Features.Add(flags...) },
+		module.Register,
+		func(r *pkgcore.ComponentRegistry) error {
+			attached, attachErr := module.Attach(r)
+			if attachErr != nil {
+				return attachErr
+			}
+			svc = attached
+			mux = mountRoutes(r)
+			return nil
+		},
+	); err != nil {
+		t.Fatalf("declare, attach and mount: %v", err)
 	}
-	svc, err := module.Attach(reg)
-	if err != nil {
-		t.Fatalf("Attach: %v", err)
-	}
-	return svc, mountRoutes(reg)
+	return svc, mux
 }
 
 // newHTTPHarness is newHTTPHarnessWithItems over the shared item/flag
@@ -414,17 +426,20 @@ func TestHTTP_Endpoints_ReportTheServiceNotAttachedWindow(t *testing.T) {
 	// A module that registered but never attached -- the wiring gap between
 	// the two Bootstrap/Attach steps -- must answer with the structured
 	// internal error, not a nil-pointer crash.
-	reg := pkgcore.NewRegistry(pkgcore.NewMemoryEventBus(), pkgcore.NewMemoryKVStore(), pkgcore.NewConsoleMailer())
-	if err := reg.Config.Add(serviceTestSchemaItems...); err != nil {
-		t.Fatalf("reg.Config.Add: %v", err)
+	reg := componenttest.NewRegistry()
+	module := NewModule(openHTTPTestDB(t), WithPollInterval(0))
+	var mux *http.ServeMux
+	if err := componenttest.DeclareAll(reg,
+		func(r *pkgcore.ComponentRegistry) error { return r.Config.Add(serviceTestSchemaItems...) },
+		func(r *pkgcore.ComponentRegistry) error { return r.Features.Add(serviceTestSchemaFlags...) },
+		module.Register,
+		func(r *pkgcore.ComponentRegistry) error {
+			mux = mountRoutes(r)
+			return nil
+		},
+	); err != nil {
+		t.Fatalf("declare and mount: %v", err)
 	}
-	if err := reg.Features.Add(serviceTestSchemaFlags...); err != nil {
-		t.Fatalf("reg.Features.Add: %v", err)
-	}
-	if err := NewModule(openHTTPTestDB(t), WithPollInterval(0)).Register(reg); err != nil {
-		t.Fatalf("Register: %v", err)
-	}
-	mux := mountRoutes(reg)
 
 	for _, path := range []string{PathPublic, PathSystemFeatures} {
 		resp := doRequest(t, mux, http.MethodGet, path, "anything.example.com")

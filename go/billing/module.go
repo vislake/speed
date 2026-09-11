@@ -244,7 +244,7 @@ func (m *Module) OpenAPISpec() []byte { return openAPISpecYAML }
 // the handler serves the service instances the host actually configured,
 // never versions captured before the options ran. Routes.Mount is a plain
 // registration, no I/O, so Register's no-I/O contract stands.
-func (m *Module) Register(reg pkgcore.Registrar) error {
+func (m *Module) Register(reg *pkgcore.ComponentRegistry) error {
 	if err := reg.PermissionsSeat().Add(
 		PermissionPlanManage,
 		PermissionSubscriptionRead,
@@ -301,8 +301,6 @@ func (m *Module) Register(reg pkgcore.Registrar) error {
 	return nil
 }
 
-// compile-time check that *Module satisfies pkgcore.Module.
-var _ pkgcore.Module = (*Module)(nil)
 
 // compile-time check that *metering.Aggregator satisfies UsageReader
 // structurally -- see UsageReader's own doc comment for why this

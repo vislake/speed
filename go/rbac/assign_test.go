@@ -44,7 +44,7 @@ func (r *eventRecorder) ofType(eventType string) []pkgcore.Event {
 }
 
 // recordEvents subscribes a recorder to every event this module publishes.
-func recordEvents(reg *pkgcore.Registry) *eventRecorder {
+func recordEvents(reg *pkgcore.ComponentRegistry) *eventRecorder {
 	rec := &eventRecorder{}
 	for _, eventType := range []string{EventRoleBindingAssigned, EventRoleBindingRevoked, EventRoleBindingRestored, EventRoleChanged} {
 		reg.Events.Subscribe(eventType, rec.record)

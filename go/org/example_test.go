@@ -13,6 +13,7 @@ import (
 
 	"github.com/vislake/speed/go/dbkit"
 	"github.com/vislake/speed/go/pkgcore"
+	"github.com/vislake/speed/go/pkgcore/componenttest"
 	"github.com/vislake/speed/go/pkgcore/apperr"
 
 	"github.com/vislake/speed/go/org"
@@ -211,7 +212,7 @@ func Example_membershipAndScope() {
 	// Bootstrap is what hands the module its host seams -- the event bus,
 	// the mailer, the key-value store the rate limiter counts in, and the
 	// merged message catalog. Nothing in org reads them before this point.
-	if _, bootErr := pkgcore.NewKernel().Bootstrap(ctx, module); bootErr != nil {
+	if _, bootErr := componenttest.DeclareModules(module); bootErr != nil {
 		fmt.Println("bootstrap:", bootErr)
 		return
 	}
@@ -336,7 +337,7 @@ func ExampleMemberService_TenantsOf() {
 		fmt.Println("apply migrations:", applyErr)
 		return
 	}
-	if _, bootErr := pkgcore.NewKernel().Bootstrap(ctx, module); bootErr != nil {
+	if _, bootErr := componenttest.DeclareModules(module); bootErr != nil {
 		fmt.Println("bootstrap:", bootErr)
 		return
 	}

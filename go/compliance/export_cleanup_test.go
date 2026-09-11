@@ -12,13 +12,14 @@ import (
 
 	"github.com/vislake/speed/go/dbkit/audit"
 	"github.com/vislake/speed/go/pkgcore"
+	"github.com/vislake/speed/go/pkgcore/componenttest"
 	"github.com/vislake/speed/go/pkgcore/apperr"
 
 	"github.com/vislake/speed/go/compliance/internal/testutil"
 )
 
 // newManifestCleanupHarness returns a RetentionService wired directly over
-// a hand-built pkgcore.Registry carrying ONLY the module's own
+// a hand-built pkgcore.ComponentRegistry carrying ONLY the module's own
 // export-manifests cleanup participant, plus the real *audit.Repository
 // (over a freshly migrated audit_events table) and the real
 // pkgcore.LocalObjectStore the participant reads and reaps through -- the
@@ -39,7 +40,8 @@ func newManifestCleanupHarness(t *testing.T) (*RetentionService, *audit.Reposito
 func newManifestCleanupHarnessSeamed(t *testing.T, auditRepo *audit.Repository, store pkgcore.ObjectStore) (*RetentionService, *audit.Repository, pkgcore.ObjectStore) {
 	t.Helper()
 	bus := pkgcore.NewMemoryEventBus()
-	reg := pkgcore.NewRegistry(bus, pkgcore.NewMemoryKVStore(), pkgcore.NewConsoleMailer())
+	reg := componenttest.NewRegistry()
+	reg.Put(bus)
 	if err := reg.AuditActions.Add(AuditActionRetentionSweep); err != nil {
 		t.Fatalf("declare audit action: %v", err)
 	}

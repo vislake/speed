@@ -13,6 +13,7 @@ import (
 	"github.com/vislake/speed/go/dbkit"
 	"github.com/vislake/speed/go/dbkit/dbtest"
 	"github.com/vislake/speed/go/pkgcore"
+	"github.com/vislake/speed/go/pkgcore/componenttest"
 	"github.com/vislake/speed/go/pkgcore/apperr"
 	"github.com/vislake/speed/go/pkgcore/i18n"
 )
@@ -37,8 +38,8 @@ func newRBACTestDB(t *testing.T) *gorm.DB {
 
 // newPlainRegistry returns a registry over throwaway in-memory seams, the
 // way a host that never wired a real bus or KV store does.
-func newPlainRegistry() *pkgcore.Registry {
-	return pkgcore.NewRegistry(pkgcore.NewMemoryEventBus(), pkgcore.NewMemoryKVStore(), pkgcore.NewConsoleMailer())
+func newPlainRegistry() *pkgcore.ComponentRegistry {
+	return componenttest.NewRegistry()
 }
 
 // declaringModule is a minimal pkgcore.Module standing in for a business
@@ -50,14 +51,13 @@ type declaringModule struct {
 	perms []string
 }
 
-var _ pkgcore.Module = (*declaringModule)(nil)
 
 func (d *declaringModule) Name() string         { return d.name }
 func (d *declaringModule) DependsOn() []string  { return nil }
 func (d *declaringModule) Migrations() embed.FS { return embed.FS{} }
 func (d *declaringModule) Locales() embed.FS    { return embed.FS{} }
 func (d *declaringModule) OpenAPISpec() []byte  { return nil }
-func (d *declaringModule) Register(reg pkgcore.Registrar) error {
+func (d *declaringModule) Register(reg *pkgcore.ComponentRegistry) error {
 	return reg.PermissionsSeat().Add(d.perms...)
 }
 
@@ -145,7 +145,7 @@ func TestModule_Attach_FreezesEveryModulesPermissions(t *testing.T) {
 	m := NewModule(newRBACTestDB(t))
 	host := &declaringModule{name: "notes", perms: []string{"notes:read", "notes:write"}}
 
-	reg, err := pkgcore.NewKernel().Bootstrap(context.Background(), m, host)
+	reg, err := componenttest.DeclareModules(m, host)
 	if err != nil {
 		t.Fatalf("Bootstrap: %v", err)
 	}
@@ -171,7 +171,7 @@ func TestModule_Attach_TwiceReportsAlreadyAttached(t *testing.T) {
 	// legal, that is a security difference rather than a cosmetic one.
 	m := NewModule(newRBACTestDB(t))
 	reg := newPlainRegistry()
-	if err := m.Register(reg); err != nil {
+	if err := componenttest.DeclareInto(reg, m); err != nil {
 		t.Fatalf("Register: %v", err)
 	}
 	first, err := m.Attach(reg)
@@ -193,7 +193,7 @@ func TestModule_Attach_RejectsMissingWiring(t *testing.T) {
 	}
 	m := NewModule(nil)
 	reg := newPlainRegistry()
-	if err := m.Register(reg); err != nil {
+	if err := componenttest.DeclareInto(reg, m); err != nil {
 		t.Fatalf("Register: %v", err)
 	}
 	if _, err := m.Attach(reg); err == nil {
@@ -208,7 +208,7 @@ func TestModule_Options_ReachTheService(t *testing.T) {
 	resolver := &stubResolver{}
 	m := NewModule(newRBACTestDB(t), WithSubtreeResolver(resolver), WithCacheTTL(5*time.Second))
 	reg := newPlainRegistry()
-	if err := m.Register(reg); err != nil {
+	if err := componenttest.DeclareInto(reg, m); err != nil {
 		t.Fatalf("Register: %v", err)
 	}
 	svc, err := m.Attach(reg)
@@ -237,7 +237,7 @@ func TestModule_NoSubtreeResolver_IsASupportedConfiguration(t *testing.T) {
 	// widen to the tenant.
 	m := NewModule(newRBACTestDB(t))
 	reg := newPlainRegistry()
-	if err := m.Register(reg); err != nil {
+	if err := componenttest.DeclareInto(reg, m); err != nil {
 		t.Fatalf("Register: %v", err)
 	}
 	svc, err := m.Attach(reg)

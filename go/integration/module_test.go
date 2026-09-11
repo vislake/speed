@@ -6,12 +6,13 @@ import (
 	"time"
 
 	"github.com/vislake/speed/go/pkgcore"
+	"github.com/vislake/speed/go/pkgcore/componenttest"
 	"github.com/vislake/speed/go/pkgcore/apperr"
 )
 
-func newTestRegistry(t *testing.T) *pkgcore.Registry {
+func newTestRegistry(t *testing.T) *pkgcore.ComponentRegistry {
 	t.Helper()
-	return pkgcore.NewRegistry(pkgcore.NewMemoryEventBus(), pkgcore.NewMemoryKVStore(), pkgcore.NewConsoleMailer())
+	return componenttest.NewRegistry()
 }
 
 func TestModule_Name(t *testing.T) {
@@ -32,7 +33,7 @@ func TestModule_Register_DeclaresTheAPIKeyExpirySweepSchedule(t *testing.T) {
 	m := NewModule(newTestDB(t))
 	reg := newTestRegistry(t)
 
-	if err := m.Register(reg); err != nil {
+	if err := componenttest.DeclareInto(reg, m); err != nil {
 		t.Fatalf("Register: %v", err)
 	}
 
@@ -46,7 +47,7 @@ func TestModule_Register_DeclaresPermissionsAndAuditActions(t *testing.T) {
 	m := NewModule(newTestDB(t))
 	reg := newTestRegistry(t)
 
-	if err := m.Register(reg); err != nil {
+	if err := componenttest.DeclareInto(reg, m); err != nil {
 		t.Fatalf("Register: %v", err)
 	}
 
@@ -103,7 +104,7 @@ func TestModule_AuditActionVocabulary_HasNoDeadEntries(t *testing.T) {
 func TestModule_Register_RegistersJobHandlers(t *testing.T) {
 	m := NewModule(newTestDB(t))
 	reg := newTestRegistry(t)
-	if err := m.Register(reg); err != nil {
+	if err := componenttest.DeclareInto(reg, m); err != nil {
 		t.Fatalf("Register: %v", err)
 	}
 
@@ -135,7 +136,7 @@ func TestModule_Register_SubscribesEveryDeclaredEventMapping(t *testing.T) {
 	}
 	m := NewModule(newTestDB(t), WithEventMapping(mapping))
 	reg := newTestRegistry(t)
-	if err := m.Register(reg); err != nil {
+	if err := componenttest.DeclareInto(reg, m); err != nil {
 		t.Fatalf("Register: %v", err)
 	}
 
@@ -157,7 +158,7 @@ func TestModule_Register_DuplicateEventMapping_Refused(t *testing.T) {
 	dup := EventMapping{InternalType: "x", PublicType: "y", PublicVersion: "v1", Transform: fixedTransform(nil)}
 	m := NewModule(newTestDB(t), WithEventMapping(dup, dup))
 	reg := newTestRegistry(t)
-	if err := m.Register(reg); !apperr.HasCode(err, ErrDuplicateEventMapping.Code) {
+	if err := componenttest.DeclareInto(reg, m); !apperr.HasCode(err, ErrDuplicateEventMapping.Code) {
 		t.Errorf("Register error = %v, want ErrDuplicateEventMapping", err)
 	}
 }
@@ -165,7 +166,7 @@ func TestModule_Register_DuplicateEventMapping_Refused(t *testing.T) {
 func TestModule_Attach_BuildsWorkingService(t *testing.T) {
 	m := NewModule(newTestDB(t), WithPermissionLister(alwaysHeld("notes:read")))
 	reg := newTestRegistry(t)
-	if err := m.Register(reg); err != nil {
+	if err := componenttest.DeclareInto(reg, m); err != nil {
 		t.Fatalf("Register: %v", err)
 	}
 
@@ -185,7 +186,7 @@ func TestModule_Attach_BuildsWorkingService(t *testing.T) {
 func TestModule_Attach_SecondCall_Refused(t *testing.T) {
 	m := NewModule(newTestDB(t))
 	reg := newTestRegistry(t)
-	if err := m.Register(reg); err != nil {
+	if err := componenttest.DeclareInto(reg, m); err != nil {
 		t.Fatalf("Register: %v", err)
 	}
 	if _, err := m.Attach(reg); err != nil {
@@ -203,10 +204,6 @@ func TestModule_Attach_NilRegistry_Refused(t *testing.T) {
 	}
 }
 
-func TestModule_ImplementsPkgcoreModule(t *testing.T) {
-	var _ pkgcore.Module = NewModule(newTestDB(t))
-}
-
 // TestModule_Attach_UsesInjectedClock proves withClock actually reaches the
 // Service Attach builds, by pinning a fixed "now" through NewModule and
 // checking Create's default expiry lands exactly at that fixed instant plus
@@ -215,7 +212,7 @@ func TestModule_ImplementsPkgcoreModule(t *testing.T) {
 func TestModule_Attach_UsesInjectedClock(t *testing.T) {
 	m := NewModule(newTestDB(t), withClock(func() time.Time { return fixedNow }))
 	reg := newTestRegistry(t)
-	if err := m.Register(reg); err != nil {
+	if err := componenttest.DeclareInto(reg, m); err != nil {
 		t.Fatalf("Register: %v", err)
 	}
 	svc, err := m.Attach(reg)

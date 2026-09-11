@@ -9,6 +9,7 @@ import (
 
 	"github.com/vislake/speed/go/jobs"
 	"github.com/vislake/speed/go/pkgcore"
+	"github.com/vislake/speed/go/pkgcore/componenttest"
 )
 
 // stubQueue is a jobs.Queue test double that records every task enqueued on
@@ -46,14 +47,14 @@ func (r *stubUserResolver) Resolve(_ context.Context, userID string) (UserAddres
 	return r.byUser[userID], nil
 }
 
-// newHostRegistry returns a pkgcore.Registry over the in-process seam
+// newHostRegistry returns a pkgcore.ComponentRegistry over the in-process seam
 // implementations -- the shape a standalone-deployment host assembles for
 // itself -- with the module's three fixture types declared on the
 // notification-type registrar, exactly as a declaring business module would
 // register them before Bootstrap walks the module graph.
-func newHostRegistry(t *testing.T) *pkgcore.Registry {
+func newHostRegistry(t *testing.T) *pkgcore.ComponentRegistry {
 	t.Helper()
-	reg := pkgcore.NewRegistry(pkgcore.NewMemoryEventBus(), pkgcore.NewMemoryKVStore(), pkgcore.NewConsoleMailer())
+	reg := componenttest.NewRegistry()
 	if err := reg.Notifications.Add(fixtureTypes...); err != nil {
 		t.Fatalf("reg.Notifications.Add: %v", err)
 	}
@@ -221,7 +222,7 @@ func TestModule_Register_DeclaresContactAuditActions(t *testing.T) {
 	module := NewModule(db, testModuleOptions(t)...)
 	reg := newHostRegistry(t)
 
-	if err := module.Register(reg); err != nil {
+	if err := componenttest.DeclareInto(reg, module); err != nil {
 		t.Fatalf("Register: %v", err)
 	}
 
@@ -252,7 +253,7 @@ func TestModule_Register_AttachesTheHostRegistrarToPreferenceService(t *testing.
 	module := NewModule(db, testModuleOptions(t)...)
 	reg := newHostRegistry(t)
 
-	if err := module.Register(reg); err != nil {
+	if err := componenttest.DeclareInto(reg, module); err != nil {
 		t.Fatalf("Register: %v", err)
 	}
 
@@ -283,7 +284,7 @@ func TestModule_Register_AttachesTransportSeamsToContactService(t *testing.T) {
 	module := NewModule(db, testModuleOptions(t)...)
 	reg := newHostRegistry(t)
 
-	if err := module.Register(reg); err != nil {
+	if err := componenttest.DeclareInto(reg, module); err != nil {
 		t.Fatalf("Register: %v", err)
 	}
 
@@ -324,7 +325,7 @@ func TestModule_Register_AttachesTheHostRegistrarToContactService(t *testing.T) 
 	module := NewModule(db, testModuleOptions(t)...)
 	reg := newHostRegistry(t)
 
-	if err := module.Register(reg); err != nil {
+	if err := componenttest.DeclareInto(reg, module); err != nil {
 		t.Fatalf("Register: %v", err)
 	}
 
@@ -362,7 +363,7 @@ func TestModule_Register_TaxonomyIsLiveNotASnapshot(t *testing.T) {
 	module := NewModule(db, testModuleOptions(t)...)
 	reg := newHostRegistry(t)
 
-	if err := module.Register(reg); err != nil {
+	if err := componenttest.DeclareInto(reg, module); err != nil {
 		t.Fatalf("Register: %v", err)
 	}
 	late := pkgcore.NotificationType{
@@ -398,7 +399,7 @@ func TestModule_Register_DeclaresTheInboxEvent(t *testing.T) {
 	module := NewModule(db, testModuleOptions(t)...)
 	reg := newHostRegistry(t)
 
-	if err := module.Register(reg); err != nil {
+	if err := componenttest.DeclareInto(reg, module); err != nil {
 		t.Fatalf("Register: %v", err)
 	}
 
@@ -430,7 +431,7 @@ func TestModule_Register_RegistersTheDeliveryJobHandler(t *testing.T) {
 	module := NewModule(db, testModuleOptions(t)...)
 	reg := newHostRegistry(t)
 
-	if err := module.Register(reg); err != nil {
+	if err := componenttest.DeclareInto(reg, module); err != nil {
 		t.Fatalf("Register: %v", err)
 	}
 
@@ -457,7 +458,7 @@ func TestModule_Register_SubscribesTheHubToTheInboxEvent(t *testing.T) {
 	module := NewModule(db, testModuleOptions(t)...)
 	reg := newHostRegistry(t)
 
-	if err := module.Register(reg); err != nil {
+	if err := componenttest.DeclareInto(reg, module); err != nil {
 		t.Fatalf("Register: %v", err)
 	}
 
@@ -505,7 +506,7 @@ func TestModule_Register_DeclaresItsBootstrapKey(t *testing.T) {
 	module := NewModule(db, testModuleOptions(t)...)
 	reg := newHostRegistry(t)
 
-	if err := module.Register(reg); err != nil {
+	if err := componenttest.DeclareInto(reg, module); err != nil {
 		t.Fatalf("Register: %v", err)
 	}
 

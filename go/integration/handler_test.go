@@ -10,6 +10,7 @@ import (
 
 	"github.com/vislake/speed/go/dbkit"
 	"github.com/vislake/speed/go/pkgcore"
+	"github.com/vislake/speed/go/pkgcore/componenttest"
 
 	"github.com/vislake/speed/go/integration/api"
 )
@@ -42,7 +43,7 @@ func newTestHandler(t *testing.T, subject SubjectResolver, opts ...Option) (*Han
 	allOpts := append([]Option{WithSubjectResolver(subject)}, opts...)
 	m := NewModule(newTestDB(t), allOpts...)
 	reg := newTestRegistry(t)
-	if err := m.Register(reg); err != nil {
+	if err := componenttest.DeclareInto(reg, m); err != nil {
 		t.Fatalf("Register: %v", err)
 	}
 	if _, err := m.Attach(reg); err != nil {

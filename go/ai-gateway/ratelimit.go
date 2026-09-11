@@ -82,7 +82,7 @@ type hostSeams interface {
 }
 
 // compile-time check that the concrete registry satisfies the seam.
-var _ hostSeams = (pkgcore.Registrar)(nil)
+var _ hostSeams = (*pkgcore.ComponentRegistry)(nil)
 
 // rateLimiter returns the injected limiter (set by a test through
 // Gateway.limiter), or builds one over the host's KVStore. Building it here

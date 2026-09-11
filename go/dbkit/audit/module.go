@@ -120,7 +120,7 @@ func (m *Module) OpenAPISpec() []byte { return nil }
 // itself is not a pkgcore.Module (it has no Register to call this from),
 // and Module is that event's one real subscriber and therefore its
 // closest thing to an owning module for cataloging purposes.
-func (m *Module) Register(reg pkgcore.Registrar) error {
+func (m *Module) Register(reg *pkgcore.ComponentRegistry) error {
 	m.actions = reg.AuditActionsSeat()
 	if err := reg.EventsSeat().Publishes(
 		pkgcore.EventDecl{
@@ -146,8 +146,6 @@ func (m *Module) Register(reg pkgcore.Registrar) error {
 	return nil
 }
 
-// compile-time check that *Module satisfies pkgcore.Module.
-var _ pkgcore.Module = (*Module)(nil)
 
 // onWriteCaptured normalizes a dbkit.WriteCapturedEvent into an AuditEvent
 // and persists it. Action is derived as "<resource_type>.<operation>" (e.g.

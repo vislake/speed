@@ -16,6 +16,7 @@ import (
 	"github.com/vislake/speed/go/dbkit"
 	"github.com/vislake/speed/go/jobs"
 	"github.com/vislake/speed/go/pkgcore"
+	"github.com/vislake/speed/go/pkgcore/componenttest"
 	"github.com/vislake/speed/go/storage"
 )
 
@@ -136,11 +137,12 @@ func newTestStorageObjectServiceWithStore(t *testing.T, store pkgcore.ObjectStor
 	if err := migrations.Apply(context.Background(), db, dbkit.DialectSQLite); err != nil {
 		t.Fatalf("apply storage migrations: %v", err)
 	}
-	// capabilities 0: the identical value pkgcore's own "objectstore.local"
-	// builtin registers (objectstore_registry.go) -- irrelevant here
-	// regardless, since these tests never set WithDeploymentMode and a
-	// single-process deployment excludes no implementation.
-	if _, err := pkgcore.NewKernel(pkgcore.WithObjectStore(store, 0)).Bootstrap(context.Background(), storageModule); err != nil {
+	// The store is put as the assembly's object-store value, so the
+	// storage module's declaration reads exactly the store these tests
+	// control.
+	reg := componenttest.NewRegistry()
+	reg.Put(store)
+	if err := componenttest.DeclareInto(reg, storageModule); err != nil {
 		t.Fatalf("bootstrap storage module: %v", err)
 	}
 	return storageModule.ObjectService()

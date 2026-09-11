@@ -13,6 +13,7 @@ import (
 	// so the dbkit.Open calls below have a driver to build from.
 	_ "github.com/vislake/speed/go/dbkit/dialect/sqlite"
 	"github.com/vislake/speed/go/pkgcore"
+	"github.com/vislake/speed/go/pkgcore/componenttest"
 )
 
 // exampleAuditModule is the minimal pkgcore.Module shape needed to feed
@@ -26,7 +27,7 @@ func (exampleAuditModule) DependsOn() []string              { return nil }
 func (exampleAuditModule) Migrations() embed.FS             { return migrations.FS }
 func (exampleAuditModule) Locales() embed.FS                { return embed.FS{} }
 func (exampleAuditModule) OpenAPISpec() []byte              { return nil }
-func (exampleAuditModule) Register(pkgcore.Registrar) error { return nil }
+func (exampleAuditModule) Register(*pkgcore.ComponentRegistry) error { return nil }
 
 // Example shows Repository end to end: migrating audit_events, appending
 // an event that records an impersonated action (an Actor together with
@@ -86,7 +87,7 @@ func Example() {
 
 // ExampleEmit shows the collection half of the design end to end: a
 // business module registers its qualified action name on
-// pkgcore.Registry.AuditActions, wires audit.New's pkgcore.Module (the
+// pkgcore.ComponentRegistry.AuditActions, wires audit.New's pkgcore.Module (the
 // persister) into the same registry, then records an impersonated action
 // (an Actor together with the OnBehalfOf administrator behind it) through
 // Emit rather than writing to Repository directly. Emit publishes an
@@ -121,8 +122,8 @@ func ExampleEmit() {
 	// A real host builds this Registry once at bootstrap and calls every
 	// module's Register on it, persister's included; this example does
 	// the same for just the one module it needs.
-	reg := pkgcore.NewRegistry(pkgcore.NewMemoryEventBus(), pkgcore.NewMemoryKVStore(), pkgcore.NewConsoleMailer())
-	if registerErr := persister.Register(reg); registerErr != nil {
+	reg := componenttest.NewRegistry()
+	if registerErr := componenttest.DeclareInto(reg, persister); registerErr != nil {
 		fmt.Println("register persister error:", registerErr)
 		return
 	}

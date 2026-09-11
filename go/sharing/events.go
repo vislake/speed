@@ -42,7 +42,7 @@ type hostSeams interface {
 }
 
 // compile-time check that the declaration face covers the seam.
-var _ hostSeams = (pkgcore.Registrar)(nil)
+var _ hostSeams = (*pkgcore.ComponentRegistry)(nil)
 
 // Plain, unexported wiring errors -- never returned to a caller as the
 // final answer, only logged (Service.Create's emitSensitiveAudit call site)
@@ -60,7 +60,7 @@ var (
 // It is called exactly once, by Module.Register, and performs no I/O: it
 // stores the registry slice and the audit-action registrar Service reads at
 // call time, so Service always uses the registry's final wiring.
-func (s *Service) attach(reg pkgcore.Registrar) {
+func (s *Service) attach(reg *pkgcore.ComponentRegistry) {
 	s.host = reg
 	s.auditActions = reg.AuditActionsSeat()
 }

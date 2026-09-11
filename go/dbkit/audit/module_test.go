@@ -8,18 +8,19 @@ import (
 
 	"github.com/vislake/speed/go/dbkit"
 	"github.com/vislake/speed/go/pkgcore"
+	"github.com/vislake/speed/go/pkgcore/componenttest"
 )
 
 // newRegisteredModule opens a fresh test DB (see repository_test.go's
 // openAuditTestDB), builds a Module over it, registers it on a fresh
-// in-memory pkgcore.Registry, and returns both -- the shape every test in
+// in-memory pkgcore.ComponentRegistry, and returns both -- the shape every test in
 // this file starts from.
-func newRegisteredModule(t *testing.T) (*pkgcore.Registry, *Module) {
+func newRegisteredModule(t *testing.T) (*pkgcore.ComponentRegistry, *Module) {
 	t.Helper()
 	db := openAuditTestDB(t)
 	m := New(db)
-	reg := pkgcore.NewRegistry(pkgcore.NewMemoryEventBus(), pkgcore.NewMemoryKVStore(), pkgcore.NewConsoleMailer())
-	if err := m.Register(reg); err != nil {
+	reg := componenttest.NewRegistry()
+	if err := componenttest.DeclareInto(reg, m); err != nil {
 		t.Fatalf("Register() error = %v", err)
 	}
 	return reg, m

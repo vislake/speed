@@ -260,7 +260,7 @@ func (m *Module) OpenAPISpec() []byte { return nil }
 // action: metering has no HTTP surface for rbac to gate, and no operation
 // privileged enough to warrant an audit trail entry -- declaring either
 // speculatively would be dead catalog weight.
-func (m *Module) Register(reg pkgcore.Registrar) error {
+func (m *Module) Register(reg *pkgcore.ComponentRegistry) error {
 	if err := reg.ConfigSeat().Add(configItemDecls...); err != nil {
 		return err
 	}
@@ -271,5 +271,3 @@ func (m *Module) Register(reg pkgcore.Registrar) error {
 	return nil
 }
 
-// compile-time check that *Module satisfies pkgcore.Module.
-var _ pkgcore.Module = (*Module)(nil)

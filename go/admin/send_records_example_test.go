@@ -16,6 +16,7 @@ import (
 	"github.com/vislake/speed/go/dbkit"
 	"github.com/vislake/speed/go/notification"
 	"github.com/vislake/speed/go/pkgcore"
+	"github.com/vislake/speed/go/pkgcore/componenttest"
 )
 
 // ExampleNewSendRecordSearchService demonstrates the cross-tenant
@@ -57,7 +58,7 @@ func ExampleNewSendRecordSearchService() {
 	// declare the cross-tenant system purpose, and hand the service the
 	// bus every WithSystemContext grant audits onto.
 	pkgcore.RegisterSystemPurpose(SystemPurposeAdminCrossTenant)
-	reg := pkgcore.NewRegistry(pkgcore.NewMemoryEventBus(), pkgcore.NewMemoryKVStore(), pkgcore.NewConsoleMailer())
+	reg := componenttest.NewRegistry()
 
 	search := NewSendRecordSearchService(notifModule.Deliveries(), nil)
 	search.attach(reg.EventBus())

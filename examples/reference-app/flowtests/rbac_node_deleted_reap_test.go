@@ -10,6 +10,7 @@ import (
 	"github.com/vislake/speed/go/dbkit"
 	"github.com/vislake/speed/go/org"
 	"github.com/vislake/speed/go/pkgcore"
+	"github.com/vislake/speed/go/pkgcore/componenttest"
 	"github.com/vislake/speed/go/pkgcore/apperr"
 	"github.com/vislake/speed/go/rbac"
 )
@@ -43,7 +44,7 @@ import (
 // bootstrapped the same way BuildServer composes the full app, just without
 // every other module the full app also wires. It returns the real
 // TreeService, the real MemberService and the real rbac Service, all backed
-// by the same pkgcore.Registry and its real event bus, so a delete or a
+// by the same pkgcore.ComponentRegistry and its real event bus, so a delete or a
 // removal published by one is delivered to the other exactly as it is in
 // production.
 func newOrgRBACReapHarness(t *testing.T) (*org.TreeService, *org.MemberService, *rbac.Service) {
@@ -103,7 +104,7 @@ func newOrgRBACReapHarness(t *testing.T) (*org.TreeService, *org.MemberService, 
 		t.Fatalf("applying migrations: %v", applyErr)
 	}
 
-	reg, err := pkgcore.NewKernel().Bootstrap(ctx, orgModule, rbacModule)
+	reg, err := componenttest.DeclareModules(orgModule, rbacModule)
 	if err != nil {
 		t.Fatalf("Bootstrap: %v", err)
 	}

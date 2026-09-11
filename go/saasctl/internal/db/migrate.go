@@ -1,6 +1,7 @@
 package db
 
 import (
+	"embed"
 	"context"
 	"crypto/rand"
 	"errors"
@@ -22,7 +23,6 @@ import (
 	// command runs only against a project's standalone SQLite database.
 	_ "github.com/vislake/speed/go/dbkit/dialect/sqlite"
 	"github.com/vislake/speed/go/org"
-	"github.com/vislake/speed/go/pkgcore"
 	"github.com/vislake/speed/go/pki"
 	"github.com/vislake/speed/go/rbac"
 	"github.com/vislake/speed/go/saasctl/internal/appconfig"
@@ -90,6 +90,22 @@ Exit codes: 0 success or help, 2 usage error, 1 execution error.
 // mirrors the one internal/project itself documents for internal/upgrade.
 const modulePrefix = "github.com/vislake/speed/go/"
 
+// migrationSet is the shape this command consumes from a constructed
+// module: the same three readings dbkit's MigrationRegistry registers on.
+// It is declared here rather than named from a platform interface so the
+// command keeps compiling against the concrete module constructors it
+// calls, which all satisfy the shape as written.
+type migrationSet interface {
+	// Name is the module's short name -- the string its migration files are
+	// recorded under in dbkit's schema_migrations ledger.
+	Name() string
+	// DependsOn names the modules whose sets apply before this one's.
+	DependsOn() []string
+	// Migrations carries the module's versioned SQL migrations, one
+	// subdirectory per dialect.
+	Migrations() embed.FS
+}
+
 // A migrationModule is one entry of the migration universe: the module's
 // short name -- the string its migration files are recorded under in
 // dbkit's schema_migrations ledger -- and a constructor that builds the
@@ -100,7 +116,7 @@ type migrationModule struct {
 	// construct builds the module. Construction performs no I/O and never
 	// touches the database: the module exists so the migration registry
 	// can read Name, DependsOn and Migrations from it.
-	construct func(db *gorm.DB) (pkgcore.Module, error)
+	construct func(db *gorm.DB) (migrationSet, error)
 }
 
 // migrationUniverse lists every speed root module that ships its own SQL
@@ -140,14 +156,14 @@ var migrationUniverse = []migrationModule{
 	{
 		name:    "config",
 		modPath: modulePrefix + "config",
-		construct: func(db *gorm.DB) (pkgcore.Module, error) {
+		construct: func(db *gorm.DB) (migrationSet, error) {
 			return config.NewModule(db), nil
 		},
 	},
 	{
 		name:    "org",
 		modPath: modulePrefix + "org",
-		construct: func(db *gorm.DB) (pkgcore.Module, error) {
+		construct: func(db *gorm.DB) (migrationSet, error) {
 			return org.NewModule(db), nil
 		},
 	},
@@ -166,7 +182,7 @@ var migrationUniverse = []migrationModule{
 	{
 		name:    "rbac",
 		modPath: modulePrefix + "rbac",
-		construct: func(db *gorm.DB) (pkgcore.Module, error) {
+		construct: func(db *gorm.DB) (migrationSet, error) {
 			return rbac.NewModule(db), nil
 		},
 	},
@@ -186,7 +202,7 @@ var migrationUniverse = []migrationModule{
 // never parses either module's GORM model structs (no token is ever
 // issued or stored, and no signing key is ever generated, by this
 // command).
-func buildAuthnAndPKI(db *gorm.DB) (authnModule pkgcore.Module, pkiModule pkgcore.Module, err error) {
+func buildAuthnAndPKI(db *gorm.DB) (authnModule migrationSet, pkiModule migrationSet, err error) {
 	pm := pki.NewModule(db)
 	blindIndexKey := make([]byte, 32)
 	if _, readErr := rand.Read(blindIndexKey); readErr != nil {

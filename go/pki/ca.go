@@ -181,7 +181,7 @@ func (s *CAService) attachQueue(queue jobs.Queue) {
 // no cache to invalidate, so it only ever publishes, never subscribes.
 // Called from Module.Register, which performs no I/O -- a plain field
 // assignment, exactly like Service.attachBus.
-func (s *CAService) attachBus(reg pkgcore.Registrar) {
+func (s *CAService) attachBus(reg *pkgcore.ComponentRegistry) {
 	s.bus = reg.EventBus()
 }
 

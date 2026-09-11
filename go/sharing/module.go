@@ -343,7 +343,7 @@ func (m *Module) OpenAPISpec() []byte { return openAPISpecYAML }
 // Handler performs no authorization decision of its own for these five
 // operations, reading only the tenant tenancy.Middleware already resolved
 // into the request context.
-func (m *Module) Register(reg pkgcore.Registrar) error {
+func (m *Module) Register(reg *pkgcore.ComponentRegistry) error {
 	if err := reg.PermissionsSeat().Add(PermissionRead, PermissionCreate, PermissionRevoke); err != nil {
 		return err
 	}
@@ -394,5 +394,3 @@ func (m *Module) Register(reg pkgcore.Registrar) error {
 	return nil
 }
 
-// compile-time check that *Module satisfies pkgcore.Module.
-var _ pkgcore.Module = (*Module)(nil)

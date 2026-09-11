@@ -20,6 +20,7 @@ import (
 	"github.com/vislake/speed/go/app/chain"
 	"github.com/vislake/speed/go/authn"
 	"github.com/vislake/speed/go/pkgcore"
+	"github.com/vislake/speed/go/pkgcore/componenttest"
 )
 
 // exampleKeySource is an authn.KeySource carrying no verification keys, so
@@ -55,7 +56,7 @@ func (exampleModule) DependsOn() []string  { return nil }
 func (exampleModule) Migrations() embed.FS { return embed.FS{} }
 func (exampleModule) Locales() embed.FS    { return embed.FS{} }
 func (exampleModule) OpenAPISpec() []byte  { return nil }
-func (m exampleModule) Register(reg pkgcore.Registrar) error {
+func (m exampleModule) Register(reg *pkgcore.ComponentRegistry) error {
 	reg.RoutesSeat().Mount(app.AuthnAPIPath, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_, _ = fmt.Fprintf(w, "authn handler: %s", r.URL.Path)
 	}))
@@ -78,7 +79,7 @@ func ExampleStandard() {
 		panic(err)
 	}
 
-	reg, err := pkgcore.NewKernel().Bootstrap(context.Background(), exampleModule{})
+	reg, err := componenttest.DeclareModules(exampleModule{})
 	if err != nil {
 		panic(err)
 	}

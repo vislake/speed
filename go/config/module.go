@@ -227,7 +227,7 @@ func (m *Module) OpenAPISpec() []byte { return openAPISpecYAML }
 // declaration made here: the component descriptor (component.go) carries it
 // as SystemPurposes, and the assembly registers it when its Init stage
 // closes.
-func (m *Module) Register(reg pkgcore.Registrar) error {
+func (m *Module) Register(reg *pkgcore.ComponentRegistry) error {
 	// One handler, two mounts: the fragment's wrapper dispatches on a
 	// request's own literal path, so the same http.Handler serves both
 	// paths -- the identical shape go/sharing's Register gives its own
@@ -275,7 +275,7 @@ func (m *Module) Register(reg pkgcore.Registrar) error {
 // callers: exactly one Attach succeeds and every other call fails with
 // ErrAlreadyAttached, never a second Service with its own poller and bus
 // subscription.
-func (m *Module) Attach(reg pkgcore.Registrar) (*Service, error) {
+func (m *Module) Attach(reg *pkgcore.ComponentRegistry) (*Service, error) {
 	m.attachMu.Lock()
 	defer m.attachMu.Unlock()
 	if m.service != nil {
@@ -320,5 +320,3 @@ func (m *Module) Attach(reg pkgcore.Registrar) (*Service, error) {
 	return svc, nil
 }
 
-// compile-time check that *Module satisfies pkgcore.Module.
-var _ pkgcore.Module = (*Module)(nil)

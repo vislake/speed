@@ -34,6 +34,7 @@ import (
 	"github.com/vislake/speed/go/dbkit/dbtest"
 	"github.com/vislake/speed/go/jobs"
 	"github.com/vislake/speed/go/pkgcore"
+	"github.com/vislake/speed/go/pkgcore/componenttest"
 	"github.com/vislake/speed/go/sharing"
 )
 
@@ -112,7 +113,7 @@ func newTenantConfigReaderHarness(t *testing.T) tenantConfigReaderHarness {
 		t.Fatalf("apply migrations: %v", err)
 	}
 
-	reg, err := pkgcore.NewKernel().Bootstrap(ctx, configModule, sharingModule, complianceModule, auditModule)
+	reg, err := componenttest.DeclareModules(configModule, sharingModule, complianceModule, auditModule)
 	if err != nil {
 		t.Fatalf("bootstrap kernel: %v", err)
 	}

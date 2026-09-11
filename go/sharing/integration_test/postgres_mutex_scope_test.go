@@ -35,6 +35,7 @@ import (
 	"time"
 
 	"github.com/vislake/speed/go/pkgcore"
+	"github.com/vislake/speed/go/pkgcore/componenttest"
 	"github.com/vislake/speed/go/sharing"
 	"github.com/vislake/speed/go/sharing/internal/testutil"
 	"github.com/vislake/speed/go/sharing/migrations"
@@ -55,9 +56,9 @@ import (
 func TestPostgres_GuardedWrites_UnrelatedTenantsNotSerialized(t *testing.T) {
 	db := testutil.NewPostgres(t, "sharing", migrations.FS)
 
-	reg := pkgcore.NewRegistry(pkgcore.NewMemoryEventBus(), pkgcore.NewMemoryKVStore(), pkgcore.NewConsoleMailer())
+	reg := componenttest.NewRegistry()
 	mod := sharing.NewModule(db)
-	if err := mod.Register(reg); err != nil {
+	if err := componenttest.DeclareInto(reg, mod); err != nil {
 		t.Fatalf("sharing.Module.Register: %v", err)
 	}
 	svc := mod.Service()

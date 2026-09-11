@@ -11,6 +11,7 @@ import (
 	"github.com/vislake/speed/go/dbkit"
 	"github.com/vislake/speed/go/jobs"
 	"github.com/vislake/speed/go/pkgcore"
+	"github.com/vislake/speed/go/pkgcore/componenttest"
 	"github.com/vislake/speed/go/pkgcore/apperr"
 
 	"github.com/vislake/speed/go/notification"
@@ -255,11 +256,7 @@ func ExamplePreferenceService() {
 	// A host assembles its own registry over the in-process seam
 	// implementations and declares its notification types on it -- the same
 	// shape Kernel.Bootstrap composes in a standalone deployment.
-	host := pkgcore.NewRegistry(
-		pkgcore.NewMemoryEventBus(),
-		pkgcore.NewMemoryKVStore(),
-		pkgcore.NewConsoleMailer(),
-	)
+	host := componenttest.NewRegistry()
 	appointment := pkgcore.NotificationType{
 		Key:             "clinic.appointment_reminder",
 		Group:           "clinic",

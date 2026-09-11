@@ -153,7 +153,7 @@ func startQueue(t *testing.T, q *jobs.StandaloneQueue) {
 //     retried after the backoff base), so the pacing these tests rely on
 //     is stated here rather than inherited from a default that could
 //     drift.
-func newQueueTestService(t *testing.T, db *gorm.DB, opts ...Option) (*Service, *pkgcore.Registry, *jobs.StandaloneQueue) {
+func newQueueTestService(t *testing.T, db *gorm.DB, opts ...Option) (*Service, *pkgcore.ComponentRegistry, *jobs.StandaloneQueue) {
 	t.Helper()
 	sqlDB, err := db.DB()
 	if err != nil {

@@ -13,6 +13,7 @@ import (
 	"github.com/vislake/speed/go/dbkit/audit"
 	"github.com/vislake/speed/go/jobs"
 	"github.com/vislake/speed/go/pkgcore"
+	"github.com/vislake/speed/go/pkgcore/componenttest"
 	"github.com/vislake/speed/go/pkgcore/apperr"
 	"github.com/vislake/speed/go/tenancy"
 
@@ -24,7 +25,7 @@ import (
 var errFakeParticipant = errors.New("testutil: fake participant refuses")
 
 // newRetentionHarness returns a RetentionService wired directly over a
-// hand-built pkgcore.Registry (Retention and AuditActions are both
+// hand-built pkgcore.ComponentRegistry (Retention and AuditActions are both
 // available on a Registry built with NewRegistry -- unlike ObjectStore,
 // they do not require Kernel.Bootstrap, see pkgcore/registry.go) plus one
 // registered testutil.FakeNote participant and its own migrated SQLite
@@ -44,7 +45,8 @@ func newRetentionHarness(t *testing.T) (*RetentionService, *testutil.FakeReposit
 // the sweep's own audit emit) that a healthy memory bus can never reach.
 func newRetentionHarnessOn(t *testing.T, bus pkgcore.EventBus) (*RetentionService, *testutil.FakeRepository) {
 	t.Helper()
-	reg := pkgcore.NewRegistry(bus, pkgcore.NewMemoryKVStore(), pkgcore.NewConsoleMailer())
+	reg := componenttest.NewRegistry()
+	reg.Put(bus)
 	if err := reg.AuditActions.Add(AuditActionRetentionSweep); err != nil {
 		t.Fatalf("declare audit action: %v", err)
 	}
@@ -259,7 +261,8 @@ func TestRetentionService_SweepTenant_ParticipantErrorIsPartialFailure(t *testin
 // vanish from the audit trail's reaped map entirely.
 func TestRetentionService_SweepTenant_ParticipantPartialCountSurvivesError(t *testing.T) {
 	bus := pkgcore.NewMemoryEventBus()
-	reg := pkgcore.NewRegistry(bus, pkgcore.NewMemoryKVStore(), pkgcore.NewConsoleMailer())
+	reg := componenttest.NewRegistry()
+	reg.Put(bus)
 	if err := reg.AuditActions.Add(AuditActionRetentionSweep); err != nil {
 		t.Fatalf("declare audit action: %v", err)
 	}
@@ -349,7 +352,8 @@ func TestRetentionService_SweepTenant_ParticipantPartialCountSurvivesError(t *te
 // is a clean, empty pass rather than an error.
 func TestRetentionService_SweepTenant_NoParticipants(t *testing.T) {
 	bus := pkgcore.NewMemoryEventBus()
-	reg := pkgcore.NewRegistry(bus, pkgcore.NewMemoryKVStore(), pkgcore.NewConsoleMailer())
+	reg := componenttest.NewRegistry()
+	reg.Put(bus)
 	if err := reg.AuditActions.Add(AuditActionRetentionSweep); err != nil {
 		t.Fatalf("declare audit action: %v", err)
 	}
@@ -534,7 +538,8 @@ func TestRetentionSweepHandler_RejectsAPayload(t *testing.T) {
 // Changes["errors"]; a verbatim write fails the assertions below.
 func TestRetentionService_SweepTenant_ChangesRecordClassificationNeverErrorText(t *testing.T) {
 	bus := pkgcore.NewMemoryEventBus()
-	reg := pkgcore.NewRegistry(bus, pkgcore.NewMemoryKVStore(), pkgcore.NewConsoleMailer())
+	reg := componenttest.NewRegistry()
+	reg.Put(bus)
 	if err := reg.AuditActions.Add(AuditActionRetentionSweep); err != nil {
 		t.Fatalf("declare audit action: %v", err)
 	}

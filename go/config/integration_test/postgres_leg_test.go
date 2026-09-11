@@ -37,6 +37,7 @@ import (
 	// has a driver to build from.
 	_ "github.com/vislake/speed/go/dbkit/dialect/postgres"
 	"github.com/vislake/speed/go/pkgcore"
+	"github.com/vislake/speed/go/pkgcore/componenttest"
 )
 
 // pgItems and pgFlags are the schema this tier's tests fold into their
@@ -136,7 +137,8 @@ func attachConfigService(t *testing.T, db *gorm.DB, bus pkgcore.EventBus, cipher
 	t.Helper()
 
 	pkgcore.RegisterSystemPurpose(config.SystemPurposeSystemWrite)
-	reg := pkgcore.NewRegistry(bus, pkgcore.NewMemoryKVStore(), pkgcore.NewConsoleMailer())
+	reg := componenttest.NewRegistry()
+	reg.Put(bus)
 	if err := reg.Config.Add(pgItems...); err != nil {
 		t.Fatalf("reg.Config.Add: %v", err)
 	}
@@ -144,7 +146,7 @@ func attachConfigService(t *testing.T, db *gorm.DB, bus pkgcore.EventBus, cipher
 		t.Fatalf("reg.Features.Add: %v", err)
 	}
 	module := config.NewModule(db, config.WithCipher(cipher), config.WithPollInterval(0))
-	if err := module.Register(reg); err != nil {
+	if err := componenttest.DeclareInto(reg, module); err != nil {
 		t.Fatalf("Register: %v", err)
 	}
 	svc, err := module.Attach(reg)
