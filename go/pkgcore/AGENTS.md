@@ -320,24 +320,24 @@ Implementing a module:
 
 ```go
 func (m *Module) Register(reg pkgcore.Registrar) error {
-	reg.Routes.Mount("/api/v1/billing", m.router())
+	reg.RoutesSeat().Mount("/api/v1/billing", m.router())
 
-	if err := reg.Config.Add(pkgcore.ConfigItem{
+	if err := reg.ConfigSeat().Add(pkgcore.ConfigItem{
 		Key: "billing.invoice_retry_limit", Type: "int", Default: 3,
 		Description: "How many times a failed invoice charge is retried.",
 	}); err != nil {
 		return err
 	}
-	if err := reg.Permissions.Add("billing:read", "billing:write"); err != nil {
+	if err := reg.PermissionsSeat().Add("billing:read", "billing:write"); err != nil {
 		return err
 	}
-	if err := reg.Events.Publishes(pkgcore.EventDecl{
+	if err := reg.EventsSeat().Publishes(pkgcore.EventDecl{
 		Type: "billing.invoice.paid", PayloadType: "billing.InvoicePaid",
 		Description: "An invoice was paid in full.",
 	}); err != nil {
 		return err
 	}
-	reg.Events.Subscribe("authn.user_created", m.openCreditLedger)
+	reg.EventsSeat().Subscribe("authn.user_created", m.openCreditLedger)
 	return nil
 }
 ```
@@ -424,7 +424,7 @@ Full runnable versions of all of the above live in `example_test.go` (the shared
 - Do not add a method to `Module`. Under lockstep versioning that breaks all modules at once — add a field to `Registry` instead.
 - Do not perform I/O in `Register`. It declares; the kernel decides when anything runs.
 - Do not depend on module registration order. Declare the dependency in `DependsOn`; `Bootstrap` sorts, and reports a cycle or a missing dependency rather than guessing.
-- Do not call a module's post-Bootstrap attach step before `Kernel.Bootstrap` returns: `config`, `rbac` and `integration` each expose `Attach(reg *pkgcore.Registry) (*<module>.Service, error)` and `admin` exposes `AttachRBAC(*rbac.Service)` — each exactly once, before the first host step that consumes the returned Service. No shared helper batches them: every `Attach` returns its own module's Service type, so no one interface is satisfied by all of them, and each host wires its own sequence (`Kernel.Bootstrap`'s "Post-Bootstrap module steps" section is the contract, including what an un-attached Service does when something reaches it).
+- Do not call a module's post-Bootstrap attach step before `Kernel.Bootstrap` returns: `config`, `rbac` and `integration` each expose `Attach(reg pkgcore.Registrar) (*<module>.Service, error)` and `admin` exposes `AttachRBAC(*rbac.Service)` — each exactly once, before the first host step that consumes the returned Service. No shared helper batches them: every `Attach` returns its own module's Service type, so no one interface is satisfied by all of them, and each host wires its own sequence (`Kernel.Bootstrap`'s "Post-Bootstrap module steps" section is the contract, including what an un-attached Service does when something reaches it).
 - Do not swallow a registrar error. A duplicate key is a bug across modules, not a merge, and nothing is registered when the call returns an error.
 - Do not publish a domain event the module never declared with `Events.Publishes`. The declarations are the catalog `integration` maps onto the versioned public event schema.
 - Do not decorate a shared `apperr` value expecting the receiver to change. `WithParam` and `WithCause` derive a new error.

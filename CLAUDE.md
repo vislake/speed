@@ -70,7 +70,7 @@ This is a coarse topological ordering, not the full edge list — `docs/internal
 
 ### Module wiring
 
-Every module implements `pkgcore.Module` and registers everything through a single `Register(reg *Registry)` call — routes, config schema, feature flags, permissions, job handlers, notification types, events, audit actions. The `Registry` struct exists so that adding a new cross-cutting mechanism does not change the `Module` interface, which under lockstep versioning would break every module at once.
+Every module implements `pkgcore.Module` and registers everything through a single `Register(reg Registrar)` call — routes, config schema, feature flags, permissions, job handlers, notification types, events, audit actions. The `Registrar` declaration face exists so that adding a new cross-cutting mechanism does not change the `Module` interface, which under lockstep versioning would break every module at once.
 
 `go/app` is the **application assembly layer** sitting above the whole graph (the one recorded exception to the module-discipline rule): it owns the structure every host's boot shares — the assembly order, the configuration load orchestration, the HTTP face and the serve/shutdown lifecycle — while the host keeps the policy (which modules compose, which values configure them, its routes and rules). Hosts assemble through it (`app.New`/`app.Run` plus the `WithXxx` options and stage hooks); the rationale and the charter live in `docs/internal/01-architecture.md` and `go/app/AGENTS.md`.
 

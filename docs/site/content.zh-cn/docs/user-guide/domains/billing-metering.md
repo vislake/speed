@@ -78,7 +78,7 @@ flowchart LR
    搁浅预留。
 5. **注册你的合规参与者。** 拥有带保留策略数据的模块实现
    `RetentionParticipant`,并在 `Register` 时把自己声明到
-   `reg.Retention`;清扫、擦除与导出编排随后就会覆盖你的行。
+   `reg.RetentionSeat()`;清扫、擦除与导出编排随后就会覆盖你的行。
 
 ## 完整示例:一次 AI 调用——先授权、再计量、用信用点付费
 

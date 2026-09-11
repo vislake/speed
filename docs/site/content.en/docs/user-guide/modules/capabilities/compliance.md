@@ -19,7 +19,7 @@ no table of its own.
 
 Three orchestrations plus one query API, all built over the
 `pkgcore.RetentionParticipant` registrations business modules make on
-the kernel's `reg.Retention` seat:
+the kernel's retention seat (`reg.RetentionSeat()`):
 
 - **`RetentionService`** — `SweepTenant(tenant)` hard-deletes each
   registered participant's soft-deleted rows past the tenant's

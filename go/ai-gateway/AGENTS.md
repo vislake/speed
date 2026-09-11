@@ -231,7 +231,7 @@ tenantless calls explicitly.
   `ImageProviderRegistry` depending on which pipeline is asking -- reuse,
   not extension.
 - Conditional job-handler registration (`module.go`): `Register` claims
-  the image-generation job handler on `reg.Jobs` whenever the module's
+  the image-generation job handler on `reg.JobsSeat()` whenever the module's
   `Gateway` was built with `WithImageGeneration(queue, objects)` -- both
   go/storage's `*storage.ObjectService` and go/jobs' `jobs.Queue` are
   injected directly: both sit below ai-gateway in the dependency graph,
@@ -347,7 +347,7 @@ tenantless calls explicitly.
   escape hatch with zero audit events, so the audited wrapper is mandatory
   for this path.
 - `Module` (`module.go`) implements `pkgcore.Module`; `Register` declares
-  the three permissions on `reg.Permissions`,
+  the three permissions on `reg.PermissionsSeat()`,
   registers `SystemPurposeCredentialWrite` via
   `pkgcore.RegisterSystemPurpose`, and mounts the Handler at `apiPath` --
   the module's single `Register(reg Registrar)` contract unchanged. The

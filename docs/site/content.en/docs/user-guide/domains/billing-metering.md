@@ -98,7 +98,7 @@ seat:
    reservation.
 5. **Register your compliance participants.** A module that owns
    data with a retention policy implements `RetentionParticipant` and
-   declares itself on `reg.Retention` during `Register`; the sweep,
+   declares itself on `reg.RetentionSeat()` during `Register`; the sweep,
    erase and export orchestrations then cover your rows.
 
 ## Complete example: one AI call, entitled, metered and paid in credits

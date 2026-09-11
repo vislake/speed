@@ -74,7 +74,7 @@ var noteCreatedNotificationType = pkgcore.NotificationType{
 
 func (m *Module) Register(reg pkgcore.Registrar) error {
     // ... this module's own declarations ...
-    return reg.Notifications.Add(noteCreatedNotificationType)
+    return reg.NotificationsSeat().Add(noteCreatedNotificationType)
 }
 ```
 
@@ -207,7 +207,7 @@ compare `.Code`, never a raw string. The most commonly reached ones:
 
 | Code | Meaning | What to do |
 |---|---|---|
-| `notification.type_not_found` | `Dispatch`/preference call named an undeclared type key | Confirm the declaring module's `Register` ran and called `reg.Notifications.Add` before this call |
+| `notification.type_not_found` | `Dispatch`/preference call named an undeclared type key | Confirm the declaring module's `Register` ran and called `reg.NotificationsSeat().Add` before this call |
 | `notification.contact_not_verified` | Dispatch to an external contact that never completed double opt-in | Nothing sends to this address until `POST /contacts/{id}/verify` succeeds -- the verification message itself is the sole exception |
 | `notification.contact_unsubscribed` / `notification.contact_bounced` | Terminal consent states | Every later delivery to this contact is refused; there is no un-bounce path |
 | `notification.preference_optout_not_allowed` | A caller tried to opt out of a transactional (non-unsubscribable) type | Expected refusal -- verification codes and similar transactional types cannot be muted |

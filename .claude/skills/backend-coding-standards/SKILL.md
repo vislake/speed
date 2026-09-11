@@ -48,17 +48,17 @@ Independent Go modules, each with its own `go.mod`, developed together through `
 
 ## 2. Module Wiring
 
-Every module implements `pkgcore.Module` and registers routes, config schema, feature flags, permissions, job handlers, notification types, events and audit actions through a single `Register(reg *Registry)`.
+Every module implements `pkgcore.Module` and registers routes, config schema, feature flags, permissions, job handlers, notification types, events and audit actions through a single `Register(reg Registrar)`.
 
 ```go
-func (m *Module) Register(reg *pkgcore.Registry) error {
-    reg.Routes.Mount("/api/v1/billing", billingapi.Handler(m.svc)) // implements the spec-generated interface
-    reg.Config.Add(configSchema...)
-    reg.Features.Add(featureFlags...)
-    reg.Permissions.Add("billing:read", "billing:manage")
-    reg.Jobs.Handle(&InvoiceGenerator{svc: m.svc})
-    reg.Notifications.Add(notificationTypes...)
-    reg.Events.Subscribe("org.member.invited", m.onMemberInvited)
+func (m *Module) Register(reg pkgcore.Registrar) error {
+    reg.RoutesSeat().Mount("/api/v1/billing", billingapi.Handler(m.svc)) // implements the spec-generated interface
+    reg.ConfigSeat().Add(configSchema...)
+    reg.FeaturesSeat().Add(featureFlags...)
+    reg.PermissionsSeat().Add("billing:read", "billing:manage")
+    reg.JobsSeat().Handle(&InvoiceGenerator{svc: m.svc})
+    reg.NotificationsSeat().Add(notificationTypes...)
+    reg.EventsSeat().Subscribe("org.member.invited", m.onMemberInvited)
     return nil
 }
 ```

@@ -68,7 +68,7 @@ Both tiers converge on `Aggregator`'s in-process counters and `UsageSummary` row
 
 ## Overage thresholds: declared config schema, Go-level values
 
-`Module.Register` declares `ConfigPeriodBucketSize` and `ConfigDefaultOverageThreshold` on `reg.Config` -- schema only. Nothing reads either through a live `config.Service` call: `Aggregator`'s actual period bucket and thresholds come from `Module`'s own `WithPeriodBucket`/`WithOverageThresholds` Go-level options, defaulted at construction.
+`Module.Register` declares `ConfigPeriodBucketSize` and `ConfigDefaultOverageThreshold` on `reg.ConfigSeat()` -- schema only. Nothing reads either through a live `config.Service` call: `Aggregator`'s actual period bucket and thresholds come from `Module`'s own `WithPeriodBucket`/`WithOverageThresholds` Go-level options, defaulted at construction.
 
 Why the schema-only declaration is right, not a shortcut: reading a live, *per-tenant* config value would require metering to depend on `go/config` (a real module-to-module import this codebase's established convention avoids in favor of a structurally-typed, no-import seam -- see `org`'s `FeatureGate`/`Scope` for the pattern) purely to serve thresholds that are still a stand-in: billing's quota limits live in its own per-plan `Grant` values and nothing wires them into metering's Go-level thresholds (or into the `metering.default_overage_threshold` config item), so a live-read seam would still have no real consumer. The same schema-only simplification `go/pki` documents for its own validity periods.
 

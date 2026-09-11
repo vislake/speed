@@ -322,16 +322,16 @@ magic numbers:
   `storage.object.deleted` (payload `storage.ObjectDeleted`: `object_id`);
 - attaches the registry to all three services (`attach`) — plain assignments;
 - claims the handlers of the two task types the module's services schedule on
-  `reg.Jobs`: the thumbnail-derive task the completion pipeline enqueues
+  `reg.JobsSeat()`: the thumbnail-derive task the completion pipeline enqueues
   (derive.go's `deriveHandler`, backed by `DeriveService`) and the
   expiry-sweep task `EnqueueExpirySweep` schedules (cleanup.go's
   `expirySweepHandler`, backed by `LifecycleService`) — catalog insertions a
   host drains onto its queue after Bootstrap and gets a worker that produces
   thumbnails and sweeps expiry — and declares the expiry sweep's periodic
-  schedule on `reg.Schedules` (cleanup.go's `expirySweepSchedule`), the seat
+  schedule on `reg.SchedulesSeat()` (cleanup.go's `expirySweepSchedule`), the seat
   a host's `jobs.Scheduler` reads;
 - builds `Handler` (`handler.go`) and mounts the module's HTTP surface on
-  `reg.Routes` at `apiPath` (`/api/v1/storage`, agreed with the fragment's
+  `reg.RoutesSeat()` at `apiPath` (`/api/v1/storage`, agreed with the fragment's
   `paths:` keys so the host's outer mux knows which requests to hand over).
   `Handler` is built here, not in `NewModule`, so it serves the service and
   repository instances the host's `With*` options actually configured —

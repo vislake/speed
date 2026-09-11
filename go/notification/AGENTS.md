@@ -60,9 +60,9 @@ a domain event; a tenant's organization structure is the same; addresses of
 *user* recipients are identity data the host resolves through seams, never
 rows here. `notification` also never declares the notification types it
 delivers: a type is a declaration of the business module that emits it,
-registered on the host registry with `reg.Notifications.Add`
+registered on the host registry with `reg.NotificationsSeat().Add`
 (`pkgcore.NotificationType`), the same relationship events have with
-`reg.Events.Publishes` -- and the taxonomy a preference write or a delivery
+`reg.EventsSeat().Publishes` -- and the taxonomy a preference write or a delivery
 consults is the live registry list, read at call time, never a snapshot
 (a business module may legitimately register its types after notification's
 own `Register` ran). Business modules never depend on notification either:
@@ -205,7 +205,7 @@ the caller's own out of its buffer. The route carries no heartbeat (see
   JSON-tagged because the payload crosses the Redis bus. During `Register`
   the module also subscribes to its own event to fan announcements out to the
   local hub (see `hub.go`).
-- Jobs: exactly one handler, `reg.Jobs.Handle(jobTypeDeliver,
+- Jobs: exactly one handler, `reg.JobsSeat().Handle(jobTypeDeliver,
   m.deliveries)`. One handler delivers every declared type, deciding what to
   do per payload; the type string is deliberately not the name of a
   notification type.
@@ -213,7 +213,7 @@ the caller's own out of its buffer. The route carries no heartbeat (see
   `attested`, `verified`, `unsubscribed` and the type-scoped
   `type_unsubscribed` (whose record names the narrowed type in its change,
   so the trail can reconstruct which type a contact opted out of) --
-  registered on `reg.AuditActions`
+  registered on `reg.AuditActionsSeat()`
   in `Register`. The audit `Resource`'s display name is the channel plus the
   address's blind index: the plaintext address must never reach the audit
   trail, whose records outlive the row.

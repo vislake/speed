@@ -15,8 +15,8 @@ compliance 是 speed 的治理层:保留窗口清扫、被遗忘权编排、数�
 
 ## 它做什么
 
-三个编排加一个查询 API,全部建在业务模块向内核 `reg.Retention` 席
-位注册的 `pkgcore.RetentionParticipant` 之上:
+三个编排加一个查询 API,全部建在业务模块经 `reg.RetentionSeat()`
+向内核保留席位注册的 `pkgcore.RetentionParticipant` 之上:
 
 - **`RetentionService`**——`SweepTenant(tenant)` 把各注册参与者过了
   保留窗口的软删行物理删除;`EnqueueRetentionSweep`(一个 `jobs` 任

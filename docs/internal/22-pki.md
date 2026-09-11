@@ -450,7 +450,7 @@ type KeySource interface {
 
 ## 模块契约
 
-按 [01 整体架构](01-architecture.md) 的模块接入契约，`Register(reg *Registry)` 注册：
+按 [01 整体架构](01-architecture.md) 的模块接入契约，`Register(reg Registrar)` 注册：
 
 **配置项**（`config` 模块）：CA 与证书的默认/最长有效期、提前续期天数、传播窗口长度、CRL 分发点 URL。**没有 Sensitive 项**——私钥不经过配置系统。
 

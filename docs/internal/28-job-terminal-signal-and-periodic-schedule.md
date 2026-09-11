@@ -11,7 +11,7 @@
 - **三个终态写入点**都在 store.go:`completeSucceeded`(:811)、`completeDeadLetter`(:875)、`markCancelled`(:899)。前两者返回 **transition report**(这次写入是否真实完成了迁移),worker.go 的 `execute`(:405)与 `settleFailedAttempt`(:520)只在报告为真后才记日志、指标、跑 `OnFailure`;写入的 `WHERE status = 'running'` 守卫让并发 `Cancel` 赢(取消赢语义),被丢弃的尝试结果永不落库(`logDiscardedOutcome`,worker.go:629)。
 - **今天一个作业的终结只能靠轮询 `Queue.Get` 观察到**。唯一的推送面是 `FailureHook.OnFailure`(go/jobs/handler.go:134):仅死信、仅进程内、挂在 Handler 上;两个实现相对死信持久化的时序不同(StandaloneQueue 严格在写入之后、asynq 在归档写之前,handler.go:95-133 逐条写明),且被明确裁定为"队列对失败补偿的全部涉入面——补偿属业务模块"。
 - **崩溃面的现状答案**是 `resetInterruptedRecords`(store.go:908):Start 时把残留 `running` 行重置重跑——本模块不存在"至多一次执行",至少一次是既定语义,消费者幂等是每个跨进程消费方的既有义务。
-- **队列目前没有总线**:`NewStandaloneQueue(db, opts...)` 与 `asynq.NewQueue(redisOpt, opts...)` 都不接受 `pkgcore.EventBus`;`jobs` 也不是 `pkgcore.Module`(根包无 `Register`),`reg.Jobs` 是外部向它声明的座席(`JobHandlerRegistrar`,go/pkgcore/registry.go:324),由 `jobs.Wire`(go/jobs/wire.go)在 Bootstrap 之后排空。
+- **队列目前没有总线**:`NewStandaloneQueue(db, opts...)` 与 `asynq.NewQueue(redisOpt, opts...)` 都不接受 `pkgcore.EventBus`;`jobs` 也不是 `pkgcore.Module`(根包无 `Register`),外部向它声明的座席是 `reg.JobsSeat()`(`JobHandlerRegistrar`,go/pkgcore/registry.go:324),由 `jobs.Wire`(go/jobs/wire.go)在 Bootstrap 之后排空。
 - **"列终态作业"的唯一读面**是两个实现各自的 `DeadLetterJobs(ctx)`(go/jobs/queue_standalone.go:577;asynq 同名),不在 `Queue` 接口上,且只覆盖死信一类。
 
 ### 1.2 观察一:信用结算的轮询与持久台账
@@ -38,7 +38,7 @@
 | 6 | sharing | `sharing.expiry_sweep` | `Module.EnqueueExpirySweep`(module.go:244) | 1h | 否(全仓无调用方) |
 | 7 | integration | `integration.apikey.expiry_sweep` | `Service.EnqueueAPIKeyExpirySweep`(apikey_sweep.go:98) | `apiKeyExpirySweepWindowSize` = 1h(:56) | 否(全仓无调用方) |
 
-每处的解剖是同一个四件套:窗口起点函数(`now.Truncate(window)`,绝对时钟、不做时区日历切)、确定性幂等键派生(`<namespace>:<tenant?>:<RFC3339>`——storage 是 `storage.sweep:`、compliance 是 `compliance.retention_sweep:`、billing 是 `billing.poll:`、pki 两条不带租户段)、一个 host-facing 的 `Enqueue*` 方法、一个 `reg.Jobs` 上的 handler。窗口键承担三件事:**同窗口的重复入队收敛为一个作业**、**让周期成立**(StandaloneQueue 的幂等键一经解析永久持有,无窗口键就退化为"每库一次")、**死信只毒化自己的窗口**(下一窗口是新键)。
+每处的解剖是同一个四件套:窗口起点函数(`now.Truncate(window)`,绝对时钟、不做时区日历切)、确定性幂等键派生(`<namespace>:<tenant?>:<RFC3339>`——storage 是 `storage.sweep:`、compliance 是 `compliance.retention_sweep:`、billing 是 `billing.poll:`、pki 两条不带租户段)、一个 host-facing 的 `Enqueue*` 方法、一个声明到 `reg.JobsSeat()` 的 handler。窗口键承担三件事:**同窗口的重复入队收敛为一个作业**、**让周期成立**(StandaloneQueue 的幂等键一经解析永久持有,无窗口键就退化为"每库一次")、**死信只毒化自己的窗口**(下一窗口是新键)。
 
 主机侧是两个各写各的 ticker:`examples/reference-app/internal/app/periodic_scheduler.go` 的 `startPeriodicTaskScheduler`(1 分钟 tick,`runPeriodicTasks` 驱动 1/2/3 三处),加 `smilesim.StartReconciler` 自己那只。租户宇宙是宿主资产:`periodicTenantUniverse`(periodic_scheduler.go:166)把 `cfg.HostTenants` 与 go/admin D3 台账(`TenantService.ListAllIDs`)取并集,每 tick 现算。
 
