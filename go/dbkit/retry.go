@@ -64,7 +64,7 @@ import "strings"
 // The substrings below are each driver's own stable wording, not a guess:
 // modernc.org/sqlite's *Error.Error() always includes the literal
 // result-code name in parentheses (confirmed against a real SQLITE_BUSY in
-// retry_sqlite_test.go, forced from two genuine connections contending on
+// retry_test.go, forced from two genuine connections contending on
 // one file exactly as go/dbkit/dialect/sqlite/dialect_sqlite_test.go's own
 // rig does), and PostgreSQL's wire-protocol error text for the
 // serialization_failure (40001) and deadlock_detected (40P01) SQLSTATEs is

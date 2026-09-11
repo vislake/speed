@@ -69,7 +69,7 @@ func (w SoftDeletableWidget) AuditResourceType() string { return "soft_deletable
 // real, working, dual-dialect-safe option; the alternative ("accept no
 // reuse until hard-deleted") remains legitimate for a model that wants it,
 // and this fixture takes no position on which answer a caller should pick,
-// only that the choice must be made deliberately. See soft_delete_unique_index_test.go
+// only that the choice must be made deliberately. See soft_delete_test.go
 // and go/dbkit/AGENTS.md's "Soft deletion" section for the general guidance
 // this proof backs.
 const SoftDeletableWidgetTableSQL = `CREATE TABLE soft_deletable_widgets (id TEXT NOT NULL, tenant_id TEXT NOT NULL, name TEXT NOT NULL, deleted_at TIMESTAMP NULL, deleted_by TEXT NOT NULL DEFAULT '', PRIMARY KEY (tenant_id, id));

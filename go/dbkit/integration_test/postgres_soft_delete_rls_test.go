@@ -29,7 +29,7 @@ import (
 // policy shape and helpers (mustExec, openRole, queryIDs, startPostgresContainer,
 // ctxFor, tenantA, tenantB — all package-level in dbkit_test), applied to
 // testutil.SoftDeletableWidgetTableSQL instead of the plain widgets table —
-// the same DDL string soft_delete_unique_index_test.go already exercises
+// the same DDL string soft_delete_test.go already exercises
 // against SQLite, now proven against real PostgreSQL too (the dual-dialect
 // half of that proof: "CREATE UNIQUE INDEX ... WHERE deleted_at IS NULL" is
 // standard SQL, not PostgreSQL-specific, but only running it against a real

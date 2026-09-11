@@ -13,7 +13,7 @@
 //     the database-level append-only backstop
 //     (migrations/{postgres,sqlite}/0002_append_only_enforcement.sql -- a
 //     BEFORE UPDATE/DELETE trigger pair on audit_events, proven against a
-//     raw *sql.DB bypassing Repository entirely in append_only_test.go
+//     raw *sql.DB bypassing Repository entirely in repository_test.go
 //     and, for PostgreSQL, integration_test/postgres_append_only_test.go).
 //   - Repository's Insert/Get/ListByTenant (repository.go) -- the minimal
 //     read path its own tests need. ListByTenant is not a query surface:

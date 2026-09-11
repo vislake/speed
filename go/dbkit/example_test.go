@@ -187,7 +187,7 @@ func ExampleBlindIndexer() {
 		return
 	}
 
-	// Bootstrap, where secrets are injected: the encryption key and the
+	// Host boot, where secrets are injected: the encryption key and the
 	// blind-index key are two separate secrets — see dbkit.NewCipher's
 	// key-separation warning for why they must never be the same bytes —
 	// and both obey the same 32-byte policy NewCipher enforces with

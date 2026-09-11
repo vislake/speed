@@ -80,7 +80,7 @@ func sampleEvent() *audit.AuditEvent {
 
 // TestAppendOnlyTrigger_Postgres_RejectsRawUpdateAndDelete is the
 // PostgreSQL leg of the database-level append-only proof -- the SQLite leg
-// lives in the parent package's append_only_test.go, needing no Docker.
+// lives in the parent package's repository_test.go, needing no Docker.
 //
 // This is the whole point of a database-level (rather than merely
 // application-level) guarantee: the test opens a raw *sql.DB from the SAME
