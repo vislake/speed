@@ -4,7 +4,7 @@ The input side of speed's multi-tenant isolation story. Where `dbkit` enforces t
 
 | Concern | Where |
 |---|---|
-| `Resolver` interface + `DomainResolver` (host/subdomain-based tenant resolution for unauthenticated requests) | `resolver.go` |
+| `Resolver` interface + `DomainResolver` (host/subdomain-based tenant resolution for unauthenticated requests) | `resolver.go`, `domain_resolver.go` |
 | `Middleware` + `WithAllowlist` / `AllowlistGETAndHEAD` (resolves the request's tenant and injects it into context; scoped exemptions for routes that must work before a tenant is known, with the GET+HEAD pair of a liveness route as one helper call) | `middleware.go` |
 | The optional tenant-status gate (`TenantStatus` vocabulary, `TenantStatusResolver`, `WithTenantStatusResolver` — makes a resolved tenant's suspended status actually refuse requests once a host wires a status source) | `tenant_status.go` (consulted by `Middleware` in `middleware.go`) |
 | `WithSystemContext` (the audited wrapper around `pkgcore`'s tenant-filtering escape hatch) | `system_context.go` |
