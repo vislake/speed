@@ -21,14 +21,17 @@ rules' living proof, in the same shape as the sibling checker suites:
     and a commented-out example, the indented variant included -- while
     a prose mention of a name and a repeated key are not separate
     entries;
-  * bootstrap.go's derivation is read from both declaration forms: the
-    env pin (the ``,derive`` option included) and the WithRootKeyEnv
+  * bootstrap.go's derivation is read from all three declaration forms:
+    the env pin (the ``,derive`` option included), the WithRootKeyEnv
     call, whose argument is the name as a string literal or as an
     identifier resolved through a same-file const (an identifier with
-    nothing to resolve to declares nothing), while a comment that
-    merely names a variable declares nothing;
-  * a missing side of the comparison (bootstrap.go or the example)
-    fires with the missing path named;
+    nothing to resolve to declares nothing), and the embedded platform
+    declaration, whose variable names derive from the platform module's
+    own key-path list and the host's prefix const -- while a comment
+    that merely names a variable declares nothing;
+  * a missing side of the comparison (bootstrap.go, the example, or the
+    platform declaration the host embeds) fires with the missing path
+    named;
   * a final case runs the gate against this repository, so the real
     tree's consistency is asserted here as it is in CI.
 """
@@ -115,6 +118,73 @@ BOOTSTRAP_UNRESOLVED_ROOT_KEY = BOOTSTRAP.replace(
     "config.WithRootKeyEnv(rootKeyEnv),",
 )
 
+# The embedded-platform fixture: the host target embeds the platform's
+# key-material declaration (config:"-", so the loader's walk of the host
+# target skips it and it loads as its own target), and the loader reads
+# each of its fields from the variable derived from the declared key path
+# under the envPrefix const.
+PLATFORM_DECL = '''package app
+
+// platformKeyPaths lists the declared bootstrap key paths, in
+// declaration order.
+var platformKeyPaths = []string{
+	"authn.blind_index_key",
+	"authn.pii_cipher_key",
+	"config.cipher_key",
+}
+'''
+
+BOOTSTRAP_EMBEDDED = '''package app
+
+import "example.com/pkgcore/config"
+
+// envPrefix is the prefix every variable carries.
+const envPrefix = "APP_"
+
+// rootKeyEnv names the root-key variable.
+const rootKeyEnv = "APP_ROOT_KEY"
+
+// hostConfig is the loader target.
+type hostConfig struct {
+	// Port names PORT, the one unprefixed variable.
+	Port string `config:"env=PORT"`
+
+	// PlatformConfig is the platform's own key-material declaration.
+	speedapp.PlatformConfig `config:"-"`
+}
+
+func loadHostConfig() (hostConfig, error) {
+	hc := hostConfigDefaults()
+	loader := config.New(
+		config.WithEnvPrefix(envPrefix),
+		config.WithRootKeyEnv(rootKeyEnv),
+	)
+	if err := loader.Load(&hc); err != nil {
+		return hc, err
+	}
+	if err := loader.Load(&hc.PlatformConfig); err != nil {
+		return hc, err
+	}
+	return hc, nil
+}
+'''
+
+EXAMPLE_EMBEDDED = '''# Environment variables the reference app's bootstrap resolves.
+
+# HTTP listen port.
+PORT=8080
+
+# Key material: set APP_ROOT_KEY alone to derive the rest.
+APP_ROOT_KEY=REPLACE_WITH_64_HEX_CHARS
+
+# The three materials this fixture's platform declaration carries, under
+# the loader-derived spellings (the declared path's dot as a double
+# underscore).
+APP_CONFIG__CIPHER_KEY=
+APP_AUTHN__BLIND_INDEX_KEY=
+APP_AUTHN__PII_CIPHER_KEY=
+'''
+
 
 def make_tree(files: dict[str, str]) -> pathlib.Path:
     root = pathlib.Path(
@@ -127,11 +197,15 @@ def make_tree(files: dict[str, str]) -> pathlib.Path:
     return root
 
 
-def base_files(bootstrap: str = BOOTSTRAP, example: str = EXAMPLE):
-    return {
+def base_files(bootstrap: str = BOOTSTRAP, example: str = EXAMPLE,
+               platform: str | None = None):
+    files = {
         m.BOOTSTRAP_REL_PATH: bootstrap,
         m.ENV_EXAMPLE_REL_PATH: example,
     }
+    if platform is not None:
+        files[m.PLATFORM_DECL_REL_PATH] = platform
+    return files
 
 
 class KeySetComparison(unittest.TestCase):
@@ -235,6 +309,68 @@ class RootKeyDeclarationForms(unittest.TestCase):
         self.assertEqual(len(findings), 1)
         self.assertIn("documents APP_ROOT_KEY", findings[0])
         self.assertIn("never declares", findings[0])
+
+
+class EmbeddedPlatformDeclaration(unittest.TestCase):
+    def embedded_files(self, bootstrap: str = BOOTSTRAP_EMBEDDED,
+                       example: str = EXAMPLE_EMBEDDED,
+                       platform: str | None = PLATFORM_DECL):
+        return base_files(
+            bootstrap=bootstrap, example=example, platform=platform
+        )
+
+    def test_derived_names_are_read_and_match(self):
+        # The positive side: the embed plus the platform module's path
+        # list plus the envPrefix const spell the three derived names,
+        # which the example documents.
+        self.assertEqual(
+            m.scan(make_tree(self.embedded_files())), []
+        )
+
+    def test_derived_name_missing_from_the_example_fires(self):
+        example = EXAMPLE_EMBEDDED.replace(
+            "APP_AUTHN__PII_CIPHER_KEY=\n", ""
+        )
+        findings = m.scan(
+            make_tree(self.embedded_files(example=example))
+        )
+        self.assertEqual(len(findings), 1)
+        self.assertIn(m.BOOTSTRAP_REL_PATH, findings[0])
+        self.assertIn("pins APP_AUTHN__PII_CIPHER_KEY", findings[0])
+
+    def test_derived_name_with_the_flat_spelling_fires(self):
+        # The old flat spelling is not a second way in: the declaration
+        # derives APP_AUTHN__BLIND_INDEX_KEY, so an entry for
+        # APP_AUTHN_BLIND_INDEX_KEY documents a variable the host never
+        # declares.
+        example = EXAMPLE_EMBEDDED + "\nAPP_AUTHN_BLIND_INDEX_KEY=\n"
+        findings = m.scan(
+            make_tree(self.embedded_files(example=example))
+        )
+        self.assertEqual(len(findings), 1)
+        self.assertIn("documents APP_AUTHN_BLIND_INDEX_KEY", findings[0])
+
+    def test_missing_platform_declaration_fires(self):
+        files = self.embedded_files()
+        del files[m.PLATFORM_DECL_REL_PATH]
+        findings = m.scan(make_tree(files))
+        self.assertEqual(len(findings), 1)
+        self.assertIn(m.PLATFORM_DECL_REL_PATH, findings[0])
+
+    def test_unreadable_key_path_list_contributes_nothing(self):
+        # A declaration the gate cannot read end to end -- here the
+        # key-path list renamed away -- declares no derived name, so the
+        # example's entries read as variables the host never declares.
+        platform = PLATFORM_DECL.replace(
+            "var platformKeyPaths", "var notTheList"
+        )
+        findings = m.scan(
+            make_tree(self.embedded_files(platform=platform))
+        )
+        self.assertEqual(len(findings), 3)
+        for finding in findings:
+            self.assertIn(m.ENV_EXAMPLE_REL_PATH, finding)
+            self.assertIn("never declares", finding)
 
 
 class ReadingRules(unittest.TestCase):

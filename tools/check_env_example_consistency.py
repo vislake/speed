@@ -6,24 +6,34 @@ examples/reference-app/.env.example is the reference app's committed
 carrier for the variables its host reads: its own header states that it
 documents ConfigFromEnv's loader-driven bootstrap surface, and readers
 copy it to .env or apply it through a shell / a process manager. The
-host side of that surface is declared in exactly two forms inside
+host side of that surface is declared in three forms inside
 examples/reference-app/internal/app/bootstrap.go:
 
-  * the loader target's env pins -- the hostConfig struct and its four
-    key-material groups tag every leaf variable with config:"env=NAME"
-    (further loader options after the name -- the key materials' derive
-    among them -- do not change the variable name), so the tag is each
-    variable's declaration site;
+  * the loader target's env pins -- the hostConfig struct tags its own
+    variables with config:"env=NAME" (further loader options after the
+    name -- the key materials' derive among them -- do not change the
+    variable name), so the tag is each variable's declaration site;
   * APP_ROOT_KEY -- the one variable that is not a struct field at all:
     the loader reads it through the WithRootKeyEnv option loadHostConfig
     wires. The call's argument names the variable either as a string
     literal or as an identifier a same-file const declaration binds to
-    one; an identifier with no such constant declares nothing.
+    one; an identifier with no such constant declares nothing;
+  * the embedded platform declaration -- hostConfig embeds the platform
+    module's key-material declaration (app.PlatformConfig) tagged
+    config:"-", so the loader's walk of the host target skips it and the
+    loader loads it as its own target instead: each of its fields reads
+    the variable the loader derives from the field's declared key path
+    under the host's prefix -- config.EnvName's rule: the prefix, then
+    the key uppercased with each level of nesting spelled as a double
+    underscore, so config.cipher_key reads APP_CONFIG__CIPHER_KEY under
+    APP_. The declared key paths are read
+    from the platform module's own declaration list in
+    go/app/config.go, the one place they are spelled.
 
 Nothing else in the app's executable code reads the environment (the
 app's own unit suite pins that surface, unittest/
-bootstrap_direct_reads_test.go), so the pins plus that call are the
-host's whole declared set.
+bootstrap_direct_reads_test.go), so the pins, that call and the
+declaration's derived names are the host's whole declared set.
 
 The example side is read line by line in both spellings the file
 actually uses for keys: an active KEY= entry and a commented-out
@@ -64,9 +74,10 @@ import pathlib
 import re
 import sys
 
-# The host's declaration site and the example it must agree with,
-# relative to the repository root.
+# The host's declaration site, the platform declaration it embeds, and
+# the example it must agree with, relative to the repository root.
 BOOTSTRAP_REL_PATH = "examples/reference-app/internal/app/bootstrap.go"
+PLATFORM_DECL_REL_PATH = "go/app/config.go"
 ENV_EXAMPLE_REL_PATH = "examples/reference-app/.env.example"
 
 # One struct-tag literal: config:"env=NAME" with any further loader
@@ -89,27 +100,43 @@ ROOT_KEY_CONST = re.compile(
     r'\bconst\s+([A-Za-z_][A-Za-z0-9_]*)\s*=\s*"([A-Za-z_][A-Za-z0-9_]*)"'
 )
 
+# The embedded platform declaration: the host target embeds the
+# platform's key-material declaration tagged config:"-" (the skip
+# option), and the enclosing file spells the environment prefix the
+# derived variable names carry as a same-file literal const.
+EMBEDDED_PLATFORM = re.compile(r'PlatformConfig\s+`config:"-"`')
+ENV_PREFIX_CONST = "envPrefix"
+
+# The platform module's declared key-path list, and one quoted path
+# inside it.
+PLATFORM_KEY_PATHS = re.compile(
+    r"var platformKeyPaths = \[\]string\{(.*?)\}", re.DOTALL
+)
+PLATFORM_KEY_PATH = re.compile(r'"([A-Za-z_][A-Za-z0-9_.]*)"')
+
 # A documented key: NAME= at the head of a line's content (the value
 # may be empty), once any leading whitespace and the comment marker of
 # the commented-out example spelling are stripped.
 EXAMPLE_KEY = re.compile(r"^([A-Za-z_][A-Za-z0-9_]*)=")
 
 
-def declared_host_keys(text: str) -> dict[str, int]:
-    """The variables bootstrap.go declares, name -> first declaration
-    line.
+def declared_host_keys(text: str, platform_text: str) -> dict[str, int]:
+    """The variables bootstrap.go's host surface declares, name -> first
+    declaration line.
 
-    Two declaration forms are read: a struct tag's env pin
+    Three declaration forms are read: a struct tag's env pin
     (config:"env=NAME"; any loader options after the comma-separated
-    name are not part of the variable) and the WithRootKeyEnv call,
+    name are not part of the variable), the WithRootKeyEnv call,
     whose argument is the name as a string literal or an identifier
-    the file's own const declaration binds to one. An identifier with
+    the file's own const declaration binds to one (an identifier with
     no such constant in the file declares nothing, and the line
     reported for the resolved identifier form is the constant's
-    declaration line. Full-line ``//`` comments are skipped -- a
-    comment may state a variable's name, but only the pins and the
-    call site declare one, and the line numbers reported for the
-    findings point at code."""
+    declaration line), and the embedded platform declaration, whose
+    derived names -- one per declared key path, read from
+    platform_text -- are reported at the embed's line. Full-line ``//``
+    comments are skipped -- a comment may state a variable's name, but
+    only the pins and the call site declare one, and the line numbers
+    reported for the findings point at code."""
     lines = text.splitlines()
     consts: dict[str, tuple[str, int]] = {}
     for line_no, line in enumerate(lines, start=1):
@@ -140,6 +167,32 @@ def declared_host_keys(text: str) -> dict[str, int]:
             continue
         if name not in keys:
             keys[name] = decl_line
+
+    # The embedded platform declaration's derived names: one per declared
+    # key path, reported at the embed's line. A declaration the gate cannot
+    # read end to end -- no embed, no prefix const, no key-path list --
+    # contributes nothing, and the example's entries then read as
+    # variables the host never declares, which is the drift the gate is
+    # for.
+    embed_line = next(
+        (
+            line_no
+            for line_no, line in enumerate(lines, start=1)
+            if not line.strip().startswith("//")
+            and EMBEDDED_PLATFORM.search(line)
+        ),
+        None,
+    )
+    prefix = consts.get(ENV_PREFIX_CONST)
+    paths_block = PLATFORM_KEY_PATHS.search(platform_text)
+    if embed_line is None or prefix is None or paths_block is None:
+        return keys
+    for path in PLATFORM_KEY_PATH.findall(paths_block.group(1)):
+        # config.EnvName(prefix, key): the prefix, then the key uppercased
+        # with each nesting level (config.KeyDelimiter ".") spelled as the
+        # environment separator (config.EnvSeparator, a double underscore).
+        name = prefix[0] + path.upper().replace(".", "__")
+        keys.setdefault(name, embed_line)
     return keys
 
 
@@ -178,7 +231,22 @@ def scan(root: pathlib.Path) -> list[str]:
     if findings:
         return findings
 
-    host = declared_host_keys(bootstrap.read_text(encoding="utf-8"))
+    bootstrap_text = bootstrap.read_text(encoding="utf-8")
+    # The platform declaration participates only when the host target
+    # embeds it; the file is read then, and its absence is a finding.
+    platform = root / PLATFORM_DECL_REL_PATH
+    platform_text = ""
+    if EMBEDDED_PLATFORM.search(bootstrap_text):
+        if not platform.is_file():
+            findings.append(
+                f"{PLATFORM_DECL_REL_PATH}: the platform declaration the "
+                f"host embeds ({BOOTSTRAP_REL_PATH} reads its key paths "
+                "from here) is missing"
+            )
+            return findings
+        platform_text = platform.read_text(encoding="utf-8")
+
+    host = declared_host_keys(bootstrap_text, platform_text)
     documented = documented_example_keys(example.read_text(encoding="utf-8"))
 
     for name, line_no in sorted(host.items(), key=lambda item: item[1]):
