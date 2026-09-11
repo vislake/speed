@@ -19,7 +19,7 @@ func TestComponent_WellFormed(t *testing.T) {
 }
 
 // TestComponent_NewBuildsAConfiguredModule drives the component's New over a
-// registry carrying the database plus both consumed optional products, and
+// registry carrying the database plus every consumed optional product, and
 // pins that the configuration and the optional seams reached the built
 // module.
 func TestComponent_NewBuildsAConfiguredModule(t *testing.T) {
@@ -27,6 +27,7 @@ func TestComponent_NewBuildsAConfiguredModule(t *testing.T) {
 	reg.Put(newTestDB(t))
 	reg.Put(&fakeQueue{})
 	reg.Put(SubjectResolverFunc(func(*http.Request) (string, bool) { return "user-1", true }))
+	reg.Put(MembershipCheckerFunc(func(context.Context, string, string) (bool, error) { return true, nil }))
 
 	instance, err := integrationComponent.New(context.Background(), reg, pkgcore.NewComponentConfig(map[string]any{
 		"max_api_key_lifetime": "720h",
@@ -47,6 +48,9 @@ func TestComponent_NewBuildsAConfiguredModule(t *testing.T) {
 	if m.subject == nil {
 		t.Error("subject is nil, want the registry's resolver wired through WithSubjectResolver")
 	}
+	if m.membership == nil {
+		t.Error("membership is nil, want the registry's checker wired through WithMembershipChecker")
+	}
 }
 
 // TestComponent_NewWithoutOptionalSeams proves the optional dependencies'
@@ -63,8 +67,8 @@ func TestComponent_NewWithoutOptionalSeams(t *testing.T) {
 	if !ok || m == nil {
 		t.Fatalf("New returned %T (%v), want a non-nil *integration.Module", instance, instance)
 	}
-	if m.queue != nil || m.subject != nil {
-		t.Errorf("optional seams = (%v, %v), want both nil without providers", m.queue, m.subject)
+	if m.queue != nil || m.subject != nil || m.membership != nil {
+		t.Errorf("optional seams = (%v, %v, %v), want all nil without providers", m.queue, m.subject, m.membership)
 	}
 }
 
@@ -145,5 +149,8 @@ func TestComponent_InitDeclaresThroughTheGate(t *testing.T) {
 	}
 	if m.handler == nil {
 		t.Error("the module's HTTP handler was not built by Init")
+	}
+	if m.membership == nil {
+		t.Error("membership is nil, want the assembly's checker wired through WithMembershipChecker")
 	}
 }

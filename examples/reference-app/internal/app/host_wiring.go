@@ -57,6 +57,7 @@ import (
 	"github.com/vislake/speed/go/notification/staticaddr"
 	"github.com/vislake/speed/go/org"
 	"github.com/vislake/speed/go/pkgcore"
+	"github.com/vislake/speed/go/pkgcore/apperr"
 	"github.com/vislake/speed/go/pki"
 	"github.com/vislake/speed/go/rbac"
 	"github.com/vislake/speed/go/sharing"
@@ -362,7 +363,9 @@ func (b *serverBuild) notificationComponent(reg *pkgcore.ComponentRegistry) (pkg
 // integrationComponent returns integration's descriptor with this app's
 // construction: the org-member-joined event mapping this deployment's
 // webhook surface publishes, the shared delivery queue, the header-only
-// subject resolver its creator reads use, and the two SSRF overrides the
+// subject resolver its creator reads use, the membership checker this app
+// provides over org's roster (integrationMembershipComponent, read from the
+// by-type context exactly like the queue), and the two SSRF overrides the
 // webhook flow test arms (nil in every production boot, leaving the
 // module's own strict default in force).
 func (b *serverBuild) integrationComponent(reg *pkgcore.ComponentRegistry) (pkgcore.Component, error) {
@@ -374,6 +377,13 @@ func (b *serverBuild) integrationComponent(reg *pkgcore.ComponentRegistry) (pkgc
 		opts := []integration.Option{
 			integration.WithEventMapping(orgMemberJoinedWebhookMapping),
 			integration.WithSubjectResolver(integration.SubjectResolverFunc(demo.DemoOrgSubjectResolverFor(b.cfg.DisableDemoUserHeader, false))),
+		}
+		membership, hasMembership, err := pkgcore.GetOptional[integration.MembershipChecker](reg)
+		if err != nil {
+			return nil, err
+		}
+		if hasMembership {
+			opts = append(opts, integration.WithMembershipChecker(membership))
 		}
 		queue, hasQueue, err := pkgcore.GetOptional[jobs.Queue](reg)
 		if err != nil {
@@ -780,6 +790,45 @@ func (b *serverBuild) integrationPermissionComponent() pkgcore.Component {
 	}
 }
 
+// integrationMembershipComponent returns integration's membership checker
+// (integration.MembershipChecker): the seam behind APIKeySummary's
+// CreatorLeft flag, answered from org's own roster -- the creator has left
+// when org holds no ACTIVE membership for them in the key's tenant, so a
+// suspended seat reads as left, exactly the state the display flag exists
+// to surface. The tenant is rebuilt from the seam's own tenantID argument
+// rather than assumed on ctx, the same explicit rebuild
+// signInMemberships.ActiveMembership makes over the same roster.
+//
+// Like integrationPermissionComponent above, the org read stays lazy
+// (pkgcore.Get inside the returned closure, resolved per request): the
+// checker runs only while serving a list call, long after every component's
+// Init turn has passed, so the provider needs no requirement edge on org to
+// be ordered correctly.
+func (b *serverBuild) integrationMembershipComponent() pkgcore.Component {
+	return pkgcore.Component{
+		Name:         hostComponentPrefix + "integration-membership",
+		Capabilities: pkgcore.MultiReplicaSafe,
+		Provides:     []any{(*integration.MembershipChecker)(nil)},
+		New: func(_ context.Context, reg *pkgcore.ComponentRegistry, _ pkgcore.ComponentConfig) (any, error) {
+			return integration.MembershipCheckerFunc(func(ctx context.Context, tenantID, userID string) (bool, error) {
+				orgModule, err := pkgcore.Get[*org.Module](reg)
+				if err != nil {
+					return false, err
+				}
+				membership, err := orgModule.Members().Get(pkgcore.WithTenant(ctx, pkgcore.TenantID(tenantID)), userID)
+				switch {
+				case err == nil:
+					return membership.IsActive(), nil
+				case apperr.HasCode(err, org.ErrMembershipNotFound.Code):
+					return false, nil
+				default:
+					return false, err
+				}
+			}), nil
+		},
+	}
+}
+
 // gatewayEntitlementsComponent returns the entitlement gate both halves of
 // this app's gateway judging run through: billing's subscription-derived
 // EntitlementsService adapted onto the gateway's own seam. The instance is
@@ -1045,6 +1094,7 @@ func (b *serverBuild) hostWiringComponents(reg *pkgcore.ComponentRegistry) ([]pk
 		b.sharingResourceComponent(),
 		b.sharingExpiryComponent(),
 		b.integrationPermissionComponent(),
+		b.integrationMembershipComponent(),
 		b.gatewayEntitlementsComponent(),
 		b.gatewayUsageComponent(),
 		b.complianceSharingComponent(),

@@ -743,6 +743,7 @@ func (b *serverBuild) composition(live bool) pkgcore.ComponentConfig {
 		With(hostComponentPrefix+"sharing-resources", nil).
 		With(hostComponentPrefix+"sharing-expiry", nil).
 		With(hostComponentPrefix+"integration-permissions", nil).
+		With(hostComponentPrefix+"integration-membership", nil).
 		With(hostComponentPrefix+"gateway-entitlements", nil).
 		With(hostComponentPrefix+"gateway-usage", nil).
 		With(hostComponentPrefix+"compliance-sharing", nil).

@@ -264,6 +264,93 @@ func TestBuildServer_APIKeyFlow_CreateListRotateRevoke_EndToEnd(t *testing.T) {
 		http.StatusNotFound, "integration.key_not_found", "revoke an id that never existed")
 }
 
+// TestBuildServer_APIKeyFlow_CreatorLeftFollowsTheRoster drives the
+// CreatorLeft display flag across its creator's whole life in the tenant:
+// the flag stays down while the key's creator holds an active membership,
+// and rises once the creator has left the roster. That is
+// integration.MembershipChecker consumed end to end: computed at List time
+// through the seam this app wires over org's own roster
+// (internal/app/host_wiring.go's integrationMembershipComponent), never
+// derived from a stand-in. The creator's membership is created and removed
+// through org's real invitation/accept and member-removal HTTP surface, so
+// both readings consult the same rows org's own roster reads.
+//
+// The flag is a display convenience, never a security control (see
+// MembershipChecker's own doc comment in go/integration/seams.go): the key
+// itself keeps authenticating either way, which is why this test asserts
+// only the flag and leaves the key's continued authentication to
+// apikey_authenticate_flow_test.go.
+func TestBuildServer_APIKeyFlow_CreatorLeftFollowsTheRoster(t *testing.T) {
+	srv, cfg, mailer := buildOrgTestServer(t)
+	acmeToken := registerAndAuthenticate(t, srv, cfg, "tenant-acme", "apikey-creator-left")
+
+	// One root node for the tenant, then two members through org's own
+	// invitation flow: the creator the flag must follow, and a second member
+	// who stays -- org refuses to remove a tenant's last active member
+	// (ErrMemberNotRemovable), so a lone creator could never leave at all.
+	// The subject header names who accepts and the accept request carries no
+	// bearer token, exactly org_flow_test.go's invitation journey: a real
+	// invitee holds no membership in the inviting tenant yet.
+	var root orgNode
+	orgRequest(t, srv, http.MethodPost, "/api/v1/org/nodes", acmeToken, "",
+		map[string]string{"name": "Acme Dental Group", "kind": "group"}, &root)
+	if root.ID == "" {
+		t.Fatal("the tenant root node was not created")
+	}
+
+	for _, invitee := range []struct{ userID, email string }{
+		{demo.DemoNotesCreatorUserID, "creator-who-leaves@example.com"},
+		{"user-member-who-stays-1", "member-who-stays@example.com"},
+	} {
+		var invitation orgInvitation
+		orgRequest(t, srv, http.MethodPost, "/api/v1/org/invitations", acmeToken, demo.DemoOwnerUserID,
+			map[string]string{"email": invitee.email, "nodeId": root.ID}, &invitation)
+		if invitation.Status != "pending" {
+			t.Fatalf("invitation for %q = %+v, want status \"pending\"", invitee.email, invitation)
+		}
+		var membership orgMembership
+		orgRequest(t, srv, http.MethodPost, "/api/v1/org/invitations/accept", "", invitee.userID,
+			map[string]string{"token": tokenFromMail(t, mailer.last(t))}, &membership)
+		if membership.UserID != invitee.userID || membership.Status != "active" {
+			t.Fatalf("membership after accept = %+v, want userId %q and status \"active\"", membership, invitee.userID)
+		}
+	}
+
+	// A key attributed to the creator identity (integration's own
+	// SubjectResolver read of the demo org header, see apikeyRequest above).
+	created := decodeCreatedAPIKey(t,
+		apikeyRequest(t, srv, http.MethodPost, apikeyBasePath, acmeToken, demo.DemoOwnerUserID),
+		http.StatusCreated, "create")
+	if created.CreatedBy != demo.DemoNotesCreatorUserID {
+		t.Fatalf("created.createdBy = %q, want %q", created.CreatedBy, demo.DemoNotesCreatorUserID)
+	}
+
+	if got := apikeyCreatorLeft(t, srv, acmeToken, created.ID); got {
+		t.Fatal("creatorLeft = true while the creator still holds an active membership")
+	}
+
+	// The creator leaves the tenant through org's own removal route...
+	orgRequest(t, srv, http.MethodDelete, "/api/v1/org/members/"+demo.DemoNotesCreatorUserID, acmeToken, demo.DemoOwnerUserID, nil, nil)
+
+	// ...and the next list raises the flag.
+	if got := apikeyCreatorLeft(t, srv, acmeToken, created.ID); !got {
+		t.Fatal("creatorLeft = false after the creator's membership was removed")
+	}
+}
+
+// apikeyCreatorLeft lists the tenant's API keys as the demo owner and
+// returns the CreatorLeft flag of the row id names.
+func apikeyCreatorLeft(t *testing.T, srv *httptest.Server, token, id string) bool {
+	t.Helper()
+	list := decodeListAPIKeys(t,
+		apikeyRequest(t, srv, http.MethodGet, apikeyBasePath, token, demo.DemoOwnerUserID),
+		http.StatusOK, "list")
+	if len(list.APIKeys) != 1 || list.APIKeys[0].ID != id {
+		t.Fatalf("list = %+v, want exactly the key %q", list.APIKeys, id)
+	}
+	return list.APIKeys[0].CreatorLeft
+}
+
 // decodeListAPIKeys reads resp, requires its status to be wantStatus, and
 // decodes its body as a testListAPIKeysResponse wire shape.
 func decodeListAPIKeys(t *testing.T, resp *http.Response, wantStatus int, what string) testListAPIKeysResponse {

@@ -98,6 +98,13 @@ var integrationComponent = pkgcore.Component{
 		if ok {
 			opts = append(opts, WithSubjectResolver(subject))
 		}
+		membership, ok, err := pkgcore.GetOptional[MembershipChecker](reg)
+		if err != nil {
+			return nil, err
+		}
+		if ok {
+			opts = append(opts, WithMembershipChecker(membership))
+		}
 		return NewModule(db, opts...), nil
 	},
 	Init: func(_ context.Context, reg *pkgcore.ComponentRegistry, instance any) error {
