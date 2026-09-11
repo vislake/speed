@@ -224,12 +224,11 @@ func (b *serverBuild) runPostBootstrap(ctx context.Context, reg *pkgcore.Compone
 		return fmt.Errorf("reference-app: register notes retention participant: %w", err)
 	}
 
-	// admin's role-management surface needs the real *rbac.Service, which
-	// exists only after the attach above. This is why go/admin's RoleService
-	// is wired through a distinct, post-Attach Module.AttachRBAC call rather
-	// than a construction-time Option -- see AttachRBAC's own doc comment
-	// for the full reasoning.
-	b.adminModule.AttachRBAC(rbacService)
+	// admin's role-management surface needs the real *rbac.Service. The
+	// admin component's own Start callback binds it (AttachRBAC), ordered
+	// after rbac's Start by the descriptor's requires edge on rbac's
+	// product -- the service is published and its catalog complete there,
+	// so no host-side wiring call is needed.
 	return nil
 }
 

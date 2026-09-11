@@ -36,7 +36,6 @@ package app
 
 import (
 	"context"
-	"embed"
 	"fmt"
 	"net/url"
 	"strings"
@@ -63,16 +62,6 @@ import (
 	"github.com/vislake/speed/go/sharing"
 	"github.com/vislake/speed/go/storage"
 	"github.com/vislake/speed/go/tenancy"
-
-	adminlocales "github.com/vislake/speed/go/admin/locales"
-	authnlocales "github.com/vislake/speed/go/authn/locales"
-	billinglocales "github.com/vislake/speed/go/billing/locales"
-	integrationlocales "github.com/vislake/speed/go/integration/locales"
-	meteringlocales "github.com/vislake/speed/go/metering/locales"
-	notificationlocales "github.com/vislake/speed/go/notification/locales"
-	orglocales "github.com/vislake/speed/go/org/locales"
-	pkilocales "github.com/vislake/speed/go/pki/locales"
-	rbaclocales "github.com/vislake/speed/go/rbac/locales"
 
 	"github.com/vislake/speed/examples/reference-app/internal/app/demo"
 	"github.com/vislake/speed/examples/reference-app/internal/attestation"
@@ -124,71 +113,41 @@ func declaredMaterial(reg *pkgcore.ComponentRegistry, keyPath string) ([]byte, e
 	return value, nil
 }
 
-// overriddenModuleLocales lists the locale resources of the modules whose
-// descriptors this host overrides. A locale file's message ids are prefixed
-// with the MODULE name, and the assembly's locale validation requires the
-// component name to be that prefix -- an override component carries a host
-// name, so it must not carry the module's locale resources. They merge here
-// instead, under the module's own name, through the host's own catalog step
-// (assembly.go's hostCatalog).
-var overriddenModuleLocales = []struct {
-	name string
-	fs   embed.FS
-}{
-	{"admin", adminlocales.FS},
-	{"authn", authnlocales.FS},
-	{"billing", billinglocales.FS},
-	{"integration", integrationlocales.FS},
-	{"metering", meteringlocales.FS},
-	{"notification", notificationlocales.FS},
-	{"org", orglocales.FS},
-	{"pki", pkilocales.FS},
-	{"rbac", rbaclocales.FS},
-}
-
-// replicaSafeModule is what every module this app selects has in common and
-// several descriptors leave undeclared: the module's state is its rows in
-// the deployment's shared database and the shared event bus, so several
-// replicas may run it at once and no state is silently split per process.
-// The host declares the bit on the components it selects itself -- an
-// override copy, or one of the host's provider components -- which is what
-// lets a distributed composition assemble; a module descriptor that declares
-// no capability would otherwise fail the mode's MultiReplicaSafe
-// requirement, naming the module.
-func replicaSafeModule(c pkgcore.Component) pkgcore.Component {
-	c.Capabilities |= pkgcore.MultiReplicaSafe
-	return c
-}
-
-// capabilityComponent returns the registered descriptor named base carrying
-// the replicaSafeModule declaration and nothing else: the same Requires,
-// Provides, assets and lifecycle callbacks, under the host's own name.
+// capabilityComponent returns the registered descriptor named base under
+// the host's own name, carrying one extra declaration: MultiReplicaSafe.
+// It exists for the module whose descriptor deliberately declares no
+// capability (signer.local: an in-process signer whose key material is
+// per-replica by design), which a distributed composition of this app
+// still selects -- the host's own placement decision, stated here rather
+// than silently inherited. Every other module's descriptor declares its own
+// capabilities, so no other component needs this copy.
 func capabilityComponent(reg *pkgcore.ComponentRegistry, name string) (pkgcore.Component, error) {
 	descriptor, ok := registeredComponent(reg, name)
 	if !ok {
 		return pkgcore.Component{}, fmt.Errorf("reference-app: component %q has no registered descriptor", name)
 	}
-	c := replicaSafeModule(descriptor)
+	c := descriptor
 	c.Name = hostComponentPrefix + name
-	c.Locales = embed.FS{}
+	c.Capabilities |= pkgcore.MultiReplicaSafe
 	return c, nil
 }
 
 // overrideComponent returns the registered descriptor named base carrying
 // this host's own construction. Everything but the name and the New callback
-// is the package's own declaration: the same Requires, Provides, assets,
-// capabilities, system purposes and lifecycle callbacks the component ships,
-// so an override declares exactly what the component declares and only
-// constructs it differently. moduleName is the module the descriptor
-// implements, and the suffix of the override's own name.
+// is the package's own declaration: the same Requires, Provides, assets
+// (locale resources included -- the catalog merges them under the module
+// name, assembly.go's hostCatalog), capabilities, system purposes and
+// lifecycle callbacks the component ships, so an override declares exactly
+// what the component declares and only constructs it differently.
+// moduleName is the module the descriptor implements, and the suffix of the
+// override's own name.
 func overrideComponent(reg *pkgcore.ComponentRegistry, base, moduleName string, construct func(context.Context, *pkgcore.ComponentRegistry, pkgcore.ComponentConfig) (any, error), extra ...pkgcore.Requirement) (pkgcore.Component, error) {
 	descriptor, ok := registeredComponent(reg, base)
 	if !ok {
 		return pkgcore.Component{}, fmt.Errorf("reference-app: component %q has no registered descriptor to override", base)
 	}
-	c := replicaSafeModule(descriptor)
+	c := descriptor
 	c.Name = hostComponentPrefix + moduleName
-	c.Locales = embed.FS{}
 	c.New = construct
 	c.Requires = append(append([]pkgcore.Requirement(nil), descriptor.Requires...), extra...)
 	return c, nil
@@ -466,8 +425,9 @@ func (b *serverBuild) aiGatewayComponent(reg *pkgcore.ComponentRegistry) (pkgcor
 // descriptor performs it in its own Prepare callback.
 func (b *serverBuild) cryptoComponent() pkgcore.Component {
 	return pkgcore.Component{
-		Name:     hostComponentPrefix + "crypto",
-		Provides: []any{(*dbkit.Cipher)(nil)},
+		Name:         hostComponentPrefix + "crypto",
+		Capabilities: pkgcore.MultiReplicaSafe,
+		Provides:     []any{(*dbkit.Cipher)(nil)},
 		Prepare: func(_ context.Context, reg *pkgcore.ComponentRegistry) error {
 			cipherKey, err := declaredMaterial(reg, configCipherKeyPath)
 			if err != nil {
@@ -519,8 +479,9 @@ func (b *serverBuild) cryptoComponent() pkgcore.Component {
 // decision for the unauthenticated case.
 func (b *serverBuild) tenancyResolverComponent() pkgcore.Component {
 	return pkgcore.Component{
-		Name:     hostComponentPrefix + "tenancy-resolver",
-		Provides: []any{(*tenancy.Resolver)(nil)},
+		Name:         hostComponentPrefix + "tenancy-resolver",
+		Capabilities: pkgcore.MultiReplicaSafe,
+		Provides:     []any{(*tenancy.Resolver)(nil)},
 		New: func(_ context.Context, _ *pkgcore.ComponentRegistry, _ pkgcore.ComponentConfig) (any, error) {
 			return tenancy.NewDomainResolver(
 				func(host string) (pkgcore.TenantID, bool) {
@@ -576,82 +537,37 @@ func (b *serverBuild) orgComponent(reg *pkgcore.ComponentRegistry) (pkgcore.Comp
 }
 
 // registerOnlyComponent returns the module's registered descriptor with its
-// Init callback reduced to the module's one declaration entry point. The
-// modules whose descriptor Init does more than declare -- config, rbac and
-// admin -- freeze a snapshot there (the configuration schema, the
-// permission catalog, the role service's authorizer), and each of those
-// snapshots must cover the declarations of EVERY module, not the ones made
-// before the snapshotting component's own turn in plan order. This host
-// therefore takes the declaration here and performs the attach sequence
-// itself, in the post-bootstrap step, after every module's declaration turn
-// has run -- the order the module Registry always drove.
+// Init callback reduced to the module's one declaration entry point. It is
+// the rbac override's shape: this host attaches rbac's permission-catalog
+// snapshot itself, in the post-bootstrap step, after every module's
+// declaration turn has run -- its Init-stage consumers (the demo seeds, the
+// self-service provisioning chain) need the complete catalog then, and the
+// descriptor's own Start callback completes the snapshot as the backstop
+// either way. Everything else -- Start included -- is the module's own.
 func registerOnlyComponent(reg *pkgcore.ComponentRegistry, moduleName string, declare func(any, *pkgcore.ComponentRegistry) error) (pkgcore.Component, error) {
 	base, ok := registeredComponent(reg, moduleName)
 	if !ok {
 		return pkgcore.Component{}, fmt.Errorf("reference-app: component %q has no registered descriptor", moduleName)
 	}
-	c := replicaSafeModule(base)
+	c := base
 	c.Name = hostComponentPrefix + moduleName
-	c.Locales = embed.FS{}
 	c.Init = func(_ context.Context, reg *pkgcore.ComponentRegistry, instance any) error {
 		return declare(instance, reg)
 	}
 	return c, nil
 }
 
-// observabilityComponent returns the engine's observability component with
-// the capability this app's telemetry genuinely has: each replica exports
-// its own spans and metrics, sharing no state with any sibling, so several
-// replicas running it split nothing and a distributed composition may select
-// it. The engine's own descriptor declares no capability -- telemetry is
-// optional by nature, and it must never be the reason an assembly fails --
-// which under the distributed mode's MultiReplicaSafe requirement would make
-// selecting it a startup error.
-func (b *serverBuild) observabilityComponent(reg *pkgcore.ComponentRegistry) (pkgcore.Component, error) {
-	base, ok := registeredComponent(reg, "observability")
-	if !ok {
-		return pkgcore.Component{}, fmt.Errorf("reference-app: the engine's observability component is not registered")
-	}
-	c := base
-	c.Name = hostComponentPrefix + "observability"
-	c.Capabilities |= pkgcore.MultiReplicaSafe
-	return c, nil
-}
-
-// configComponent returns config's descriptor declaring only: its schema
-// snapshot is taken in the post-bootstrap step (configModule.Attach), after
-// every module has declared its configuration items and feature flags.
-func (b *serverBuild) configComponent(reg *pkgcore.ComponentRegistry) (pkgcore.Component, error) {
-	return registerOnlyComponent(reg, "config", func(instance any, reg *pkgcore.ComponentRegistry) error {
-		m, ok := instance.(*config.Module)
-		if !ok {
-			return fmt.Errorf("reference-app: the config component was handed a %T instance, want *config.Module", instance)
-		}
-		return m.Register(reg)
-	})
-}
-
 // rbacComponent returns rbac's descriptor declaring only: its permission
 // catalog snapshot is taken in the post-bootstrap step (rbacModule.Attach),
-// after every module has declared its permissions.
+// after every module has declared its permissions, because this host's
+// Init-stage consumers need the complete catalog while they run. The
+// descriptor's own Start callback completes the snapshot as the backstop
+// that makes completeness structural rather than a function of plan order.
 func (b *serverBuild) rbacComponent(reg *pkgcore.ComponentRegistry) (pkgcore.Component, error) {
 	return registerOnlyComponent(reg, "rbac", func(instance any, reg *pkgcore.ComponentRegistry) error {
 		m, ok := instance.(*rbac.Module)
 		if !ok {
 			return fmt.Errorf("reference-app: the rbac component was handed a %T instance, want *rbac.Module", instance)
-		}
-		return m.Register(reg)
-	})
-}
-
-// adminComponent returns admin's descriptor declaring only: the role
-// service's authorizer is bound in the post-bootstrap step
-// (adminModule.AttachRBAC), once the rbac service exists.
-func (b *serverBuild) adminComponent(reg *pkgcore.ComponentRegistry) (pkgcore.Component, error) {
-	return registerOnlyComponent(reg, "admin", func(instance any, reg *pkgcore.ComponentRegistry) error {
-		m, ok := instance.(*admin.Module)
-		if !ok {
-			return fmt.Errorf("reference-app: the admin component was handed a %T instance, want *admin.Module", instance)
 		}
 		return m.Register(reg)
 	})
@@ -693,7 +609,8 @@ func (b *serverBuild) invitationLinkBuilder() org.InvitationLinkBuilder {
 // component exists for the modules that stay on their own descriptors.
 func (b *serverBuild) subjectResolverComponent() pkgcore.Component {
 	return pkgcore.Component{
-		Name: hostComponentPrefix + "subject-resolvers",
+		Name:         hostComponentPrefix + "subject-resolvers",
+		Capabilities: pkgcore.MultiReplicaSafe,
 		Provides: []any{
 			(*org.SubjectResolver)(nil),
 			(*notification.SubjectResolver)(nil),
@@ -712,9 +629,10 @@ func (b *serverBuild) subjectResolverComponent() pkgcore.Component {
 // tree rather than denying for want of a resolver.
 func (b *serverBuild) rbacSubtreeComponent() pkgcore.Component {
 	return pkgcore.Component{
-		Name:     hostComponentPrefix + "rbac-subtree",
-		Provides: []any{(*rbac.SubtreeResolver)(nil)},
-		Requires: []pkgcore.Requirement{{Token: (*org.Module)(nil)}},
+		Name:         hostComponentPrefix + "rbac-subtree",
+		Capabilities: pkgcore.MultiReplicaSafe,
+		Provides:     []any{(*rbac.SubtreeResolver)(nil)},
+		Requires:     []pkgcore.Requirement{{Token: (*org.Module)(nil)}},
 		New: func(_ context.Context, reg *pkgcore.ComponentRegistry, _ pkgcore.ComponentConfig) (any, error) {
 			orgModule, err := pkgcore.Get[*org.Module](reg)
 			if err != nil {
@@ -730,8 +648,9 @@ func (b *serverBuild) rbacSubtreeComponent() pkgcore.Component {
 // notification glue renders addresses from.
 func (b *serverBuild) notificationAddressComponent() pkgcore.Component {
 	return pkgcore.Component{
-		Name:     hostComponentPrefix + "notification-addresses",
-		Provides: []any{(*notification.UserAddressResolver)(nil)},
+		Name:         hostComponentPrefix + "notification-addresses",
+		Capabilities: pkgcore.MultiReplicaSafe,
+		Provides:     []any{(*notification.UserAddressResolver)(nil)},
 		New: func(_ context.Context, _ *pkgcore.ComponentRegistry, _ pkgcore.ComponentConfig) (any, error) {
 			return staticaddr.New(demo.DemoUserAddresses), nil
 		},
@@ -743,9 +662,10 @@ func (b *serverBuild) notificationAddressComponent() pkgcore.Component {
 // lazily so the wiring order is not a hazard.
 func (b *serverBuild) notificationLocaleComponent() pkgcore.Component {
 	return pkgcore.Component{
-		Name:     hostComponentPrefix + "notification-locales",
-		Provides: []any{(*notification.UserLocaleResolver)(nil)},
-		Requires: []pkgcore.Requirement{{Token: (*authn.Module)(nil)}},
+		Name:         hostComponentPrefix + "notification-locales",
+		Capabilities: pkgcore.MultiReplicaSafe,
+		Provides:     []any{(*notification.UserLocaleResolver)(nil)},
+		Requires:     []pkgcore.Requirement{{Token: (*authn.Module)(nil)}},
 		New: func(_ context.Context, reg *pkgcore.ComponentRegistry, _ pkgcore.ComponentConfig) (any, error) {
 			authnModule, err := pkgcore.Get[*authn.Module](reg)
 			if err != nil {
@@ -764,8 +684,9 @@ func (b *serverBuild) notificationLocaleComponent() pkgcore.Component {
 // composition -- sharing never imports either.
 func (b *serverBuild) sharingResourceComponent() pkgcore.Component {
 	return pkgcore.Component{
-		Name:     hostComponentPrefix + "sharing-resources",
-		Provides: []any{(*sharing.ResourceResolver)(nil)},
+		Name:         hostComponentPrefix + "sharing-resources",
+		Capabilities: pkgcore.MultiReplicaSafe,
+		Provides:     []any{(*sharing.ResourceResolver)(nil)},
 		Requires: []pkgcore.Requirement{
 			{Token: (*storage.Module)(nil)},
 			{Token: (*attestation.Service)(nil)},
@@ -790,9 +711,10 @@ func (b *serverBuild) sharingResourceComponent() pkgcore.Component {
 // resolved expiry instead of always falling back to the default.
 func (b *serverBuild) sharingExpiryComponent() pkgcore.Component {
 	return pkgcore.Component{
-		Name:     hostComponentPrefix + "sharing-expiry",
-		Provides: []any{(*sharing.TenantConfigReader)(nil)},
-		Requires: []pkgcore.Requirement{{Token: (*config.Module)(nil)}},
+		Name:         hostComponentPrefix + "sharing-expiry",
+		Capabilities: pkgcore.MultiReplicaSafe,
+		Provides:     []any{(*sharing.TenantConfigReader)(nil)},
+		Requires:     []pkgcore.Requirement{{Token: (*config.Module)(nil)}},
 		New: func(_ context.Context, reg *pkgcore.ComponentRegistry, _ pkgcore.ComponentConfig) (any, error) {
 			configModule, err := pkgcore.Get[*config.Module](reg)
 			if err != nil {
@@ -818,8 +740,9 @@ func (b *serverBuild) sharingExpiryComponent() pkgcore.Component {
 // catalog before the modules behind it declared their permissions.
 func (b *serverBuild) integrationPermissionComponent() pkgcore.Component {
 	return pkgcore.Component{
-		Name:     hostComponentPrefix + "integration-permissions",
-		Provides: []any{(*integration.PermissionLister)(nil)},
+		Name:         hostComponentPrefix + "integration-permissions",
+		Capabilities: pkgcore.MultiReplicaSafe,
+		Provides:     []any{(*integration.PermissionLister)(nil)},
 		New: func(_ context.Context, reg *pkgcore.ComponentRegistry, _ pkgcore.ComponentConfig) (any, error) {
 			return integration.PermissionListerFunc(func(ctx context.Context, tenantID, userID string) ([]string, error) {
 				rbacService, err := pkgcore.Get[*rbac.Service](reg)
@@ -842,9 +765,10 @@ func (b *serverBuild) integrationPermissionComponent() pkgcore.Component {
 // same seam before its credit reservation opens.
 func (b *serverBuild) gatewayEntitlementsComponent() pkgcore.Component {
 	return pkgcore.Component{
-		Name:     hostComponentPrefix + "gateway-entitlements",
-		Provides: []any{(*aigateway.Entitlements)(nil)},
-		Requires: []pkgcore.Requirement{{Token: (*billing.Module)(nil)}},
+		Name:         hostComponentPrefix + "gateway-entitlements",
+		Capabilities: pkgcore.MultiReplicaSafe,
+		Provides:     []any{(*aigateway.Entitlements)(nil)},
+		Requires:     []pkgcore.Requirement{{Token: (*billing.Module)(nil)}},
 		New: func(_ context.Context, reg *pkgcore.ComponentRegistry, _ pkgcore.ComponentConfig) (any, error) {
 			billingModule, err := pkgcore.Get[*billing.Module](reg)
 			if err != nil {
@@ -862,9 +786,10 @@ func (b *serverBuild) gatewayEntitlementsComponent() pkgcore.Component {
 // metering_usage_summaries rows once metering's own pipelines run.
 func (b *serverBuild) gatewayUsageComponent() pkgcore.Component {
 	return pkgcore.Component{
-		Name:     hostComponentPrefix + "gateway-usage",
-		Provides: []any{(*aigateway.UsageRecorder)(nil)},
-		Requires: []pkgcore.Requirement{{Token: (*metering.Module)(nil)}},
+		Name:         hostComponentPrefix + "gateway-usage",
+		Capabilities: pkgcore.MultiReplicaSafe,
+		Provides:     []any{(*aigateway.UsageRecorder)(nil)},
+		Requires:     []pkgcore.Requirement{{Token: (*metering.Module)(nil)}},
 		New: func(_ context.Context, reg *pkgcore.ComponentRegistry, _ pkgcore.ComponentConfig) (any, error) {
 			meteringModule, err := pkgcore.Get[*metering.Module](reg)
 			if err != nil {
@@ -880,9 +805,10 @@ func (b *serverBuild) gatewayUsageComponent() pkgcore.Component {
 // delivery path (a single-view share link) instead of refusing every call.
 func (b *serverBuild) complianceSharingComponent() pkgcore.Component {
 	return pkgcore.Component{
-		Name:     hostComponentPrefix + "compliance-sharing",
-		Provides: []any{(*compliance.SharingCreator)(nil)},
-		Requires: []pkgcore.Requirement{{Token: (*sharing.Module)(nil)}},
+		Name:         hostComponentPrefix + "compliance-sharing",
+		Capabilities: pkgcore.MultiReplicaSafe,
+		Provides:     []any{(*compliance.SharingCreator)(nil)},
+		Requires:     []pkgcore.Requirement{{Token: (*sharing.Module)(nil)}},
 		New: func(_ context.Context, reg *pkgcore.ComponentRegistry, _ pkgcore.ComponentConfig) (any, error) {
 			sharingModule, err := pkgcore.Get[*sharing.Module](reg)
 			if err != nil {
@@ -900,8 +826,9 @@ func (b *serverBuild) complianceSharingComponent() pkgcore.Component {
 // post-attach step.
 func (b *serverBuild) attestationComponent() pkgcore.Component {
 	return pkgcore.Component{
-		Name:     hostComponentPrefix + "attestation",
-		Provides: []any{(*attestation.Service)(nil)},
+		Name:         hostComponentPrefix + "attestation",
+		Capabilities: pkgcore.MultiReplicaSafe,
+		Provides:     []any{(*attestation.Service)(nil)},
 		Requires: []pkgcore.Requirement{
 			{Token: (*pki.Module)(nil)},
 			{Token: (*storage.Module)(nil)},
@@ -943,8 +870,9 @@ func (b *serverBuild) attestationComponent() pkgcore.Component {
 // scheduler, long after every product exists.
 func (b *serverBuild) tenantListerComponent() pkgcore.Component {
 	return pkgcore.Component{
-		Name:     hostComponentPrefix + "tenant-lister",
-		Provides: []any{(*jobs.TenantLister)(nil)},
+		Name:         hostComponentPrefix + "tenant-lister",
+		Capabilities: pkgcore.MultiReplicaSafe,
+		Provides:     []any{(*jobs.TenantLister)(nil)},
 		New: func(_ context.Context, reg *pkgcore.ComponentRegistry, _ pkgcore.ComponentConfig) (any, error) {
 			return lazyAdminTenantUniverse{configured: b.cfg.HostTenants, reg: reg}, nil
 		},
@@ -982,7 +910,7 @@ func (b *serverBuild) mailerComponent() pkgcore.Component {
 		Name:         hostComponentPrefix + "mailer",
 		Module:       "mailer",
 		Provides:     []any{(*pkgcore.Mailer)(nil)},
-		Capabilities: pkgcore.Stateless,
+		Capabilities: pkgcore.Stateless | pkgcore.MultiReplicaSafe,
 		New: func(_ context.Context, _ *pkgcore.ComponentRegistry, _ pkgcore.ComponentConfig) (any, error) {
 			return b.cfg.Mailer, nil
 		},
@@ -999,7 +927,7 @@ func (b *serverBuild) smsComponent() pkgcore.Component {
 		Name:         hostComponentPrefix + "sms",
 		Module:       "sms",
 		Provides:     []any{(*pkgcore.SMSSender)(nil)},
-		Capabilities: pkgcore.Stateless,
+		Capabilities: pkgcore.Stateless | pkgcore.MultiReplicaSafe,
 		New: func(_ context.Context, _ *pkgcore.ComponentRegistry, _ pkgcore.ComponentConfig) (any, error) {
 			return pkgcore.NewConsoleSMSSender(smsOutputFor(b.cfg)), nil
 		},
@@ -1016,8 +944,9 @@ func (b *serverBuild) smsComponent() pkgcore.Component {
 // janitor).
 func (b *serverBuild) workerComponent() pkgcore.Component {
 	return pkgcore.Component{
-		Name: hostComponentPrefix + "worker",
-		New:  newHostStep,
+		Name:         hostComponentPrefix + "worker",
+		Capabilities: pkgcore.MultiReplicaSafe,
+		New:          newHostStep,
 		Close: func(_ context.Context, reg *pkgcore.ComponentRegistry, _ any) error {
 			var firstErr error
 			keepErr := func(err error) {
@@ -1043,16 +972,20 @@ func (b *serverBuild) workerComponent() pkgcore.Component {
 // in an order whose independent components plan in registration order. The
 // registry is the assembly instance the override components copy their
 // modules' descriptors from.
+//
+// Every module descriptor this host selects declares its own capabilities
+// -- the modules own that declaration -- so the only capability this file
+// states itself is the host's own: each provider below adapts a
+// shared-database service or hands each unit of work straight out, holding
+// nothing a second replica would silently split, and says so on its own
+// descriptor.
 func (b *serverBuild) hostWiringComponents(reg *pkgcore.ComponentRegistry) ([]pkgcore.Component, error) {
 	components := []pkgcore.Component{b.dbComponent(), b.cryptoComponent()}
 
 	for _, build := range []func(*pkgcore.ComponentRegistry) (pkgcore.Component, error){
 		b.authnComponent,
 		b.orgComponent,
-		b.observabilityComponent,
-		b.configComponent,
 		b.rbacComponent,
-		b.adminComponent,
 		b.notificationComponent,
 		b.integrationComponent,
 		b.aiGatewayComponent,
@@ -1064,16 +997,14 @@ func (b *serverBuild) hostWiringComponents(reg *pkgcore.ComponentRegistry) ([]pk
 		components = append(components, c)
 	}
 
-	// The modules whose descriptors declare no capability: this host
-	// selects its own copies, carrying the replicaSafeModule declaration
-	// and the package's own construction untouched.
-	for _, name := range []string{"pki", "signer.local", "billing", "metering", "audit"} {
-		c, err := capabilityComponent(reg, name)
-		if err != nil {
-			return nil, err
-		}
-		components = append(components, c)
+	// signer.local is the one module descriptor whose capability stays
+	// deliberately undeclared (an in-process signer); this host selects its
+	// own copy carrying the placement decision.
+	signerLocal, err := capabilityComponent(reg, "signer.local")
+	if err != nil {
+		return nil, err
 	}
+	components = append(components, signerLocal)
 
 	components = append(components,
 		b.tenancyResolverComponent(),
@@ -1095,13 +1026,6 @@ func (b *serverBuild) hostWiringComponents(reg *pkgcore.ComponentRegistry) ([]pk
 	}
 	if b.cfg.SMSOutput != nil {
 		components = append(components, b.smsComponent())
-	}
-	// Every component this file contributes is replica-safe state: each
-	// holds nothing a second replica would silently split (the providers
-	// adapt shared-database services, the host transports hand each unit
-	// of work straight out), so the declaration is made once here.
-	for i := range components {
-		components[i] = replicaSafeModule(components[i])
 	}
 	return components, nil
 }

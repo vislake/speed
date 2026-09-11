@@ -181,8 +181,9 @@ func hostFaceOf(instance any) (*hostFace, error) {
 // own, which is the difference between the two drives and nothing else.
 func appComponent(b *serverBuild, baseCtx context.Context, live bool) pkgcore.Component {
 	return pkgcore.Component{
-		Name:     "reference-app.app",
-		Provides: []any{(*hostFace)(nil)},
+		Name:         "reference-app.app",
+		Capabilities: pkgcore.MultiReplicaSafe,
+		Provides:     []any{(*hostFace)(nil)},
 		New: func(context.Context, *pkgcore.ComponentRegistry, pkgcore.ComponentConfig) (any, error) {
 			return &hostFace{baseCtx: baseCtx}, nil
 		},
@@ -303,8 +304,9 @@ func (b *serverBuild) stepInitWithFace(run func(ctx context.Context, view assemb
 // steps bind (bindRuntimeServices).
 func (b *serverBuild) postBootstrapComponent() pkgcore.Component {
 	return pkgcore.Component{
-		Name: "reference-app.post_bootstrap",
-		New:  newHostStep,
+		Name:         "reference-app.post_bootstrap",
+		Capabilities: pkgcore.MultiReplicaSafe,
+		New:          newHostStep,
 		Init: func(ctx context.Context, reg *pkgcore.ComponentRegistry, _ any) error {
 			if err := b.bindRegistry(reg); err != nil {
 				return err
@@ -328,9 +330,10 @@ func (b *serverBuild) postBootstrapComponent() pkgcore.Component {
 // binds the assembled values the step reads and runs the runPostAttach body.
 func (b *serverBuild) postAttachComponent() pkgcore.Component {
 	return pkgcore.Component{
-		Name: "reference-app.post_attach",
-		New:  newHostStep,
-		Init: b.stepInit(b.runPostAttach),
+		Name:         "reference-app.post_attach",
+		Capabilities: pkgcore.MultiReplicaSafe,
+		New:          newHostStep,
+		Init:         b.stepInit(b.runPostAttach),
 	}
 }
 
@@ -340,9 +343,10 @@ func (b *serverBuild) postAttachComponent() pkgcore.Component {
 // through the composed handler and its subscription lands after them.
 func (b *serverBuild) preServeComponent() pkgcore.Component {
 	return pkgcore.Component{
-		Name:     "reference-app.pre_serve",
-		Requires: []pkgcore.Requirement{{Token: (*hostFace)(nil)}},
-		New:      newHostStep,
+		Name:         "reference-app.pre_serve",
+		Capabilities: pkgcore.MultiReplicaSafe,
+		Requires:     []pkgcore.Requirement{{Token: (*hostFace)(nil)}},
+		New:          newHostStep,
 		Init: b.stepInitWithFace(func(ctx context.Context, view assemblyView, face *hostFace) error {
 			return b.runPreServe(ctx, view, face.Handler())
 		}),
@@ -382,14 +386,6 @@ func (b *serverBuild) hostStepComponents(baseCtx context.Context, live bool) []p
 		appComponent(b, baseCtx, live),
 		b.preServeComponent(),
 		b.workerComponent(),
-	}
-	// The steps hold no state a second replica would silently split: what
-	// they publish during Init is the assembly's own context, and what they
-	// start runs per replica over the shared database and queue, so a
-	// distributed composition may select them (host_wiring.go's
-	// replicaSafeModule has the full argument).
-	for i := range components {
-		components[i] = replicaSafeModule(components[i])
 	}
 	return components
 }

@@ -426,18 +426,30 @@ func TestHostCatalog_Refusals(t *testing.T) {
 	})
 
 	t.Run("no assets at all", func(t *testing.T) {
-		// The overridden modules' locale resources merge unconditionally
-		// (they ride no component), so a nil asset list still yields their
-		// languages and ids.
+		// Locale resources ride the selected components' descriptors --
+		// override copies included -- so an empty asset list merges
+		// nothing: there is no second, unconditional source of messages.
 		catalog, err := hostCatalog(nil)
 		if err != nil {
 			t.Fatalf("hostCatalog(nil): %v", err)
 		}
-		if got := catalog.Locales(); !slices.Equal(got, []string{"en-US", "zh-CN"}) {
-			t.Fatalf("catalog languages = %v, want the overridden modules' en-US/zh-CN pair", got)
+		if got := catalog.Locales(); len(got) != 0 {
+			t.Fatalf("catalog languages = %v, want none without any asset", got)
 		}
-		if _, err := catalog.Lookup(i18n.LocaleENUS, "authn.invalid_credentials", nil); err != nil {
-			t.Fatalf("lookup authn.invalid_credentials: %v, want the overridden module's ids merged", err)
+	})
+
+	t.Run("a module prefix over a renamed component", func(t *testing.T) {
+		// The id prefix is the MODULE the component implements: an override
+		// component (host name, module's own resources) merges under the
+		// module name, exactly as the module's own descriptor would.
+		catalog, err := hostCatalog([]pkgcore.Asset{
+			{Name: "test-host.alpha", Module: "alpha", Locales: alpha.FS},
+		})
+		if err != nil {
+			t.Fatalf("hostCatalog() over a renamed component carrying its module's locales: %v", err)
+		}
+		if _, err := catalog.Lookup(i18n.LocaleENUS, "alpha.greeting", nil); err != nil {
+			t.Fatalf("lookup alpha.greeting: %v, want the renamed component's resources merged under the module name", err)
 		}
 	})
 }

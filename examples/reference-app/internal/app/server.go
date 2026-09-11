@@ -682,7 +682,6 @@ func (b *serverBuild) composition(live bool) pkgcore.ComponentConfig {
 	// shortfall a composition that cannot run in the declared mode reports
 	// is the seam implementation that first fails to satisfy it.
 	components := pkgcore.ComponentConfig{}.
-		With("observability", false).
 		With("eventbus.memory", nil).
 		With("kv.memory", nil).
 		With("mailer.console", nil).
@@ -693,16 +692,14 @@ func (b *serverBuild) composition(live bool) pkgcore.ComponentConfig {
 		With("queue.standalone", pkgcore.ComponentConfig{}.
 			With("worker", !b.cfg.DisableQueueWorker).
 			With("schedule_interval", b.cfg.PeriodicTaskInterval)).
-		With("pki", false).
-		With(hostComponentPrefix+"pki", nil).
+		With("pki", nil).
 		With("signer.local", false).
 		With(hostComponentPrefix+"signer.local", nil).
 		With("authn", false).
 		With(hostComponentPrefix+"authn", nil).
 		With("org", false).
 		With(hostComponentPrefix+"org", nil).
-		With("config", false).
-		With(hostComponentPrefix+"config", nil).
+		With("config", nil).
 		With("storage", nil).
 		With("sharing", nil).
 		With("integration", false).
@@ -712,23 +709,22 @@ func (b *serverBuild) composition(live bool) pkgcore.ComponentConfig {
 		With(hostComponentPrefix+"notification", nil).
 		With("ai-gateway", false).
 		With(hostComponentPrefix+"ai-gateway", nil).
-		With("billing", false).
-		With(hostComponentPrefix+"billing", nil).
-		With("metering", false).
-		With(hostComponentPrefix+"metering", nil).
+		With("billing", nil).
+		With("metering", nil).
 		With("compliance", nil).
-		With("audit", false).
-		With(hostComponentPrefix+"audit", nil).
+		With("audit", nil).
 		With("notes", nil).
-		// config, rbac and admin are host overrides: each declares through
-		// its own Init turn, and the host takes their snapshots (the
-		// configuration schema, the permission catalog, the role service's
-		// authorizer) in the post-bootstrap step, after every module has
-		// declared.
+		// rbac is the one host override left among these: its config
+		// attach must run in the post-bootstrap step, because this host's
+		// Init-stage consumers (the demo seeds, the self-service chain)
+		// need the complete permission catalog while they run. config,
+		// admin and observability are selected by their own descriptors --
+		// config's Start completes its schema snapshot, admin's Start
+		// binds the rbac Service, and both declare their capabilities
+		// themselves.
 		With("rbac", false).
 		With(hostComponentPrefix+"rbac", nil).
-		With("admin", false).
-		With(hostComponentPrefix+"admin", nil).
+		With("admin", nil).
 		With(hostComponentPrefix+"crypto", nil).
 		With(hostComponentPrefix+"tenancy-resolver", nil).
 		With(hostComponentPrefix+"subject-resolvers", nil).
@@ -803,7 +799,7 @@ func (b *serverBuild) composition(live bool) pkgcore.ComponentConfig {
 	if b.cfg.PKIExpiryScanWindow > 0 {
 		pkiConfig = pkiConfig.With("expiry_scan_window", b.cfg.PKIExpiryScanWindow)
 	}
-	components = components.With(hostComponentPrefix+"pki", pkiConfig)
+	components = components.With("pki", pkiConfig)
 
 	switch {
 	case b.cfg.SMSGatewayURL != "":
@@ -820,19 +816,18 @@ func (b *serverBuild) composition(live bool) pkgcore.ComponentConfig {
 		// the module that owns the rule.
 		components = components.With("sms.console", nil)
 	}
-	// The observability component is the host's own: it carries this app's
-	// telemetry configuration and declares the capability its per-process
-	// exporters have (host_wiring.go's observabilityComponent).
+	// The engine's observability component, selected with this app's
+	// telemetry configuration (the component itself is the engine's).
 	if live {
 		observability := pkgcore.ComponentConfig{}.With("service_name", "reference-app")
 		if b.cfg.OTLPEndpoint != "" {
 			observability = observability.With("otlp_endpoint", b.cfg.OTLPEndpoint)
 		}
-		components = components.With(hostComponentPrefix+"observability", observability)
+		components = components.With("observability", observability)
 	} else {
 		// BuildServer serves the returned handler in-process; the telemetry
 		// lifecycle belongs to the process that owns the listener.
-		components = components.With(hostComponentPrefix+"observability", false)
+		components = components.With("observability", false)
 	}
 
 	return pkgcore.ComponentConfig{}.

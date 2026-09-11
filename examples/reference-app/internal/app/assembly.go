@@ -74,17 +74,17 @@ func viewFromComponents(reg *pkgcore.ComponentRegistry) (assemblyView, error) {
 
 // hostCatalog merges the selected components' locale resources into the
 // message catalog, the same mechanism a module set's locales merge under
-// (i18n.Builder over each carrier's own name and locale files), plus the
-// resources of the modules whose descriptors this host overrides
-// (host_wiring.go's overriddenModuleLocales). The component name is the
-// locale id prefix -- the builder rejects an asset whose message ids do not
-// start with the name it is registered under, so an override component
-// cannot carry its module's locales (it carries a host name) and those
-// resources merge here under the module's own name -- and a component whose
-// embedded resources and name disagree fails here, naming the component
-// rather than rendering a missing id later. Components that carry no locale
-// resources are skipped: a zero embed.FS contributes nothing, and it is the
-// ordinary shape of a component that renders no message.
+// (i18n.Builder over each carrier's own module and locale files). The id
+// prefix is the MODULE the component implements (falling back to the
+// component's name for an assembly-time step that implements none): the
+// message ids belong to the module's contract, so an override component --
+// which carries a host name but the module's own resources -- merges under
+// the module's name exactly as the module's own descriptor would, and the
+// builder's prefix check holds for both. A carrier whose embedded resources
+// and module disagree fails here, naming the component rather than
+// rendering a missing id later. Components that carry no locale resources
+// are skipped: a zero embed.FS contributes nothing, and it is the ordinary
+// shape of a component that renders no message.
 func hostCatalog(assets []pkgcore.Asset) (*i18n.Catalog, error) {
 	var zeroLocales embed.FS
 	builder := i18n.NewBuilder()
@@ -92,13 +92,12 @@ func hostCatalog(assets []pkgcore.Asset) (*i18n.Catalog, error) {
 		if asset.Locales == zeroLocales {
 			continue
 		}
-		if err := builder.AddModule(asset.Name, asset.Locales); err != nil {
-			return nil, fmt.Errorf("reference-app: component %q has invalid locale resources: %w", asset.Name, err)
+		prefix := asset.Module
+		if prefix == "" {
+			prefix = asset.Name
 		}
-	}
-	for _, overridden := range overriddenModuleLocales {
-		if err := builder.AddModule(overridden.name, overridden.fs); err != nil {
-			return nil, fmt.Errorf("reference-app: overridden module %q has invalid locale resources: %w", overridden.name, err)
+		if err := builder.AddModule(prefix, asset.Locales); err != nil {
+			return nil, fmt.Errorf("reference-app: component %q has invalid locale resources: %w", asset.Name, err)
 		}
 	}
 	return builder.Build(), nil

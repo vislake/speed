@@ -9,7 +9,6 @@ package app
 import (
 	"bytes"
 	"context"
-	"embed"
 	"path/filepath"
 	"reflect"
 	"testing"
@@ -24,8 +23,11 @@ import (
 )
 
 // overriddenModules names the modules whose descriptors this host overrides
-// by copying the module's own registered descriptor.
-var overriddenModules = []string{"authn", "notification", "integration", "ai-gateway"}
+// by copying the module's own registered descriptor: the modules this app
+// constructs beyond what a descriptor carries, plus rbac, whose catalog
+// attach must run in the post-bootstrap step for this host's Init-stage
+// consumers.
+var overriddenModules = []string{"authn", "rbac", "notification", "integration", "ai-gateway"}
 
 // TestOverrideComponents_CarryTheirDeclarations pins the override contract
 // against the module packages' own descriptors: an override is the
@@ -62,8 +64,8 @@ func TestOverrideComponents_CarryTheirDeclarations(t *testing.T) {
 		if override.Name != hostComponentPrefix+module {
 			t.Errorf("override name = %q, want %q", override.Name, hostComponentPrefix+module)
 		}
-		if override.Locales != (embed.FS{}) {
-			t.Errorf("override %q carries locale resources; a renamed component cannot (the ids are prefixed with the module name)", name)
+		if !reflect.DeepEqual(override.Locales, base.Locales) {
+			t.Errorf("override %q Locales differs from the module's own resources; the catalog merges them under the MODULE name (hostCatalog), so an override carries them unchanged", name)
 		}
 		if len(override.Requires) < len(base.Requires) || !reflect.DeepEqual(override.Requires[:len(base.Requires)], base.Requires) {
 			t.Errorf("override %q Requires = %v, want the module's own %v (plus the host's own additional edges)", name, override.Requires, base.Requires)
@@ -82,8 +84,8 @@ func TestOverrideComponents_CarryTheirDeclarations(t *testing.T) {
 		if !reflect.DeepEqual(override.BootstrapKeys, base.BootstrapKeys) {
 			t.Errorf("override %q BootstrapKeys = %v, want the module's own %v", name, override.BootstrapKeys, base.BootstrapKeys)
 		}
-		if override.Capabilities != base.Capabilities|pkgcore.MultiReplicaSafe {
-			t.Errorf("override %q Capabilities = %v, want the module's own %v plus the host's MultiReplicaSafe declaration", name, override.Capabilities, base.Capabilities)
+		if override.Capabilities != base.Capabilities {
+			t.Errorf("override %q Capabilities = %v, want the module's own %v unchanged", name, override.Capabilities, base.Capabilities)
 		}
 		if reflect.TypeOf(override.ConfigSchema) != reflect.TypeOf(base.ConfigSchema) {
 			t.Errorf("override %q ConfigSchema = %T, want the module's own schema", name, override.ConfigSchema)
@@ -235,9 +237,9 @@ func TestComposition_SelectsTheResolvedImplementations(t *testing.T) {
 			"eventbus.memory", "kv.memory", "mailer.console", "objectstore.local", "sms.console",
 			"queue.standalone", "notes", "demo",
 			"compliance", "storage", "sharing",
-			hostComponentPrefix + "config", hostComponentPrefix + "rbac", hostComponentPrefix + "admin",
-			hostComponentPrefix + "pki", hostComponentPrefix + "signer.local",
-			hostComponentPrefix + "billing", hostComponentPrefix + "metering", hostComponentPrefix + "audit",
+			"config", hostComponentPrefix + "rbac", "admin",
+			"pki", hostComponentPrefix + "signer.local",
+			"billing", "metering", "audit",
 			hostComponentPrefix + "db", hostComponentPrefix + "crypto", hostComponentPrefix + "authn",
 			hostComponentPrefix + "org",
 			hostComponentPrefix + "notification", hostComponentPrefix + "integration", hostComponentPrefix + "ai-gateway",
@@ -250,9 +252,9 @@ func TestComposition_SelectsTheResolvedImplementations(t *testing.T) {
 			}
 		}
 		for _, off := range []string{
-			"db.sqlite", "authn", "org", "config", "rbac", "admin", "notification", "integration", "ai-gateway",
-			"pki", "signer.local", "billing", "metering", "audit",
-			"observability", hostComponentPrefix + "observability",
+			"db.sqlite", "authn", "org", "rbac", "notification", "integration", "ai-gateway",
+			"signer.local",
+			"observability",
 		} {
 			value, ok := block.Get(off)
 			if !ok || value != false {
@@ -294,7 +296,7 @@ func TestComposition_SelectsTheResolvedImplementations(t *testing.T) {
 		if worker, _ := queueBlock.Get("worker"); worker != false {
 			t.Errorf("queue worker = %v under DisableQueueWorker, want false", worker)
 		}
-		observability, ok := selectedEntry(block, hostComponentPrefix+"observability")
+		observability, ok := selectedEntry(block, "observability")
 		if !ok {
 			t.Fatal("the live drive selects no observability component")
 		}
