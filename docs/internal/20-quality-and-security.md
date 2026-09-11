@@ -22,7 +22,7 @@ Vitest + Testing Library 做组件与 hook 测试；Playwright 做 e2e。UI 包�
 
 这是硬性约定，不是风格偏好——目的是让 `go test ./...`（默认只跑单元测试，秒级完成）和 `go test -tags=integration ./...`（显式触发，允许慢）这条分层在物理上可执行，而不是靠开发者自觉：
 
-- **单元测试文件名必须是被测目标的前缀**：`registry.go` 对应 `registry_test.go`，`kv.go` 对应 `kv_test.go`（Go 原生约定）；前端同理，`PlanCard.tsx` 对应 `PlanCard.test.tsx`。不与单个源文件一一对应的测试文件，必须用它验证的行为语义命名（如 `concurrency_test.go`），禁止用 `misc`/`extra`/`independent` 这类不表意的名字——名字是未来定位测试的第一手段，含糊的名字让这个手段失效。
+- **单元测试文件名必须是被测目标的前缀**：`registry.go` 对应 `registry_test.go`，`memory_kvstore.go` 对应 `memory_kvstore_test.go`（Go 原生约定）；前端同理，`PlanCard.tsx` 对应 `PlanCard.test.tsx`。不与单个源文件一一对应的测试文件，必须用它验证的行为语义命名（如 `concurrency_test.go`），禁止用 `misc`/`extra`/`independent` 这类不表意的名字——名字是未来定位测试的第一手段，含糊的名字让这个手段失效。
 - **`example_test.go` 是 Go 惯例的例外**：godoc 可渲染的 `Example*` 函数按约定放在这个文件名下，不受"按目标命名"规则约束。
 - **测试工具与帮助类放在独立的测试目录**：Go 侧是模块内的 `internal/testutil` 子包，前端侧是每个包的 `test-utils/` 目录；跨测试文件复用的 fake、builder、断言辅助函数都放这里，不允许在 `_test.go` 里内联重复定义（Go 的 `_test.go` 本身也无法被其他包 import，这是该约定的硬约束，不只是风格要求）。
 - **集成测试与单元测试物理分离**：Go 侧每个模块用 `integration_test/` 子目录 + `//go:build integration` 构建标签；前端侧用 Playwright 原生的 `e2e/` 目录。任何一次普通的单元测试运行都不会碰到集成测试。

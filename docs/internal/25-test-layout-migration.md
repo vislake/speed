@@ -127,7 +127,7 @@ Go 不允许外部目录的测试访问 package main 的未导出符号,也不�
 
 | 文件 | 钉什么 | 套件所在(支撑包) | 支撑包黑盒可导入? |
 |---|---|---|---|
-| go/pkgcore/eventbus_conformance_test.go | `NewMemoryEventBus` 满足 `eventbustest.AssertConforms`;内存总线"额外属性"(同步投递错误回传)由 `eventbus_test.go` 在包内另行钉住 | go/pkgcore/eventbustest | 是:`AssertConforms(t, caps, factory)`,签名公开 |
+| go/pkgcore/eventbus_conformance_test.go | `NewMemoryEventBus` 满足 `eventbustest.AssertConforms`;内存总线"额外属性"(同步投递错误回传)由 `memory_eventbus_test.go` 在包内另行钉住 | go/pkgcore/eventbustest | 是:`AssertConforms(t, caps, factory)`,签名公开 |
 | go/pkgcore/kv_conformance_test.go | `NewMemoryKVStore` 以能力 0(单实例、无能力声明)满足 `kvstoretest.AssertConforms` 的单实例检查段 | go/pkgcore/kvstoretest(另有 AssertSurvivesRestart) | 是 |
 | go/pkgcore/mailer_conformance_test.go | `NewSMTPMailer` 满足 `mailertest.AssertConforms`,假中继为进程内 net.Listener(单元层,无 Docker);文件内 `smtpMailerFor` 因环约束重复了 smtp_mailer_test.go 的 mailerFor | go/pkgcore/mailertest | 是 |
 | go/pkgcore/objectstore_conformance_test.go | `NewLocalObjectStore(t.TempDir())` 满足 `objectstoretest.AssertConforms` | go/pkgcore/objectstoretest(另有 AssertSurvivesRestart) | 是 |
