@@ -6,8 +6,9 @@ package s3
 // the file-locality this package always had.
 import (
 	"fmt"
-	"github.com/vislake/speed/go/pkgcore"
 	"strings"
+
+	"github.com/vislake/speed/go/pkgcore"
 )
 
 // Capabilities is what "objectstore.s3" declares about itself: any number of

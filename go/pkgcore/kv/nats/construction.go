@@ -6,6 +6,7 @@ package nats
 // the file-locality this package always had.
 import (
 	"fmt"
+
 	"github.com/nats-io/nats.go"
 
 	"github.com/vislake/speed/go/pkgcore"

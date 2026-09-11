@@ -7,7 +7,9 @@ package postgres
 import (
 	"context"
 	"fmt"
+
 	"github.com/jackc/pgx/v5/pgxpool"
+
 	"github.com/vislake/speed/go/pkgcore"
 )
 

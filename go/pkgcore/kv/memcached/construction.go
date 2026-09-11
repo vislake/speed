@@ -5,9 +5,11 @@ package memcached
 // (component.go) builds from -- kept beside the implementation they adapt,
 // the file-locality this package always had.
 import (
-	"github.com/bradfitz/gomemcache/memcache"
-	"github.com/vislake/speed/go/pkgcore"
 	"strings"
+
+	"github.com/bradfitz/gomemcache/memcache"
+
+	"github.com/vislake/speed/go/pkgcore"
 )
 
 // Capabilities is what "kv.memcached" declares about itself: honestly
