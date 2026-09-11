@@ -87,3 +87,30 @@ func TestComponent_NewFailsWithoutTheDatabase(t *testing.T) {
 		t.Fatalf("New = %v, nil error; want the missing database reported", instance)
 	}
 }
+
+// TestComponent_NewFailsWithoutEachMidChainProduct pins the fail-closed
+// shape of every mandatory product past the database: each missing one
+// fails the construction naming its own gap instead of building a
+// half-wired module.
+func TestComponent_NewFailsWithoutEachMidChainProduct(t *testing.T) {
+	db := dbtest.NewSQLite(t)
+
+	t.Run("queue", func(t *testing.T) {
+		reg := pkgcore.NewComponentRegistry()
+		reg.Put(db)
+		instance, err := complianceComponent.New(context.Background(), reg, pkgcore.NewComponentConfig(nil))
+		if err == nil {
+			t.Fatalf("New = %v, nil error; want the missing queue reported", instance)
+		}
+	})
+
+	t.Run("config module", func(t *testing.T) {
+		reg := pkgcore.NewComponentRegistry()
+		reg.Put(db)
+		reg.Put(&recordingQueue{})
+		instance, err := complianceComponent.New(context.Background(), reg, pkgcore.NewComponentConfig(nil))
+		if err == nil {
+			t.Fatalf("New = %v, nil error; want the missing config module reported", instance)
+		}
+	})
+}
