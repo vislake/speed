@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/vislake/speed/go/saasctl/internal/appconfig"
+	"github.com/vislake/speed/go/saasctl/internal/appconfig/appconfigtest"
 )
 
 // bootstrapEnvKeys lists the full twenty-three bootstrap variables a
@@ -39,6 +40,16 @@ var bootstrapEnvKeys = []string{
 	appconfig.SMTPUsernameEnv,
 	appconfig.SMTPPasswordEnv,
 	appconfig.SMSGatewayURLEnv,
+}
+
+// TestBootstrapEnvKeysMatchesTheAppConfigSurface: the list must name exactly
+// the environment variables appconfig.Load resolves -- no more, no fewer,
+// none twice -- so a variable joining or leaving the bootstrap surface fails
+// here until this list moves with it. The expectation is appconfig.Load's
+// own behavior, derived by appconfigtest, never a second hand-maintained
+// list.
+func TestBootstrapEnvKeysMatchesTheAppConfigSurface(t *testing.T) {
+	appconfigtest.AssertKeys(t, bootstrapEnvKeys)
 }
 
 // runCLI invokes run with captured output.
