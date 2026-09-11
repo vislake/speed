@@ -2,6 +2,7 @@ package storage
 
 import (
 	"context"
+	"slices"
 	"testing"
 	"time"
 
@@ -66,5 +67,68 @@ func TestComponent_NewFailsWithoutTheDatabase(t *testing.T) {
 	instance, err := storageComponent.New(context.Background(), pkgcore.NewComponentRegistry(), pkgcore.NewComponentConfig(nil))
 	if err == nil {
 		t.Fatalf("New = %v, nil error; want the missing database reported", instance)
+	}
+}
+
+// TestComponent_InitDeclaresThroughTheGate drives the descriptor's Init
+// through a real assembly: the module's Register runs inside the one stage
+// whose seats accept writes, so its full surface -- permissions, audit
+// vocabulary, event catalog, both job handlers, the expiry sweep's schedule
+// and the HTTP mount -- lands in the assembly's own seats, and the services
+// take the assembly's own object store and bus.
+func TestComponent_InitDeclaresThroughTheGate(t *testing.T) {
+	db := testutil.NewSQLite(t, moduleName, migrations.FS)
+	bus := pkgcore.NewMemoryEventBus()
+	reg := pkgcore.NewComponentRegistry()
+	if err := componenttest.RunInit(t, reg, storageComponent, db, &stubQueue{}, pkgcore.NewLocalObjectStore(t.TempDir()), bus); err != nil {
+		t.Fatalf("RunInit: %v", err)
+	}
+	m, err := pkgcore.Get[*Module](reg)
+	if err != nil {
+		t.Fatalf("the assembly's product: %v", err)
+	}
+
+	perms := reg.Permissions.Permissions()
+	for _, want := range []string{PermissionRead, PermissionWrite} {
+		if !slices.Contains(perms, want) {
+			t.Errorf("Permissions seat = %v, want the %q declaration", perms, want)
+		}
+	}
+	actions := reg.AuditActions.Actions()
+	for _, want := range []string{AuditActionObjectCreate, AuditActionObjectComplete, AuditActionObjectDelete} {
+		if !slices.Contains(actions, want) {
+			t.Errorf("AuditActions seat = %v, want the %q declaration", actions, want)
+		}
+	}
+	var types []string
+	for _, decl := range reg.Events.Published() {
+		types = append(types, decl.Type)
+	}
+	for _, want := range []string{EventObjectCompleted, EventObjectDeleted} {
+		if !slices.Contains(types, want) {
+			t.Errorf("Events seat = %v, want the %q declaration", types, want)
+		}
+	}
+	handlers := reg.Jobs.Handlers()
+	for _, want := range []string{taskTypeDeriveThumbnail, taskTypeExpirySweep} {
+		if _, ok := handlers[want]; !ok {
+			t.Errorf("Jobs seat = %v, want the %q handler", handlers, want)
+		}
+	}
+	if decls := reg.Schedules.Declarations(); len(decls) != 1 || decls[0].Type != taskTypeExpirySweep {
+		t.Errorf("Schedules seat = %v, want the expiry-sweep schedule", decls)
+	}
+	if routes := reg.Routes.Routes(); len(routes) != 1 || routes[0].Path != apiPath {
+		t.Fatalf("Init mounted %v, want exactly the %s mount", routes, apiPath)
+	}
+
+	// The declarations reached the running services: Register hands each of
+	// the three services the assembly's own view, and builds the handler
+	// over them while the seats are open.
+	if m.handler == nil {
+		t.Error("the module's HTTP handler was not built by Init")
+	}
+	if m.svc.host == nil || m.derive.host == nil || m.life.host == nil {
+		t.Error("the services did not take the assembly's declaration face")
 	}
 }

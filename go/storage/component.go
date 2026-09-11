@@ -5,10 +5,14 @@ package storage
 // as the "storage" module's single implementation. The component builds the
 // same *Module every other caller builds through NewModule, so the module's
 // services, HTTP surface and registration behavior are one implementation
-// reachable two ways.
+// reachable two ways. Its Init runs the module's one declaration entry
+// point, Register, inside the assembly's Init stage -- the one stage whose
+// seats accept writes -- so the module's declarations reach the assembly's
+// seats exactly as they reach the kernel bootstrap's registry.
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	"gorm.io/gorm"
@@ -54,8 +58,9 @@ type storageComponentConfig struct {
 // events publish on. Provides (*Module)(nil) so a consumer's token resolves
 // against this component's product.
 //
-// Init is deliberately not declared: declaration (the module's Register
-// call) is made today by the host's bootstrap path, not by this descriptor.
+// Init runs the module's one declaration entry point, Register, inside the
+// assembly's Init stage -- the one stage whose seats accept writes -- so the
+// component world declares exactly what the module's Register declares.
 var storageComponent = pkgcore.Component{
 	Name:         "storage",
 	Module:       "storage",
@@ -97,6 +102,13 @@ var storageComponent = pkgcore.Component{
 			opts = append(opts, WithNoExpiryAllowed())
 		}
 		return NewModule(db, opts...), nil
+	},
+	Init: func(_ context.Context, reg *pkgcore.ComponentRegistry, instance any) error {
+		m, ok := instance.(*Module)
+		if !ok {
+			return fmt.Errorf("storage: component init got a %T instance, want *storage.Module", instance)
+		}
+		return m.Register(reg)
 	},
 }
 
