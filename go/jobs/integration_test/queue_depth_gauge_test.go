@@ -49,9 +49,11 @@ func TestRedisQueue_DepthGauge_UnregisteredTierDoesNotFailCollect(t *testing.T) 
 	// registered whether the worker has drained the task or not, so the
 	// gauge has a default-tier row to report at any scrape time.
 
-	// Pre-fix this Collect errors -- the callback's GetQueueInfo probe of
-	// the never-registered critical tier surfaces NOT_FOUND -- and
-	// CollectMetric fails the test right here.
+	// The callback must not consult a never-registered tier: a
+	// GetQueueInfo probe of the never-registered critical tier surfaces
+	// NOT_FOUND (its missing-queue answer does not wrap
+	// asynqlib.ErrQueueNotFound), which the ListQueues-driven discovery
+	// avoids -- so this Collect must succeed.
 	depth := testutil.CollectMetric(t, reader, "jobs.queue.depth")
 
 	labels := gaugeQueueLabels(t, depth)

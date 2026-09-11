@@ -51,8 +51,8 @@ func (*metricFailHandler) Handle(context.Context, *jobs.Job, jobs.ProgressFn) (j
 // for the failure side alone -- attempts{succeeded}, duration{succeeded},
 // attempts{retrying} (the first failed attempt), attempts{dead_letter},
 // duration{dead_letter} and the dead_letter counter, all labeled by the
-// jobs' own types. Before the fix nothing wired the instruments on this
-// Queue, so the CollectMetric calls fail with the metric names missing.
+// jobs' own types. All three instruments must carry their rows after one
+// real boot (the CollectMetric calls below fail if a name is missing).
 func TestRedisQueue_JobMetrics_SucceededAndDeadLetterAttemptsRecorded(t *testing.T) {
 	reader := testutil.SetupTestMeterProvider(t)
 	ctx := context.Background()

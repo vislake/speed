@@ -1110,11 +1110,11 @@ func (q *Queue) readCancelMarker(ctx context.Context, id string) (*time.Time, er
 // whose missing-queue answer does not wrap the exported
 // asynqlib.ErrQueueNotFound (asynq's GetQueueInfo delegates to its
 // CurrentStats, which reports an internal NotFound instead), so an
-// errors.Is tolerance against that sentinel never matched and a single
-// traffic-less tier used to fail every Collect with NOT_FOUND until a task
-// had reached it -- the defect the ListQueues-driven discovery fixes (see
-// the regression pair in go/jobs/integration_test's queue_depth_gauge_test
-// and job_metrics_test).
+// errors.Is tolerance against that sentinel never matches; without the
+// ListQueues-driven discovery a single traffic-less tier fails every
+// Collect with NOT_FOUND (see the regression pair in
+// go/jobs/integration_test's queue_depth_gauge_test and
+// job_metrics_test).
 //
 // The gauge's callback carries the same unregisterable-lifecycle contract
 // StandaloneQueue.registerQueueDepthGauge's own doc comment records: it

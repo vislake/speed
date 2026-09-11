@@ -209,12 +209,11 @@ func TestWriterRegistration_DBFailures_ReturnWrappedErrors(t *testing.T) {
 }
 
 // TestEnsureJobsSchema_StepFailures_ReturnWrappedErrors covers the three
-// ensureJobsSchema steps whose failure was previously only reachable
-// through a whole-database failure (which trips the earlier CREATE step
-// first): the claimed_by column add on a legacy jobs table, the
-// queue_writers table create, and the stale_at column add on a legacy
-// queue_writers table -- each must surface wrapped, and each leaves the
-// schema exactly as it was.
+// ensureJobsSchema steps a whole-database failure cannot isolate (the
+// earlier CREATE step trips first): the claimed_by column add on a legacy
+// jobs table, the queue_writers table create, and the stale_at column add
+// on a legacy queue_writers table -- each must surface wrapped, and each
+// leaves the schema exactly as it was.
 func TestEnsureJobsSchema_StepFailures_ReturnWrappedErrors(t *testing.T) {
 	ctx := context.Background()
 

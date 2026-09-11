@@ -36,8 +36,8 @@ import (
 // registerJobMetrics's smoke proof, mirroring StandaloneQueue's own
 // job-metrics coverage (jobs' queue_standalone_test.go): after
 // registration and one record on each instrument, a Collect answers all
-// three by name -- the rows that simply did not exist on this Queue
-// before the fix. Each instrument records one data point first because an
+// three by name -- the rows registration makes collectable. Each
+// instrument records one data point first because an
 // OTel Counter/Histogram that was never recorded emits no metric at all
 // on Collect (there is no proactive zero-valued row), so presence is only
 // observable after a record; the recorders' own semantics are pinned by
@@ -103,8 +103,7 @@ func TestQueue_JobMetrics_RetryableFailure_RecordsRetryingOutcome(t *testing.T) 
 // (retried == maxRetry, the exact archive-boundary handleErrorAttempt
 // replicates) records the jobs.job.dead_letter Counter, the
 // StatusDeadLetter row of the attempts Counter and one duration data
-// point, and fires the FailureHook exactly as before. Fails on the
-// pre-fix code, where no instrument exists to record onto.
+// point, and fires the FailureHook exactly as before.
 func TestQueue_JobMetrics_TerminalFailure_RecordsDeadLetterOutcome(t *testing.T) {
 	reader := testutil.SetupTestMeterProvider(t)
 	q := newTestQueue(t)

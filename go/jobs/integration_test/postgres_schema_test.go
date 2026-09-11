@@ -23,16 +23,11 @@ import (
 // (dbtest.NewPostgres) and drives a real row through the real worker, so
 // a dialect bug in the DDL fails here instead of in a customer's boot.
 //
-// The leg exists because of exactly such a bug: createJobsTableSQL
-// declared the payload and result columns BLOB, which SQLite accepts and
-// PostgreSQL rejects outright (PostgreSQL has no BLOB type -- the byte
-// type is BYTEA), so a standalone-mode queue booted over real PostgreSQL
-// failed its schema creation at Start with `type "blob" does not exist`.
-// The DDL is now branched by dialect (BLOB on SQLite, BYTEA on
-// PostgreSQL); this test pins the PostgreSQL half against a real server,
-// the same coverage the two prior fixes of this column-type bug class
-// (go/integration's webhook secret, go/org's invitation email) proved was
-// the only thing that actually stops the recurrence.
+// The DDL is branched by dialect (BLOB on SQLite, BYTEA on PostgreSQL);
+// this test pins the PostgreSQL half against a real server -- the
+// coverage that catches a column type PostgreSQL rejects at Start
+// (`type "blob" does not exist`: PostgreSQL has no BLOB type, its byte
+// type is BYTEA), which SQLite's acceptance of BLOB cannot reveal.
 func TestStandaloneQueue_PostgresSchema_BuildsAndRoundTrips(t *testing.T) {
 	db := dbtest.NewPostgres(t)
 	q := jobs.NewStandaloneQueue(db,

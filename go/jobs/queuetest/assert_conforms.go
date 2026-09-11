@@ -162,18 +162,18 @@ func AssertConforms(t *testing.T, factory func() Runnable) {
 			t.Errorf("Get() with no tenant and no system context error = %v, want ErrJobNotFound", err)
 		}
 
-		// Ruling in place (tenancy re-scan): the bare pkgcore primitive is
-		// deliberately used here rather than tenancy.WithSystemContext, the
-		// audited wrapper this package could import (jobs sits above tenancy
-		// in the module graph). This is test-support code whose whole job is
-		// to exercise a queue implementation's system-context handling --
-		// each implementation reads pkgcore.SystemReasonFromContext, the
-		// exact primitive this call produces -- and every run of this suite
-		// enters a system context dozens of times, so publishing an audit
-		// event per call would drown the bus in noise an audit reader could
-		// never act on. Audited wrapper for test-support code is noise, not
-		// accountability; the ruling stands for any test-support caller that
-		// states the same rationale in place.
+		// The bare pkgcore primitive is deliberately used here rather than
+		// tenancy.WithSystemContext, the audited wrapper this package could
+		// import (jobs sits above tenancy in the module graph). This is
+		// test-support code whose whole job is to exercise a queue
+		// implementation's system-context handling -- each implementation
+		// reads pkgcore.SystemReasonFromContext, the exact primitive this
+		// call produces -- and every run of this suite enters a system
+		// context dozens of times, so publishing an audit event per call
+		// would drown the bus in noise an audit reader could never act on:
+		// the audited wrapper is noise, not accountability, for
+		// test-support code; the same rationale applies to any test-support
+		// caller that states it in place.
 		pkgcore.RegisterSystemPurpose(conformSystemPurpose)
 		sysCtx, err := pkgcore.WithSystemContext(context.Background(), pkgcore.SystemReason{Actor: "queuetest", Purpose: conformSystemPurpose})
 		if err != nil {
