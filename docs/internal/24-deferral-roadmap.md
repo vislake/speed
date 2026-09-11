@@ -36,7 +36,7 @@
 |---|---|---|
 | 1. dbkit 软删模型 Update 清标缺陷 | 实现(不等真实调用方) | 普查行 109 闭。`907e864a`(fix(dbkit): keep a stale model's Update from clearing a row's soft-delete mark),错误码索引随行 `d7c9a8b3` |
 | 2. GeoIP 许可证审查(MaxMind GeoLite2 条款) | ★加排 | 未实现;触发行=异常登录检测(新设备/新地区/不可能位移)整族。见第 4.1 节 |
-| 3. SMS 厂商适配器 | 实现 | 普查行 143、166 闭。`e10d3d49`(feat(authn): add Aliyun, Tencent Cloud and Twilio SMS provider adapters),行文修复随行 `3e1933f6`。真网关验收残余:三适配器对真实账号的验收以 `ALIYUN_SMS_*`/`TENCENT_SMS_*`/`TWILIO_SMS_*` 环境变量门控的集成 leg 形式存在(缺凭据自跳过),见 go/pkgcore/AGENTS.md "SMS carrier adapters"(适配器已随 SMS 模块升格自 go/authn/sms 移入 pkgcore/sms,`87364ed4`;authn 侧记录见其 "The SMS seam is pkgcore's" 节) |
+| 3. SMS 厂商适配器 | 实现 | 普查行 143、166 闭。`e10d3d49`(feat(authn): add Aliyun, Tencent Cloud and Twilio SMS provider adapters),行文修复随行 `3e1933f6`。真网关验收残余:三适配器对真实账号的验收以 `ALIYUN_SMS_*`/`TENCENT_SMS_*`/`TWILIO_SMS_*` 环境变量门控的集成 leg 形式存在(缺凭据自跳过),见 go/pkgcore/AGENTS.md "SMS carrier adapters"(适配器已随 SMS 模块升格自 go/authn/sms 移入 pkgcore/sms,`87364ed4`;authn 侧记录见其 "The SMS module is pkgcore's" 节) |
 | 4. X.509 层真实消费方 | 实现 | 普查行 174 闭。`66c81ee9`(CAService.SignCertificate 签发)+ `e0f4e691`(reference-app 对 AI 输出做链验证公证并门控公开分享),残余记录 `65cd4362`、`d2e991ee`。到期驱动续期机制本身仍开,见第 7 章普查行 8、121 |
 | 5. 基准套件 | 实现 | 普查行 86、179 的 benchmark 半边闭。`f09dc0db`(jobs)、`c88a26ab`(authn)、`0c8d858f`(notification)、`f89c4e20`(rbac),nightly GATE 文本随行 `78dbe0e7`、doc 20 记录 `cde7c11d`。千级组织树压测仍缺(普查行 74、88,归属 org 侧) |
 
