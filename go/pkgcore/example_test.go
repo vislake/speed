@@ -669,3 +669,26 @@ func ExampleMountedRoute_access() {
 	// /api/v1/notes true false notes:read
 	// /api/v1/config/public true true true
 }
+
+// ExampleGetOptional shows the optional-dependency reading of the by-type
+// context: an absent value is a fact the caller branches on -- the
+// dependency's documented default applies -- never an error, while a true
+// lookup error is the caller's to handle, conventionally by propagating it.
+// Get stays the reading for a required dependency, where absence is itself
+// the error.
+func ExampleGetOptional() {
+	reg := pkgcore.NewComponentRegistry()
+
+	// The composition wired no mailer: absence, reported as a fact.
+	mailer, ok, err := pkgcore.GetOptional[pkgcore.Mailer](reg)
+	fmt.Println(mailer != nil, ok, err)
+
+	// A component construction put a console mailer: the value resolves.
+	reg.Put(pkgcore.NewConsoleMailer())
+	mailer, ok, err = pkgcore.GetOptional[pkgcore.Mailer](reg)
+	fmt.Println(mailer != nil, ok, err)
+
+	// Output:
+	// false false <nil>
+	// true true <nil>
+}

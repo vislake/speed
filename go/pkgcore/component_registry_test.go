@@ -165,6 +165,40 @@ func TestPutGetStructuralMatch(t *testing.T) {
 	assertPanicContains(t, "Put requires a non-nil value", func() { reg.Put(nil) })
 }
 
+func TestGetOptional(t *testing.T) {
+	reg := NewComponentRegistry()
+
+	// One match: a concrete pointer, the typical optional dependency.
+	put := &compTokenA{}
+	reg.Put(put)
+	if v, ok, err := GetOptional[*compTokenA](reg); err != nil || !ok || v != put {
+		t.Fatalf("GetOptional[*compTokenA] = (%v, %v, %v), want the put value with ok", v, ok, err)
+	}
+
+	// Zero matches: absence is (zero, false, nil), never an error -- the
+	// optional dependency's documented default is the caller's to apply.
+	if v, ok, err := GetOptional[*compTokenB](reg); v != nil || ok || err != nil {
+		t.Fatalf("GetOptional[*compTokenB] = (%v, %v, %v), want (nil, false, nil)", v, ok, err)
+	}
+
+	// A non-pointer target reports its type's zero value on absence, not nil.
+	if v, ok, err := GetOptional[compTokenA](reg); v != (compTokenA{}) || ok || err != nil {
+		t.Fatalf("GetOptional[compTokenA] = (%v, %v, %v), want the zero struct with ok false", v, ok, err)
+	}
+
+	// Several matches: a true error, returned as-is rather than folded
+	// into absence, so a caller that propagates fails the wiring loudly.
+	reg.Put(&compTokenB{})
+	reg.Put(&compTokenB{})
+	v, ok, err := GetOptional[*compTokenB](reg)
+	if v != nil || ok || !errors.Is(err, ErrAmbiguousProvider) {
+		t.Fatalf("GetOptional for two values = (%v, %v, %v), want (nil, false, ErrAmbiguousProvider)", v, ok, err)
+	}
+	if !strings.Contains(err.Error(), "pkgcore.compTokenB") {
+		t.Errorf("ambiguity error %q does not list the values", err)
+	}
+}
+
 func TestComponentRegistryRegisterAndIsolation(t *testing.T) {
 	a := Component{Name: "test.isolated.a", New: func(context.Context, *ComponentRegistry, ComponentConfig) (any, error) { return &compTokenA{}, nil }}
 	reg := newTestRegistry(t, a)

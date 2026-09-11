@@ -347,6 +347,40 @@ func Get[T any](r *ComponentRegistry) (T, error) {
 	}
 }
 
+// GetOptional returns the value in the by-type context that T addresses,
+// reporting absence as a fact rather than as an error. No put value
+// assignable to T yields (zero, false, nil); exactly one yields the value
+// with ok true; every other error Get can report -- an error wrapping
+// ErrAmbiguousProvider when several put values are assignable, or the
+// single-match conversion failure -- is returned as-is with ok false.
+//
+// It is the reading for an optional dependency, whose absence has a
+// documented default:
+//
+//	mailer, ok, err := pkgcore.GetOptional[pkgcore.Mailer](reg)
+//	if err != nil {
+//		return nil, err
+//	}
+//	if ok {
+//		opts = append(opts, WithMailer(mailer))
+//	}
+//
+// The caller branches on ok -- the absent case is a legitimate
+// configuration, never an error -- while a true error keeps whatever the
+// caller's own contract says, conventionally propagation. Get stays the
+// reading for a required dependency, where absence is itself the error.
+func GetOptional[T any](r *ComponentRegistry) (T, bool, error) {
+	var zero T
+	v, err := Get[T](r)
+	if err != nil {
+		if errors.Is(err, ErrMissingRequirement) {
+			return zero, false, nil
+		}
+		return zero, false, err
+	}
+	return v, true, nil
+}
+
 // Prepare runs the first stage: the assembly reads the composition
 // configuration the host put, parses it strictly, expands the selection
 // (including auto-pull of uniquely-available providers unless strict is set),
