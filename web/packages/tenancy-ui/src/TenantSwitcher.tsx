@@ -126,7 +126,8 @@ import MenuItem from '@mui/material/MenuItem'
 import Typography from '@mui/material/Typography'
 import type { AuthSession } from '@speed/auth-core'
 import { isOperationSuperseded } from '@speed/auth-core'
-import { errorCodeOf, InlineError } from './internal/inline-error.js'
+import { errorCodeOf } from '@speed/ui-kit'
+import { InlineError } from './internal/inline-error.js'
 import { useTenancyUiTranslation } from './internal/translation.js'
 
 /** One switchable tenant: the id the switch is called with, and the name

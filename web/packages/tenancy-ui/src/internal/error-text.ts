@@ -48,6 +48,11 @@
  * authored texts, recorded in the suite's SWITCH_AUTHORED_TEXTS.
  */
 
+import {
+  CLIENT_TRANSPORT_ERROR_CODES,
+  SESSION_LIFECYCLE_ERROR_CODES,
+  createErrorTextResolver,
+} from '@speed/i18n'
 import { useTenancyUiTranslation } from './translation.js'
 
 /**
@@ -76,18 +81,12 @@ export const ERROR_TEXT_CODES = [
   // with either, so these texts are authored, not copied.
   'authn.authentication_required',
   'authn.token_invalid',
-  // authn: session lifecycle -- a switch whose session dies surfaces as
-  // one of these (refused refresh, revoked session), and TenantSwitcher
-  // renders the session's answer for the retryable failure.
-  'authn.session_not_found',
-  'authn.session_revoked',
-  'authn.refresh_token_invalid',
-  'authn.refresh_token_reused',
-  'authn.token_expired',
-  // Transport-level failures of the api-client contract.
-  'client.network',
-  'client.timeout',
-  'client.protocol',
+  // The shared families (see @speed/i18n): a switch whose session dies
+  // surfaces as a session-lifecycle code (refused refresh, revoked
+  // session), and every caller here talks through the api-client's
+  // transport.
+  ...SESSION_LIFECYCLE_ERROR_CODES,
+  ...CLIENT_TRANSPORT_ERROR_CODES,
 ] as const
 
 const KNOWN_CODES = new Set<string>(ERROR_TEXT_CODES)
@@ -98,6 +97,5 @@ const KNOWN_CODES = new Set<string>(ERROR_TEXT_CODES)
  */
 export function useTenancyUiErrorText(): (code: string) => string {
   const { t } = useTenancyUiTranslation()
-  return (code: string) =>
-    t(KNOWN_CODES.has(code) ? `errors.${code}` : 'errors.unknown')
+  return createErrorTextResolver(t, KNOWN_CODES)
 }
