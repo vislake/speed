@@ -25,8 +25,10 @@ import (
 // implementations (this one and go/jobs/queue/asynq's, proven by
 // go/jobs/integration_test's own TestAsynqQueue_ConformsToQueueContract)
 // agree on Enqueue/Get/Cancel/idempotency/retry/dead-letter semantics.
-// The five contract subtests (enqueue_get_happy_path,
+// The seven contract subtests (enqueue_get_happy_path,
 // get_tenant_isolation, cancel_tenant_isolation_and_idempotency,
+// idempotency_concurrent_enqueue_dedupes_to_one_handle_call,
+// idempotency_same_key_across_priorities_dedupes_to_first_job,
 // retry_succeeds_after_transient_failures,
 // dead_letter_exhausts_retries_and_invokes_failure_hook) are the single
 // home of the portable contract, run against both implementations.
