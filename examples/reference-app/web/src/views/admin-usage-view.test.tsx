@@ -2,7 +2,8 @@
  * AdminUsageView contract: the platform's usage/billing dashboard gates
  * on the dashboard read it drives and renders what the server answers
  * -- one section per tenant in go/admin's ledger, from the module's own
- * operator-facing route (admin-api.ts -- GET /api/v1/admin/usage-summary,
+ * operator-facing route (the generated adminGetUsageSummary hook -- GET
+ * /api/v1/admin/usage-summary,
  * mounted behind this app's admin route guard like the tenant ledger).
  * The demo server serves the dashboard only to the platform-staff shape
  * (a principal scoped to the system pseudo-tenant,

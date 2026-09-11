@@ -117,8 +117,9 @@
  * job's terminal outcome settles the row in place (confirmed on
  * success, refunded when the simulateJobOutcome option scripts a
  * dead_letter generation -- see the two options' docs), plus the team
- * surface's calls through the app's hand-written org accessor
- * (org-api.ts) and the host composition that names its members:
+ * surface's org calls (the generated orgListInvitations, orgListNodes
+ * and orgCreateInvitation operations) and the host composition that
+ * names its members:
  * GET /api/v1/org/invitations (200, the tenant's pending
  * invitations, newest first, stateful from a create),
  * GET /api/v1/org/nodes (200, the tenant's single root node, the
@@ -147,8 +148,9 @@
  * operator-facing route) is served to the platform-staff shape above
  * and refused with the rbac gate's 403 to every other principal,
  * exactly like the real admin route guard. The usage/billing dashboard
- * read (GET /api/v1/admin/usage-summary, admin-api.ts's second
- * accessor) is served and refused under that identical gate.
+ * read (GET /api/v1/admin/usage-summary, the generated
+ * adminGetUsageSummary operation) is served and refused under that
+ * identical gate.
  * GET /api/v1/org/members
  * itself remains
  * served for the org surface's own wire-shape fidelity. The notes
@@ -567,7 +569,8 @@ export interface DemoServerOptions {
   }
   /** The GET /api/v1/admin/tenants ledger rows as first served -- the
    * platform's tenant ledger go/admin's operator-facing route answers
-   * (admin-api.ts). Only a principal scoped to the system pseudo-tenant
+   * (the generated adminListTenants hook). Only a principal scoped to
+   * the system pseudo-tenant
    * (SYSTEM_PSEUDO_TENANT_ID -- the demo-server's platform-staff shape,
    * scripted by signing the configured account into the 'system'
    * tenant) is served the ledger; any other principal's read answers
@@ -579,7 +582,8 @@ export interface DemoServerOptions {
   readonly initialAdminTenants?: readonly AdminTenant[]
   /** The GET /api/v1/admin/usage-summary rows as first served -- the
    * platform's usage/billing dashboard go/admin's operator-facing route
-   * answers (admin-api.ts), one row per tenant in the ledger. Only a
+   * answers (the generated adminGetUsageSummary hook), one row per
+   * tenant in the ledger. Only a
    * principal scoped to the system pseudo-tenant (SYSTEM_PSEUDO_TENANT_ID
    * -- the demo-server's platform-staff shape) is served the dashboard;
    * any other principal's read answers the rbac gate's 403, the answer
@@ -1577,7 +1581,8 @@ export function demoServer(options: DemoServerOptions = {}): RealResponder {
         return jsonResponse(201, created)
       }
       case 'GET /api/v1/admin/tenants': {
-        // The platform's tenant ledger (admin-api.ts), mirroring
+        // The platform's tenant ledger (the generated
+        // adminListTenants hook), mirroring
         // go/admin's own operator-facing route behind this app's admin
         // route guard (internal/app/demo/demo_admin.go's guardAdminRoute).
         // The bearer is resolved BEFORE the gate answers, like every
@@ -1596,7 +1601,8 @@ export function demoServer(options: DemoServerOptions = {}): RealResponder {
         return jsonResponse(200, { tenants: initialAdminTenants })
       }
       case 'GET /api/v1/admin/usage-summary': {
-        // The platform's usage/billing dashboard (admin-api.ts),
+        // The platform's usage/billing dashboard (the generated
+        // adminGetUsageSummary hook),
         // mirroring go/admin's own operator-facing route behind the
         // same admin route guard as the ledger above -- served and
         // refused under the identical platform-staff gate.

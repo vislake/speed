@@ -1,8 +1,9 @@
 /**
  * AdminView contract: the administration surface gates on the ledger
  * read it drives and renders what the server answers -- the platform's
- * tenant ledger from go/admin's own operator-facing route (admin-api.ts
- * -- GET /api/v1/admin/tenants, mounted behind this app's admin route
+ * tenant ledger from go/admin's own operator-facing route (the
+ * generated adminListTenants hook -- GET /api/v1/admin/tenants, mounted
+ * behind this app's admin route
  * guard, internal/app/demo/demo_admin.go). The demo server serves the ledger
  * only to the platform-staff shape (a principal scoped to the system
  * pseudo-tenant, SYSTEM_PSEUDO_TENANT_ID) and answers the rbac gate's

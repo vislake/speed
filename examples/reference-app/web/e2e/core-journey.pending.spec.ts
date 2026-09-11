@@ -249,8 +249,8 @@ test.describe('the core journey', { tag: '@budget' }, () => {
 
       // AGAIN, because a patient opens the link more than once: from the
       // message when it arrives, then later to show someone at home.
-      // This app mints its patient links with no view cap (share-api.ts
-      // sends only resourceRef), so a second visit is supposed to work
+      // This app mints its patient links with no view cap (the share
+      // create sends only resourceRef), so a second visit is supposed to work
       // and does; go/sharing counts a served view against a grant's cap
       // only when the grant carries one, so the repeated-open journey
       // stays pinned against that accounting rather than assumed.
