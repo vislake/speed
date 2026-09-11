@@ -57,7 +57,7 @@ const SystemPurposeSystemWrite pkgcore.SystemPurpose = "config.system_write"
 // Register declares only the schema-less surfaces: the two endpoints, its
 // one event type and its one audit action. The configuration schema and
 // feature flags it serves come from the other modules' registrations, and
-// are snapshotted by Attach, after Bootstrap has finished registering
+// are snapshotted by Attach, after the assembly has finished registering
 // every module.
 type Module struct {
 	// db is the *gorm.DB the configs table lives in. It is opened and
@@ -162,7 +162,7 @@ func withAfterRefreshLockForTest(hook func()) Option {
 
 // NewModule returns a Module whose configs table lives in db. Constructing
 // a Module performs no I/O -- opening and migrating db is the caller's
-// responsibility, done once at startup before Bootstrap ever calls
+// responsibility, done once at startup before the assembly ever calls
 // Register (see examples/reference-app/internal/app's wiring for the exact
 // sequence). db must not be nil by the time Attach runs; Register itself
 // never touches it (per the module contract's "declares, never performs

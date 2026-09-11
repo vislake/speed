@@ -131,7 +131,7 @@ func openConfigPostgres(t *testing.T, ctx context.Context, pgContainer *postgres
 // attachConfigService folds pgItems and pgFlags into a fresh registry over
 // the given bus and returns the Service Attach produced. Register's one
 // process-global side effect is replicated up front -- the module's system
-// purpose is declared -- mirroring what a real Bootstrap performs before
+// purpose is declared -- mirroring what the real assembly performs before
 // Attach, so systemWriteContext works even in a test that never registers
 // a module (none do, but the helper stands alone).
 //

@@ -1,17 +1,17 @@
 // Package config implements the dynamic-config module: the schema-driven
 // runtime configuration store that every module's ConfigItem and
-// FeatureFlag declarations land in after Bootstrap, served through
+// FeatureFlag declarations land in during the assembly, served through
 // typed reads, scoped writes, change propagation and two unauthenticated
-// HTTP endpoints. The module's contracts, the post-Bootstrap attach seam
+// HTTP endpoints. The module's contracts, the post-registration attach seam
 // and its known limitations are documented in go/config/AGENTS.md.
 //
 // The module's shape, in one pass:
 //
 //   - Modules declare their configuration schema (items via
 //     pkgcore.ConfigSchemaRegistrar, flags via pkgcore.FeatureRegistrar)
-//     during Register. The runtime schema is only complete once Bootstrap
-//     has registered every module, so config.NewModule's host calls
-//     (*Module).Attach on the booted Registry right after Bootstrap and
+//     during Register. The runtime schema is only complete once the
+//     assembly has registered every module, so config.NewModule's host calls
+//     (*Module).Attach on the registry right after that and
 //     receives the Service back. Routes are mounted during Register and
 //     resolve the attached Service lazily; a request served in the window
 //     between Register and Attach reports ErrServiceNotAttached rather

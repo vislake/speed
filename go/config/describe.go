@@ -67,7 +67,8 @@ type ConfigItemDescriptor struct {
 
 	// FlagDependsOn holds a feature flag's DependsOn keys (empty for a
 	// plain ConfigItem) -- the dependency graph pkgcore.ValidateFeatureGraph
-	// already proved acyclic and fully resolved at Bootstrap.
+	// already proved acyclic and fully resolved when the assembly's Init
+	// stage closed.
 	FlagDependsOn []string
 }
 

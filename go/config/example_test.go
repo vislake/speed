@@ -317,7 +317,7 @@ func ExampleModule_Handle() {
 	}
 
 	// A seam that reads configuration is wired with the handle here --
-	// before Bootstrap, when no Service exists yet.
+	// before Attach, when no Service exists yet.
 	handle := configModule.Handle()
 	if _, err = handle.IsEnabled(ctx, "brand.custom_theme"); err != nil {
 		appErr, _ := apperr.As(err)

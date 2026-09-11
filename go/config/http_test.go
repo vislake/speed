@@ -425,7 +425,7 @@ func TestHTTP_MethodGating_AdmitsGetAndHeadOnly(t *testing.T) {
 
 func TestHTTP_Endpoints_ReportTheServiceNotAttachedWindow(t *testing.T) {
 	// A module that registered but never attached -- the wiring gap between
-	// the two Bootstrap/Attach steps -- must answer with the structured
+	// the Register and Attach steps -- must answer with the structured
 	// internal error, not a nil-pointer crash.
 	reg := componenttest.NewRegistry()
 	module := NewModule(openHTTPTestDB(t), WithPollInterval(0))

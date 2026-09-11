@@ -180,10 +180,10 @@ func TestDeclareModules_FailsOnAnUnresolvedFlagDependency(t *testing.T) {
 
 	_, err := componenttest.DeclareModules(configModule, host)
 	if err == nil {
-		t.Fatal("Bootstrap succeeded with an unresolved flag dependency; the graph must fail closed")
+		t.Fatal("assembly succeeded with an unresolved flag dependency; the graph must fail closed")
 	}
 	if !errors.Is(err, pkgcore.ErrUnresolvedFeatureDependency) {
-		t.Fatalf("Bootstrap error = %v, want one wrapping %v", err, pkgcore.ErrUnresolvedFeatureDependency)
+		t.Fatalf("assembly error = %v, want one wrapping %v", err, pkgcore.ErrUnresolvedFeatureDependency)
 	}
 }
 

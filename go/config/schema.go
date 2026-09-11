@@ -17,7 +17,7 @@ const itemTypeBool = "bool"
 // declared by its owning module, or a FeatureFlag folded into the same
 // shape (a bool item defaulting to the flag's Default, marked isFlag). The
 // snapshot is built once, at Attach, from what every module registered
-// during Bootstrap (see buildSchema).
+// during the assembly's Init stage (see buildSchema).
 type schemaItem struct {
 	// key is the configuration key, shared between items and flags.
 	key string

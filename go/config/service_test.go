@@ -129,7 +129,7 @@ func buildTestCipher(t *testing.T) *dbkit.Cipher {
 // and returns the Service Attach produced, plus the bus the registry was
 // built on (so tests can capture events). Register's one process-global
 // side effect is replicated here -- the module's system purpose is declared
-// -- mirroring what a real Bootstrap performs before Attach.
+// -- mirroring what the real assembly performs before Attach.
 func attachServiceForTest(t *testing.T, db *gorm.DB, cipher *dbkit.Cipher, items []pkgcore.ConfigItem, flags []pkgcore.FeatureFlag, opts ...Option) (*Service, pkgcore.EventBus) {
 	t.Helper()
 	pkgcore.RegisterSystemPurpose(SystemPurposeSystemWrite)
