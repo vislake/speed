@@ -8,7 +8,7 @@ docs/site/ public documentation site -- English-first, with zh-CN
 localization directories added by need -- are the exceptions). This
 script is the local-run discipline check; CI runs the same check.
 
-Scan semantics, mirroring go/ratelimit/no_cjk_characters_test.go (the module-level
+Scan semantics, mirroring go/ratelimit/unittest/no_cjk_characters_test.go (the module-level
 precedent):
 
 * Go files (.go): comments only. A single-pass lexer extracts comment text
@@ -133,7 +133,7 @@ CARVED_SUBTREES = frozenset({"docs/internal", "docs/site"})
 NON_SCANNED_DIR_PATHS = frozenset({".claude/worktrees"})
 
 # Han-script rune ranges, byte-for-byte what Go's unicode.Han classifies
-# (go/ratelimit/no_cjk_characters_test.go calls unicode.Is(unicode.Han, r)),
+# (go/ratelimit/unittest/no_cjk_characters_test.go calls unicode.Is(unicode.Han, r)),
 # transcribed from the Go 1.26.1 toolchain's unicode/tables.go _Han table
 # and verified code point for code point against unicode.Is: CJK radicals
 # and Kangxi radicals; the Han members of the CJK Symbols and Punctuation
