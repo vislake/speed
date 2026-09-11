@@ -180,6 +180,8 @@ func TestComponentConfigDecodeRejectsUnfitValues(t *testing.T) {
 	}{
 		{"text is not an integer", "retries", "abc", "not a valid integer"},
 		{"fractional float into int", "retries", 1.5, "not a whole number"},
+		{"float above the int range", "retries", 1e30, "does not fit"},
+		{"float below the int range", "retries", -1e30, "does not fit"},
 		{"text is not a duration", "timeout", "soon", "not a valid duration"},
 		{"text is not a bool", "enabled", "maybe", "not a valid bool"},
 		{"map into string", "host", map[string]any{"a": 1}, "cannot be assigned"},
@@ -198,6 +200,56 @@ func TestComponentConfigDecodeRejectsUnfitValues(t *testing.T) {
 				t.Errorf("error %q does not mention %q", err, tc.want)
 			}
 		})
+	}
+}
+
+// TestComponentConfigRejectsOutOfRangeFloats pins the float-to-integer range
+// boundary: a float outside the destination integer range is refused before
+// the conversion, because Go leaves an out-of-range float-to-integer
+// conversion implementation-defined -- a check run after the conversion
+// would inspect the conversion's garbage instead of the configured value and
+// accept it silently. The exact float64 boundaries of each range still
+// convert: -2^63 and 2^62 for int64, 2^63 for uint64, while 2^63 (one past
+// int64's maximum) does not fit int64 and 2^64 does not fit uint64.
+func TestComponentConfigRejectsOutOfRangeFloats(t *testing.T) {
+	cfg := NewComponentConfig(map[string]any{
+		"too_big_int":   1e30,
+		"too_small_int": -1e30,
+		"too_big_uint":  1e30,
+		"int_min":       float64(-1 << 63),
+		"int_safe":      float64(1 << 62),
+		"int_max_next":  float64(1 << 63),
+		"uint_half":     float64(1 << 63),
+		"uint_max_next": float64(1 << 64),
+	})
+
+	rejected := []struct {
+		name string
+		call func() error
+	}{
+		{"int64 above the range", func() error { _, err := Value[int64](cfg, "too_big_int"); return err }},
+		{"int64 below the range", func() error { _, err := Value[int64](cfg, "too_small_int"); return err }},
+		{"uint64 above the range", func() error { _, err := Value[uint64](cfg, "too_big_uint"); return err }},
+		{"int64 one past its maximum", func() error { _, err := Value[int64](cfg, "int_max_next"); return err }},
+		{"uint64 one past its maximum", func() error { _, err := Value[uint64](cfg, "uint_max_next"); return err }},
+	}
+	for _, tc := range rejected {
+		t.Run(tc.name, func(t *testing.T) {
+			err := tc.call()
+			if err == nil || !strings.Contains(err.Error(), "does not fit") {
+				t.Errorf("Value = %v, want a does-not-fit error", err)
+			}
+		})
+	}
+
+	if v, err := Value[int64](cfg, "int_min"); err != nil || v != -1<<63 {
+		t.Errorf("Value[int64] of -2^63 = (%v, %v), want the value: -2^63 is exactly the minimum int64", v, err)
+	}
+	if v, err := Value[int64](cfg, "int_safe"); err != nil || v != 1<<62 {
+		t.Errorf("Value[int64] of 2^62 = (%v, %v), want the value", v, err)
+	}
+	if v, err := Value[uint64](cfg, "uint_half"); err != nil || v != 1<<63 {
+		t.Errorf("Value[uint64] of 2^63 = (%v, %v), want the value", v, err)
 	}
 }
 

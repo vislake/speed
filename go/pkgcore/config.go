@@ -330,6 +330,18 @@ func assignConfigValue(dst reflect.Value, raw any, path string) error {
 // durationType is the standard duration shape a config value converts into.
 var durationType = reflect.TypeOf(time.Duration(0))
 
+// The integer ranges' exact float64 boundaries, for the float-to-integer
+// conversions: a float outside a range must be refused BEFORE the conversion,
+// because Go leaves an out-of-range float-to-integer conversion
+// implementation-defined -- a range check run after the conversion inspects a
+// value the conversion already replaced. 2^63 and 2^64 are powers of two, so
+// these constants are exact and the comparisons are exact.
+const (
+	minInt64Float  = float64(-1 << 63) // exactly -2^63, the minimum int64
+	maxInt64Float  = float64(1 << 63)  // exactly 2^63, one past the maximum int64
+	maxUint64Float = float64(1 << 64)  // exactly 2^64, one past the maximum uint64
+)
+
 // assignStruct assigns raw to a struct field: a mapping decodes into the
 // struct's fields strictly, a string parses through encoding.TextUnmarshaler
 // when the struct implements it (time.Time does), and anything else is
@@ -444,6 +456,9 @@ func assignInt(dst reflect.Value, rawValue reflect.Value, path string) error {
 		if value != math.Trunc(value) {
 			return fmt.Errorf("pkgcore: config key %q: value %v is not a whole number", path, value)
 		}
+		if value < minInt64Float || value >= maxInt64Float {
+			return overflowError(path, rawValue.Type(), dst.Type())
+		}
 		if dst.OverflowInt(int64(value)) {
 			return overflowError(path, rawValue.Type(), dst.Type())
 		}
@@ -491,6 +506,9 @@ func assignUint(dst reflect.Value, rawValue reflect.Value, path string) error {
 		value := rawValue.Float()
 		if value != math.Trunc(value) || value < 0 {
 			return fmt.Errorf("pkgcore: config key %q: value %v is not a whole non-negative number", path, value)
+		}
+		if value >= maxUint64Float {
+			return overflowError(path, rawValue.Type(), dst.Type())
 		}
 		if dst.OverflowUint(uint64(value)) {
 			return overflowError(path, rawValue.Type(), dst.Type())
