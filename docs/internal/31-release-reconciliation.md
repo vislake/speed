@@ -130,7 +130,7 @@
 ### 5.5. pkgcore 新增可选依赖读取 `GetOptional`（非破坏，新增面登记）
 
 - **面**：`go/pkgcore` 新增导出函数 `GetOptional[T any](r *ComponentRegistry) (T, bool, error)`——by-type 上下文的可选依赖读取：无匹配 put 值返回 `(zero, false, nil)`（缺失是事实、不是错误），恰一个匹配返回值与 `true`，其余错误（`ErrAmbiguousProvider` 包装、单匹配的转换失败）原样带回。既有导出符号与 `Get` 语义均无变化。
-- **消费者影响**：无破坏、无升级动作；可选依赖消费点可改调该读取（缺失走 `ok == false` 分支、其余错误按调用方自身契约处理），与既有"缺失即跳过、其余错误上抛"写法行为一致。本轮已收敛 rbac/org/config/billing/pki/authn 六个模块组件构造与 go/app 组合配置读取共 12 处；`err == nil` 形态的"任何错误都按缺失"探测点（含 examples 与 saasctl 模板）语义不同——迁移会把歧义错误由静默缺失改为上抛——维持原样。
+- **消费者影响**：无破坏、无升级动作；可选依赖消费点可改调该读取（缺失走 `ok == false` 分支、其余错误按调用方自身契约处理），与既有"缺失即跳过、其余错误上抛"写法行为一致。本轮已收敛 rbac/org/config/billing/pki/authn 六个模块组件构造与 go/app 组合配置读取共 12 处；`err == nil` 形态的"任何错误都按缺失"探测点（含 examples 与 saasctl 模板）当时维持原样，其后经语义裁定完成迁移，行为收紧见 §5.8。
 - **登记理由**：公共符号面新增，按"宿主可见面变更须带 `!BREAKING` footer 或登记本清单"的纪律登记（本轮为纯新增，不带 footer）。
 - **出处**：`0d9d3070`（`refactor(pkgcore): add the optional-dependency reading of the by-type context`）+ `0d8d1d6e`（`refactor(rbac,org,config,billing,pki,authn,app): read optional dependencies through GetOptional`）。
 
@@ -147,6 +147,16 @@
 - **消费者影响**：无破坏、无升级动作；此前把平台公钥证书的内容填进 `alipay_public_key_pem` 会在启动时解析失败，现在按证书内公钥正常启用（与 Alipay 证书模式下"支付宝公钥证书"即平台公钥的事实一致）。
 - **登记理由**：宿主可见面（配置接受面）的行为放宽，按"宿主可见面变更须带 `!BREAKING` footer 或登记本清单"的纪律登记（非破坏，不带 footer）。
 - **出处**：`52c96731`（`refactor(billing/gateway): share the provider helpers in the gateway root`）。
+
+### 5.8. 可选依赖读取全面改走 `GetOptional` 错误传播 + 交付歧义在 plan 期拒绝（行为收紧）
+
+- **面**：两处配套的行为收紧。
+  1. **读取侧**：`err == nil` 形态的"任何错误都按缺失"探测点全部迁移为 `GetOptional` 三值读法——缺失（not-found）跳过不变，`ErrAmbiguousProvider` 等真错误改为构造期上抛（原样或按站点既有包装）。迁移面共 28 处：sharing/ai-gateway/notification/integration/admin/compliance/jobs 七模块组件构造 16 处、saasctl 四变体模板的 SMSSender 接缝 4 处、reference-app host_wiring 7 处与 notes 1 处（含两处双取站点：ai-gateway 与 host_wiring 的 queue+storage）。
+  2. **装配校验侧**：pkgcore 在 plan 期新增"同一单值 token 被多个选中组件交付 → 拒绝"校验（29 号文 §6.1 歧义规则的全选择集形态，原实现只在某消费方 `Requires` 锚定该 token 时才触发），报 `ErrAmbiguousProvider` 并列两个组件名，提示取消其一。
+- **消费者影响**：误装配（同一 token 被两个选中组件同时交付，或宿主对同一 token 重复 `Put`）此前被静默按缺失处理——可选依赖不接、pkgcore sugar 读法取 nil；现在**构造期**（读点）与 **plan 期**（声明面）分别显式失败，即为"误装配从静默按缺失变为装配期失败"。正确装配的组合零行为变化：缺失仍走各站点文档化默认、命中仍同值。宿主直接 `Put` 的重复值不在组件声明面内、plan 不可见，仍为读时条件；pkgcore 五个 sugar 读法（`KVStore()`/`Mailer()`/`ObjectStore()`/`Locales()`/`EventBus()`）的 nil-for-absent 公共契约不变。
+- **替代路径**：无（行为收紧）；按错误信息取消其一（组件选择或宿主 Put）即可修复。
+- **登记理由**：宿主可见的装配契约行为收紧（此前可启动的误装配组合现在拒绝启动），按"宿主可见面变更须带 `!BREAKING` footer 或登记本清单"的纪律**双轨**登记（四个收紧提交均带 `!BREAKING` footer，先例同 §5.2）。
+- **出处**：`da8d6c62`（`fix(pkgcore)!: refuse a token delivered by two selected components`）+ `2ae8a125`（`refactor(sharing,ai-gateway,notification,integration,admin,compliance,jobs)!: propagate optional dependency read errors`）+ `cfa6f7e1`（`refactor(saasctl)!: propagate the optional SMS sender read in the templates`）+ `3b719310`（`refactor(reference-app)!: propagate optional dependency read errors in host wiring`）。
 
 ## 6. D 组：configrefgen 工具内部迁移（工具面，非宿主面）
 
