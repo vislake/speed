@@ -7,14 +7,16 @@
  * which must be added as its own option rather than silently displaying
  * the wrong one); a language change PATCHes the account FIRST and only a
  * confirmed write switches the instance (the manual slot and the account
- * move together) -- and a refused write renders the two-line failure
- * alert (save line plus the server's code text) with the instance left
- * on the old language; a timezone change and a timezone CLEAR (the
- * "not chosen" choice, whose value is the empty string) PATCH the field;
- * and a settled load that delivered no data renders the EmptyState error
- * variant with a retry that refetches. Every write's request body is
- * pinned, so the PATCH contract (partial update, empty string clears) is
- * asserted from the wire up.
+ * move together), while a language CLEAR PATCHes the empty string,
+ * leaves the device language where it was -- the empty string is not a
+ * language to switch to -- and still refetches; a refused write renders
+ * the two-line failure alert (save line plus the server's code text)
+ * with the instance left on the old language; a timezone change and a
+ * timezone CLEAR (the "not chosen" choice, whose value is the empty
+ * string) PATCH the field; and a settled load that delivered no data
+ * renders the EmptyState error variant with a retry that refetches.
+ * Every write's request body is pinned, so the PATCH contract (partial
+ * update, empty string clears) is asserted from the wire up.
  */
 
 import { describe, expect, it, vi } from 'vitest'
@@ -161,6 +163,42 @@ describe('PreferencesSection', () => {
     expect(
       await screen.findByRole('heading', { name: enUS.preferences.title }),
     ).toBeTruthy()
+  })
+
+  it('clears the language preference without switching the device language', async () => {
+    const { respond, stored } = makePreferencesResponder({ locale: 'en-US' })
+    const { rig, i18n } = await mountSection(respond)
+
+    const language = await screen.findByRole('combobox', {
+      name: zhCN.preferences.language.label,
+    })
+    expect(language).toHaveTextContent(languageLabel('en-US', 'zh-CN'))
+
+    chooseOption(language, zhCN.preferences.language.notChosen)
+
+    // The clear reaches the account as the empty string, and the
+    // confirmed write still refetches the stored pair.
+    await waitFor(() => expect(stored.locale).toBe(''))
+    const patch = rig.calls.find(
+      (call) => call.method === 'PATCH' && call.path === PREFERENCES_PATH,
+    )
+    expect(patch?.body).toEqual({ locale: '' })
+    await waitFor(() =>
+      expect(
+        rig.calls.filter(
+          (call) => call.method === 'GET' && call.path === PREFERENCES_PATH,
+        ),
+      ).toHaveLength(2),
+    )
+
+    // No failure alert renders and the device keeps its current
+    // language: the empty string is not a language to switch to, so a
+    // successful clear must not be reported as a failed save.
+    expect(screen.queryByRole('alert')).toBeNull()
+    expect(i18n.language).toBe('zh-CN')
+    await waitFor(() =>
+      expect(language).toHaveTextContent(zhCN.preferences.language.notChosen),
+    )
   })
 
   it('renders the two-line failure alert and does not switch when the language write is refused', async () => {

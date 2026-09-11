@@ -14,6 +14,10 @@
  *    success, runs the persisting switchLanguage -- the settings switch
  *    lands the decision on the device (the manual-choice slot) and the
  *    account together, which is the one place both are meant to move.
+ *    Clearing the preference (the "not chosen" choice, the empty string
+ *    the server stores as no choice) PATCHes the account alone: the
+ *    empty string is not a language the instance can switch to, so the
+ *    device keeps the language it is showing.
  *  - Timezone: the options are the engine's IANA list
  *    (Intl.supportedValuesOf('timeZone'), guarded) plus an explicit
  *    "not chosen" choice whose value is the empty string -- the stored
@@ -129,11 +133,17 @@ export function PreferencesSection() {
     setFailureCode(null)
     try {
       await updatePreferences.mutateAsync({ data: { locale } })
-      // The account accepted the choice; land it on the device too (the
-      // persisting form -- this is the manual language-switch UI). A
-      // storage failure inside switchLanguage is a console warning, never
-      // a rejection: the switch itself still happens.
-      await switchLanguage(i18n, locale)
+      // The empty string IS the clearing value, not a language: a
+      // successful clear leaves the device on its current language, so
+      // only a real choice is switched to (switchLanguage refuses the
+      // empty string, which must not read as a failed save).
+      if (locale !== '') {
+        // The account accepted the choice; land it on the device too (the
+        // persisting form -- this is the manual language-switch UI). A
+        // storage failure inside switchLanguage is a console warning, never
+        // a rejection: the switch itself still happens.
+        await switchLanguage(i18n, locale)
+      }
       await queryClient.invalidateQueries({
         queryKey: getAuthnGetPreferencesQueryKey(),
       })
