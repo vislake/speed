@@ -1,11 +1,11 @@
 /**
- * share-errors.ts -- the block-C share surfaces' reachable-error
+ * share-errors.ts -- the share surfaces' reachable-error
  * whitelists: one map per surface from every code that surface can be
  * answered with to the app-namespace key carrying its current-language
  * text, plus the classifiers the two surfaces share with the rest of
  * the host.
  *
- * The two block-C surfaces sit on opposite sides of go/sharing's HTTP
+ * The two share surfaces sit on opposite sides of go/sharing's HTTP
  * surface, and each can be answered with a different slice of the
  * module's code set:
  *

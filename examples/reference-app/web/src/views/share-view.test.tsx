@@ -1,5 +1,5 @@
 /**
- * ShareView contract -- the block-C patient surface at the component
+ * ShareView contract -- the patient's share surface at the component
  * level: the page one share link opens renders the shared BEFORE/AFTER
  * pair straight from the public access route for anyone holding the
  * link -- no session attached, no sign-in, no app frame -- each half

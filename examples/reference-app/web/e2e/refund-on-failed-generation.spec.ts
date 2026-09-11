@@ -66,8 +66,8 @@ const CREDITS_TEXT = {
 
 /**
  * This spec's own database and server. The run's shared server cannot be
- * the one under test: a vendor armed to refuse would fail block B's
- * generation too, and block B is the gate that proves generation works.
+ * the one under test: a vendor armed to refuse would fail the generation
+ * gate too, and that gate is what proves generation works.
  */
 const databasePath = join(
   tmpdir(),

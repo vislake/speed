@@ -11,11 +11,11 @@
  * That gap is not hypothetical. The unit and component suites under src/
  * and in web/packages/* drive their requests through scripted fetch
  * doubles, and a double answers whatever shape its author believed the
- * server sends. When the two drifted -- @speed/api-client demanding a
- * traceId field on the error envelope that no backend writer has ever
- * emitted -- every scripted suite kept passing while every real error in
- * the deployed app degraded to the generic "something went wrong" text
- * (fixed in f23079d). The specs here would have failed on the very first
+ * server sends -- so a drift between the two is invisible below this
+ * tier: @speed/api-client demanding a traceId field on the error
+ * envelope that no backend writer emits would leave every scripted
+ * suite passing while every real error degrades to the generic
+ * "something went wrong" text. The specs here fail on the very first
  * wrong-password assertion, which is why the error-text assertions in
  * password-sign-in.spec.ts and registration.spec.ts are written as
  * regression gates rather than incidental checks.
@@ -66,24 +66,22 @@ const serverDir = fileURLToPath(new URL('..', import.meta.url))
 /**
  * The four ports one run needs: the Go server, the vite server, the
  * second Go process restart-survival.spec.ts starts over the same
- * database, and -- since the block-B gates -- the throwaway
- * OpenAI-compatible images provider (fake-image-provider.mjs) the Go
- * server's smile-simulation pipeline reaches. Picked at random per run
- * rather than fixed, and set through the environment for the same
- * reason the database path below is -- the runner chooses, every worker
- * inherits.
+ * database, and the throwaway OpenAI-compatible images provider
+ * (fake-image-provider.mjs) the Go server's smile-simulation pipeline
+ * reaches. Picked at random per run rather than fixed, and set through
+ * the environment for the same reason the database path below is --
+ * the runner chooses, every worker inherits.
  *
- * Fixed ports were the original shape (8091 and 5191, chosen only to stay
- * clear of a developer's own 5173 and 8080) and they were wrong for a
- * reason the repository's own working style makes routine rather than
- * exotic: several git worktrees of this repository run this same suite at
- * the same time, one per concurrent round. Worktrees isolate the CODE.
- * They do not isolate the machine's TCP ports, its filesystem or its
- * process table -- so two runs asked for 5191, the second lost, and
- * `reuseExistingServer` (below) quietly handed it the FIRST run's server:
- * a suite in one worktree driving another worktree's code. That is worse
- * than a collision that fails, because a green result means nothing and
- * says nothing about it.
+ * Fixed ports are wrong for this repository for a reason its own working
+ * style makes routine rather than exotic: several git worktrees of this
+ * repository run this same suite at the same time, one per concurrent
+ * round. Worktrees isolate the CODE. They do not isolate the machine's
+ * TCP ports, its filesystem or its process table -- so two runs asking
+ * for the same fixed port would let `reuseExistingServer` (below)
+ * quietly hand the second one the FIRST run's server: a suite in one
+ * worktree driving another worktree's code. That is worse than a
+ * collision that fails, because a green result means nothing and says
+ * nothing about it.
  *
  * A random base cannot make a collision impossible -- roughly one run in
  * six hundred with eight running at once -- so it is paired with the
@@ -144,16 +142,13 @@ export const REFUSING_IMAGE_PORT = runPort('E2E_REFUSING_IMAGE_PORT', portBase +
  * Its own, not shared with provisioning-recovery: both specs own a
  * server, they run in the same tier one after the other, and a boot onto
  * a port a previous spec's server still holds does not fail -- bootServer
- * waits for a healthy /healthz and the incumbent answers it. So the
- * refund gate silently adopted the recovery gate's server, which has no
- * image provider configured, and its generation was refused before it
- * could be enqueued: "Something went wrong. Try again later." on the
- * panel, passing when run alone and failing in the tier.
- *
- * The identical mistake this suite fixed at the run level hours earlier
- * (fixed ports plus reuseExistingServer, one worktree adopting
- * another's server) reappeared between two of its own specs. A port a
- * second thing might want is a port that needs its own name.
+ * waits for a healthy /healthz and the incumbent answers it. A port
+ * shared between them would therefore let the refund gate adopt the
+ * recovery gate's server, which has no image provider configured, and
+ * its generation would be refused before it could be enqueued:
+ * "Something went wrong. Try again later." on the panel, passing when
+ * run alone and failing in the tier. A port a second thing might want is
+ * a port that needs its own name.
  */
 export const REFUND_API_PORT = runPort('E2E_REFUND_PORT', portBase + 6)
 
@@ -164,10 +159,10 @@ export const REFUND_API_PORT = runPort('E2E_REFUND_PORT', portBase + 6)
  * name resolves to both `::1` and `127.0.0.1` on a dual-stack host, a
  * server may bind only one of them, and the two halves of this suite
  * disagree about which to try -- Playwright's own health check reaches a
- * server over either, while Chromium picked IPv4 and answered
- * ERR_CONNECTION_REFUSED for a server listening on IPv6 alone. So the
- * health check passed, the suite ran, and every spec failed on a
- * navigation. Naming the address leaves nothing to resolve.
+ * server over either, while Chromium resolves IPv4 first and answers
+ * ERR_CONNECTION_REFUSED for a server listening on IPv6 alone. The
+ * health check would pass, the suite would run, and every spec would
+ * fail on a navigation. Naming the address leaves nothing to resolve.
  */
 const loopback = '127.0.0.1'
 
@@ -199,13 +194,12 @@ const databasePath = process.env.E2E_DB_PATH
  * Where this run records the sign-ins it has spent, so a gate can pace
  * itself inside go/authn's login budget (e2e/test-utils/journeys.ts).
  *
- * A file rather than a module-level array, and for a reason this suite
- * has now paid for twice: a Playwright worker serves ONE project, and
- * switching project restarts it. A ledger held in memory therefore
- * resets at every engine boundary while the server's own rate limiter
- * counts the whole run -- so the pacing did nothing on the second and
- * third engines and the refusal came back, which is exactly the "state I
- * assumed was shared and is not" shape that the fixed-port hazard was.
+ * A file rather than a module-level array: a Playwright worker serves
+ * ONE project, and switching project restarts it. A ledger held in
+ * memory would therefore reset at every engine boundary while the
+ * server's own rate limiter counts the whole run -- so the pacing would
+ * do nothing on the second and third engines and the refusal would come
+ * back.
  *
  * Through the environment for the same reason the database path is: the
  * runner evaluates this first and every worker inherits the name, so all
@@ -270,25 +264,22 @@ export default defineConfig({
   //   clinic a self-service registration creates is still shown as a
   //   raw tenant id and named on no surface, which is the same missing
   //   capability its file header points at rather than a UI omission).
-  //   Written ahead of the fix on purpose -- each one is an acceptance
-  //   criterion, checkable the day it lands -- but a suite that is
-  //   permanently red says nothing, so they are asked for by name:
+  //   Each one is an acceptance criterion, checkable the day it lands
+  //   -- but a suite that is permanently red says nothing, so they are
+  //   asked for by name:
   //
   //     pnpm test:e2e:pending
   //
   //   @budget -- VERIFIED PASSING, and out of the default run only
   //   because the suite has no sign-in left to spend on it
-  //   (self-service-signup's gate moved here the round its acceptance
-  //   blocker closed -- ef8b97a -- its own file header says why):
+  //   (self-service-signup's gate; its own file header says why):
   //
   //     pnpm test:e2e:budget
   //
-  // Keeping these two apart is not bookkeeping. They were one tag, and
-  // the conflation made the suite unreadable in the way that matters
-  // most: a gate excluded because its defect is open and a gate excluded
-  // because the budget is full looked identical, so nothing in the suite
-  // could tell anyone what was still broken. An acceptance report cannot
-  // be honest on top of that.
+  // Keeping these two apart is not bookkeeping: a gate excluded because
+  // its defect is open and a gate excluded because the budget is full
+  // must not look identical, or nothing in the suite can tell anyone
+  // what is still broken.
   //
   // The budget is a real ceiling, not a tidiness preference, and it has
   // TWO dimensions (go/authn's ratelimit.go): five sign-ins per account
@@ -298,9 +289,8 @@ export default defineConfig({
   // finishes inside a single window. The default tier spends seventeen
   // of those twenty.
   //
-  // Only the per-account limit was counted when these tiers were drawn,
-  // and the difference matters: moving a gate to a quieter demo account
-  // buys NO room, because the binding pool is not per-account. A new
+  // Moving a gate to a quieter demo account buys NO room, because the
+  // binding pool is the per-IP one, not per-account. A new
   // gate either fits in the three remaining slots or belongs in @budget,
   // whose separate invocation gets a fresh twenty. Going over does not
   // slow the suite down -- it turns it red on 429 in whichever test
@@ -313,7 +303,7 @@ export default defineConfig({
   //
   // The exclusion is conditional rather than absolute because a config
   // grepInvert OVERRIDES a command-line --grep: with it always on, asking
-  // for a tier by name answered "No tests found", which is the worst
+  // for a tier by name answers "No tests found", which is the worst
   // possible failure mode for a gate written to be run deliberately. So
   // selecting by tag says so, which is what the two scripts above do:
   //
@@ -350,27 +340,25 @@ export default defineConfig({
   fullyParallel: false,
   forbidOnly: Boolean(process.env.CI),
   // NO RETRIES, ANYWHERE -- and this is a decision rather than a
-  // default. It used to be `process.env.CI ? 1 : 0`, which would have
-  // made a CI run strictly weaker than a local one: a gate failing its
-  // first attempt and passing its second reports green, and nobody sees
-  // the first.
+  // default: a retry makes a CI run strictly weaker than a local one,
+  // because a gate failing its first attempt and passing its second
+  // reports green, and nobody sees the first.
   //
-  // Every flake this suite has had was a DEFECT IN THE GATE, not noise:
-  // a decode state read one `evaluateAll` after the element count
-  // reached two (expectBeforeAndAfter's own note), an `isVisible()`
-  // asked before the frame rendered (openSurface), five more
-  // point-in-time reads that `readSettledText` replaced, and a refusal
-  // gate locking out its own account across engines. A single retry
-  // would have hidden all of them, and the one that mattered most --
-  // the disclosure gate reddening on work that had already been done --
-  // would have been hidden intermittently, which is worse than either
-  // outcome.
+  // A retry would hide exactly the failures this suite reddens on:
+  // each is a DEFECT IN THE GATE rather than noise -- a decode state
+  // read one `evaluateAll` after the element count reached two
+  // (expectBeforeAndAfter's own note), an `isVisible()` asked before
+  // the frame rendered (openSurface), point-in-time reads that
+  // `readSettledText` exists to replace, a refusal gate locking out its
+  // own account across engines. The one that matters most -- a gate
+  // reddening on work that had already been done -- would then be
+  // hidden intermittently, which is worse than either outcome.
   //
   // This file's own comments say it twice already: "a false red is not
   // a cheap failure", and "once a gate is known to flake, its red stops
   // being read". A retry count is the mechanism that makes both true.
   //
-  // If the e2e pipeline lands (M4) and a genuinely environmental flake
+  // If the e2e pipeline lands and a genuinely environmental flake
   // appears -- a browser download hiccup, a runner slow enough to pass
   // a 60s test timeout -- the answer is to fix the gate or raise that
   // timeout. Should retries ever be truly necessary, the reasoning goes
@@ -413,7 +401,7 @@ export default defineConfig({
           // Only stdout is redirected: stderr stays on the process, so a
           // server that fails to boot still says so in the test report.
           //
-          // THE COST OF THAT, since it is now worth knowing: everything
+          // THE COST OF THAT, worth knowing: everything
           // Kernel.Bootstrap says goes to stderr and is therefore NOT in
           // this file. pkgcore announces its resolved seam composition
           // and warns about implementations that do not survive a
@@ -445,8 +433,8 @@ export default defineConfig({
           // Never adopt a server this run did not start, on CI or off it.
           // The ports above are this run's own, so there is nothing
           // legitimate to reuse -- and reuse is exactly how a run in one
-          // worktree ended up driving another worktree's server. Off, a
-          // taken port is a startup failure that names it.
+          // worktree would end up driving another worktree's server. Off,
+          // a taken port is a startup failure that names it.
           reuseExistingServer: false,
           // The server's stdout is its OpenTelemetry span export plus its
           // structured log, several hundred lines per test -- piping it
@@ -460,7 +448,7 @@ export default defineConfig({
             APP_DB_PATH: databasePath,
             APP_DEPLOYMENT_MODE: 'standalone',
             APP_DEMO_USERS_PASSWORD: DEMO_PASSWORD,
-            // The smile-simulation pipeline's provider: the block-B
+            // The smile-simulation pipeline's provider: the simulation
             // gates generate a real simulation, and the only way a
             // freshly booted server can complete one is against this
             // run's own throwaway OpenAI-compatible images endpoint
@@ -488,7 +476,7 @@ export default defineConfig({
         {
           // The throwaway OpenAI-compatible images endpoint: answers
           // every /images/edits with a fixed, deterministic image, so a
-          // generation the block-B gates start completes on the real
+          // generation the simulation gates start completes on the real
           // composed stack with no live provider anywhere (see that
           // script's own header).
           command: `node e2e/test-utils/fake-image-provider.mjs`,

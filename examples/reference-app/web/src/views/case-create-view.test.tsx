@@ -1,7 +1,7 @@
 /**
  * CasesCreateView contract: the one-page creation flow picks the
  * patient's photos, enters the patient name and submits once -- the
- * block-A shape. The journeys drive a real client bound into the
+ * one-step shape. The journeys drive a real client bound into the
  * runtime seam over the demo server's cases endpoints, sign in through
  * the real session operation, choose a real File through the picker's
  * hidden input, and pin the observed requests: the photo-upload leg

@@ -1,5 +1,5 @@
 /**
- * PhotoSimulationPanel contract -- the block-B journey at the
+ * PhotoSimulationPanel contract -- the simulation journey at the
  * component level: a case photo offers the documented smile option set
  * by name, a generation started from the chosen options reports its
  * honest asynchronous progress and, once it completes, the before/after
@@ -251,13 +251,13 @@ describe('PhotoSimulationPanel', () => {
   })
 
   it('says what the completed generation cost, beside the comparison (block D)', async () => {
-    // The block-D acceptance shape: where the generation happened, the
+    // The acceptance shape: where the generation happened, the
     // page must say what it cost -- a number, not just the idea of a
     // cost (a pay-per-use product that spends silently is one nobody
     // trusts). The caption reads the displayed cost from the same
     // mirrored constant the simulation-cost-lockstep suite pins to the
     // service's own charge. A freshly opened photo's first generation
-    // is the panel's automatic default one (the block-C shape, and the
+    // is the panel's automatic default one (the auto-run shape, and the
     // button stays disabled while it runs), so the caption is awaited
     // beside the auto-run's comparison -- the completed generation is
     // the one that must say what it cost.

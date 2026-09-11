@@ -1,7 +1,7 @@
 /**
  * simulation-cost-lockstep.test.ts -- the mechanical pin that keeps the
- * price the block-D surface displays ("this simulation cost N credits",
- * rendered beside a completed generation on the case page) in step with
+ * price the case page displays beside a completed generation ("this
+ * simulation cost N credits") in step with
  * the amount the server actually charges: the display reads
  * SIMULATION_CREDIT_COST from photo-simulation-panel.tsx, and this
  * suite reads the authoritative constant out of the Go source that

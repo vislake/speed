@@ -168,10 +168,10 @@
  * off-roster clinics the demo roster's host copy cannot name (see the
  * clinic-naming paragraph above). The smile-simulation and sharing
  * surfaces ride the same shape: the simulation endpoints under
- * /api/v1/smile-simulation answer the block-B read legs (the
+ * /api/v1/smile-simulation answer the simulation read legs (the
  * job-status, per-photo enumeration and content reads over the
- * deterministic job ledger, plus the simulate 202), and the block-C
- * sharing endpoints answer the clinic's mint and the patient's open --
+ * deterministic job ledger, plus the simulate 202), and the sharing
+ * endpoints answer the clinic's mint and the patient's open --
  * POST /api/v1/sharing/shares (201, a share echoing the body's
  * resourceRef plus its once-returned bearer token; the reader-shaped
  * principal's mint answers the rbac gate's 403) and GET
@@ -686,16 +686,16 @@ const DEFAULT_SOCIAL_AUTHORIZE_URL =
   'https://sso.example.test/authorize?channel=demo'
 
 /** The parameterized cases paths: one case's detail and one attached
- * photo's content (the block-A surface's read legs). The photo-upload
+ * photo's content (the cases surface's read legs). The photo-upload
  * route is exact-keyed in the switch, so its path never falls through
  * to these. */
 const CASE_PATH = /^\/api\/v1\/cases\/([^/]+)$/
 const CASE_PHOTO_CONTENT_PATH =
   /^\/api\/v1\/cases\/([^/]+)\/photos\/([^/]+)\/content$/
 
-/** The parameterized smile-simulation paths (the block-B surface's read
- * legs). The simulate route is exact-keyed in the switch, so its path
- * never falls through to these; the job-status route is exact-keyed
+/** The parameterized smile-simulation paths (the simulation surface's
+ * read legs). The simulate route is exact-keyed in the switch, so its
+ * path never falls through to these; the job-status route is exact-keyed
  * with one parameter; the enumeration path's $ anchor keeps the content
  * path (which carries a deeper suffix) from matching it. */
 const SIMULATION_JOB_PATH = /^\/api\/v1\/smile-simulation\/jobs\/([^/]+)$/
@@ -1478,8 +1478,8 @@ export function demoServer(options: DemoServerOptions = {}): RealResponder {
         }
         // A register that named no email (the identifier was a phone) is
         // recorded under nothing a sign-in can name, so it stays the
-        // pre-self-service fixture's unrecorded 201 answer -- no journey
-        // drives a phone registration.
+        // fixture's unrecorded 201 answer -- no journey drives a phone
+        // registration.
         return jsonResponse(201, {
           id: 'user-9',
           created_at: DEMO_NOTE_CREATED_AT,

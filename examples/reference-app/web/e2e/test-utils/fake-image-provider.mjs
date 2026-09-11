@@ -11,7 +11,7 @@
  * with the identical answer (flowtests/smilesim_flow_test.go's
  * fakeOpenAIImageServer): no live provider and no live key are
  * involved, only a real multipart request reaching a real server, so
- * the block-B gates run deterministically against a freshly booted
+ * the simulation gates run deterministically against a freshly booted
  * reference-app server.
  *
  * The response bytes differ from the e2e suite's patient photo (a 1x1

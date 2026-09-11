@@ -6,7 +6,7 @@
  * auth-core hooks), over the demo server's cases endpoints mirroring
  * the real fragment's clinic-wide shape.
  *
- * The block-A title regression lives here first: the cases page's
+ * The clinic-title regression lives here first: the cases page's
  * level-one heading carries the current clinic's display name -- the
  * same host roster the tenant switcher reads -- composed with the
  * title "Cases" (never "My Cases"), so a person working in Acme knows

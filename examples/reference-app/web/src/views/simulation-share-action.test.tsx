@@ -1,7 +1,7 @@
 /**
- * SimulationShareAction contract -- the block-C journey at the
- * component level, driven the same way the block-B panel suite drives
- * its own: the case detail page mounted over the real api-client rig
+ * SimulationShareAction contract -- the share journey at the
+ * component level, driven the same way the simulation panel suite
+ * drives its own: the case detail page mounted over the real api-client rig
  * answering from the demo responder's genuine Response objects. A
  * completed simulation's comparison carries the share action; clicking
  * it mints the BEFORE/AFTER pair -- one share per half of the

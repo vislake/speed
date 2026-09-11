@@ -4,7 +4,7 @@
  * comparing it with the original, sharing it with the patient, and seeing
  * what it cost.
  *
- * The four blocks pass in one run, on each engine, with the run's own
+ * The gates pass in one run, on each engine, with the run's own
  * throwaway OpenAI-compatible images provider standing in for the vendor
  * (fake-image-provider.mjs under e2e/test-utils, wired in
  * playwright.config.ts) so a freshly booted server completes the
@@ -19,9 +19,9 @@
  * whole login allowance, so in the default tier they would be waits
  * rather than sign-ins.
  *
- * Block A must ride along with B: each run boots a fresh server and a
- * fresh database, and block B's helpers open a case that block A's own
- * tests create earlier in the same run.
+ * The gates must run together: each run boots a fresh server and a
+ * fresh database, and a later gate's helpers open a case an earlier
+ * gate's own tests create in the same run.
  *
  * WHAT THESE ASSERT, AND WHAT THEY DELIBERATELY DO NOT
  *
@@ -34,8 +34,8 @@
  * in a test id, and test-utils/cases.ts's CASE_UI is the one place to
  * reconcile when a name changes.
  *
- * The blocks are ordered along the journey (A first: it is the
- * entrance), and each is independently runnable.
+ * The gates are ordered along the journey (the entrance gate first),
+ * and each is independently runnable.
  */
 import { expect, test } from '@playwright/test'
 import { DEMO_OWNER, DEMO_READER } from './test-utils/accounts.js'

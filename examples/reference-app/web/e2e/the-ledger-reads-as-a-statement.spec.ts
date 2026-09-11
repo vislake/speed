@@ -56,12 +56,11 @@ import { CASE_UI } from './test-utils/cases.js'
  * `ai_generation:job_123`, `plan:pro:monthly_included` and
  * `expiry:2026-09-policy` all match, while `1:00 AM`, `Sep 8, 2026`,
  * `Top-up`, `Simulation refunded`, `-10`, `+1,000` and the zh-CN labels
- * do not -- checked against all of them before this gate was committed.
+ * do not -- each was checked against this pattern.
  *
- * That check is not ceremony. Thresholds and patterns in this suite
- * have failed in exactly the opposite direction -- one loose enough to
- * catch the bad case caught the good one too, accusing a correct
- * download of being an error page.
+ * A pattern loose enough to catch the bad case catches good ones too:
+ * a false positive here accuses a correct download of being an error
+ * page.
  */
 const BILLING_REASON_SHAPE = /\b[A-Za-z][A-Za-z0-9]*[:_][A-Za-z0-9][A-Za-z0-9:_-]*/
 

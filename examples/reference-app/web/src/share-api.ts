@@ -1,6 +1,6 @@
 /**
  * share-api.ts -- the app's hand-written half of go/sharing's HTTP
- * surface: the two paths and the one typed call the block-C surfaces
+ * surface: the two paths and the one typed call the share surfaces
  * need. go/sharing's fragment joins the merged document and the
  * generated @speed/api-sdk like every platform module's does; this app
  * reaches both routes through the api-client RequestFn the host bound,
@@ -62,7 +62,7 @@ export async function createPatientShare(
 
 /**
  * Revokes one of this tenant's shares by its owner-facing id (POST
- * /api/v1/sharing/shares/{shareId}/revoke). The block-C share action
+ * /api/v1/sharing/shares/{shareId}/revoke). The share action
  * uses it as its one compensation leg: when one half of a minted
  * before/after pair cannot be created, the half that succeeded is
  * revoked again so a failed share action never leaves a live,

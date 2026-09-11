@@ -296,8 +296,7 @@ describe('CreditsView', () => {
 
   it('gates on the reads: the rbac refusal renders the no-permission state, never the data (a caller without billing:credit:read)', async () => {
     // The demo route guard's genuine 403 (billingDeny), the same shape
-    // the real server gives a caller without billing:credit:read (the
-    // block-D read of the demo subject's reader-shaped caller). A
+    // the real server gives a caller without billing:credit:read. A
     // refused read means no surface: no balance, no rows.
     const rig = makeRealClientRig(demoServer({ billingDeny: true }))
     await signInWithPassword(rig)
