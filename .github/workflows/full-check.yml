@@ -37,11 +37,15 @@ name: full-check
 #   * integration-tiers job: the Docker-backed integration tiers
 #     (-tags=integration), one matrix row per module that ships a tier,
 #     run from inside the module: go test -race -tags=integration ./...
-#     -- the exact command shape and module enumeration of Taskfile
-#     test:full's INTEGRATION_DIRS loop (the source of truth for which
-#     modules carry an integration_test/ directory). Docker is
-#     preinstalled on ubuntu-latest runners; testcontainers pulls images
-#     per leg on first use. The legs, module by module:
+#     -- the same module set Taskfile test:full's INTEGRATION_DIRS loop
+#     runs locally. The set is derived from the tree (every go/ module
+#     carrying a //go:build integration constraint, go/saasctl excepted:
+#     its tier materializes and boots a whole generated project and
+#     runs in scaffold-verify.yml instead) and
+#     tools/check_integration_tiers.py gates this matrix and the
+#     Taskfile list against it on every PR, so neither copy can drift.
+#     Docker is preinstalled on ubuntu-latest runners; testcontainers
+#     pulls images per leg on first use. The legs, module by module:
 #       go/dbkit     PostgreSQL
 #       go/tenancy   PostgreSQL (its tier lives under
 #                    tenancytest/integration_test/; ./... covers it)
@@ -94,8 +98,16 @@ name: full-check
 #                     registry to exactly one row per certificate --
 #                     the one regression whose second dialect no SQLite
 #                     proof can rule out)
-#     Modules without a matrix row here: go/sharing, go/compliance and
-#     go/admin (see each module's AGENTS.md for what each ships).
+#       go/sharing    PostgreSQL (the gate-scope inverse against a
+#                     real server: two unrelated tenants' guarded
+#                     writes proceed concurrently, one never blocking
+#                     behind the other -- deterministic, tenant A's
+#                     write parked on a row lock the test holds and
+#                     observed via pg_locks before tenant B is launched)
+#     Modules without a matrix row here: go/compliance and go/admin
+#     (see each module's AGENTS.md for what each ships), and go/saasctl
+#     (its tier runs in scaffold-verify.yml -- a declared exclusion in
+#     tools/check_integration_tiers.py).
 #   * reference-app job: examples/reference-app's golangci-lint leg,
 #     unit suite under -race, and its Docker-backed integration tier
 #     (-tags=integration -- testcontainers Redis, RustFS and a Mailpit
@@ -245,6 +257,7 @@ jobs:
           - go/metering
           - go/billing
           - go/pki
+          - go/sharing
     steps:
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1

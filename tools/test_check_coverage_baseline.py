@@ -62,6 +62,7 @@ from __future__ import annotations
 import contextlib
 import io
 import pathlib
+import shutil
 import sys
 import tempfile
 import unittest
@@ -466,6 +467,21 @@ class UpdateRefusal(unittest.TestCase):
     def test_sub_floor_measurement_is_refused_with_its_total(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = pathlib.Path(tmp)
+            # The gated set is derived from go.work at run time (with the
+            # release coordinator's parser), so the fixture root carries
+            # both: go.work registering the module under test, and a copy
+            # of the real parser at the path the derivation loads.
+            (root / "go.work").write_text(
+                "go 1.26.8\n\nuse (\n\t./go/pkgcore\n)\n", encoding="utf-8"
+            )
+            parser_dir = root / "tools" / "release"
+            parser_dir.mkdir(parents=True)
+            shutil.copy(
+                pathlib.Path(__file__).resolve().parent
+                / "release"
+                / "lockstep-release.py",
+                parser_dir / "lockstep-release.py",
+            )
             measurement = m.ModuleMeasurement(
                 total=50.0,
                 total_statements=100,

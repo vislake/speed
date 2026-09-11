@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 """Coverage gate for every released module.
 
-Every released Go module -- the 23 go.work entries: the 22 go/* modules
-plus the reference app -- must hold its unit-suite statement coverage
-at or above an 80% floor and must not let it decline against a recorded
-baseline. This script is the mechanism behind that rule: collect (run
+Every released Go module -- every go.work use entry outside tools/, so
+the go/ modules plus the reference app -- must hold its unit-suite
+statement coverage at or above an 80% floor and must not let it decline
+against a recorded baseline. This script is the mechanism behind that
+rule: collect (run
 `go test -count=1 -coverpkg=./... -coverprofile` from the module
 directory and compute the module's exact total statement coverage --
 the module's unit suite measured against the whole module, a quantity
@@ -170,7 +171,8 @@ Usage:
     python3 tools/check_coverage_baseline.py --selfcheck
 
 Exit codes: 0 = clean / nothing to do; 1 = a comparison failed, a
-baseline is stale or missing, or the toolchain moved; 2 = usage error.
+baseline is stale or missing, or the toolchain moved; 2 = usage error,
+or the gated module set cannot be derived from go.work.
 Standard library only, Python >= 3.11. Needs a Go toolchain on PATH.
 """
 
@@ -178,6 +180,7 @@ from __future__ import annotations
 
 import argparse
 import dataclasses
+import importlib.util
 import json
 import os
 import pathlib
@@ -186,38 +189,14 @@ import subprocess
 import sys
 import tempfile
 
-# The released modules, mirrored from go.work's use list and from
-# docs/internal/20-quality-and-security.md's coverage section (which
-# named six foundation modules -- pkgcore, dbkit, tenancy, rbac, billing,
-# jobs -- until the 2026-09 decision extended the gate to every module).
-# Repo-root-relative module directories. Adding a module means editing
-# go.work, this list and the doc together; --selfcheck refuses a
-# baseline file that names anything else.
-GATED_MODULES = [
-    "examples/reference-app",
-    "go/admin",
-    "go/ai-gateway",
-    "go/app",
-    "go/authn",
-    "go/billing",
-    "go/compliance",
-    "go/config",
-    "go/dbkit",
-    "go/integration",
-    "go/jobs",
-    "go/metering",
-    "go/notification",
-    "go/observability",
-    "go/org",
-    "go/pkgcore",
-    "go/pki",
-    "go/ratelimit",
-    "go/rbac",
-    "go/saasctl",
-    "go/sharing",
-    "go/storage",
-    "go/tenancy",
-]
+# The gated set's source: go.work's use block, read with the release
+# coordinator's own parser (tools/release/lockstep-release.py) -- the
+# same reader the reusable module-set derivation
+# (.github/workflows/reusable-go-module-set.yml) loads -- so there is one
+# copy of the parse logic. The set is derived, never hand-copied: a
+# module becomes gated, and its missing baseline row goes red, the moment
+# its go.work use entry lands.
+GOWORK_PARSER_REL = os.path.join("tools", "release", "lockstep-release.py")
 
 BASELINE_FILE_NAME = "coverage-baselines.json"
 DEFAULT_BASELINE = pathlib.Path(__file__).resolve().parent / BASELINE_FILE_NAME
@@ -304,6 +283,38 @@ PROFILE_BLOCK = re.compile(
 )
 
 TOOLCHAIN_RE = re.compile(r"^go version go(\S+)")
+
+
+def derive_gated_modules(root: pathlib.Path) -> list[str]:
+    """The gated module set, derived from go.work at run time.
+
+    Every go.work use entry outside tools/, in go.work file order: the
+    go/ modules plus the reference app. The tools/ entries are the
+    repository's build-time tool modules (tools/configrefgen) -- they
+    ride the CI module matrix rows, but they are not released units and
+    carry no coverage baseline. Fails closed: a missing go.work or
+    parser, a malformed go.work and an empty derivation all raise, so a
+    silently shrunk or unreadable gated set can never read as clean."""
+    parser_path = root / GOWORK_PARSER_REL
+    if not parser_path.is_file():
+        raise FileNotFoundError(
+            "%s is missing (the go.work use block is read with the "
+            "release coordinator's parser)" % GOWORK_PARSER_REL
+        )
+    spec = importlib.util.spec_from_file_location(
+        "lockstep_release", parser_path
+    )
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    entries = module.parse_gowork_uses(
+        (root / "go.work").read_text(encoding="utf-8")
+    )
+    gated = [
+        entry for entry in entries if entry.split("/", 1)[0] != "tools"
+    ]
+    if not gated:
+        raise ValueError("go.work yielded no gated modules")
+    return gated
 
 
 def short_toolchain(go_version_output: str) -> str:
@@ -754,25 +765,35 @@ def main(argv: list[str]) -> int:
     if args.root:
         baseline_path = root / "tools" / BASELINE_FILE_NAME
 
+    try:
+        gated = derive_gated_modules(root)
+    except Exception as exc:  # noqa: BLE001 -- any derivation failure is infrastructure
+        print(
+            "check_coverage_baseline: cannot derive the gated module "
+            "set: %s" % exc,
+            file=sys.stderr,
+        )
+        return 2
+    gated_set = set(gated)
+
     if args.selfcheck:
         data = load_baselines(baseline_path)
         rows = data.get("baselines", {}) if isinstance(data, dict) else {}
         toolchain = data.get("toolchain") if isinstance(data, dict) else None
         problems: list[str] = []
-        gated = set(GATED_MODULES)
         for module_dir in sorted(rows):
-            if module_dir not in gated:
+            if module_dir not in gated_set:
                 problems.append(
                     "baseline row %s is not a gated module (the released-"
                     "module set names %s)"
-                    % (module_dir, ", ".join(sorted(gated)))
+                    % (module_dir, ", ".join(sorted(gated_set)))
                 )
             elif not (root / module_dir / "go.mod").is_file():
                 problems.append(
                     "baseline row %s has no go.mod at %s"
                     % (module_dir, root / module_dir)
                 )
-        for module_dir in GATED_MODULES:
+        for module_dir in gated:
             if module_dir not in rows:
                 problems.append(
                     "gated module %s has no baseline row -- record one "
@@ -790,7 +811,7 @@ def main(argv: list[str]) -> int:
             return 1
         print(
             "coverage-baselines.json: rows match the gated set "
-            "(%d modules)" % len(GATED_MODULES)
+            "(%d modules)" % len(gated)
         )
         return 0
 
@@ -801,7 +822,7 @@ def main(argv: list[str]) -> int:
             return 2
         selected = [args.module]
     elif args.all:
-        selected = list(GATED_MODULES)
+        selected = list(gated)
     else:
         print("one of --module X or --all is required", file=sys.stderr)
         return 2
@@ -817,12 +838,12 @@ def main(argv: list[str]) -> int:
         measured_by_module: dict[str, float] = {}
         refusals: list[str] = []
         for module_dir in selected:
-            if module_dir not in GATED_MODULES:
+            if module_dir not in gated_set:
                 print(
                     "update refuses %s: the baseline gate covers the "
-                    "released modules only (%d of them: go.work's use "
-                    "list plus examples/reference-app)"
-                    % (module_dir, len(GATED_MODULES)),
+                    "released modules only -- go.work's use entries "
+                    "outside tools/ (%d of them)"
+                    % (module_dir, len(gated)),
                     file=sys.stderr,
                 )
                 return 1
@@ -858,12 +879,11 @@ def main(argv: list[str]) -> int:
     # --check (default)
     failures = 0
     for module_dir in selected:
-        if module_dir not in GATED_MODULES:
+        if module_dir not in gated_set:
             print(
                 "%s: outside the coverage gate (the released modules: "
-                "go.work's use list plus examples/reference-app) -- "
-                "nothing to compare"
-                % module_dir
+                "go.work's use entries outside tools/) -- nothing to "
+                "compare" % module_dir
             )
             continue
         if module_dir not in rows:

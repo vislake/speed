@@ -2,15 +2,16 @@
 """Scaffold the canonical stub of a new speed Go module.
 
 `task new:module` exists so that adding a module never means hand-repeating
-the same skeleton (the eight things a new module needs -- go.mod,
-directory skeleton, AGENTS.md, design doc, migration directory, test
-skeleton, CI matrix registration, lockstep release registration). In
-this repository the go.work use entry is the lockstep release
-registration: the release coordinator (tools/release/lockstep-release.py)
-derives the per-module tag list from go.work at runtime, so a module
-never registered there cannot be released. This script is the generator
-behind that task: the root Taskfile.yml's new:module task invokes it,
-and --help documents the wiring contract (see the epilog).
+the same skeleton (go.mod, directory skeleton, AGENTS.md, design doc,
+migration directory, test skeleton). In this repository the go.work use
+entry is the registration: the release coordinator
+(tools/release/lockstep-release.py) derives the per-module tag list from
+go.work at runtime, and the CI module sets (the fast-check/full-check/
+security matrices and the coverage gate's gated set) derive from it too,
+so a module registered there is released and checked together. This
+script is the generator behind that task: the root Taskfile.yml's
+new:module task invokes it, and --help documents the wiring contract
+(see the epilog).
 
 What it scaffolds is the canonical stub shape of a Go module under go/
 (three files, nothing more):
@@ -82,8 +83,9 @@ Refusals and guardrails:
     category exactly as new:module wraps the Go one.
 
 After scaffolding, the script prints a registration checklist -- go.work
-use entry (which is also the lockstep release registration, see below),
-CI matrix row, roadmap/design-doc rows -- as actionable reminders. It never modifies any of those shared repository
+use entry (the CI and release registration, see below), coverage-baseline
+row, integration-tier rows when the module ships one, roadmap/design-doc
+rows -- as actionable reminders. It never modifies any of those shared repository
 files itself -- that is deliberate: a scaffolder that silently edits go.work
 and CI matrices makes review diffs impossible to read, so the checklist is
 the contract with the human.
@@ -1235,15 +1237,25 @@ def registration_checklist(module_name: str, design_doc: str) -> list[str]:
         "left untouched by this script:",
         f"  1. go.work (repo root): add \"./{GO_DIR_NAME}/{module_name}\" to the "
         "use ( ... ) block -- the workspace is what makes go build / go test "
-        "resolve the new module locally.",
-        "  2. CI matrix: register the module in the fast-check/full-check "
-        "workflow matrix (docs/internal/18-cicd.md, reusable-workflow "
-        "design section: adding a module is one row in the orchestrating "
-        "workflow's matrix list). Both pipelines are live: add the module "
-        "to the matrix in .github/workflows/fast-check.yml and full-check.yml, "
-        "or it is never linted, vetted or tested in CI.",
-        "  3. Lockstep release: step 1's go.work use entry is this "
-        "module's release registration too -- the release coordinator "
+        "resolve the new module locally, and the entry is the module's "
+        "whole registration (steps 2 and 3).",
+        "  2. CI: the go-module sets derive from go.work at run time -- "
+        "the fast-check/full-check/security matrices "
+        "(reusable-go-module-set.yml) and the coverage gate's gated set "
+        "(tools/check_coverage_baseline.py) -- so the use entry is the "
+        "module's CI registration and there is no matrix row to add. Two "
+        "follow-ups it triggers: record the module's coverage baseline "
+        "once its unit suite is green (python3 "
+        "tools/check_coverage_baseline.py --update --module "
+        f"\"{GO_DIR_NAME}/{module_name}\"; the go-module-ci coverage leg "
+        "goes red with 'has no baseline row' until the row lands), and if "
+        "the module ships a Docker-backed integration tier (a "
+        "//go:build integration test file), add it to full-check.yml's "
+        "integration-tiers matrix and Taskfile.yml's INTEGRATION_DIRS -- "
+        "tools/check_integration_tiers.py gates that pair against the "
+        "tree.",
+        "  3. Lockstep release: the same go.work use entry is this "
+        "module's release registration -- the release coordinator "
         "(tools/release/lockstep-release.py) derives the per-module tag "
         "list from go.work at runtime, so a module missing from go.work "
         "can never be tagged (docs/internal/02-repo-and-release.md: each "
@@ -1276,11 +1288,12 @@ def npm_registration_checklist(module_name: str, design_doc: str) -> list[str]:
         "of a Go module's go.work use entry: the release coordinator "
         "(tools/release/lockstep-release.py) fails a release plan whose "
         "fixed-group coverage does not match web/packages/*.",
-        "  3. CI matrix: register the package in the fast-check/full-check "
-        "npm matrix (reusable-npm-package-ci rows, one per web package and "
-        "for examples/reference-app/web) in .github/workflows/fast-check.yml "
-        "and full-check.yml -- or it is never linted, typechecked, tested "
-        "or built in CI.",
+        "  3. CI matrix: register the package in the npm-packages matrix "
+        "of .github/workflows/fast-check.yml (reusable-npm-package-ci rows, "
+        "one per web package and for examples/reference-app/web) -- or it "
+        "is never linted, typechecked, tested or built in CI. Unlike the "
+        "go modules' derived CI sets, this npm matrix is hand-maintained: "
+        "keep it in step with web/pnpm-workspace.yaml's package list.",
         "  4. Roadmap and design doc: register the package in the milestone "
         "that plans it (docs/internal/15-roadmap.md) and, once it ships a "
         "surface, in the web-package enumeration of web/README.md.",

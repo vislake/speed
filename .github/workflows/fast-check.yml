@@ -67,8 +67,8 @@ name: fast-check
 #         coverage rule (every released module: an 80% floor measured
 #         excluding .gen.go statements, plus no decline against the
 #         recorded baseline): every row in tools/coverage-baselines.json
-#         must name one of the 23 gated modules (the 22 go/ modules with
-#         a go.mod plus examples/reference-app) with a real go.mod, and
+#         must name one of the gated modules (derived from go.work --
+#         every use entry outside tools/) with a real go.mod, and
 #         every gated module must have a row -- so a stale or missing
 #         row cannot silently exempt a module from the comparisons the
 #         go-module-ci coverage leg (reusable-go-module-ci.yml leg 3b)
@@ -80,6 +80,16 @@ name: fast-check
 #         stdlib-only step just before it, pinning the coverage math,
 #         the diagnostics census, both regimes of the size-calibrated
 #         tolerance and the --update refusal path.
+#       - tools/check_integration_tiers.py -- the integration-tier
+#         enumeration drift gate: every go/ module carrying a
+#         //go:build integration test file must appear in
+#         full-check.yml's integration-tiers matrix and in Taskfile.yml's
+#         INTEGRATION_DIRS (go/saasctl is a declared exclusion -- its
+#         tier materializes a whole project and runs in
+#         scaffold-verify.yml), and neither copy may name a module
+#         without a tier. Its planted-drift suite
+#         (tools/test_check_integration_tiers.py) runs as its own
+#         stdlib-only step just before it.
 #       - tools/check_spec_request_tenant_id.py -- the API-spec lint for
 #         the 18-cicd discipline row "the API layer must not accept an
 #         externally supplied tenant_id": every backend fragment's
@@ -316,14 +326,24 @@ jobs:
       - name: Coverage-baseline checker's unit suite (tools/test_check_coverage_baseline.py)
         run: python3 tools/test_check_coverage_baseline.py
       # Coverage-baseline file health: every row must name a gated
-      # module (docs/internal/20's released set: the 22 go/ modules with
-      # a go.mod plus examples/reference-app) with a real go.mod, and
-      # every gated module must have a row -- the baselines the
-      # go-module-ci coverage leg compares against must themselves be
-      # complete and current, or a missing row would silently exempt a
-      # module from the 80% floor and the no-decline rule.
+      # module (docs/internal/20's released set, derived from go.work:
+      # every use entry outside tools/) with a real go.mod, and every
+      # gated module must have a row -- the baselines the go-module-ci
+      # coverage leg compares against must themselves be complete and
+      # current, or a missing row would silently exempt a module from
+      # the 80% floor and the no-decline rule.
       - name: Coverage-baseline file self-check
         run: python3 tools/check_coverage_baseline.py --selfcheck
+      # Integration-tier enumeration: the two hand-written copies of the
+      # tier module set (full-check.yml's integration-tiers matrix,
+      # Taskfile.yml's INTEGRATION_DIRS) must match the set derived from
+      # the tree -- every go/ module with a //go:build integration test,
+      # go/saasctl excepted by recorded declaration. The checker's own
+      # suite (pure python) runs first, then the gate over the real tree.
+      - name: Integration-tier checker's planted-drift suite (tools/test_check_integration_tiers.py)
+        run: python3 tools/test_check_integration_tiers.py
+      - name: Integration-tier enumeration check
+        run: python3 tools/check_integration_tiers.py
       # API-spec lint for the discipline-table row "the API layer must
       # not accept an externally supplied tenant_id": every fragment's
       # requests are scanned for a requestBody property or parameter
