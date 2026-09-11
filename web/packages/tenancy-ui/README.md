@@ -381,12 +381,15 @@ consumption of the switch endpoint.
 | `@emotion/react`, `@emotion/styled` | peer (required, ^11) | MUI's own runtime requirements |
 | `@speed/auth-core` | dependency | `TenantSwitcherProps.session` is the `AuthSession` type and `src/TenantSwitcher.tsx` imports the runtime helper `isOperationSuperseded` -- the guard that tells a switch answer superseded by a sibling session operation (a lost race, never re-issued and never an error, the winner's own commit having already announced its tenant) from a genuine failure -- so the specifier is a runtime import, not a type-only one |
 | `@speed/i18n` | dependency | the namespace registration and the translation hook every string renders through |
+| `@speed/ui-kit` | dependency | the shared failure-banner pair `src/` renders whole-attempt failures through: `InlineError`, bound to this namespace's own text resolver, and the `errorCodeOf` classifier |
 
-`@speed/ui-kit` (theme provider used only by the test tree),
 `@speed/api-client` and `@speed/api-sdk` stay devDependencies: no
 `src/` code references them and no public type of this package does
-either. No direct HTTP exists anywhere in `src/` -- every request is
-the session's generated switch operation over the shared seam, and the
+either. `ui-kit`'s theme provider is likewise test-only -- it appears
+only in `test-utils/`, never in `src/`, because the test tree must
+render under a real host composition. No direct HTTP exists anywhere
+in `src/` -- every request is the session's generated switch operation
+over the shared seam, and the
 workspace's `speed/no-direct-http` rule enforces that (this package is
 simply absent from the rule's one whitelist, `packages/api-client`);
 the `speed/no-literal-text` rule enforces the namespace discipline over
@@ -452,10 +455,12 @@ the `speed/no-literal-text` rule enforces the namespace discipline over
 ## Development
 
 From `web/packages/tenancy-ui`: `pnpm lint`, `pnpm typecheck`, `pnpm
-test`, `pnpm build`. The build compiles `@speed/auth-core` and
-`@speed/i18n` first (their declarations are what the published `.d.ts`
-files reference) and then emits this package's `dist/`; `pnpm build`
-from the `web/` root does the same for every package. Shared test
+test`, `pnpm build`. The build compiles `@speed/auth-core`,
+`@speed/ui-kit` and `@speed/i18n` first -- the sibling declarations the
+build type-checks against, the published `.d.ts` files referencing
+`auth-core`'s and `i18n`'s -- and then emits this package's `dist/`;
+`pnpm build` from the `web/` root does the same for every package.
+Shared test
 helpers live in `test-utils/`, bilingual fixtures are the shipped
 locale files under `src/locales/`, and `src/usage-example.test.tsx`
 compiles and executes the Quick start composition above, so the

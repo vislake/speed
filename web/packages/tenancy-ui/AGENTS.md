@@ -45,13 +45,16 @@ breaks delivered projects.
 ## Same-tier boundary
 
 This package sits beside `auth-ui` and `ui-kit` at the same layer. It
-never imports `auth-ui` (same-layer dependency is prohibited) and never
-imports `ui-kit` from `src/` -- the theme provider appears only in
-`test-utils/` and devDependencies, because the test tree must render
-under a real host composition. It depends on `@speed/auth-core` as a
-runtime import, not a type-only one: `TenantSwitcherProps.session` is
-the `AuthSession` type, and `src/TenantSwitcher.tsx` calls the runtime
-helper `isOperationSuperseded` to tell a superseded switch (a sibling
+never imports `auth-ui` (same-layer dependency is prohibited). From
+`ui-kit` it takes the shared failure-banner machinery as a runtime
+dependency of `src/` -- `InlineError`, bound to this package's own
+text resolver, and the `errorCodeOf` classifier -- while `ui-kit`'s
+theme provider stays test-only: it appears only in `test-utils/`,
+because the test tree must render under a real host composition. It
+depends on `@speed/auth-core` as a runtime import, not a type-only
+one: `TenantSwitcherProps.session` is the `AuthSession` type, and
+`src/TenantSwitcher.tsx` calls the runtime helper
+`isOperationSuperseded` to tell a superseded switch (a sibling
 operation committed to the session first) from a genuine failure. It
 also depends on `@speed/i18n`.
 
