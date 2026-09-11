@@ -538,12 +538,10 @@ func TestMiddleware_TenantStatusResolver_AllowlistedNoTenant_NeverConsulted(t *t
 // report with a nil error -- the empty status, a case variant of
 // "suspended", a future third state this version does not define -- is
 // refused with the same coded ErrTenantSuspended error the suspended
-// branch writes. Before the default-refuse fix, only the exact
-// TenantStatusSuspended value was refused: every one of these statuses
-// sailed through as a normal request, a fail-open a buggy or newer
-// resolver could trigger without ever returning an error -- the status
-// twin of the empty-tenant fail-open errEmptyTenantResolved already
-// closes on the resolution side.
+// branch writes. That is what closes the fail-open a buggy or newer
+// resolver could otherwise trigger without ever returning an error: the
+// status twin of the empty-tenant fail-open errEmptyTenantResolved closes
+// on the resolution side.
 func TestMiddleware_TenantStatusResolver_NonActiveStatus_FailsClosed(t *testing.T) {
 	tests := []struct {
 		name   string
@@ -588,13 +586,14 @@ func TestMiddleware_TenantStatusResolver_NonActiveStatus_FailsClosed(t *testing.
 // (method, path) pair is allowlisted proceeds past a tenant-status refusal
 // exactly as it proceeds past a resolution failure -- the next handler
 // runs with no tenant in the request context instead of receiving the
-// coded refusal. Before this fix the allowlist was consulted only on the
-// resolution-failure branch, so a suspended tenant's request to an
-// allowlisted route -- the reference app wires WithAllowlist(GET,
-// config.PathPublic) and WithTenantStatusResolver together -- was refused
-// with 403 tenancy.tenant_suspended despite the route's whole purpose
-// being to keep working regardless of tenant state, breaking go/config's
-// own "never an error" promise for /api/v1/config/public.
+// coded refusal. The allowlist must apply to the tenant-status refusal the
+// same way it applies to a resolution failure, or a suspended tenant's
+// request to an allowlisted route -- the reference app wires
+// WithAllowlist(GET, config.PathPublic) and WithTenantStatusResolver
+// together -- would be refused with 403 tenancy.tenant_suspended despite
+// the route's whole purpose being to keep working regardless of tenant
+// state, so go/config's own "never an error" promise for
+// /api/v1/config/public holds.
 func TestMiddleware_TenantStatusResolver_SuspendedTenant_AllowlistedPath_Proceeds(t *testing.T) {
 	tests := []struct {
 		name            string

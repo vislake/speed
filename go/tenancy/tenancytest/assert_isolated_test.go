@@ -436,8 +436,8 @@ func TestAssertIsolated_SystemCtxElevatedDB(t *testing.T) {
 // failure that reads as unrelated to the isolation property actually under
 // test.
 
-// TestBoundedTenantIDSegment_ShortNamePassesThroughUnchanged proves the fix
-// is fully backward compatible: any test name that already fits within
+// TestBoundedTenantIDSegment_ShortNamePassesThroughUnchanged proves full
+// backward compatibility: any test name that already fits within
 // budget derives the exact same segment sanitizeForTenantID alone would
 // have produced, so no existing (short) test name's tenant id changes.
 func TestBoundedTenantIDSegment_ShortNamePassesThroughUnchanged(t *testing.T) {
@@ -510,9 +510,9 @@ func TestBoundedTenantIDSegment_LongNamesSharingAPrefixDoNotCollide(t *testing.T
 // hold for exactly this t.Name().
 func TestIsolationTenants_LongDescriptiveSubtestName_StaysWithinMaxTenantIDLen(t *testing.T) {
 	// Deliberately mirrors a real, plausible descriptive subtest name, not
-	// a synthetic worst case: this is close to the exact subtest name whose
-	// derived id independent testing measured at 84 characters against the
-	// 64-character column every fixture in this package uses.
+	// a synthetic worst case: this is close to the subtest name whose
+	// derived id runs to 84 characters against the 64-character column
+	// every fixture in this package uses.
 	t.Run("RepositoryBuiltFromSystemContextElevatedDB_WithoutAnyAdditionalScoping/postgres", func(t *testing.T) {
 		rawLen := len(isolationTenantPrefix) + len(sanitizeForTenantID(t.Name())) + isolationTenantSuffixLen
 		if rawLen <= maxTenantIDLen {
