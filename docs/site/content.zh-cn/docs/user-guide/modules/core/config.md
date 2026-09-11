@@ -20,7 +20,7 @@ speed 的动态配置模块:schema 先行、数据库承载的设置库,值可�
 模块的行为都可能受它服务的开关或限额支配。
 
 每个模块在 `Register` 期间把它的配置项与开关声明到注册器上
-(`reg.Config.Add(pkgcore.ConfigItem{Key, Type, Default, ...})`,
+(`reg.ConfigSeat().Add(pkgcore.ConfigItem{Key, Type, Default, ...})`,
 功能开关带各自的 `DependsOn` 链)。本模块把这些声明折进一张
 schema,运行时解析开关依赖,并服务有效值。
 

@@ -20,9 +20,9 @@ pkgcore 是所有 Go 模块共同 import、却不 import 任何其它 speed 模�
 
 ## 设计:装配契约为什么是单一 `Register` 调用
 
-每个模块实现同一个 `Module` 接口(`Name`/`DependsOn`/`Migrations`/`Locales`/`OpenAPISpec`/`Register`),把自己拥有的一切——路由、配置 schema、功能开关、权限、任务处理器、通知类型、事件、审计动作——经那一次 `Register(reg *Registry)` 调用注册出去。`Registry` 为每种机制聚合一个注册座位。
+每个模块实现同一个 `Module` 接口(`Name`/`DependsOn`/`Migrations`/`Locales`/`OpenAPISpec`/`Register`),把自己拥有的一切——路由、配置 schema、功能开关、权限、任务处理器、通知类型、事件、审计动作——经那一次 `Register(reg Registrar)` 调用注册出去。声明面就是 `Registrar` 视图:每种机制一个注册座位,内核的模块 `Registry` 与组件组装的 `ComponentRegistry` 都回答它。
 
-**为什么一个方法而不是八个?** 锁步版本下,改 `Module` 接口就是一次同时打破所有模块的破坏性变更。新增一类横切机制变成 `Registry` 上加一个字段;既有模块不改、不重编译。`Registry` 结构的存在正是为了"加机制永不改 `Module` 接口"——模块资产(迁移、语言包、OpenAPI 片段)随模块代码一起 embed、版本与资产永不脱节,出于同一理由。
+**为什么一个方法而不是八个?** 锁步版本下,改 `Module` 接口就是一次同时打破所有模块的破坏性变更。新增一类横切机制变成声明面上的一个新座位——`Registrar` 上的一个访问器加上它背后的注册器;既有模块不改、不重编译。声明面的存在正是为了"加机制永不改 `Module` 接口"——模块资产(迁移、语言包、OpenAPI 片段)随模块代码一起 embed、版本与资产永不脱节,出于同一理由。
 
 注册是声明式的,声明在别处兑现:权限清单喂给运营后台的角色配置面,配置与开关 schema 喂给自动生成的配置文档,通知类型喂给用户侧偏好矩阵。注册期规则由这个形状推出:注册期间不做 I/O(只声明,何时运行由内核定);不依赖注册顺序(`DependsOn` 声明,`Bootstrap` 排序并报告环);不吞注册器错误(重复 key 是跨模块的 bug,不是合并)。
 

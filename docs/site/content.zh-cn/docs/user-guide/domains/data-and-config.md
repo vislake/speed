@@ -129,15 +129,15 @@ func (subscriptionsModule) DependsOn() []string  { return nil }
 func (subscriptionsModule) Migrations() embed.FS { return embed.FS{} }
 func (subscriptionsModule) Locales() embed.FS    { return embed.FS{} }
 func (subscriptionsModule) OpenAPISpec() []byte  { return nil }
-func (subscriptionsModule) Register(reg *pkgcore.Registry) error {
-	if err := reg.Config.Add(pkgcore.ConfigItem{
+func (subscriptionsModule) Register(reg pkgcore.Registrar) error {
+	if err := reg.ConfigSeat().Add(pkgcore.ConfigItem{
 		Key: "support.email", Type: "string", Default: "support@example.com",
 		Public: true, Description: "The address shown to this tenant's users",
 		Group:  "support",
 	}); err != nil {
 		return err
 	}
-	return reg.Features.Add(pkgcore.FeatureFlag{
+	return reg.FeaturesSeat().Add(pkgcore.FeatureFlag{
 		Key: "support.live_chat", Default: false,
 		Description: "Whether the tenant gets the live-chat widget",
 	})
@@ -274,7 +274,7 @@ live_chat: false
 形态:[`internal/notes/repository.go`](https://github.com/vislake/speed/blob/main/examples/reference-app/internal/notes/repository.go)
 嵌入 `dbkit.Repository[Note]`,绝不手握裸 `*gorm.DB`;
 [`internal/notes/module.go`](https://github.com/vislake/speed/blob/main/examples/reference-app/internal/notes/module.go)
-在 `Register` 里用 `reg.Config.Add` / `reg.Features.Add` 声明它的配置项
+在 `Register` 里用 `reg.ConfigSeat().Add` / `reg.FeaturesSeat().Add` 声明它的配置项
 与功能开关——正是参考应用 `internal/app/server.go` 随后折进
 `configModule.Attach` 冻结的 schema 的那些声明。
 

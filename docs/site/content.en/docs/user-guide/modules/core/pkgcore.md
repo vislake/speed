@@ -10,7 +10,7 @@ The dependency floor of a speed-based service: the module every other
 Go module imports, and the one that imports none of them.
 
 pkgcore owns seven things and nothing else: the
-`Module`/`Registry`/`Kernel` wiring contract — one `Register(reg *Registry)`
+`Module`/`Registry`/`Kernel` wiring contract — one `Register(reg Registrar)`
 call per module; tenant context plus the raw system-context marker;
 the infrastructure seam interfaces `KVStore`, `EventBus`, `Mailer` and
 `ObjectStore` with the in-process implementations that double as test
@@ -36,8 +36,8 @@ builds on pkgcore. You use it in one of two roles:
   flags, permissions, job handlers, notification types, events and
   audit actions through one `Register` call. Do not add methods to
   `Module` later: under lockstep versioning that breaks every module
-  at once, which is why cross-cutting mechanisms become new fields on
-  `Registry` instead.
+  at once, which is why cross-cutting mechanisms become new seats on
+  the `Registrar` declaration face instead.
 - **As a host** — your binary composes the modules with
   `Kernel.Bootstrap` and declares which topology it runs as. The
   bare `NewKernel()` default is standalone: in-process seams only,
@@ -50,18 +50,18 @@ services started; registration order never matters, `DependsOn` and
 `Bootstrap`'s sort decide:
 
 ```go
-func (m *BillingModule) Register(reg *pkgcore.Registry) error {
-    reg.Routes.Mount("/api/v1/billing", m.router())
-    if err := reg.Permissions.Add("billing:read", "billing:write"); err != nil {
+func (m *BillingModule) Register(reg pkgcore.Registrar) error {
+    reg.RoutesSeat().Mount("/api/v1/billing", m.router())
+    if err := reg.PermissionsSeat().Add("billing:read", "billing:write"); err != nil {
         return err
     }
-    if err := reg.Events.Publishes(pkgcore.EventDecl{
+    if err := reg.EventsSeat().Publishes(pkgcore.EventDecl{
         Type: "billing.invoice.paid", PayloadType: "billing.InvoicePaid",
         Description: "An invoice was paid in full.",
     }); err != nil {
         return err
     }
-    reg.Events.Subscribe("authn.user_created", m.openCreditLedger)
+    reg.EventsSeat().Subscribe("authn.user_created", m.openCreditLedger)
     return nil
 }
 ```
@@ -144,7 +144,8 @@ client must not see.
 
 ## Boundaries and pitfalls
 
-- A new cross-cutting mechanism belongs on the `Registry`, never as a
+- A new cross-cutting mechanism belongs on the declaration face — a
+  `Registrar` accessor plus the registry field behind it — never as a
   new `Module` method; `Register` must not perform I/O, and a
   registrar error is never a merge — duplicate keys fail registration.
 - Do not write mocks for the seams: `NewMemoryKVStore`,

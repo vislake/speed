@@ -15,7 +15,7 @@ has been verified first.
 
 Every message your product sends goes through a **declared
 notification type**, and the type is declared by the business module
-that emits it — `reg.Notifications.Add` during its own `Register` —
+that emits it — `reg.NotificationsSeat().Add` during its own `Register` —
 never stored here as a template. A declaration carries the type's
 preference group, default channels, opt-out eligibility (verification
 codes are transactional) and recipient-visible parameters; the copy

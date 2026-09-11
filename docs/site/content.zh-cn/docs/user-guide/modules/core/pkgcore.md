@@ -10,7 +10,7 @@ speed 服务的依赖底座:每个其他 Go 模块都导入它,而它不导入�
 任何一个。
 
 pkgcore 只拥有七样东西:`Module`/`Registry`/`Kernel` 组装契约——
-每个模块一次 `Register(reg *Registry)` 调用;租户上下文与裸的系统
+每个模块一次 `Register(reg Registrar)` 调用;租户上下文与裸的系统
 上下文标记;基础设施接缝接口 `KVStore`、`EventBus`、`Mailer`、
 `ObjectStore` 及各自的进程内实现(内存存储与总线、控制台发信器、
 本地对象存储,同时充当测试替身);`Bootstrap` 借以解析并校验装配的
@@ -32,8 +32,8 @@ pkgcore 只拥有七样东西:`Module`/`Registry`/`Kernel` 组装契约——
 - **模块作者**——你的业务模块实现 `pkgcore.Module`,通过一次
   `Register` 调用贡献路由、配置项、功能开关、权限、任务处理器、
   通知类型、事件与审计动作。此后不要再给 `Module` 加方法:在
-  锁步版本化下那会同时打破所有模块——这正是横切机制改为往
-  `Registry` 上加字段的原因。
+  锁步版本化下那会同时打破所有模块——这正是横切机制改为落在
+  `Registrar` 声明面上的原因。
 - **宿主**——你的二进制用 `Kernel.Bootstrap` 组装模块,并声明自己
   以哪种拓扑运行。裸 `NewKernel()` 默认即 standalone:全部进程内
   接缝、零配置、无外部服务。
@@ -44,18 +44,18 @@ pkgcore 只拥有七样东西:`Module`/`Registry`/`Kernel` 组装契约——
 服务;注册顺序从不重要,由 `DependsOn` 与 `Bootstrap` 的排序决定:
 
 ```go
-func (m *BillingModule) Register(reg *pkgcore.Registry) error {
-    reg.Routes.Mount("/api/v1/billing", m.router())
-    if err := reg.Permissions.Add("billing:read", "billing:write"); err != nil {
+func (m *BillingModule) Register(reg pkgcore.Registrar) error {
+    reg.RoutesSeat().Mount("/api/v1/billing", m.router())
+    if err := reg.PermissionsSeat().Add("billing:read", "billing:write"); err != nil {
         return err
     }
-    if err := reg.Events.Publishes(pkgcore.EventDecl{
+    if err := reg.EventsSeat().Publishes(pkgcore.EventDecl{
         Type: "billing.invoice.paid", PayloadType: "billing.InvoicePaid",
         Description: "An invoice was paid in full.",
     }); err != nil {
         return err
     }
-    reg.Events.Subscribe("authn.user_created", m.openCreditLedger)
+    reg.EventsSeat().Subscribe("authn.user_created", m.openCreditLedger)
     return nil
 }
 ```
@@ -127,7 +127,8 @@ pkgcore.MultiReplicaSafe|pkgcore.SurvivesRestart)`、`WithKVStore`、
 
 ## 边界与注意
 
-- 新的横切机制落在 `Registry` 字段上,绝不作为新的 `Module` 方法。
+- 新的横切机制落在声明面上(一个 `Registrar` 访问器加其背后的
+  `Registry` 字段),绝不作为新的 `Module` 方法。
 - `Register` 不得做 I/O;注册器错误绝不是合并——跨模块重复键会让
   注册失败。
 - 不要为接缝写 mock:`NewMemoryKVStore`、`NewMemoryEventBus`、

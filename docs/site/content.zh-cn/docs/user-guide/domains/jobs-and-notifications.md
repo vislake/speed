@@ -15,7 +15,7 @@ flowchart LR
     H[你的 handler] -->|Enqueue Task| Q[jobs.Queue]
     Q -->|认领 + 租户上下文| W[worker: 注册的 Handler]
     W -->|完成或重试/死信| Q
-    B[业务模块] -->|Dispatch + reg.Notifications.Add| N[notification]
+    B[业务模块] -->|Dispatch + reg.NotificationsSeat().Add| N[notification]
     N -->|每位收件人每通道一个 job| Q
     Q --> D[投递 job:发送时重查偏好、\n同意、地址]
     D --> I[in_app_messages 行 / email / SMS]
@@ -55,7 +55,7 @@ defer q.Close(ctx)
 ## 消息面:notification
 
 每种通知类型是**声明的,不是存模板**:你的模块在 `Register` 期间把
-类型注册到内核注册表(`reg.Notifications.Add(...)`),每个类型带其偏
+类型注册到内核注册表(`reg.NotificationsSeat().Add(...)`),每个类型带其偏
 好组、默认通道与收件人能否退订(验证码是事务性的,不可退订)。文案
 存在声明模块自己的双语 locale 包里,投递时按收件人 locale 渲染——
 绝不在注册时捕获。
@@ -205,7 +205,7 @@ handler 在成功路径上派发:
 // In your module's Register: the type lands in the preference matrix;
 // its copy lives in your bilingual locale bundle under
 // <type_key>.<channel>.<part> ids, rendered in the recipient's locale.
-if err := reg.Notifications.Add(pkgcore.NotificationType{
+if err := reg.NotificationsSeat().Add(pkgcore.NotificationType{
 	Key:                   "reports.export_ready",
 	Group:                 "reports",
 	DefaultChannels:       []string{"in_app", "email"},

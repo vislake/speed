@@ -109,8 +109,8 @@ func (notesLikeModule) DependsOn() []string  { return nil }
 func (notesLikeModule) Migrations() embed.FS { return embed.FS{} }
 func (notesLikeModule) Locales() embed.FS    { return embed.FS{} }
 func (notesLikeModule) OpenAPISpec() []byte  { return nil }
-func (notesLikeModule) Register(reg *pkgcore.Registry) error {
-	return reg.Permissions.Add("notes:read", "notes:write")
+func (notesLikeModule) Register(reg pkgcore.Registrar) error {
+	return reg.PermissionsSeat().Add("notes:read", "notes:write")
 }
 
 // everyMember 回答 authn 在登录时提出的成员问题;真实宿主从 org 的

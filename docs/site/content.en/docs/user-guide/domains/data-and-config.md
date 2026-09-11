@@ -148,15 +148,15 @@ func (subscriptionsModule) DependsOn() []string  { return nil }
 func (subscriptionsModule) Migrations() embed.FS { return embed.FS{} }
 func (subscriptionsModule) Locales() embed.FS    { return embed.FS{} }
 func (subscriptionsModule) OpenAPISpec() []byte  { return nil }
-func (subscriptionsModule) Register(reg *pkgcore.Registry) error {
-	if err := reg.Config.Add(pkgcore.ConfigItem{
+func (subscriptionsModule) Register(reg pkgcore.Registrar) error {
+	if err := reg.ConfigSeat().Add(pkgcore.ConfigItem{
 		Key: "support.email", Type: "string", Default: "support@example.com",
 		Public: true, Description: "The address shown to this tenant's users",
 		Group:  "support",
 	}); err != nil {
 		return err
 	}
-	return reg.Features.Add(pkgcore.FeatureFlag{
+	return reg.FeaturesSeat().Add(pkgcore.FeatureFlag{
 		Key: "support.live_chat", Default: false,
 		Description: "Whether the tenant gets the live-chat widget",
 	})
@@ -300,7 +300,7 @@ same shape in real code:
 embeds `dbkit.Repository[Note]` instead of holding a raw `*gorm.DB`, and
 [`internal/notes/module.go`](https://github.com/vislake/speed/blob/main/examples/reference-app/internal/notes/module.go)
 declares its configuration items and feature flags through
-`reg.Config.Add` / `reg.Features.Add` during `Register` — the exact
+`reg.ConfigSeat().Add` / `reg.FeaturesSeat().Add` during `Register` — the exact
 declarations the reference app's `internal/app/server.go` then folds into
 the schema `configModule.Attach` freezes.
 

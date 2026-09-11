@@ -17,7 +17,7 @@ flowchart LR
     H[Your handler] -->|Enqueue Task| Q[jobs.Queue]
     Q -->|claim + tenant context| W[worker: registered Handler]
     W -->|done or retry/dead-letter| Q
-    B[Business module] -->|Dispatch + reg.Notifications.Add| N[notification]
+    B[Business module] -->|Dispatch + reg.NotificationsSeat().Add| N[notification]
     N -->|one job per recipient per channel| Q
     Q --> D[delivery job: re-check preferences\nconsent, addresses at send time]
     D --> I[in_app_messages row / email / SMS]
@@ -66,7 +66,7 @@ defer q.Close(ctx)
 
 Every notification type is **declared, not stored as a template**: your
 module registers its types on the kernel registry during `Register`
-(`reg.Notifications.Add(...)`), each carrying its preference group,
+(`reg.NotificationsSeat().Add(...)`), each carrying its preference group,
 default channels and whether recipients may unsubscribe (verification
 codes are transactional and not unsubscribable). The copy lives in the
 declaring module's own bilingual locale bundles, rendered at delivery
@@ -231,7 +231,7 @@ type while registering, the export handler dispatches it on success:
 // In your module's Register: the type lands in the preference matrix;
 // its copy lives in your bilingual locale bundle under
 // <type_key>.<channel>.<part> ids, rendered in the recipient's locale.
-if err := reg.Notifications.Add(pkgcore.NotificationType{
+if err := reg.NotificationsSeat().Add(pkgcore.NotificationType{
 	Key:                   "reports.export_ready",
 	Group:                 "reports",
 	DefaultChannels:       []string{"in_app", "email"},

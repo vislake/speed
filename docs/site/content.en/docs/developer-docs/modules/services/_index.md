@@ -29,7 +29,7 @@ route, every services module ships the full stack of a business
 capability: real tables with dual-dialect migrations, an OpenAPI
 fragment mounted at `/api/v1/*`, declared permissions, audit actions,
 events and job handlers — registered through the one
-`Register(reg *Registry)` call of the [module wiring
+`Register(reg Registrar)` call of the [module wiring
 contract](/docs/developer-docs/architecture/).
 
 The five modules also share the discipline the [design

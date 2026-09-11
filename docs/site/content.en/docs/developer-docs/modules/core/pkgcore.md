@@ -53,13 +53,16 @@ Every module implements one `Module` interface (`Name`, `DependsOn`,
 `Migrations`, `Locales`, `OpenAPISpec`, `Register`) and contributes
 everything it owns — routes, config schema, feature flags,
 permissions, job handlers, notification types, events, audit actions —
-through that single `Register(reg *Registry)` call. The `Registry`
-aggregates one registration seat per mechanism.
+through that single `Register(reg Registrar)` call. The declaration
+face is the `Registrar` view: one registration seat per mechanism,
+answered by both the kernel's module `Registry` and the component
+assembly's `ComponentRegistry`.
 
 **Why one method instead of eight?** Under lockstep versioning,
 changing the `Module` interface is a breaking change that breaks every
-module at once; a new cross-cutting mechanism becomes a new field on
-`Registry`, and existing modules neither change nor recompile. The
+module at once; a new cross-cutting mechanism becomes a new seat on
+the declaration face — a `Registrar` accessor plus the registrar
+behind it — and existing modules neither change nor recompile. The
 same reasoning keeps module assets (migrations, locales, the OpenAPI
 fragment) embedded with the module's own code, so version and assets
 cannot drift apart.

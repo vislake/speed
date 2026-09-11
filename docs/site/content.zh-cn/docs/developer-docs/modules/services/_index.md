@@ -23,7 +23,7 @@ core 组的模块——组装契约(`pkgcore`)、双方言数据库与仓储层
 模块都带着完整业务能力的全套:真实的表与双方言迁移、挂在
 `/api/v1/*` 的 OpenAPI 片段、声明的权限、审计动作、事件与任务
 处理器——全部经由[模块接线契约](/zh-cn/docs/developer-docs/architecture/)
-那一次 `Register(reg *Registry)` 调用注册。
+那一次 `Register(reg Registrar)` 调用注册。
 
 五个模块还共享[设计原则](/zh-cn/docs/developer-docs/design-principles/)
 对业务模块的要求:租户只从请求上下文读取、永不来自请求;长任务

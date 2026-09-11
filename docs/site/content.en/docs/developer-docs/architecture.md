@@ -217,15 +217,18 @@ containers.)
 Every backend module implements one `pkgcore.Module` interface and
 registers everything it contributes — routes, config schema, feature
 flags, permissions, job handlers, notification types, events, audit
-actions — through a **single `Register(reg *Registry)` call**. The
-`Registry` aggregates one registration seat per mechanism.
+actions — through a **single `Register(reg Registrar)` call**. The
+declaration face is the `Registrar` view: one registration seat per
+mechanism, answered by both the kernel's module `Registry` and the
+component assembly's `ComponentRegistry`.
 
 **Why one `Register` call instead of eight interface methods?**
 Under lockstep versioning, changing the `Module` interface is a
 breaking change that breaks every module at once. A new cross-cutting
-mechanism becomes a new field on `Registry`; existing modules do not
-change and do not recompile. The `Registry` struct exists precisely
-so that adding a mechanism never changes the `Module` interface.
+mechanism becomes a new seat on the declaration face — a `Registrar`
+accessor plus the registrar behind it; existing modules do not change
+and do not recompile. The declaration face exists precisely so that
+adding a mechanism never changes the `Module` interface.
 
 Registration is declarative, which pays dividends elsewhere:
 permission lists feed the admin console's role surface, config and

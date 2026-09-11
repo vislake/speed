@@ -46,7 +46,7 @@ message.
 ## A live type registry, not a template store
 
 Every notification type is declared by its owning business module
-during `Register`, through `reg.Notifications.Add`: its key
+during `Register`, through `reg.NotificationsSeat().Add`: its key
 (`<module>.<entity>.<action>`), default channels, and whether
 recipients may unsubscribe. Transactional types — verification codes —
 are not unsubscribable. Three design decisions hang off this registry:

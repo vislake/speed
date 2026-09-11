@@ -24,7 +24,7 @@ key path (`pkgcore.BootstrapKeyPurpose`), composed with
 owns the runtime layer, and it is required for any multi-tenant host.
 
 Modules declare items and feature flags on the registry during
-`Register` (`reg.Config.Add(pkgcore.ConfigItem{Key, Type, Default,
+`Register` (`reg.ConfigSeat().Add(pkgcore.ConfigItem{Key, Type, Default,
 ...})`, flags with their `DependsOn` chains); this module folds the
 declarations into one schema, resolves flag dependencies at runtime,
 and serves the effective values.

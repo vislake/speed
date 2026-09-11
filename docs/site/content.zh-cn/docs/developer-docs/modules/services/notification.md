@@ -37,7 +37,7 @@ import `notification`——它们发布领域事件,**宿主**订阅并调
 ## 活类型注册表,而非模板库
 
 每个通知类型由所属业务模块在 `Register` 期间经
-`reg.Notifications.Add` 声明:key(`<module>.<entity>.<action>`)、
+`reg.NotificationsSeat().Add` 声明:key(`<module>.<entity>.<action>`)、
 默认渠道、收件人能否退订。事务型类型——验证码——不可退订。三个
 设计决策挂在这张注册表上:
 

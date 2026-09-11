@@ -13,7 +13,7 @@ notification 是 speed 的外发消息模块:把租户的通知投递给它所�
 ## 它做什么
 
 你产品发出的每条消息都走一个**已声明的通知类型**,类型由发出它的
-业务模块声明——在自己的 `Register` 期间 `reg.Notifications.Add`——
+业务模块声明——在自己的 `Register` 期间 `reg.NotificationsSeat().Add`——
 绝不在这里存成模板。声明携带该类型的偏好组、默认通道、可否退订
 (验证码是事务性的,不可退订)与收件人可见参数;文案住在声明模块
 自己的双语 locale 包里,按 `<type_key>.<channel>.<part>` id 惯例,
