@@ -16,6 +16,7 @@ import (
 	"gorm.io/gorm"
 
 	"github.com/vislake/speed/go/metering"
+	"github.com/vislake/speed/go/pkgcore/testkit"
 )
 
 // TestPostgres_IngestReceiptRepository_DuplicateCreate_IsErrDuplicatedKey
@@ -32,7 +33,7 @@ import (
 // IngestReceiptRepository directly.
 func TestPostgres_IngestReceiptRepository_DuplicateCreate_IsErrDuplicatedKey(t *testing.T) {
 	repo := metering.NewIngestReceiptRepository(newPostgres(t))
-	ctx := tenantCtx("tenant-a")
+	ctx := testkit.TenantCtx("tenant-a")
 
 	if err := repo.Create(ctx, &metering.IngestReceipt{ID: "idem-1"}); err != nil {
 		t.Fatalf("Create (first): %v", err)
@@ -89,7 +90,7 @@ func TestPostgres_IngestBillingGrade_Redelivery_IsANoOpNotAnError(t *testing.T) 
 		t.Errorf("RealtimeCount after redelivery = %v, want 7 (exactly one application, not 14)", gotRealtime)
 	}
 
-	rows, err := summaries.List(tenantCtx("tenant-a"))
+	rows, err := summaries.List(testkit.TenantCtx("tenant-a"))
 	if err != nil {
 		t.Fatalf("List: %v", err)
 	}
@@ -160,7 +161,7 @@ func TestPostgres_Dispatcher_RedeliveredRow_RetiresInsteadOfErroring(t *testing.
 		t.Errorf("RealtimeCount after redelivery = %v, want 5 (exactly one application, not 10)", gotRealtime)
 	}
 
-	rows, err := summaries.List(tenantCtx("tenant-a"))
+	rows, err := summaries.List(testkit.TenantCtx("tenant-a"))
 	if err != nil {
 		t.Fatalf("List: %v", err)
 	}

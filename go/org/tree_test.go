@@ -18,6 +18,7 @@ import (
 	"github.com/vislake/speed/go/org/migrations"
 	"github.com/vislake/speed/go/pkgcore"
 	"github.com/vislake/speed/go/pkgcore/apperr"
+	"github.com/vislake/speed/go/pkgcore/testkit"
 )
 
 // newTestTree returns a TreeService over a freshly migrated SQLite database,
@@ -64,7 +65,7 @@ func mustCreateChild(t *testing.T, tree *TreeService, ctx context.Context, paren
 
 func TestTreeService_CreateRoot(t *testing.T) {
 	tree := newTestTree(t)
-	ctx := tenantCtx("tenant-a")
+	ctx := testkit.TenantCtx("tenant-a")
 
 	root := mustCreateRoot(t, tree, ctx, "Acme Dental")
 
@@ -90,7 +91,7 @@ func TestTreeService_CreateRoot(t *testing.T) {
 
 func TestTreeService_CreateRoot_Twice_ReturnsRootAlreadyExists(t *testing.T) {
 	tree := newTestTree(t)
-	ctx := tenantCtx("tenant-a")
+	ctx := testkit.TenantCtx("tenant-a")
 
 	mustCreateRoot(t, tree, ctx, "Acme Dental")
 
@@ -127,8 +128,8 @@ func TestTreeService_CreateRoot_Twice_ReturnsRootAlreadyExists(t *testing.T) {
 // exact interleaving only the index can arbitrate. The index admits the
 // first insert and refuses the second with the coded org.root_already_exists.
 func TestTreeService_CreateRoot_ConcurrentRaces_ExactlyOneRootSurvives(t *testing.T) {
-	ctxA := tenantCtx("tenant-a")
-	ctxB := tenantCtx("tenant-b")
+	ctxA := testkit.TenantCtx("tenant-a")
+	ctxB := testkit.TenantCtx("tenant-b")
 
 	dsn := filepath.Join(t.TempDir(), "createroot-race.sqlite")
 	db1, err := dbkit.Open(context.Background(), dbkit.Options{Dialect: dbkit.DialectSQLite, DSN: dsn})
@@ -250,7 +251,7 @@ func TestTreeService_CreateRoot_ConcurrentRaces_ExactlyOneRootSurvives(t *testin
 // succeeded.
 func TestTreeService_CreateRoot_SecondRootAndRootUnderRoot_AreRefused(t *testing.T) {
 	tree := newTestTree(t)
-	ctx := tenantCtx("tenant-a")
+	ctx := testkit.TenantCtx("tenant-a")
 
 	root := mustCreateRoot(t, tree, ctx, "root")
 
@@ -295,13 +296,13 @@ func TestTreeService_CreateRoot_SecondRootAndRootUnderRoot_AreRefused(t *testing
 func TestTreeService_CreateRoot_PerTenant_EachTenantGetsItsOwn(t *testing.T) {
 	tree := newTestTree(t)
 
-	rootA := mustCreateRoot(t, tree, tenantCtx("tenant-a"), "Acme Dental")
-	rootB := mustCreateRoot(t, tree, tenantCtx("tenant-b"), "Acme Dental")
+	rootA := mustCreateRoot(t, tree, testkit.TenantCtx("tenant-a"), "Acme Dental")
+	rootB := mustCreateRoot(t, tree, testkit.TenantCtx("tenant-b"), "Acme Dental")
 
 	if rootA.ID == rootB.ID {
 		t.Fatalf("both tenants' roots share id %q", rootA.ID)
 	}
-	got, err := tree.Root(tenantCtx("tenant-a"))
+	got, err := tree.Root(testkit.TenantCtx("tenant-a"))
 	if err != nil {
 		t.Fatalf("Root: %v", err)
 	}
@@ -323,7 +324,7 @@ func TestTreeService_CreateRoot_InvalidName(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			tree := newTestTree(t)
-			_, err := tree.CreateRoot(tenantCtx("tenant-a"), tc.input, "group")
+			_, err := tree.CreateRoot(testkit.TenantCtx("tenant-a"), tc.input, "group")
 			if err == nil {
 				t.Fatalf("CreateRoot(%q) succeeded, want %s", tc.input, tc.wantCode)
 			}
@@ -338,7 +339,7 @@ func TestTreeService_CreateRoot_InvalidName(t *testing.T) {
 // -- returns the root already there, unchanged.
 func TestTreeService_EnsureRoot_CreatesOnceThenReturnsTheStoredRoot(t *testing.T) {
 	tree := newTestTree(t)
-	ctx := tenantCtx("tenant-a")
+	ctx := testkit.TenantCtx("tenant-a")
 
 	created, err := tree.EnsureRoot(ctx, "Demo Tenant", "group")
 	if err != nil {
@@ -362,7 +363,7 @@ func TestTreeService_EnsureRoot_CreatesOnceThenReturnsTheStoredRoot(t *testing.T
 	}
 
 	// Each tenant still gets exactly its own root.
-	other, err := tree.EnsureRoot(tenantCtx("tenant-b"), "Other Tenant", "group")
+	other, err := tree.EnsureRoot(testkit.TenantCtx("tenant-b"), "Other Tenant", "group")
 	if err != nil {
 		t.Fatalf("EnsureRoot(tenant-b): %v", err)
 	}
@@ -373,7 +374,7 @@ func TestTreeService_EnsureRoot_CreatesOnceThenReturnsTheStoredRoot(t *testing.T
 
 func TestTreeService_EnsureRoot_InvalidName_IsRefusedAtTheCreate(t *testing.T) {
 	tree := newTestTree(t)
-	ctx := tenantCtx("tenant-a")
+	ctx := testkit.TenantCtx("tenant-a")
 
 	if _, err := tree.EnsureRoot(ctx, "", "group"); !apperr.HasCode(err, ErrNodeNameRequired.Code) {
 		t.Errorf("EnsureRoot(empty name) error = %v, want org.node_name_required", err)
@@ -382,7 +383,7 @@ func TestTreeService_EnsureRoot_InvalidName_IsRefusedAtTheCreate(t *testing.T) {
 
 func TestTreeService_CreateChild(t *testing.T) {
 	tree := newTestTree(t)
-	ctx := tenantCtx("tenant-a")
+	ctx := testkit.TenantCtx("tenant-a")
 
 	root := mustCreateRoot(t, tree, ctx, "Acme Dental")
 	region := mustCreateChild(t, tree, ctx, root.ID, "North Region")
@@ -423,7 +424,7 @@ func TestTreeService_CreateChild_UnknownParent_ReturnsParentNotFound(t *testing.
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			tree := newTestTree(t)
-			ctx := tenantCtx("tenant-a")
+			ctx := testkit.TenantCtx("tenant-a")
 			mustCreateRoot(t, tree, ctx, "Acme Dental")
 
 			_, err := tree.CreateChild(ctx, tc.parentID, "Child", "store")
@@ -441,10 +442,10 @@ func TestTreeService_CreateChild_UnknownParent_ReturnsParentNotFound(t *testing.
 // exists somewhere, which is itself a cross-tenant leak.
 func TestTreeService_CreateChild_ParentInAnotherTenant_ReturnsParentNotFound(t *testing.T) {
 	tree := newTestTree(t)
-	rootB := mustCreateRoot(t, tree, tenantCtx("tenant-b"), "Other Tenant")
-	mustCreateRoot(t, tree, tenantCtx("tenant-a"), "Acme Dental")
+	rootB := mustCreateRoot(t, tree, testkit.TenantCtx("tenant-b"), "Other Tenant")
+	mustCreateRoot(t, tree, testkit.TenantCtx("tenant-a"), "Acme Dental")
 
-	_, err := tree.CreateChild(tenantCtx("tenant-a"), rootB.ID, "Child", "store")
+	_, err := tree.CreateChild(testkit.TenantCtx("tenant-a"), rootB.ID, "Child", "store")
 	if err == nil {
 		t.Fatal("CreateChild under another tenant's node succeeded")
 	}
@@ -453,7 +454,7 @@ func TestTreeService_CreateChild_ParentInAnotherTenant_ReturnsParentNotFound(t *
 
 func TestTreeService_CreateChild_DuplicateSiblingName_ReturnsDuplicateSiblingName(t *testing.T) {
 	tree := newTestTree(t)
-	ctx := tenantCtx("tenant-a")
+	ctx := testkit.TenantCtx("tenant-a")
 
 	root := mustCreateRoot(t, tree, ctx, "Acme Dental")
 	mustCreateChild(t, tree, ctx, root.ID, "North Region")
@@ -484,7 +485,7 @@ func TestTreeService_CreateChild_DuplicateSiblingName_ReturnsDuplicateSiblingNam
 // would not enforce the column width that would otherwise catch it.
 func TestTreeService_CreateChild_BeyondMaxDepth_ReturnsMaxDepthExceeded(t *testing.T) {
 	tree := newTestTree(t)
-	ctx := tenantCtx("tenant-a")
+	ctx := testkit.TenantCtx("tenant-a")
 
 	node := mustCreateRoot(t, tree, ctx, "level-0")
 	for depth := 1; depth <= maxDepth; depth++ {
@@ -511,7 +512,7 @@ func TestTreeService_CreateChild_CorruptParentPath_ReturnsInternal(t *testing.T)
 	db := newTestDB(t)
 	tree := newTestTreeOn(t, db)
 	repo := NewRepository(db)
-	ctx := tenantCtx("tenant-a")
+	ctx := testkit.TenantCtx("tenant-a")
 
 	seedNode(t, repo, ctx, OrgNode{ID: "bad", Path: "no-leading-separator", Depth: 0, Name: "corrupt"})
 
@@ -524,7 +525,7 @@ func TestTreeService_CreateChild_CorruptParentPath_ReturnsInternal(t *testing.T)
 
 func TestTreeService_Rename(t *testing.T) {
 	tree := newTestTree(t)
-	ctx := tenantCtx("tenant-a")
+	ctx := testkit.TenantCtx("tenant-a")
 
 	root := mustCreateRoot(t, tree, ctx, "Acme Dental")
 	region := mustCreateChild(t, tree, ctx, root.ID, "North Region")
@@ -554,7 +555,7 @@ func TestTreeService_Rename(t *testing.T) {
 
 func TestTreeService_Rename_ToItsOwnName_IsANoOp(t *testing.T) {
 	tree := newTestTree(t)
-	ctx := tenantCtx("tenant-a")
+	ctx := testkit.TenantCtx("tenant-a")
 
 	root := mustCreateRoot(t, tree, ctx, "Acme Dental")
 	region := mustCreateChild(t, tree, ctx, root.ID, "North Region")
@@ -570,7 +571,7 @@ func TestTreeService_Rename_ToItsOwnName_IsANoOp(t *testing.T) {
 
 func TestTreeService_Rename_DuplicateSiblingName_ReturnsDuplicateSiblingName(t *testing.T) {
 	tree := newTestTree(t)
-	ctx := tenantCtx("tenant-a")
+	ctx := testkit.TenantCtx("tenant-a")
 
 	root := mustCreateRoot(t, tree, ctx, "Acme Dental")
 	mustCreateChild(t, tree, ctx, root.ID, "North Region")
@@ -585,7 +586,7 @@ func TestTreeService_Rename_DuplicateSiblingName_ReturnsDuplicateSiblingName(t *
 
 func TestTreeService_Rename_UnknownNode_ReturnsNodeNotFound(t *testing.T) {
 	tree := newTestTree(t)
-	ctx := tenantCtx("tenant-a")
+	ctx := testkit.TenantCtx("tenant-a")
 	mustCreateRoot(t, tree, ctx, "Acme Dental")
 
 	_, err := tree.Rename(ctx, "nope", "Whatever")
@@ -600,7 +601,7 @@ func TestTreeService_Rename_UnknownNode_ReturnsNodeNotFound(t *testing.T) {
 // must follow, with the parent edges of the descendants untouched.
 func TestTreeService_Move_RewritesTheWholeSubtree(t *testing.T) {
 	tree := newTestTree(t)
-	ctx := tenantCtx("tenant-a")
+	ctx := testkit.TenantCtx("tenant-a")
 
 	root := mustCreateRoot(t, tree, ctx, "Acme Dental")
 	north := mustCreateChild(t, tree, ctx, root.ID, "North Region")
@@ -663,7 +664,7 @@ func TestTreeService_Move_RewritesTheWholeSubtree(t *testing.T) {
 
 func TestTreeService_Move_IntoOwnSubtree_ReturnsCycleNotAllowed(t *testing.T) {
 	tree := newTestTree(t)
-	ctx := tenantCtx("tenant-a")
+	ctx := testkit.TenantCtx("tenant-a")
 
 	root := mustCreateRoot(t, tree, ctx, "Acme Dental")
 	north := mustCreateChild(t, tree, ctx, root.ID, "North Region")
@@ -702,7 +703,7 @@ func TestTreeService_Move_IntoOwnSubtree_ReturnsCycleNotAllowed(t *testing.T) {
 
 func TestTreeService_Move_UnknownTarget_ReturnsParentNotFound(t *testing.T) {
 	tree := newTestTree(t)
-	ctx := tenantCtx("tenant-a")
+	ctx := testkit.TenantCtx("tenant-a")
 
 	root := mustCreateRoot(t, tree, ctx, "Acme Dental")
 	north := mustCreateChild(t, tree, ctx, root.ID, "North Region")
@@ -720,9 +721,9 @@ func TestTreeService_Move_UnknownTarget_ReturnsParentNotFound(t *testing.T) {
 // exist from here.
 func TestTreeService_Move_TargetInAnotherTenant_ReturnsParentNotFound(t *testing.T) {
 	tree := newTestTree(t)
-	ctxA := tenantCtx("tenant-a")
+	ctxA := testkit.TenantCtx("tenant-a")
 
-	rootB := mustCreateRoot(t, tree, tenantCtx("tenant-b"), "Other Tenant")
+	rootB := mustCreateRoot(t, tree, testkit.TenantCtx("tenant-b"), "Other Tenant")
 	rootA := mustCreateRoot(t, tree, ctxA, "Acme Dental")
 	north := mustCreateChild(t, tree, ctxA, rootA.ID, "North Region")
 
@@ -735,7 +736,7 @@ func TestTreeService_Move_TargetInAnotherTenant_ReturnsParentNotFound(t *testing
 
 func TestTreeService_Move_DuplicateNameAtTarget_ReturnsDuplicateSiblingName(t *testing.T) {
 	tree := newTestTree(t)
-	ctx := tenantCtx("tenant-a")
+	ctx := testkit.TenantCtx("tenant-a")
 
 	root := mustCreateRoot(t, tree, ctx, "Acme Dental")
 	north := mustCreateChild(t, tree, ctx, root.ID, "North Region")
@@ -755,7 +756,7 @@ func TestTreeService_Move_DuplicateNameAtTarget_ReturnsDuplicateSiblingName(t *t
 // actually overflows.
 func TestTreeService_Move_SubtreeWouldExceedMaxDepth_ReturnsMaxDepthExceeded(t *testing.T) {
 	tree := newTestTree(t)
-	ctx := tenantCtx("tenant-a")
+	ctx := testkit.TenantCtx("tenant-a")
 
 	root := mustCreateRoot(t, tree, ctx, "Acme Dental")
 
@@ -805,7 +806,7 @@ func TestTreeService_Move_SubtreeWouldExceedMaxDepth_ReturnsMaxDepthExceeded(t *
 
 func TestTreeService_Move_ToItsCurrentParent_IsANoOp(t *testing.T) {
 	tree := newTestTree(t)
-	ctx := tenantCtx("tenant-a")
+	ctx := testkit.TenantCtx("tenant-a")
 
 	root := mustCreateRoot(t, tree, ctx, "Acme Dental")
 	north := mustCreateChild(t, tree, ctx, root.ID, "North Region")
@@ -827,7 +828,7 @@ func TestTreeService_Move_SiblingSharingAnIDPrefix_IsNotDraggedAlong(t *testing.
 	db := newTestDB(t)
 	tree := NewTreeService(db)
 	repo := NewRepository(db)
-	ctx := tenantCtx("tenant-a")
+	ctx := testkit.TenantCtx("tenant-a")
 
 	// Hex-only ids, per the alphabet path.go pins: "1a" and "1aa" are the
 	// adversarial pair, "0" is the root, "3" the leaf under the short id and
@@ -867,7 +868,7 @@ func TestTreeService_Move_SiblingSharingAnIDPrefix_IsNotDraggedAlong(t *testing.
 
 func TestTreeService_Delete_Leaf(t *testing.T) {
 	tree := newTestTree(t)
-	ctx := tenantCtx("tenant-a")
+	ctx := testkit.TenantCtx("tenant-a")
 
 	root := mustCreateRoot(t, tree, ctx, "Acme Dental")
 	north := mustCreateChild(t, tree, ctx, root.ID, "North Region")
@@ -887,7 +888,7 @@ func TestTreeService_Delete_Leaf(t *testing.T) {
 // is what proves it was.
 func TestTreeService_Delete_WithChildren_NoCascade_ReturnsNodeHasChildren(t *testing.T) {
 	tree := newTestTree(t)
-	ctx := tenantCtx("tenant-a")
+	ctx := testkit.TenantCtx("tenant-a")
 
 	root := mustCreateRoot(t, tree, ctx, "Acme Dental")
 	north := mustCreateChild(t, tree, ctx, root.ID, "North Region")
@@ -929,7 +930,7 @@ func TestTreeService_Delete_WithChildren_NoCascade_ReturnsNodeHasChildren(t *tes
 
 func TestTreeService_Delete_WithCascade_RemovesTheWholeSubtree(t *testing.T) {
 	tree := newTestTree(t)
-	ctx := tenantCtx("tenant-a")
+	ctx := testkit.TenantCtx("tenant-a")
 
 	root := mustCreateRoot(t, tree, ctx, "Acme Dental")
 	north := mustCreateChild(t, tree, ctx, root.ID, "North Region")
@@ -966,7 +967,7 @@ func TestTreeService_Delete_WithCascade_RemovesTheWholeSubtree(t *testing.T) {
 // dbkit.ErrRecordNotFound on every restore.
 func TestTreeService_Delete_WithCascade_MarksEveryLevelSoftDeletedAndRestorable(t *testing.T) {
 	tree := newTestTree(t)
-	ctx := tenantCtx("tenant-a")
+	ctx := testkit.TenantCtx("tenant-a")
 
 	root := mustCreateRoot(t, tree, ctx, "Acme Dental")
 	north := mustCreateChild(t, tree, ctx, root.ID, "North Region")
@@ -1006,7 +1007,7 @@ func TestTreeService_Delete_WithCascade_MarksEveryLevelSoftDeletedAndRestorable(
 
 func TestTreeService_Delete_Root_ReturnsRootNotDeletable(t *testing.T) {
 	tree := newTestTree(t)
-	ctx := tenantCtx("tenant-a")
+	ctx := testkit.TenantCtx("tenant-a")
 
 	root := mustCreateRoot(t, tree, ctx, "Acme Dental")
 
@@ -1024,7 +1025,7 @@ func TestTreeService_Delete_Root_ReturnsRootNotDeletable(t *testing.T) {
 
 func TestTreeService_Delete_UnknownNode_ReturnsNodeNotFound(t *testing.T) {
 	tree := newTestTree(t)
-	ctx := tenantCtx("tenant-a")
+	ctx := testkit.TenantCtx("tenant-a")
 	mustCreateRoot(t, tree, ctx, "Acme Dental")
 
 	err := tree.Delete(ctx, "nope", true)
@@ -1046,8 +1047,8 @@ func TestTreeService_Delete_UnknownNode_ReturnsNodeNotFound(t *testing.T) {
 // TestRepository_subtree_OtherTenantWithIdenticalPaths_IsNotReturned.
 func TestTreeService_Delete_Cascade_LeavesOtherTenantsAlone(t *testing.T) {
 	tree := newTestTree(t)
-	ctxA := tenantCtx("tenant-a")
-	ctxB := tenantCtx("tenant-b")
+	ctxA := testkit.TenantCtx("tenant-a")
+	ctxB := testkit.TenantCtx("tenant-b")
 
 	rootA := mustCreateRoot(t, tree, ctxA, "Acme Dental")
 	branchA := mustCreateChild(t, tree, ctxA, rootA.ID, "North Region")
@@ -1076,7 +1077,7 @@ func TestTreeService_Delete_Cascade_LeavesOtherTenantsAlone(t *testing.T) {
 
 func TestTreeService_Ancestors(t *testing.T) {
 	tree := newTestTree(t)
-	ctx := tenantCtx("tenant-a")
+	ctx := testkit.TenantCtx("tenant-a")
 
 	root := mustCreateRoot(t, tree, ctx, "Acme Dental")
 	north := mustCreateChild(t, tree, ctx, root.ID, "North Region")
@@ -1123,7 +1124,7 @@ func TestTreeService_Ancestors(t *testing.T) {
 // accidental depth filter shows up as a missing or extra branch.
 func TestTreeService_DescendantsAndSubtree_WideAndDeep(t *testing.T) {
 	tree := newTestTree(t)
-	ctx := tenantCtx("tenant-a")
+	ctx := testkit.TenantCtx("tenant-a")
 
 	root := mustCreateRoot(t, tree, ctx, "Acme Dental")
 
@@ -1189,7 +1190,7 @@ func TestTreeService_DescendantsAndSubtree_WideAndDeep(t *testing.T) {
 
 func TestTreeService_Children(t *testing.T) {
 	tree := newTestTree(t)
-	ctx := tenantCtx("tenant-a")
+	ctx := testkit.TenantCtx("tenant-a")
 
 	root := mustCreateRoot(t, tree, ctx, "Acme Dental")
 	north := mustCreateChild(t, tree, ctx, root.ID, "North Region")
@@ -1218,9 +1219,9 @@ func TestTreeService_Children(t *testing.T) {
 // from a nonexistent one.
 func TestTreeService_Get_OtherTenantsNode_ReturnsNodeNotFound(t *testing.T) {
 	tree := newTestTree(t)
-	rootB := mustCreateRoot(t, tree, tenantCtx("tenant-b"), "Other Tenant")
+	rootB := mustCreateRoot(t, tree, testkit.TenantCtx("tenant-b"), "Other Tenant")
 
-	_, err := tree.Get(tenantCtx("tenant-a"), rootB.ID)
+	_, err := tree.Get(testkit.TenantCtx("tenant-a"), rootB.ID)
 	if err == nil {
 		t.Fatal("reading another tenant's node succeeded")
 	}
@@ -1232,7 +1233,7 @@ func TestTreeService_Get_OtherTenantsNode_ReturnsNodeNotFound(t *testing.T) {
 // worked without a tenant would be the exact shape of a cross-tenant leak.
 func TestTreeService_NoTenantContext_EveryOperationFailsClosed(t *testing.T) {
 	tree := newTestTree(t)
-	seeded := mustCreateRoot(t, tree, tenantCtx("tenant-a"), "Acme Dental")
+	seeded := mustCreateRoot(t, tree, testkit.TenantCtx("tenant-a"), "Acme Dental")
 	ctx := context.Background()
 
 	operations := []struct {
@@ -1260,7 +1261,7 @@ func TestTreeService_NoTenantContext_EveryOperationFailsClosed(t *testing.T) {
 	}
 
 	// And nothing was written along the way.
-	nodes, err := NewRepository(tree.repo.db).List(tenantCtx("tenant-a"))
+	nodes, err := NewRepository(tree.repo.db).List(testkit.TenantCtx("tenant-a"))
 	if err != nil {
 		t.Fatalf("List: %v", err)
 	}
@@ -1274,8 +1275,8 @@ func TestTreeService_NoTenantContext_EveryOperationFailsClosed(t *testing.T) {
 // from the request.
 func TestTreeService_TenantIsNeverATreeServiceParameter(t *testing.T) {
 	tree := newTestTree(t)
-	ctxA := tenantCtx("tenant-a")
-	ctxB := tenantCtx("tenant-b")
+	ctxA := testkit.TenantCtx("tenant-a")
+	ctxB := testkit.TenantCtx("tenant-b")
 
 	rootA := mustCreateRoot(t, tree, ctxA, "Acme Dental")
 
@@ -1306,7 +1307,7 @@ func TestTreeService_TenantIsNeverATreeServiceParameter(t *testing.T) {
 // person whose data scope can no longer be resolved.
 func TestTreeService_Delete_WithMembers_ReturnsNodeHasMembers(t *testing.T) {
 	m, _ := newTestModule(t)
-	ctx := tenantCtx("tenant-a")
+	ctx := testkit.TenantCtx("tenant-a")
 	root, left, right := seedTree(t, m.Tree(), ctx)
 	chair, err := m.Tree().CreateChild(ctx, left.ID, "chair 1", "room")
 	if err != nil {
@@ -1350,10 +1351,10 @@ func TestTreeService_Delete_WithMembers_ReturnsNodeHasMembers(t *testing.T) {
 // a same-named node id cannot make this tenant's node undeletable.
 func TestTreeService_Delete_OtherTenantsMembers_DoNotBlockADelete(t *testing.T) {
 	m, _ := newTestModule(t)
-	ctx := tenantCtx("tenant-a")
+	ctx := testkit.TenantCtx("tenant-a")
 	_, left, _ := seedTree(t, m.Tree(), ctx)
 
-	seedMembership(t, m.Members().Repository(), tenantCtx("tenant-b"), Membership{
+	seedMembership(t, m.Members().Repository(), testkit.TenantCtx("tenant-b"), Membership{
 		ID: "20000000-0000-4000-8000-000000000020", UserID: "u-theirs",
 		NodeID: left.ID, Status: MembershipStatusActive,
 	})
@@ -1367,7 +1368,7 @@ func TestTreeService_Delete_OtherTenantsMembers_DoNotBlockADelete(t *testing.T) 
 // be orphaned -- keeps working exactly as it did before the guard existed.
 func TestTreeService_Delete_WithoutARosterWired_SkipsTheGuard(t *testing.T) {
 	tree := NewTreeService(newTestDB(t))
-	ctx := tenantCtx("tenant-a")
+	ctx := testkit.TenantCtx("tenant-a")
 
 	root, err := tree.CreateRoot(ctx, "group", "group")
 	if err != nil {
@@ -1390,7 +1391,7 @@ func TestTreeService_Delete_WithoutARosterWired_SkipsTheGuard(t *testing.T) {
 // disagree about it without one reconfiguring the other.
 func TestTreeService_MaxDepth_IsPerServiceNotGlobal(t *testing.T) {
 	shallow := NewModule(newTestDB(t), WithEmailIndexer(newTestEmailIndexer(t)), WithMaxDepth(1))
-	ctx := tenantCtx("tenant-a")
+	ctx := testkit.TenantCtx("tenant-a")
 
 	root, err := shallow.Tree().CreateRoot(ctx, "group", "group")
 	if err != nil {
@@ -1428,7 +1429,7 @@ func TestTreeService_MaxDepth_IsPerServiceNotGlobal(t *testing.T) {
 // prevents.
 func TestTreeService_Delete_ThenCreateChild_SameSiblingName_Succeeds(t *testing.T) {
 	tree := newTestTree(t)
-	ctx := tenantCtx("tenant-a")
+	ctx := testkit.TenantCtx("tenant-a")
 
 	root := mustCreateRoot(t, tree, ctx, "Acme Dental")
 	original := mustCreateChild(t, tree, ctx, root.ID, "North Region")
@@ -1462,7 +1463,7 @@ func TestTreeService_Delete_ThenCreateChild_SameSiblingName_Succeeds(t *testing.
 // Restore's collapsed not-found signal: an id nothing ever created.
 func TestTreeService_Restore_UnknownID_ReturnsNodeNotFound(t *testing.T) {
 	tree := newTestTree(t)
-	ctx := tenantCtx("tenant-a")
+	ctx := testkit.TenantCtx("tenant-a")
 	mustCreateRoot(t, tree, ctx, "Acme Dental")
 
 	_, err := tree.Restore(ctx, "nope")
@@ -1476,7 +1477,7 @@ func TestTreeService_Restore_UnknownID_ReturnsNodeNotFound(t *testing.T) {
 // and Restore does not silently treat that as a no-op success.
 func TestTreeService_Restore_LiveNode_ReturnsNodeNotFound(t *testing.T) {
 	tree := newTestTree(t)
-	ctx := tenantCtx("tenant-a")
+	ctx := testkit.TenantCtx("tenant-a")
 	root := mustCreateRoot(t, tree, ctx, "Acme Dental")
 
 	_, err := tree.Restore(ctx, root.ID)
@@ -1491,7 +1492,7 @@ func TestTreeService_Restore_LiveNode_ReturnsNodeNotFound(t *testing.T) {
 // explicitly by id.
 func TestTreeService_Restore_IsNotCascading(t *testing.T) {
 	tree := newTestTree(t)
-	ctx := tenantCtx("tenant-a")
+	ctx := testkit.TenantCtx("tenant-a")
 
 	root := mustCreateRoot(t, tree, ctx, "Acme Dental")
 	north := mustCreateChild(t, tree, ctx, root.ID, "North Region")
@@ -1531,7 +1532,7 @@ func TestTreeService_Restore_IsNotCascading(t *testing.T) {
 // corrupt, not supported. Restore refuses instead.
 func TestTreeService_Restore_DeadParent_RefusesRestore(t *testing.T) {
 	tree := newTestTree(t)
-	ctx := tenantCtx("tenant-a")
+	ctx := testkit.TenantCtx("tenant-a")
 
 	root := mustCreateRoot(t, tree, ctx, "Acme Dental")
 	north := mustCreateChild(t, tree, ctx, root.ID, "North Region")
@@ -1583,7 +1584,7 @@ func TestTreeService_Restore_DeadParent_RefusesRestore(t *testing.T) {
 func TestTreeService_Restore_AfterAncestorMoved_ReexpressesUnderTheCurrentParent(t *testing.T) {
 	db := newTestDB(t)
 	tree := newTestTreeOn(t, db)
-	ctx := tenantCtx("tenant-a")
+	ctx := testkit.TenantCtx("tenant-a")
 
 	root := mustCreateRoot(t, tree, ctx, "Acme Dental")
 	north := mustCreateChild(t, tree, ctx, root.ID, "North Region")
@@ -1656,7 +1657,7 @@ func TestTreeService_Restore_AfterAncestorMoved_ReexpressesUnderTheCurrentParent
 // resurrect a row deeper than the module's own bound permits.
 func TestTreeService_Restore_WouldLandBeyondMaxDepth_Refused(t *testing.T) {
 	tree := newTestTree(t) // default maxDepth = 8
-	ctx := tenantCtx("tenant-a")
+	ctx := testkit.TenantCtx("tenant-a")
 
 	root := mustCreateRoot(t, tree, ctx, "Acme Dental")
 	// An 8-deep chain under the root: the deepest level maxDepth admits.
@@ -1739,7 +1740,7 @@ func TestTreeService_Restore_WouldLandBeyondMaxDepth_Refused(t *testing.T) {
 func TestTreeService_Restore_RestoreMoveDeleteRace_RestoresUnderCurrentParent(t *testing.T) {
 	db := newTestDB(t)
 	tree := newTestTreeOn(t, db)
-	ctx := tenantCtx("tenant-a")
+	ctx := testkit.TenantCtx("tenant-a")
 
 	root := mustCreateRoot(t, tree, ctx, "root")
 	p1 := mustCreateChild(t, tree, ctx, root.ID, "p1")
@@ -1888,7 +1889,7 @@ func TestTreeService_ConcurrentCreateChildAndDelete_NeverOrphansAChild(t *testin
 	for round := 0; round < rounds; round++ {
 		db := newTestDB(t)
 		tree := newTestTreeOn(t, db)
-		ctx := tenantCtx("tenant-a")
+		ctx := testkit.TenantCtx("tenant-a")
 		root := mustCreateRoot(t, tree, ctx, "root")
 		parent := mustCreateChild(t, tree, ctx, root.ID, "parent")
 
@@ -1933,7 +1934,7 @@ func TestTreeService_ConcurrentMoveAndMove_TreeInvariantHolds(t *testing.T) {
 	for round := 0; round < rounds; round++ {
 		db := newTestDB(t)
 		tree := newTestTreeOn(t, db)
-		ctx := tenantCtx("tenant-a")
+		ctx := testkit.TenantCtx("tenant-a")
 		root := mustCreateRoot(t, tree, ctx, "root")
 		a := mustCreateChild(t, tree, ctx, root.ID, "a")
 		b := mustCreateChild(t, tree, ctx, root.ID, "b")
@@ -1973,7 +1974,7 @@ func TestTreeService_ConcurrentMoveAndCreateChild_TreeInvariantHolds(t *testing.
 	for round := 0; round < rounds; round++ {
 		db := newTestDB(t)
 		tree := newTestTreeOn(t, db)
-		ctx := tenantCtx("tenant-a")
+		ctx := testkit.TenantCtx("tenant-a")
 		root := mustCreateRoot(t, tree, ctx, "root")
 		a := mustCreateChild(t, tree, ctx, root.ID, "a")
 		b := mustCreateChild(t, tree, ctx, root.ID, "b")
@@ -2009,7 +2010,7 @@ func TestTreeService_ConcurrentMoveAndDelete_TreeInvariantHolds(t *testing.T) {
 	for round := 0; round < rounds; round++ {
 		db := newTestDB(t)
 		tree := newTestTreeOn(t, db)
-		ctx := tenantCtx("tenant-a")
+		ctx := testkit.TenantCtx("tenant-a")
 		root := mustCreateRoot(t, tree, ctx, "root")
 		a := mustCreateChild(t, tree, ctx, root.ID, "a")
 		b := mustCreateChild(t, tree, ctx, root.ID, "b")
@@ -2078,7 +2079,7 @@ func TestTreeService_ConcurrentRestoreAndCascadeDelete_NeverLandsOnADeadParent(t
 	for round := 0; round < rounds; round++ {
 		db := newTestDB(t)
 		tree := newTestTreeOn(t, db)
-		ctx := tenantCtx("tenant-a")
+		ctx := testkit.TenantCtx("tenant-a")
 		root := mustCreateRoot(t, tree, ctx, "root")
 		parent := mustCreateChild(t, tree, ctx, root.ID, "parent")
 		child := mustCreateChild(t, tree, ctx, parent.ID, "child")
@@ -2143,7 +2144,7 @@ func TestTreeService_ConcurrentMoveAndCreateChild_InteriorDescendant_TreeInvaria
 	for round := 0; round < rounds; round++ {
 		db := newTestDB(t)
 		tree := newTestTreeOn(t, db)
-		ctx := tenantCtx("tenant-a")
+		ctx := testkit.TenantCtx("tenant-a")
 		root := mustCreateRoot(t, tree, ctx, "root")
 		a := mustCreateChild(t, tree, ctx, root.ID, "a")
 		b := mustCreateChild(t, tree, ctx, root.ID, "b")
@@ -2194,7 +2195,7 @@ func TestTreeService_ConcurrentDeleteAndMemberAdd_NeverDanglesAMembership(t *tes
 	const rounds = 200
 	for round := 0; round < rounds; round++ {
 		m, _ := newTestModule(t)
-		ctx := tenantCtx("tenant-a")
+		ctx := testkit.TenantCtx("tenant-a")
 		root, err := m.Tree().CreateRoot(ctx, "root", "group")
 		if err != nil {
 			t.Fatalf("round %d: CreateRoot: %v", round, err)
@@ -2273,7 +2274,7 @@ func TestTreeService_ConcurrentDeleteAndMemberAdd_NeverDanglesAMembership(t *tes
 // a valid serial order, rename then delete -- which is why this test starts
 // it only after `held`.)
 func TestTreeService_ConcurrentRenameAndDelete_NeverResurrectsTheNode(t *testing.T) {
-	ctx := tenantCtx("tenant-a")
+	ctx := testkit.TenantCtx("tenant-a")
 
 	// One file, two connections: db1 carries the tree; db2 plays the
 	// concurrent deleter. dbkit.Open applies the busy_timeout pragma to every
@@ -2403,7 +2404,7 @@ func TestTreeService_ConcurrentRenameAndDelete_NeverResurrectsTheNode(t *testing
 // therefore always reports one of the two legitimate outcomes -- the node
 // deleted, or node_not_found -- never a silent zero-match.
 func TestTreeService_Delete_CascadeRacingAMove_NeverSilentlyDeletesNothing(t *testing.T) {
-	ctx := tenantCtx("tenant-a")
+	ctx := testkit.TenantCtx("tenant-a")
 
 	dsn := filepath.Join(t.TempDir(), "delete-move-race.sqlite")
 	db1, err := dbkit.Open(context.Background(), dbkit.Options{Dialect: dbkit.DialectSQLite, DSN: dsn})
@@ -2523,7 +2524,7 @@ func TestTreeService_Delete_CascadeRacingAMove_NeverSilentlyDeletesNothing(t *te
 // must answer with ErrNodeNotFound instead of the success plus empty-ids
 // event the unguarded shape would have produced.
 func TestTreeService_Delete_CascadeOfAConcurrentlyDeletedNode_AnswersNodeNotFound(t *testing.T) {
-	ctx := tenantCtx("tenant-a")
+	ctx := testkit.TenantCtx("tenant-a")
 
 	dsn := filepath.Join(t.TempDir(), "delete-delete-race.sqlite")
 	db1, err := dbkit.Open(context.Background(), dbkit.Options{Dialect: dbkit.DialectSQLite, DSN: dsn})
@@ -2632,7 +2633,7 @@ func TestTreeService_Delete_CascadeOfAConcurrentlyDeletedNode_AnswersNodeNotFoun
 // must answer the same coded org.duplicate_sibling_name.
 func TestTreeService_Restore_ReusedSiblingNameSlot_AnswersDuplicateSiblingName(t *testing.T) {
 	tree := newTestTree(t)
-	ctx := tenantCtx("tenant-a")
+	ctx := testkit.TenantCtx("tenant-a")
 
 	root := mustCreateRoot(t, tree, ctx, "root")
 	original := mustCreateChild(t, tree, ctx, root.ID, "same-name")
@@ -2672,7 +2673,7 @@ func TestTreeService_Restore_ReusedSiblingNameSlot_AnswersDuplicateSiblingName(t
 // root slot immediately, while one LIVE root per tenant stays enforced.
 func TestTreeService_CreateRoot_AfterSoftDeletedRoot_Succeeds(t *testing.T) {
 	tree := newTestTree(t)
-	ctx := tenantCtx("tenant-a")
+	ctx := testkit.TenantCtx("tenant-a")
 
 	original := mustCreateRoot(t, tree, ctx, "Acme Dental")
 
@@ -2740,7 +2741,7 @@ func TestTreeService_CreateRoot_AfterSoftDeletedRoot_Succeeds(t *testing.T) {
 // the response and the next read disagreeing about when the write happened.
 func TestTreeService_Rename_ReturnsThePostWriteUpdatedAt(t *testing.T) {
 	tree := newTestTree(t)
-	ctx := tenantCtx("tenant-a")
+	ctx := testkit.TenantCtx("tenant-a")
 	root := mustCreateRoot(t, tree, ctx, "root")
 	node := mustCreateChild(t, tree, ctx, root.ID, "before")
 
@@ -2769,7 +2770,7 @@ func TestTreeService_Rename_ReturnsThePostWriteUpdatedAt(t *testing.T) {
 // UpdatedAt disagreed with the value a subsequent Get reads back.
 func TestTreeService_Move_ReturnsThePostWriteUpdatedAt(t *testing.T) {
 	tree := newTestTree(t)
-	ctx := tenantCtx("tenant-a")
+	ctx := testkit.TenantCtx("tenant-a")
 	root := mustCreateRoot(t, tree, ctx, "root")
 	a := mustCreateChild(t, tree, ctx, root.ID, "a")
 	b := mustCreateChild(t, tree, ctx, root.ID, "b")

@@ -10,6 +10,7 @@ import (
 
 	"github.com/vislake/speed/go/pkgcore"
 	"github.com/vislake/speed/go/pkgcore/apperr"
+	"github.com/vislake/speed/go/pkgcore/testkit"
 )
 
 // eventRecorder collects the events a Service publishes, so a test can
@@ -58,7 +59,7 @@ func recordEvents(reg *pkgcore.ComponentRegistry) *eventRecorder {
 func TestService_DefineRole_CreatesTheRoleAndItsPermissions(t *testing.T) {
 	svc, reg := newTestServiceWithRegistry(t)
 	rec := recordEvents(reg)
-	ctx := tenantCtx("tenant-a")
+	ctx := testkit.TenantCtx("tenant-a")
 
 	role, err := svc.DefineRole(ctx, RoleDefinition{
 		Key:            "reader",
@@ -113,7 +114,7 @@ func TestService_DefineRole_UndeclaredPermission_IsRejected(t *testing.T) {
 	// be a role that appears to grant something and silently grants
 	// nothing, which nobody would notice until an incident.
 	svc := newTestService(t)
-	ctx := tenantCtx("tenant-a")
+	ctx := testkit.TenantCtx("tenant-a")
 
 	_, err := svc.DefineRole(ctx, RoleDefinition{Key: "typo", Permissions: []string{"notes:read", "notes:wirte"}})
 	if !apperr.HasCode(err, ErrUnknownPermission.Code) {
@@ -128,7 +129,7 @@ func TestService_DefineRole_UndeclaredPermission_IsRejected(t *testing.T) {
 
 func TestService_DefineRole_DuplicateKey_IsRejected(t *testing.T) {
 	svc := newTestService(t)
-	ctx := tenantCtx("tenant-a")
+	ctx := testkit.TenantCtx("tenant-a")
 	def := RoleDefinition{Key: "reader", Permissions: []string{"notes:read"}}
 
 	if _, err := svc.DefineRole(ctx, def); err != nil {
@@ -157,7 +158,7 @@ func TestService_DefineRole_ConcurrentIdenticalDefine_LoserConvergesOnTheDocumen
 	// EnsureBuiltinRoles whose seed lost the race converge instead of
 	// failing a replica's startup.
 	svc := newTestService(t)
-	ctx := tenantCtx("tenant-a")
+	ctx := testkit.TenantCtx("tenant-a")
 	def := RoleDefinition{Key: "reader", Permissions: []string{"notes:read"}}
 
 	svc.beforeRoleCreate = func() {
@@ -185,10 +186,10 @@ func TestService_DefineRole_SameKeyInAnotherTenant_IsAllowed(t *testing.T) {
 	svc := newTestService(t)
 	def := RoleDefinition{Key: "reader", Permissions: []string{"notes:read"}}
 
-	if _, err := svc.DefineRole(tenantCtx("tenant-a"), def); err != nil {
+	if _, err := svc.DefineRole(testkit.TenantCtx("tenant-a"), def); err != nil {
 		t.Fatalf("DefineRole in tenant-a: %v", err)
 	}
-	if _, err := svc.DefineRole(tenantCtx("tenant-b"), def); err != nil {
+	if _, err := svc.DefineRole(testkit.TenantCtx("tenant-b"), def); err != nil {
 		t.Fatalf("DefineRole in tenant-b: %v", err)
 	}
 }
@@ -203,7 +204,7 @@ func TestService_DefineRole_WithoutATenantContext_FailsClosed(t *testing.T) {
 
 func TestService_AssignRole_CreatesTheBindingAndAnnouncesIt(t *testing.T) {
 	svc, reg := newTestServiceWithRegistry(t)
-	ctx := tenantCtx("tenant-a")
+	ctx := testkit.TenantCtx("tenant-a")
 	if _, err := svc.DefineRole(ctx, RoleDefinition{Key: "reader", Permissions: []string{"notes:read"}}); err != nil {
 		t.Fatalf("DefineRole: %v", err)
 	}
@@ -248,7 +249,7 @@ func TestService_AssignRole_WithNoActingSubject_LeavesTheActorEmpty(t *testing.T
 	// The actor is best-effort: rbac takes no actor parameter and must not
 	// invent one.
 	svc, reg := newTestServiceWithRegistry(t)
-	ctx := tenantCtx("tenant-a")
+	ctx := testkit.TenantCtx("tenant-a")
 	if _, err := svc.DefineRole(ctx, RoleDefinition{Key: "reader", Permissions: []string{"notes:read"}}); err != nil {
 		t.Fatalf("DefineRole: %v", err)
 	}
@@ -268,7 +269,7 @@ func TestService_AssignRole_IsIdempotent(t *testing.T) {
 	// caller's intent, and a retry after a timeout must not fail on the
 	// unique index.
 	svc, reg := newTestServiceWithRegistry(t)
-	ctx := tenantCtx("tenant-a")
+	ctx := testkit.TenantCtx("tenant-a")
 	if _, err := svc.DefineRole(ctx, RoleDefinition{Key: "reader", Permissions: []string{"notes:read"}}); err != nil {
 		t.Fatalf("DefineRole: %v", err)
 	}
@@ -309,7 +310,7 @@ func TestService_AssignRole_ConcurrentIdenticalAssign_IsANoOp(t *testing.T) {
 	// returning nil per AssignRole's documented contract -- not surfaced
 	// as ErrStorage.
 	svc := newTestService(t)
-	ctx := tenantCtx("tenant-a")
+	ctx := testkit.TenantCtx("tenant-a")
 	role, err := svc.DefineRole(ctx, RoleDefinition{Key: "reader", Permissions: []string{"notes:read"}})
 	if err != nil {
 		t.Fatalf("DefineRole: %v", err)
@@ -343,7 +344,7 @@ func TestService_AssignRole_ConcurrentIdenticalAssign_IsANoOp(t *testing.T) {
 
 func TestService_AssignRole_DifferentScopes_AreDifferentGrants(t *testing.T) {
 	svc := newTestService(t)
-	ctx := tenantCtx("tenant-a")
+	ctx := testkit.TenantCtx("tenant-a")
 	if _, err := svc.DefineRole(ctx, RoleDefinition{Key: "reader", Permissions: []string{"notes:read"}}); err != nil {
 		t.Fatalf("DefineRole: %v", err)
 	}
@@ -365,7 +366,7 @@ func TestService_AssignRole_DifferentScopes_AreDifferentGrants(t *testing.T) {
 
 func TestService_AssignRole_UnknownRole_IsRejected(t *testing.T) {
 	svc := newTestService(t)
-	err := svc.AssignRole(tenantCtx("tenant-a"), Subject{TenantID: "tenant-a", UserID: "user-1"}, "ghost", Scope{})
+	err := svc.AssignRole(testkit.TenantCtx("tenant-a"), Subject{TenantID: "tenant-a", UserID: "user-1"}, "ghost", Scope{})
 	if !apperr.HasCode(err, ErrRoleNotFound.Code) {
 		t.Fatalf("error = %v, want %s", err, ErrRoleNotFound.Code)
 	}
@@ -376,11 +377,11 @@ func TestService_AssignRole_AnotherTenantsRole_IsNotFound(t *testing.T) {
 	// cross the tenant boundary; reporting anything but "not found" would
 	// leak that the key exists.
 	svc := newTestService(t)
-	if _, err := svc.DefineRole(tenantCtx("tenant-a"), RoleDefinition{Key: "reader", Permissions: []string{"notes:read"}}); err != nil {
+	if _, err := svc.DefineRole(testkit.TenantCtx("tenant-a"), RoleDefinition{Key: "reader", Permissions: []string{"notes:read"}}); err != nil {
 		t.Fatalf("DefineRole: %v", err)
 	}
 
-	err := svc.AssignRole(tenantCtx("tenant-b"), Subject{TenantID: "tenant-b", UserID: "user-1"}, "reader", Scope{})
+	err := svc.AssignRole(testkit.TenantCtx("tenant-b"), Subject{TenantID: "tenant-b", UserID: "user-1"}, "reader", Scope{})
 	if !apperr.HasCode(err, ErrRoleNotFound.Code) {
 		t.Fatalf("error = %v, want %s", err, ErrRoleNotFound.Code)
 	}
@@ -388,7 +389,7 @@ func TestService_AssignRole_AnotherTenantsRole_IsNotFound(t *testing.T) {
 
 func TestService_AssignRole_IncompleteSubject_IsRejected(t *testing.T) {
 	svc := newTestService(t)
-	err := svc.AssignRole(tenantCtx("tenant-a"), Subject{TenantID: "tenant-a"}, "reader", Scope{})
+	err := svc.AssignRole(testkit.TenantCtx("tenant-a"), Subject{TenantID: "tenant-a"}, "reader", Scope{})
 	if !apperr.HasCode(err, ErrSubjectRequired.Code) {
 		t.Fatalf("error = %v, want %s", err, ErrSubjectRequired.Code)
 	}
@@ -396,7 +397,7 @@ func TestService_AssignRole_IncompleteSubject_IsRejected(t *testing.T) {
 
 func TestService_RevokeRole_RemovesTheBindingAndAnnouncesIt(t *testing.T) {
 	svc, reg := newTestServiceWithRegistry(t)
-	ctx := tenantCtx("tenant-a")
+	ctx := testkit.TenantCtx("tenant-a")
 	sub := Subject{TenantID: "tenant-a", UserID: "user-1"}
 	grant(t, svc, sub, "reader", Scope{}, "notes:read")
 	rec := recordEvents(reg)
@@ -422,7 +423,7 @@ func TestService_RevokeRole_NothingToRevoke_IsReported(t *testing.T) {
 	// quietly would tell an administrator that access was withdrawn when
 	// it was not.
 	svc := newTestService(t)
-	ctx := tenantCtx("tenant-a")
+	ctx := testkit.TenantCtx("tenant-a")
 	sub := Subject{TenantID: "tenant-a", UserID: "user-1"}
 	grant(t, svc, sub, "reader", Scope{}, "notes:read")
 
@@ -449,7 +450,7 @@ func TestService_RevokeRole_ConcurrentIdenticalRevoke_ReportsBindingNotFound(t *
 	// ErrStorage a caller could not distinguish from an actual database
 	// failure.
 	svc := newTestService(t)
-	ctx := tenantCtx("tenant-a")
+	ctx := testkit.TenantCtx("tenant-a")
 	sub := Subject{TenantID: "tenant-a", UserID: "user-1"}
 	grant(t, svc, sub, "reader", Scope{}, "notes:read")
 
@@ -480,7 +481,7 @@ func TestService_RevokeRole_WrongScope_DoesNotSilentlySucceed(t *testing.T) {
 	// the administrator revokes tenant-wide. If that reported success, the
 	// user would keep the access everyone believed was withdrawn.
 	svc := newTestService(t)
-	ctx := tenantCtx("tenant-a")
+	ctx := testkit.TenantCtx("tenant-a")
 	sub := Subject{TenantID: "tenant-a", UserID: "user-1"}
 	grant(t, svc, sub, "region-reader", Scope{NodeID: "node-7"}, "notes:read")
 
@@ -502,12 +503,12 @@ func TestService_RevokeRole_AnotherTenantsBinding_IsNotFound(t *testing.T) {
 	grant(t, svc, inA, "reader", Scope{}, "notes:read")
 	// The same role key in tenant-b, so the lookup gets past the role and
 	// reaches the binding: the binding is what must not be found.
-	if _, err := svc.DefineRole(tenantCtx("tenant-b"), RoleDefinition{Key: "reader", Permissions: []string{"notes:read"}}); err != nil {
+	if _, err := svc.DefineRole(testkit.TenantCtx("tenant-b"), RoleDefinition{Key: "reader", Permissions: []string{"notes:read"}}); err != nil {
 		t.Fatalf("DefineRole in tenant-b: %v", err)
 	}
 
 	inB := Subject{TenantID: "tenant-b", UserID: "user-1"}
-	if err := svc.RevokeRole(tenantCtx("tenant-b"), inB, "reader", Scope{}); !apperr.HasCode(err, ErrBindingNotFound.Code) {
+	if err := svc.RevokeRole(testkit.TenantCtx("tenant-b"), inB, "reader", Scope{}); !apperr.HasCode(err, ErrBindingNotFound.Code) {
 		t.Fatalf("error = %v, want %s", err, ErrBindingNotFound.Code)
 	}
 	// tenant-a's grant is untouched.
@@ -518,7 +519,7 @@ func TestService_RevokeRole_AnotherTenantsBinding_IsNotFound(t *testing.T) {
 
 func TestService_RevokeRole_IncompleteSubject_IsRejected(t *testing.T) {
 	svc := newTestService(t)
-	err := svc.RevokeRole(tenantCtx("tenant-a"), Subject{UserID: "user-1"}, "reader", Scope{})
+	err := svc.RevokeRole(testkit.TenantCtx("tenant-a"), Subject{UserID: "user-1"}, "reader", Scope{})
 	if !apperr.HasCode(err, ErrSubjectRequired.Code) {
 		t.Fatalf("error = %v, want %s", err, ErrSubjectRequired.Code)
 	}
@@ -533,7 +534,7 @@ func TestService_RevokeRole_IncompleteSubject_IsRejected(t *testing.T) {
 // and fail the second AssignRole.
 func TestService_RevokeRole_ThenAssignRole_SameScope_Succeeds(t *testing.T) {
 	svc := newTestService(t)
-	ctx := tenantCtx("tenant-a")
+	ctx := testkit.TenantCtx("tenant-a")
 	sub := Subject{TenantID: "tenant-a", UserID: "user-1"}
 	grant(t, svc, sub, "reader", Scope{NodeID: "node-7"}, "notes:read")
 
@@ -563,7 +564,7 @@ func TestService_RevokeRole_ThenAssignRole_SameScope_Succeeds(t *testing.T) {
 // convergence event on the bus.
 func TestService_RestoreRole_UndoesTheRevokeAndAnnouncesIt(t *testing.T) {
 	svc, reg := newTestServiceWithRegistry(t)
-	ctx := tenantCtx("tenant-a")
+	ctx := testkit.TenantCtx("tenant-a")
 	sub := Subject{TenantID: "tenant-a", UserID: "user-1"}
 	grant(t, svc, sub, "reader", Scope{NodeID: "node-7"}, "notes:read")
 
@@ -609,7 +610,7 @@ func TestService_RestoreRole_UndoesTheRevokeAndAnnouncesIt(t *testing.T) {
 // not-found path reports for "nothing to revoke".
 func TestService_RestoreRole_NothingToRestore_IsReported(t *testing.T) {
 	svc := newTestService(t)
-	ctx := tenantCtx("tenant-a")
+	ctx := testkit.TenantCtx("tenant-a")
 	sub := Subject{TenantID: "tenant-a", UserID: "user-1"}
 	if _, err := svc.DefineRole(ctx, RoleDefinition{Key: "reader", Permissions: []string{"notes:read"}}); err != nil {
 		t.Fatalf("DefineRole: %v", err)
@@ -629,7 +630,7 @@ func TestService_RestoreRole_NothingToRestore_IsReported(t *testing.T) {
 // attempted write would collide with the partial unique index instead.
 func TestService_RestoreRole_AlreadyLiveAtThisScope_IsANoOp(t *testing.T) {
 	svc, reg := newTestServiceWithRegistry(t)
-	ctx := tenantCtx("tenant-a")
+	ctx := testkit.TenantCtx("tenant-a")
 	sub := Subject{TenantID: "tenant-a", UserID: "user-1"}
 	grant(t, svc, sub, "reader", Scope{}, "notes:read")
 
@@ -669,7 +670,7 @@ func TestService_RestoreRole_AlreadyLiveAtThisScope_IsANoOp(t *testing.T) {
 // occupant of the same scope.
 func TestService_RestoreRole_RestoresTheMostRecentRevoke(t *testing.T) {
 	svc := newTestService(t)
-	ctx := tenantCtx("tenant-a")
+	ctx := testkit.TenantCtx("tenant-a")
 	sub := Subject{TenantID: "tenant-a", UserID: "user-1"}
 	grant(t, svc, sub, "reader", Scope{}, "notes:read")
 	roleID := mustRoleID(t, svc, ctx, "reader")
@@ -717,7 +718,7 @@ func TestService_RestoreRole_RestoresTheMostRecentRevoke(t *testing.T) {
 // the role by key exactly the way AssignRole and RevokeRole both do.
 func TestService_RestoreRole_UnknownRole_IsRejected(t *testing.T) {
 	svc := newTestService(t)
-	err := svc.RestoreRole(tenantCtx("tenant-a"), Subject{TenantID: "tenant-a", UserID: "user-1"}, "ghost", Scope{})
+	err := svc.RestoreRole(testkit.TenantCtx("tenant-a"), Subject{TenantID: "tenant-a", UserID: "user-1"}, "ghost", Scope{})
 	if !apperr.HasCode(err, ErrRoleNotFound.Code) {
 		t.Fatalf("error = %v, want %s", err, ErrRoleNotFound.Code)
 	}
@@ -727,7 +728,7 @@ func TestService_RestoreRole_UnknownRole_IsRejected(t *testing.T) {
 // identical AssignRole/RevokeRole guard.
 func TestService_RestoreRole_IncompleteSubject_IsRejected(t *testing.T) {
 	svc := newTestService(t)
-	err := svc.RestoreRole(tenantCtx("tenant-a"), Subject{TenantID: "tenant-a"}, "reader", Scope{})
+	err := svc.RestoreRole(testkit.TenantCtx("tenant-a"), Subject{TenantID: "tenant-a"}, "reader", Scope{})
 	if !apperr.HasCode(err, ErrSubjectRequired.Code) {
 		t.Fatalf("error = %v, want %s", err, ErrSubjectRequired.Code)
 	}
@@ -742,17 +743,17 @@ func TestService_RestoreRole_AnotherTenantsBinding_IsNotFound(t *testing.T) {
 	svc := newTestService(t)
 	inA := Subject{TenantID: "tenant-a", UserID: "user-1"}
 	grant(t, svc, inA, "reader", Scope{}, "notes:read")
-	if err := svc.RevokeRole(tenantCtx("tenant-a"), inA, "reader", Scope{}); err != nil {
+	if err := svc.RevokeRole(testkit.TenantCtx("tenant-a"), inA, "reader", Scope{}); err != nil {
 		t.Fatalf("RevokeRole in tenant-a: %v", err)
 	}
 	// The same role key in tenant-b, so the lookup gets past the role and
 	// reaches the binding search: the binding is what must not be found.
-	if _, err := svc.DefineRole(tenantCtx("tenant-b"), RoleDefinition{Key: "reader", Permissions: []string{"notes:read"}}); err != nil {
+	if _, err := svc.DefineRole(testkit.TenantCtx("tenant-b"), RoleDefinition{Key: "reader", Permissions: []string{"notes:read"}}); err != nil {
 		t.Fatalf("DefineRole in tenant-b: %v", err)
 	}
 
 	inB := Subject{TenantID: "tenant-b", UserID: "user-1"}
-	if err := svc.RestoreRole(tenantCtx("tenant-b"), inB, "reader", Scope{}); !apperr.HasCode(err, ErrBindingNotFound.Code) {
+	if err := svc.RestoreRole(testkit.TenantCtx("tenant-b"), inB, "reader", Scope{}); !apperr.HasCode(err, ErrBindingNotFound.Code) {
 		t.Fatalf("error = %v, want %s", err, ErrBindingNotFound.Code)
 	}
 }
@@ -776,7 +777,7 @@ func TestService_RestoreRole_AnotherTenantsBinding_IsNotFound(t *testing.T) {
 // row at the very tuple this restore is about to un-delete.
 func TestService_RestoreRole_ConcurrentAssignBeforeItsWrite_IsBindingNotFound(t *testing.T) {
 	svc := newTestService(t)
-	ctx := tenantCtx("tenant-a")
+	ctx := testkit.TenantCtx("tenant-a")
 	sub := Subject{TenantID: "tenant-a", UserID: "user-1"}
 	grant(t, svc, sub, "reader", Scope{}, "notes:read")
 

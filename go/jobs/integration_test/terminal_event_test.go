@@ -13,6 +13,7 @@ import (
 	"github.com/vislake/speed/go/jobs/internal/testutil"
 	"github.com/vislake/speed/go/jobs/queue/asynq"
 	"github.com/vislake/speed/go/pkgcore"
+	"github.com/vislake/speed/go/pkgcore/testkit"
 )
 
 // This file proves, against a real asynq.Server dequeuing from a real
@@ -64,7 +65,7 @@ func TestRedisQueue_TerminalEvent_SucceededJob(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Enqueue() error = %v", err)
 	}
-	ctxT := tenantCtx(tenant)
+	ctxT := testkit.TenantCtx(tenant)
 	if job := waitForTerminal(t, ctxT, q, id, 10*time.Second); job.Status != jobs.StatusSucceeded {
 		t.Fatalf("Job status = %v, want %v", job.Status, jobs.StatusSucceeded)
 	}
@@ -114,7 +115,7 @@ func TestRedisQueue_TerminalEvent_DeadLetterPublishesBeforeArchive(t *testing.T)
 	}
 
 	const tenant = pkgcore.TenantID("tenant-a")
-	ctxT := tenantCtx(tenant)
+	ctxT := testkit.TenantCtx(tenant)
 	var observedAtPublish atomic.Value // jobs.Status, read back from inside the hook.
 	bus.SetPublishHook(func(_ context.Context, evt pkgcore.Event) error {
 		payload, ok := evt.Payload.(jobs.JobTerminalEvent)
@@ -174,7 +175,7 @@ func TestRedisQueue_TerminalEvent_CancelledScheduledJob(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Enqueue() error = %v", err)
 	}
-	ctxT := tenantCtx(tenant)
+	ctxT := testkit.TenantCtx(tenant)
 	if err := q.Cancel(ctxT, id); err != nil {
 		t.Fatalf("Cancel() error = %v", err)
 	}

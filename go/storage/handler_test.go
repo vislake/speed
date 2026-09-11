@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/vislake/speed/go/pkgcore"
+	"github.com/vislake/speed/go/pkgcore/testkit"
 
 	"github.com/vislake/speed/go/storage/api"
 	"github.com/vislake/speed/go/storage/internal/testutil"
@@ -563,7 +564,7 @@ func TestHandler_StorageListObjects_CompletedOnlyPages(t *testing.T) {
 	h, _, _ := newHandlerHarness(t)
 	base := time.Now().Add(-2 * time.Hour)
 	for i := 0; i < 3; i++ {
-		seedObject(t, h.objects, tenantCtx("tenant-a"),
+		seedObject(t, h.objects, testkit.TenantCtx("tenant-a"),
 			newCompleted(fmt.Sprintf("c-%02d", i), "tenant-a", base.Add(time.Duration(i)*time.Minute)))
 	}
 	// The newest row of all is an upload in flight -- created through the
@@ -690,7 +691,7 @@ func TestHandler_StorageDeleteObject_Answers(t *testing.T) {
 		h, _, _ := newHandlerHarness(t)
 		deleting := newCompleted("obj-interrupted", "tenant-a", time.Now())
 		deleting.State = ObjectStateDeleting
-		seedObject(t, h.objects, tenantCtx("tenant-a"), deleting)
+		seedObject(t, h.objects, testkit.TenantCtx("tenant-a"), deleting)
 		if rec := request(t, h, "tenant-a", http.MethodDelete, apiPath+"/objects/obj-interrupted", nil); rec.Code != http.StatusNoContent {
 			t.Fatalf("delete status = %d, want 204 (body %s)", rec.Code, rec.Body.String())
 		}

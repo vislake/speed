@@ -10,6 +10,7 @@ import (
 	"github.com/vislake/speed/go/jobs"
 	"github.com/vislake/speed/go/pkgcore"
 	"github.com/vislake/speed/go/pkgcore/componenttest"
+	"github.com/vislake/speed/go/pkgcore/testkit"
 )
 
 // stubQueue is a jobs.Queue test double that records every task enqueued on
@@ -257,7 +258,7 @@ func TestModule_Register_AttachesTheHostRegistrarToPreferenceService(t *testing.
 	module := NewModule(db, testModuleOptions(t)...)
 	newHostRegistry(t, module.Register)
 
-	ctx := tenantCtx("tenant-acme")
+	ctx := testkit.TenantCtx("tenant-acme")
 	got, err := module.Preferences().ResolveChannels(ctx, "user-7", fixtureTypeAppointment)
 	if err != nil {
 		t.Fatalf("ResolveChannels: %v", err)
@@ -321,7 +322,7 @@ func TestModule_Register_AttachesTheHostRegistrarToContactService(t *testing.T) 
 	module := NewModule(db, testModuleOptions(t)...)
 	newHostRegistry(t, module.Register)
 
-	ctx := tenantCtx("tenant-acme")
+	ctx := testkit.TenantCtx("tenant-acme")
 	contact, err := module.Contacts().CreateContact(ctx, ContactCreateInput{
 		Channel:    ChannelEmail,
 		Address:    "wangfang@external.example.com",
@@ -363,7 +364,7 @@ func TestModule_Register_TaxonomyIsLiveNotASnapshot(t *testing.T) {
 		return r.Notifications.Add(late)
 	})
 
-	ctx := tenantCtx("tenant-acme")
+	ctx := testkit.TenantCtx("tenant-acme")
 	if err := module.Preferences().Set(ctx, "user-7", late.Key, []string{ChannelEmail}); err != nil {
 		t.Errorf("Set on a type registered after Register: %v", err)
 	}

@@ -46,6 +46,7 @@ import (
 	_ "github.com/vislake/speed/go/dbkit/dialect/postgres"
 	"github.com/vislake/speed/go/pkgcore"
 	"github.com/vislake/speed/go/pkgcore/componenttest"
+	"github.com/vislake/speed/go/pkgcore/testkit"
 	"github.com/vislake/speed/go/rbac"
 	"github.com/vislake/speed/go/tenancy/tenancytest"
 )
@@ -145,12 +146,6 @@ func attachRBACService(t *testing.T, db *gorm.DB, bus pkgcore.EventBus, opts ...
 	return svc
 }
 
-// tenantContext is the context a host hands in after tenancy.Middleware
-// has resolved the tenant.
-func tenantContext(tenant pkgcore.TenantID) context.Context {
-	return pkgcore.WithTenant(context.Background(), tenant)
-}
-
 // TestPostgres_Migrations_CreateEveryTableFromZero proves the second
 // dialect's migration set actually runs and produces the three tables the
 // models are mapped onto. openRBACPostgres has already applied it from an
@@ -224,7 +219,7 @@ func TestPostgres_AssignRole_TenantWideTwice_WritesOneRow(t *testing.T) {
 	db := openRBACPostgres(t, ctx, startPostgresContainer(t, ctx))
 	svc := attachRBACService(t, db, pkgcore.NewMemoryEventBus())
 
-	tenantCtx := tenantContext("tenant-a")
+	tenantCtx := testkit.TenantCtx("tenant-a")
 	sub := rbac.Subject{TenantID: "tenant-a", UserID: "user-1"}
 	if _, err := svc.DefineRole(tenantCtx, rbac.RoleDefinition{
 		Key:            "reader",
@@ -293,7 +288,7 @@ func TestPostgres_Evaluation_IsTenantIsolatedEndToEnd(t *testing.T) {
 	// Both tenants define a role under the same key. The unique index is
 	// (tenant_id, key), so this must succeed twice.
 	for _, sub := range []rbac.Subject{inA, inB} {
-		if _, err := svc.DefineRole(tenantContext(sub.TenantID), rbac.RoleDefinition{
+		if _, err := svc.DefineRole(testkit.TenantCtx(sub.TenantID), rbac.RoleDefinition{
 			Key:            "reader",
 			DescriptionKey: "rbac.role.member",
 			Permissions:    []string{"notes:read"},
@@ -301,7 +296,7 @@ func TestPostgres_Evaluation_IsTenantIsolatedEndToEnd(t *testing.T) {
 			t.Fatalf("DefineRole in %s: %v", sub.TenantID, err)
 		}
 	}
-	if err := svc.AssignRole(tenantContext(inA.TenantID), inA, "reader", rbac.Scope{}); err != nil {
+	if err := svc.AssignRole(testkit.TenantCtx(inA.TenantID), inA, "reader", rbac.Scope{}); err != nil {
 		t.Fatalf("AssignRole in tenant-a: %v", err)
 	}
 
@@ -333,7 +328,7 @@ func TestPostgres_Evaluation_IsTenantIsolatedEndToEnd(t *testing.T) {
 	assertNotGranted("write", "notes")
 	assertNotGranted("read", "nosuch")
 
-	if err := svc.RevokeRole(tenantContext(inA.TenantID), inA, "reader", rbac.Scope{}); err != nil {
+	if err := svc.RevokeRole(testkit.TenantCtx(inA.TenantID), inA, "reader", rbac.Scope{}); err != nil {
 		t.Fatalf("RevokeRole: %v", err)
 	}
 	assertCan(inA, false, "tenant-a, after revoke")
@@ -349,7 +344,7 @@ func TestPostgres_SystemDomain_IsAnOrdinaryTenant(t *testing.T) {
 	svc := attachRBACService(t, db, pkgcore.NewMemoryEventBus())
 
 	operator := rbac.Subject{TenantID: rbac.SystemDomain, UserID: "staff-1"}
-	systemCtx := tenantContext(rbac.SystemDomain)
+	systemCtx := testkit.TenantCtx(rbac.SystemDomain)
 	if err := svc.EnsureBuiltinRoles(systemCtx); err != nil {
 		t.Fatalf("EnsureBuiltinRoles in the system domain: %v", err)
 	}

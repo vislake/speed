@@ -10,6 +10,7 @@ import (
 
 	"github.com/vislake/speed/go/org"
 	"github.com/vislake/speed/go/pkgcore"
+	"github.com/vislake/speed/go/pkgcore/testkit"
 )
 
 // This file is org's PostgreSQL proof for the tree's three concurrent-write
@@ -66,7 +67,7 @@ func TestConcurrentCreateChildAndDelete_NeverOrphansAChild_Postgres(t *testing.T
 
 	const rounds = 20
 	for round := 0; round < rounds; round++ {
-		ctx := tenantCtx(pkgcore.TenantID(fmt.Sprintf("tenant-%d", round)))
+		ctx := testkit.TenantCtx(pkgcore.TenantID(fmt.Sprintf("tenant-%d", round)))
 		tree := org.NewTreeService(db)
 		root, err := tree.CreateRoot(ctx, fmt.Sprintf("root-%d", round), "group")
 		if err != nil {
@@ -102,7 +103,7 @@ func TestConcurrentMoveAndMove_TreeInvariantHolds_Postgres(t *testing.T) {
 
 	const rounds = 15
 	for round := 0; round < rounds; round++ {
-		ctx := tenantCtx(pkgcore.TenantID(fmt.Sprintf("tenant-%d", round)))
+		ctx := testkit.TenantCtx(pkgcore.TenantID(fmt.Sprintf("tenant-%d", round)))
 		tree := org.NewTreeService(db)
 		root, err := tree.CreateRoot(ctx, fmt.Sprintf("root-%d", round), "group")
 		if err != nil {
@@ -148,7 +149,7 @@ func TestConcurrentRestoreAndCascadeDelete_NeverLandsOnADeadParent_Postgres(t *t
 
 	const rounds = 20
 	for round := 0; round < rounds; round++ {
-		ctx := tenantCtx(pkgcore.TenantID(fmt.Sprintf("tenant-%d", round)))
+		ctx := testkit.TenantCtx(pkgcore.TenantID(fmt.Sprintf("tenant-%d", round)))
 		tree := org.NewTreeService(db)
 		root, err := tree.CreateRoot(ctx, fmt.Sprintf("root-%d", round), "group")
 		if err != nil {
@@ -195,7 +196,7 @@ func TestConcurrentMoveAndCreateChild_TreeInvariantHolds_Postgres(t *testing.T) 
 
 	const rounds = 15
 	for round := 0; round < rounds; round++ {
-		ctx := tenantCtx(pkgcore.TenantID(fmt.Sprintf("tenant-%d", round)))
+		ctx := testkit.TenantCtx(pkgcore.TenantID(fmt.Sprintf("tenant-%d", round)))
 		tree := org.NewTreeService(db)
 		root, err := tree.CreateRoot(ctx, fmt.Sprintf("root-%d", round), "group")
 		if err != nil {
@@ -249,7 +250,7 @@ func TestConcurrentMoveAndCreateChild_InteriorDescendant_TreeInvariantHolds_Post
 
 	const rounds = 60
 	for round := 0; round < rounds; round++ {
-		ctx := tenantCtx(pkgcore.TenantID(fmt.Sprintf("tenant-%d", round)))
+		ctx := testkit.TenantCtx(pkgcore.TenantID(fmt.Sprintf("tenant-%d", round)))
 		tree := org.NewTreeService(db)
 		root, err := tree.CreateRoot(ctx, fmt.Sprintf("root-%d", round), "group")
 		if err != nil {
@@ -295,7 +296,7 @@ func TestConcurrentMoveAndDelete_TreeInvariantHolds_Postgres(t *testing.T) {
 
 	const rounds = 15
 	for round := 0; round < rounds; round++ {
-		ctx := tenantCtx(pkgcore.TenantID(fmt.Sprintf("tenant-%d", round)))
+		ctx := testkit.TenantCtx(pkgcore.TenantID(fmt.Sprintf("tenant-%d", round)))
 		tree := org.NewTreeService(db)
 		root, err := tree.CreateRoot(ctx, fmt.Sprintf("root-%d", round), "group")
 		if err != nil {

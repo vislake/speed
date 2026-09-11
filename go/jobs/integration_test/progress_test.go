@@ -9,6 +9,7 @@ import (
 
 	"github.com/vislake/speed/go/jobs"
 	"github.com/vislake/speed/go/pkgcore"
+	"github.com/vislake/speed/go/pkgcore/testkit"
 )
 
 // progressHandler reports 30% then blocks until the test lets it continue,
@@ -61,7 +62,7 @@ func TestRedisQueue_ProgressReporting(t *testing.T) {
 		t.Fatal("handler never reported its first progress update")
 	}
 
-	tctx := tenantCtx(tenant)
+	tctx := testkit.TenantCtx(tenant)
 	mid := pollUntil(t, tctx, q, id, 5*time.Second, func(j *jobs.Job) bool { return j.ProgressPct == 30 })
 	if mid.ProgressMsg != "step one" {
 		t.Errorf("mid-flight ProgressMsg = %q, want %q", mid.ProgressMsg, "step one")

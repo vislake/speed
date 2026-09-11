@@ -25,6 +25,7 @@ import (
 	"github.com/vislake/speed/go/dbkit/dbtest"
 	"github.com/vislake/speed/go/pkgcore"
 	"github.com/vislake/speed/go/pkgcore/apperr"
+	"github.com/vislake/speed/go/pkgcore/testkit"
 	"github.com/vislake/speed/go/pki"
 	"github.com/vislake/speed/go/pki/migrations"
 )
@@ -304,11 +305,6 @@ func newAttestationFixture(t *testing.T) *attestationFixture {
 	}
 }
 
-// tenantCtx returns ctx carrying tenant.
-func tenantCtx(tenant string) context.Context {
-	return pkgcore.WithTenant(context.Background(), pkgcore.TenantID(tenant))
-}
-
 // countCertificates counts every pki_certificates row across tenants,
 // through raw SQL -- fixture plumbing only, never a production read path:
 // certificate rows are tenant data (a repository List under one tenant's
@@ -418,7 +414,7 @@ func TestService_EnsureAuthorityChain_IgnoresUnrelatedAuthorities(t *testing.T) 
 // appear.
 func TestService_EnsureAttestedContent_FirstAttestationIssuesSignsAndStores(t *testing.T) {
 	fx := newAttestationFixture(t)
-	ctx := tenantCtx(anyTenant)
+	ctx := testkit.TenantCtx(anyTenant)
 	content := []byte("simulated smile output bytes")
 	fx.content.setObject("obj-1", content)
 
@@ -483,8 +479,8 @@ func TestService_EnsureAttestedContent_FirstAttestationIssuesSignsAndStores(t *t
 // attested output is "unattested" here, never a refusal.
 func TestService_EnsureAttestedContent_SecondTenantGetsItsOwnCertificate(t *testing.T) {
 	fx := newAttestationFixture(t)
-	acme := tenantCtx(anyTenant)
-	globex := tenantCtx("tenant-attestation-other")
+	acme := testkit.TenantCtx(anyTenant)
+	globex := testkit.TenantCtx("tenant-attestation-other")
 
 	if err := fx.svc.EnsureAttestedContent(acme, "obj-acme", []byte("acme's output")); err != nil {
 		t.Fatalf("EnsureAttestedContent(acme): %v", err)
@@ -531,7 +527,7 @@ func TestService_EnsureAttestedContent_SecondTenantGetsItsOwnCertificate(t *test
 // under the new certificate.
 func TestService_EnsureAttestedContent_RevokedCertificate_ReattestsUnderAFreshOne(t *testing.T) {
 	fx := newAttestationFixture(t)
-	ctx := tenantCtx(anyTenant)
+	ctx := testkit.TenantCtx(anyTenant)
 	content := []byte("output whose certificate gets revoked")
 
 	if err := fx.svc.EnsureAttestedContent(ctx, "obj-1", content); err != nil {
@@ -576,7 +572,7 @@ func TestService_EnsureAttestedContent_RevokedCertificate_ReattestsUnderAFreshOn
 // bound is refused rather than attested.
 func TestService_EnsureAttestedContent_Refusals(t *testing.T) {
 	fx := newAttestationFixture(t)
-	ctx := tenantCtx(anyTenant)
+	ctx := testkit.TenantCtx(anyTenant)
 
 	// Unbootstrapped: a Service constructed but whose EnsureAuthorityChain
 	// never ran (or failed) must refuse -- the issuing authority is unknown.
@@ -612,7 +608,7 @@ func TestService_EnsureAttested_OpensReadsAndClosesTheOutputBytes(t *testing.T) 
 
 	t.Run("happy_path_attests_the_opened_bytes", func(t *testing.T) {
 		fx := newAttestationFixture(t)
-		ctx := tenantCtx(anyTenant)
+		ctx := testkit.TenantCtx(anyTenant)
 		fx.content.setObject("obj-1", content)
 
 		if err := fx.svc.EnsureAttested(ctx, "obj-1"); err != nil {
@@ -626,7 +622,7 @@ func TestService_EnsureAttested_OpensReadsAndClosesTheOutputBytes(t *testing.T) 
 	t.Run("open_failure_is_wrapped", func(t *testing.T) {
 		fx := newAttestationFixture(t)
 		fx.content.openErr = errors.New("fake open failure")
-		err := fx.svc.EnsureAttested(tenantCtx(anyTenant), "obj-1")
+		err := fx.svc.EnsureAttested(testkit.TenantCtx(anyTenant), "obj-1")
 		if err == nil || !strings.Contains(err.Error(), "fake open failure") {
 			t.Fatalf("EnsureAttested with a failing opener error = %v, want the open failure wrapped", err)
 		}
@@ -634,7 +630,7 @@ func TestService_EnsureAttested_OpensReadsAndClosesTheOutputBytes(t *testing.T) 
 
 	t.Run("read_failure_is_wrapped", func(t *testing.T) {
 		fx := newAttestationFixture(t)
-		ctx := tenantCtx(anyTenant)
+		ctx := testkit.TenantCtx(anyTenant)
 		fx.content.setObject("obj-1", content)
 		fx.content.readErr = errors.New("fake read failure")
 		err := fx.svc.EnsureAttested(ctx, "obj-1")
@@ -648,7 +644,7 @@ func TestService_EnsureAttested_OpensReadsAndClosesTheOutputBytes(t *testing.T) 
 
 	t.Run("close_failure_is_wrapped", func(t *testing.T) {
 		fx := newAttestationFixture(t)
-		ctx := tenantCtx(anyTenant)
+		ctx := testkit.TenantCtx(anyTenant)
 		fx.content.setObject("obj-1", content)
 		fx.content.closeErr = errors.New("fake close failure")
 		err := fx.svc.EnsureAttested(ctx, "obj-1")
@@ -663,7 +659,7 @@ func TestService_EnsureAttested_OpensReadsAndClosesTheOutputBytes(t *testing.T) 
 // photo, the case this layer must never touch -- passes untouched.
 func TestService_CheckContent_PassesAnUnattestedObject(t *testing.T) {
 	fx := newAttestationFixture(t)
-	ctx := tenantCtx(anyTenant)
+	ctx := testkit.TenantCtx(anyTenant)
 
 	if err := fx.svc.CheckContent(ctx, "plain-photo-object", []byte("patient photo bytes")); err != nil {
 		t.Fatalf("CheckContent over an unattested object: %v", err)
@@ -679,7 +675,7 @@ func TestService_CheckContent_PassesAnUnattestedObject(t *testing.T) {
 // the message and compares the served object id.
 func TestService_CheckContent_RefusalStages(t *testing.T) {
 	fx := newAttestationFixture(t)
-	ctx := tenantCtx(anyTenant)
+	ctx := testkit.TenantCtx(anyTenant)
 	content := []byte("attested bytes")
 
 	if err := fx.svc.EnsureAttestedContent(ctx, "obj-1", content); err != nil {
@@ -725,7 +721,7 @@ func TestService_CheckContent_RefusalStages(t *testing.T) {
 // unusable, an active certificate is usable, and a revoked one is not.
 func TestService_CertificateUsable_Decisions(t *testing.T) {
 	fx := newAttestationFixture(t)
-	ctx := tenantCtx(anyTenant)
+	ctx := testkit.TenantCtx(anyTenant)
 
 	usable, err := fx.svc.certificateUsable(ctx, "no-such-certificate")
 	if err != nil {
@@ -777,7 +773,7 @@ func TestService_CertificateUsable_Decisions(t *testing.T) {
 // raw-statement convention countAllRows documents in store_test.go.
 func TestService_EnsureAttestedContent_MissingCertificateRow_RepairsUnderAFreshOne(t *testing.T) {
 	fx := newAttestationFixture(t)
-	ctx := tenantCtx(anyTenant)
+	ctx := testkit.TenantCtx(anyTenant)
 	content := []byte("output whose certificate row goes missing")
 
 	if err := fx.svc.EnsureAttestedContent(ctx, "obj-1", content); err != nil {

@@ -54,10 +54,11 @@ import (
 	"github.com/vislake/speed/go/pkgcore/apperr"
 	"github.com/vislake/speed/go/pkgcore/componenttest"
 	"github.com/vislake/speed/go/pkgcore/i18n"
+	"github.com/vislake/speed/go/pkgcore/testkit"
 )
 
 // deliveryTenant and deliveryUser are the fixed tenant and recipient every
-// delivery test drives, mirroring module_test.go's tenantCtx("tenant-acme").
+// delivery test drives, mirroring module_test.go's testkit.TenantCtx("tenant-acme").
 const (
 	deliveryTenant = "tenant-acme"
 	deliveryUser   = "user-7"
@@ -228,7 +229,7 @@ func deliveryDispatch() Dispatch {
 func (e *deliveryEnv) enqueue(t *testing.T, d Dispatch) []byte {
 	t.Helper()
 	before := len(e.queue.tasks)
-	if _, err := e.svc.Dispatch(tenantCtx(deliveryTenant), d); err != nil {
+	if _, err := e.svc.Dispatch(testkit.TenantCtx(deliveryTenant), d); err != nil {
 		t.Fatalf("Dispatch: %v", err)
 	}
 	if len(e.queue.tasks) != before+1 {
@@ -242,7 +243,7 @@ func (e *deliveryEnv) enqueue(t *testing.T, d Dispatch) []byte {
 // attempt's error (nil for a converged or deliberately stopped delivery).
 func (e *deliveryEnv) attempt(t *testing.T, payload []byte) error {
 	t.Helper()
-	_, err := e.svc.Handle(tenantCtx(deliveryTenant), &jobs.Job{
+	_, err := e.svc.Handle(testkit.TenantCtx(deliveryTenant), &jobs.Job{
 		Type:    jobTypeDeliver,
 		Payload: payload,
 	}, nil)
@@ -332,7 +333,7 @@ func TestDelivery_Dispatch_RefusesAMalformedShape(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			_, err := env.svc.Dispatch(tenantCtx(deliveryTenant), tc.shape)
+			_, err := env.svc.Dispatch(testkit.TenantCtx(deliveryTenant), tc.shape)
 			if err == nil {
 				t.Fatal("Dispatch succeeded on a malformed dispatch, want ErrDispatchInvalid")
 			}
@@ -365,7 +366,7 @@ func TestDelivery_Dispatch_RequiresQueueAndTenant(t *testing.T) {
 		env := newDeliveryEnv(t)
 		env.svc.queue = nil
 
-		_, err := env.svc.Dispatch(tenantCtx(deliveryTenant), deliveryDispatch())
+		_, err := env.svc.Dispatch(testkit.TenantCtx(deliveryTenant), deliveryDispatch())
 		assertCode(t, err, ErrDeliveryQueueRequired.Code)
 		if len(env.queue.tasks) != 0 {
 			t.Errorf("queue holds %d tasks, want none", len(env.queue.tasks))
@@ -397,7 +398,7 @@ func TestDelivery_Dispatch_RequiresQueueAndTenant(t *testing.T) {
 func TestDelivery_OneAttemptDeliversEveryResolvedChannelAndWritesAgreeingRows(t *testing.T) {
 	env := newDeliveryEnv(t)
 	env.resolver.byUser[deliveryUser] = deliveryAddresses
-	ctx := tenantCtx(deliveryTenant)
+	ctx := testkit.TenantCtx(deliveryTenant)
 	d := deliveryDispatch()
 
 	if err := env.dispatchAndAttempt(t, d); err != nil {
@@ -512,7 +513,7 @@ func TestDelivery_OneAttemptDeliversEveryResolvedChannelAndWritesAgreeingRows(t 
 func TestDelivery_RetriedJobSendsNothingASecondTime(t *testing.T) {
 	env := newDeliveryEnv(t)
 	env.resolver.byUser[deliveryUser] = deliveryAddresses
-	ctx := tenantCtx(deliveryTenant)
+	ctx := testkit.TenantCtx(deliveryTenant)
 	payload := env.enqueue(t, deliveryDispatch())
 
 	if err := env.attempt(t, payload); err != nil {
@@ -571,7 +572,7 @@ func TestDelivery_RetriedJobSendsNothingASecondTime(t *testing.T) {
 func TestDelivery_OptOutBetweenEnqueueAndAttemptSendsNothing(t *testing.T) {
 	env := newDeliveryEnv(t)
 	env.resolver.byUser[deliveryUser] = deliveryAddresses
-	ctx := tenantCtx(deliveryTenant)
+	ctx := testkit.TenantCtx(deliveryTenant)
 	payload := env.enqueue(t, deliveryDispatch())
 
 	// The recipient's later decision, landing between enqueue and attempt:
@@ -608,7 +609,7 @@ func TestDelivery_OptOutBetweenEnqueueAndAttemptSendsNothing(t *testing.T) {
 func TestDelivery_AddressRemovedBetweenEnqueueAndAttemptSkipsTheChannel(t *testing.T) {
 	env := newDeliveryEnv(t)
 	env.resolver.byUser[deliveryUser] = deliveryAddresses
-	ctx := tenantCtx(deliveryTenant)
+	ctx := testkit.TenantCtx(deliveryTenant)
 	payload := env.enqueue(t, deliveryDispatch())
 
 	// The host's address book changes between enqueue and attempt: the
@@ -638,7 +639,7 @@ func TestDelivery_AddressRemovedBetweenEnqueueAndAttemptSkipsTheChannel(t *testi
 // their reasons, and nothing reaches a transport.
 func TestDelivery_UserWithNoAddressesSkipsEveryOutboundChannel(t *testing.T) {
 	env := newDeliveryEnv(t)
-	ctx := tenantCtx(deliveryTenant)
+	ctx := testkit.TenantCtx(deliveryTenant)
 
 	if err := env.dispatchAndAttempt(t, deliveryDispatch()); err != nil {
 		t.Fatalf("delivery attempt: %v", err)
@@ -673,7 +674,7 @@ func TestDelivery_UserWithNoAddressesSkipsEveryOutboundChannel(t *testing.T) {
 // -- never a user id.
 func TestDelivery_ExternalContactReceivesTheRenderedEmail(t *testing.T) {
 	env := newDeliveryEnv(t)
-	ctx := tenantCtx(deliveryTenant)
+	ctx := testkit.TenantCtx(deliveryTenant)
 
 	contact, err := env.contacts.CreateContact(ctx, ContactCreateInput{
 		Channel:    ChannelEmail,
@@ -745,7 +746,7 @@ func TestDelivery_ExternalContactReceivesTheRenderedEmail(t *testing.T) {
 // dispatch that never set the field.
 func TestDelivery_ExternalContactLocaleChain(t *testing.T) {
 	env := newDeliveryEnv(t)
-	ctx := tenantCtx(deliveryTenant)
+	ctx := testkit.TenantCtx(deliveryTenant)
 
 	contact, err := env.contacts.CreateContact(ctx, ContactCreateInput{
 		Channel:    ChannelEmail,
@@ -817,7 +818,7 @@ func TestDelivery_ExternalContactLocaleChain(t *testing.T) {
 // nothing was sent -- without ever calling the transport.
 func TestDelivery_UnsubscribeBetweenEnqueueAndAttemptSkipsWithTheReasonRecorded(t *testing.T) {
 	env := newDeliveryEnv(t)
-	ctx := tenantCtx(deliveryTenant)
+	ctx := testkit.TenantCtx(deliveryTenant)
 
 	contact, err := env.contacts.CreateContact(ctx, ContactCreateInput{
 		Channel:    ChannelEmail,
@@ -874,7 +875,7 @@ func TestDelivery_UnsubscribeBetweenEnqueueAndAttemptSkipsWithTheReasonRecorded(
 // call, no send record, no channel to record under.
 func TestDelivery_UnknownContactRefusalSurfacesToTheQueue(t *testing.T) {
 	env := newDeliveryEnv(t)
-	ctx := tenantCtx(deliveryTenant)
+	ctx := testkit.TenantCtx(deliveryTenant)
 
 	d := Dispatch{
 		TypeKey: fixtureTypeAppointment,
@@ -912,7 +913,7 @@ func TestDelivery_UnknownContactRefusalSurfacesToTheQueue(t *testing.T) {
 // refused before the contact's channel ever resolved.
 func TestDelivery_PendingContactRefusalIsDeferredUntilVerification(t *testing.T) {
 	env := newDeliveryEnv(t)
-	ctx := tenantCtx(deliveryTenant)
+	ctx := testkit.TenantCtx(deliveryTenant)
 
 	// A double_opt_in create renders the module's verification-code copy,
 	// which the env's clinic fixture catalog does not carry, so the
@@ -1004,7 +1005,7 @@ func TestDelivery_PendingContactRefusalIsDeferredUntilVerification(t *testing.T)
 func TestDelivery_TransientTransportFailureIsRecordedAndRetried(t *testing.T) {
 	env := newDeliveryEnv(t)
 	env.resolver.byUser[deliveryUser] = deliveryAddresses
-	ctx := tenantCtx(deliveryTenant)
+	ctx := testkit.TenantCtx(deliveryTenant)
 	payload := env.enqueue(t, deliveryDispatch())
 
 	env.host.mailer.failWith = errors.New("smtp: connection refused")
@@ -1055,7 +1056,7 @@ func TestDelivery_TransientTransportFailureIsRecordedAndRetried(t *testing.T) {
 func TestDelivery_SMSTransientFailureIsRecordedAndRetried(t *testing.T) {
 	env := newDeliveryEnv(t)
 	env.resolver.byUser[deliveryUser] = deliveryAddresses
-	ctx := tenantCtx(deliveryTenant)
+	ctx := testkit.TenantCtx(deliveryTenant)
 	payload := env.enqueue(t, deliveryDispatch())
 
 	env.sms.failWith = errors.New("gateway: timeout")
@@ -1095,7 +1096,7 @@ func TestDelivery_SMSTransientFailureIsRecordedAndRetried(t *testing.T) {
 func TestDelivery_PermanentTransportFailureStopsTheChannelWithoutRetrying(t *testing.T) {
 	env := newDeliveryEnv(t)
 	env.resolver.byUser[deliveryUser] = deliveryAddresses
-	ctx := tenantCtx(deliveryTenant)
+	ctx := testkit.TenantCtx(deliveryTenant)
 	payload := env.enqueue(t, deliveryDispatch())
 
 	env.host.mailer.failWith = fmt.Errorf("550 mailbox unavailable: %w", pkgcore.ErrTransportPermanent)
@@ -1132,7 +1133,7 @@ func TestDelivery_PermanentTransportFailureStopsTheChannelWithoutRetrying(t *tes
 // by asking the consent gate itself.
 func TestDelivery_ContactPermanentFailureMarksTheContactBounced(t *testing.T) {
 	env := newDeliveryEnv(t)
-	ctx := tenantCtx(deliveryTenant)
+	ctx := testkit.TenantCtx(deliveryTenant)
 
 	contact, err := env.contacts.CreateContact(ctx, ContactCreateInput{
 		Channel:    ChannelEmail,
@@ -1213,7 +1214,7 @@ func TestDelivery_TerminalRefusalAfterASettledKeyDoesNotDowngradeTheSucceededRec
 	for _, flip := range flips {
 		t.Run(flip.name, func(t *testing.T) {
 			env := newDeliveryEnv(t)
-			ctx := tenantCtx(deliveryTenant)
+			ctx := testkit.TenantCtx(deliveryTenant)
 
 			contact, err := env.contacts.CreateContact(ctx, ContactCreateInput{
 				Channel:    ChannelEmail,
@@ -1283,7 +1284,7 @@ func TestDelivery_TerminalRefusalAfterASettledKeyDoesNotDowngradeTheSucceededRec
 func TestDelivery_ErrorSettleAfterASettledKeyDoesNotDowngradeTheSucceededRecord(t *testing.T) {
 	env := newDeliveryEnv(t)
 	env.resolver.byUser[deliveryUser] = deliveryAddresses
-	ctx := tenantCtx(deliveryTenant)
+	ctx := testkit.TenantCtx(deliveryTenant)
 
 	d := deliveryDispatch()
 	if err := env.dispatchAndAttempt(t, d); err != nil {
@@ -1347,7 +1348,7 @@ func TestDelivery_ErrorSettleAfterASettledKeyDoesNotDowngradeTheSucceededRecord(
 func TestDelivery_StaleAdoptedSettleDoesNotDowngradeTheSucceededRecord(t *testing.T) {
 	env := newDeliveryEnv(t)
 	env.resolver.byUser[deliveryUser] = deliveryAddresses
-	ctx := tenantCtx(deliveryTenant)
+	ctx := testkit.TenantCtx(deliveryTenant)
 
 	d := deliveryDispatch()
 	if err := env.dispatchAndAttempt(t, d); err != nil {
@@ -1405,7 +1406,7 @@ func TestDelivery_MissingTemplateCopyStopsTheAttempt(t *testing.T) {
 	env.prefs.attachTypes(fixtureRegistrar{types: []pkgcore.NotificationType{
 		{Key: "clinic.reminder_only", Group: "appointments", DefaultChannels: []string{ChannelEmail}, Unsubscribable: false},
 	}})
-	ctx := tenantCtx(deliveryTenant)
+	ctx := testkit.TenantCtx(deliveryTenant)
 
 	d := Dispatch{
 		TypeKey: "clinic.reminder_only",
@@ -1539,7 +1540,7 @@ func TestDeliverUserSMS_CarriesIdentityAndNarrowedParams(t *testing.T) {
 // with no fallback).
 func TestDeliverContactSMS_CarriesTheRenderedLocale(t *testing.T) {
 	env := newDeliveryEnv(t)
-	ctx := tenantCtx(deliveryTenant)
+	ctx := testkit.TenantCtx(deliveryTenant)
 
 	// A verified contact, business-attested (ConsentRef) so the
 	// verification code never sends and the recorder holds exactly the
@@ -1611,7 +1612,7 @@ func TestDeliverContactSMS_CarriesTheRenderedLocale(t *testing.T) {
 func TestDeliverUserSMS_UnstringifiableParamStopsAsRenderFailure(t *testing.T) {
 	env := newDeliveryEnv(t)
 	env.resolver.byUser[deliveryUser] = deliveryAddresses
-	ctx := tenantCtx(deliveryTenant)
+	ctx := testkit.TenantCtx(deliveryTenant)
 
 	// appointment_time is referenced by the fixture sms copy, so the
 	// structured value survives narrowing and reaches the stringifier.
@@ -1706,7 +1707,7 @@ func TestSMSParams_StringifiesTheScalarTypesAndRefusesTheRest(t *testing.T) {
 func TestDelivery_AnnounceFailureRetriesAndConverges(t *testing.T) {
 	env := newDeliveryEnv(t)
 	env.resolver.byUser[deliveryUser] = deliveryAddresses
-	ctx := tenantCtx(deliveryTenant)
+	ctx := testkit.TenantCtx(deliveryTenant)
 	payload := env.enqueue(t, deliveryDispatch())
 
 	env.host.bus.failWith = errors.New("bus: stream unavailable")
@@ -1785,7 +1786,7 @@ func TestDelivery_ResolverFailureIsRecordedAndRetried(t *testing.T) {
 	env := newDeliveryEnv(t)
 	env.resolver.byUser[deliveryUser] = deliveryAddresses
 	env.resolver.err = errors.New("directory: unavailable")
-	ctx := tenantCtx(deliveryTenant)
+	ctx := testkit.TenantCtx(deliveryTenant)
 	payload := env.enqueue(t, deliveryDispatch())
 
 	if err := env.attempt(t, payload); err == nil {
@@ -1860,7 +1861,7 @@ func TestDelivery_RunDeliveryRefusesAnUnknownRecipientClass(t *testing.T) {
 		},
 		Locale: "zh-CN",
 	}
-	err := env.svc.runDelivery(tenantCtx(deliveryTenant), d)
+	err := env.svc.runDelivery(testkit.TenantCtx(deliveryTenant), d)
 	assertCode(t, err, ErrDispatchInvalid.Code)
 	appErr, _ := apperr.As(err)
 	if got := appErr.Params["field"]; got != "recipient.class" {
@@ -2034,7 +2035,7 @@ func TestRegisterDeliveryMetrics_Smoke(t *testing.T) {
 func TestDelivery_RetriedAttemptKeepsCreatedAtAndTimeBoundedAuditVisibility(t *testing.T) {
 	env := newDeliveryEnv(t)
 	env.resolver.byUser[deliveryUser] = deliveryAddresses
-	ctx := tenantCtx(deliveryTenant)
+	ctx := testkit.TenantCtx(deliveryTenant)
 	d := deliveryDispatch()
 	payload := env.enqueue(t, d)
 
@@ -2093,7 +2094,7 @@ func TestDelivery_RetriedAttemptKeepsCreatedAtAndTimeBoundedAuditVisibility(t *t
 func TestDelivery_RepeatedDispatchOfOneDelivery_SettlesOneRecord(t *testing.T) {
 	env := newDeliveryEnv(t)
 	env.resolver.byUser[deliveryUser] = deliveryAddresses
-	ctx := tenantCtx(deliveryTenant)
+	ctx := testkit.TenantCtx(deliveryTenant)
 	d := deliveryDispatch()
 
 	if err := env.dispatchAndAttempt(t, d); err != nil {
@@ -2124,7 +2125,7 @@ func TestDelivery_RepeatedDispatchOfOneDelivery_SettlesOneRecord(t *testing.T) {
 func TestDelivery_ResendWithAFreshOccurrenceID_DeliversAgain(t *testing.T) {
 	env := newDeliveryEnv(t)
 	env.resolver.byUser[deliveryUser] = deliveryAddresses
-	ctx := tenantCtx(deliveryTenant)
+	ctx := testkit.TenantCtx(deliveryTenant)
 
 	first := deliveryDispatch()
 	first.OccurrenceID = "occurrence-1"
@@ -2193,7 +2194,7 @@ func TestDelivery_ResendAfterALocaleChange_DeliversInTheNewLocale(t *testing.T) 
 	if mails[0].Subject != "预约提醒" || mails[1].Subject != "Appointment reminder" {
 		t.Errorf("mail subjects = %q then %q, want the zh-CN copy then the en-US copy", mails[0].Subject, mails[1].Subject)
 	}
-	rec := env.sendRecordByChannel(t, tenantCtx(deliveryTenant), en, ChannelEmail)
+	rec := env.sendRecordByChannel(t, testkit.TenantCtx(deliveryTenant), en, ChannelEmail)
 	if rec == nil || rec.Status != SendRecordStatusSucceeded {
 		t.Fatalf("en-US resend record = %+v, want its own succeeded record under its own key", rec)
 	}
@@ -2212,7 +2213,7 @@ func TestDelivery_ResendAfterALocaleChange_DeliversInTheNewLocale(t *testing.T) 
 func TestDelivery_GatewayEchoingTheRecipientAddress_NeverReachesTheStoredRecord(t *testing.T) {
 	env := newDeliveryEnv(t)
 	env.resolver.byUser[deliveryUser] = deliveryAddresses
-	ctx := tenantCtx(deliveryTenant)
+	ctx := testkit.TenantCtx(deliveryTenant)
 	d := deliveryDispatch()
 
 	env.host.mailer.failWith = fmt.Errorf("smtp: 550 %s: recipient address rejected", deliveryAddresses.Email)
@@ -2241,7 +2242,7 @@ func TestDelivery_GatewayEchoingTheRecipientAddress_NeverReachesTheStoredRecord(
 // classification, whatever form the gateway's echo took.
 func TestDelivery_ContactBounceCarryingTheAddress_StoredRecordAndReadbackNeverCarryIt(t *testing.T) {
 	env := newDeliveryEnv(t)
-	ctx := tenantCtx(deliveryTenant)
+	ctx := testkit.TenantCtx(deliveryTenant)
 
 	const address = "wangfang@external.example.com"
 	contact, err := env.contacts.CreateContact(ctx, ContactCreateInput{
@@ -2321,7 +2322,7 @@ func TestDelivery_TransportEchoingTheAddressInANonNormalizedForm_NeverReachesThe
 	t.Run("uppercase email echo", func(t *testing.T) {
 		env := newDeliveryEnv(t)
 		env.resolver.byUser[deliveryUser] = deliveryAddresses
-		ctx := tenantCtx(deliveryTenant)
+		ctx := testkit.TenantCtx(deliveryTenant)
 		d := deliveryDispatch()
 
 		echo := strings.ToUpper(deliveryAddresses.Email)
@@ -2356,7 +2357,7 @@ func TestDelivery_TransportEchoingTheAddressInANonNormalizedForm_NeverReachesThe
 	t.Run("plus-less phone echo", func(t *testing.T) {
 		env := newDeliveryEnv(t)
 		env.resolver.byUser[deliveryUser] = deliveryAddresses
-		ctx := tenantCtx(deliveryTenant)
+		ctx := testkit.TenantCtx(deliveryTenant)
 		d := deliveryDispatch()
 
 		echo := strings.TrimPrefix(deliveryAddresses.Phone, "+")
@@ -2477,7 +2478,7 @@ func serveScriptedSMTP(conn net.Conn, rcptReply string) {
 // retryable, which is precisely the state this test exists to rule out.
 func TestDelivery_RealSMTPMailerRecipientRefusal_MarksTheContactBounced(t *testing.T) {
 	env := newDeliveryEnv(t)
-	ctx := tenantCtx(deliveryTenant)
+	ctx := testkit.TenantCtx(deliveryTenant)
 	env.svc.host = &smtpMailerHost{
 		testHost: env.host,
 		mailer:   smtpMailerRefusingRecipients(t, "550 5.1.1 No such user"),
@@ -2530,7 +2531,7 @@ func TestDelivery_RealSMTPMailerRecipientRefusal_MarksTheContactBounced(t *testi
 // narrow, so a mailbox-full refusal never blacklists the address.
 func TestDelivery_RealSMTPMailerTransientRefusal_RetriesWithoutBouncing(t *testing.T) {
 	env := newDeliveryEnv(t)
-	ctx := tenantCtx(deliveryTenant)
+	ctx := testkit.TenantCtx(deliveryTenant)
 	env.svc.host = &smtpMailerHost{
 		testHost: env.host,
 		mailer:   smtpMailerRefusingRecipients(t, "452 4.2.2 Mailbox full"),
@@ -2581,7 +2582,7 @@ func TestDelivery_RealSMTPMailerTransientRefusal_RetriesWithoutBouncing(t *testi
 // error that retries pointlessly and logs nothing.
 func TestDelivery_ContactVerifiedOnAnUnknownChannel_RecordsAndStops(t *testing.T) {
 	env := newDeliveryEnv(t)
-	ctx := tenantCtx(deliveryTenant)
+	ctx := testkit.TenantCtx(deliveryTenant)
 
 	contact, err := env.contacts.CreateContact(ctx, ContactCreateInput{
 		Channel:    ChannelEmail,
@@ -2646,7 +2647,7 @@ func TestDelivery_ContactVerifiedOnAnUnknownChannel_RecordsAndStops(t *testing.T
 // ordinary delivery.
 func TestDelivery_ContactDeliveryOfAnUndeclaredType_NeverReachesTheTransport(t *testing.T) {
 	env := newDeliveryEnv(t)
-	ctx := tenantCtx(deliveryTenant)
+	ctx := testkit.TenantCtx(deliveryTenant)
 
 	// Widen the env's catalog with the undeclared module's own bundle; the
 	// env's taxonomy (fixtureTypes, attached in newDeliveryEnv) never
@@ -2757,7 +2758,7 @@ var annotatedAppointmentType = pkgcore.NotificationType{
 func TestDelivery_Dispatch_RefusesParamsOutsideRecipientVisibleDeclaration(t *testing.T) {
 	env := newDeliveryEnv(t)
 	env.prefs.attachTypes(fixtureRegistrar{types: []pkgcore.NotificationType{annotatedAppointmentType}})
-	ctx := tenantCtx(deliveryTenant)
+	ctx := testkit.TenantCtx(deliveryTenant)
 
 	d := deliveryDispatch()
 	d.Params = maps.Clone(renderTestParams)
@@ -2800,7 +2801,7 @@ func TestDelivery_StalePayloadParams_NarrowedBeforeRowAndKey(t *testing.T) {
 	env := newDeliveryEnv(t)
 	env.prefs.attachTypes(fixtureRegistrar{types: []pkgcore.NotificationType{annotatedAppointmentType}})
 	env.resolver.byUser[deliveryUser] = deliveryAddresses
-	ctx := tenantCtx(deliveryTenant)
+	ctx := testkit.TenantCtx(deliveryTenant)
 
 	stale := deliveryDispatch()
 	stale.Params = maps.Clone(renderTestParams)
@@ -2890,7 +2891,7 @@ func TestDelivery_Dispatch_RefusesParamsNoTemplateReferences(t *testing.T) {
 	// nothing to refuse (nil list = unrestricted), so a copy-inert
 	// parameter must be refused by the copy gate alone.
 	env := newDeliveryEnv(t)
-	ctx := tenantCtx(deliveryTenant)
+	ctx := testkit.TenantCtx(deliveryTenant)
 
 	d := deliveryDispatch()
 	d.Params = maps.Clone(renderTestParams)
@@ -2949,7 +2950,7 @@ func TestDelivery_Dispatch_RefusesParamsNoTemplateReferences(t *testing.T) {
 func TestDelivery_StalePayloadParams_UnreferencedParam_DroppedBeforeRowAndKey(t *testing.T) {
 	env := newDeliveryEnv(t)
 	env.resolver.byUser[deliveryUser] = deliveryAddresses
-	ctx := tenantCtx(deliveryTenant)
+	ctx := testkit.TenantCtx(deliveryTenant)
 
 	stale := deliveryDispatch()
 	stale.Params = maps.Clone(renderTestParams)
@@ -3016,7 +3017,7 @@ func TestDelivery_StalePayloadParams_UnreferencedParam_DroppedBeforeRowAndKey(t 
 // type's opt-out leaves the contact reachable for the rest.
 func TestDelivery_TypeOptOutBetweenEnqueueAndAttempt_SkipsThatTypeOnlyAndKeepsOthers(t *testing.T) {
 	env := newDeliveryEnv(t)
-	ctx := tenantCtx(deliveryTenant)
+	ctx := testkit.TenantCtx(deliveryTenant)
 	env.contacts.types = fixtureRegistrar{types: fixtureTypes}
 
 	contact, err := env.contacts.CreateContact(ctx, ContactCreateInput{
@@ -3102,7 +3103,7 @@ func TestDelivery_TypeOptOutBetweenEnqueueAndAttempt_SkipsThatTypeOnlyAndKeepsOt
 // durable fact, and its skip record carries the whole-contact reason.
 func TestDelivery_TypeOptedOutContact_WholeUnsubscribeStillSkipsWithTheWholeReason(t *testing.T) {
 	env := newDeliveryEnv(t)
-	ctx := tenantCtx(deliveryTenant)
+	ctx := testkit.TenantCtx(deliveryTenant)
 	env.contacts.types = fixtureRegistrar{types: fixtureTypes}
 
 	contact, err := env.contacts.CreateContact(ctx, ContactCreateInput{

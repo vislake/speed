@@ -16,6 +16,7 @@ import (
 	"github.com/vislake/speed/go/pkgcore"
 	"github.com/vislake/speed/go/pkgcore/apperr"
 	"github.com/vislake/speed/go/pkgcore/componenttest"
+	"github.com/vislake/speed/go/pkgcore/testkit"
 )
 
 func TestModule_Identity(t *testing.T) {
@@ -408,7 +409,7 @@ func TestModule_Register_PerformsNoIO(t *testing.T) {
 
 func TestModule_Tree_ReturnsAUsableService(t *testing.T) {
 	m := newWiredModule(t, newTestDB(t))
-	ctx := tenantCtx("tenant-a")
+	ctx := testkit.TenantCtx("tenant-a")
 
 	root, err := m.Tree().CreateRoot(ctx, "Acme Dental", "group")
 	if err != nil {
@@ -596,7 +597,7 @@ func TestModule_Register_SubscribesToTheAuthnEvent(t *testing.T) {
 		t.Fatalf("Publish: %v", err)
 	}
 
-	ctx := tenantCtx("tenant-a")
+	ctx := testkit.TenantCtx("tenant-a")
 	if _, err := m.Members().Get(ctx, "u-1"); err != nil {
 		t.Errorf("the bootstrapped module did not react to %s: %v", EventUserCreated, err)
 	}

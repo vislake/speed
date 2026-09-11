@@ -12,6 +12,7 @@ import (
 	"github.com/vislake/speed/go/dbkit"
 	"github.com/vislake/speed/go/pkgcore"
 	"github.com/vislake/speed/go/pkgcore/apperr"
+	"github.com/vislake/speed/go/pkgcore/testkit"
 	"github.com/vislake/speed/go/tenancy/tenancytest"
 
 	"github.com/vislake/speed/go/notification/internal/testutil"
@@ -24,13 +25,6 @@ import (
 func newTestDB(t *testing.T) *gorm.DB {
 	t.Helper()
 	return testutil.NewSQLite(t, moduleName, migrations.FS)
-}
-
-// tenantCtx wraps ctx's background with the tenant a repository call runs
-// under. The tenant never travels any other way -- no header, no argument,
-// no field on the record; the repository reads it from the context alone.
-func tenantCtx(tenant string) context.Context {
-	return pkgcore.WithTenant(context.Background(), pkgcore.TenantID(tenant))
 }
 
 // testMessage returns a fully populated inbox row with id as its primary key.
@@ -74,7 +68,7 @@ func TestRepository_AssertIsolated(t *testing.T) {
 func TestRepository_Create_RoundTripsEveryColumn(t *testing.T) {
 	db := newTestDB(t)
 	repo := NewRepository(db)
-	ctx := tenantCtx("tenant-acme")
+	ctx := testkit.TenantCtx("tenant-acme")
 
 	key := "delivery-note-42"
 	expiry := time.Date(2026, 9, 30, 23, 59, 59, 0, time.UTC)
@@ -149,7 +143,7 @@ func TestRepository_Create_RoundTripsEveryColumn(t *testing.T) {
 func TestRepository_Create_NullableColumnsAndDefaults_RoundTrip(t *testing.T) {
 	db := newTestDB(t)
 	repo := NewRepository(db)
-	ctx := tenantCtx("tenant-acme")
+	ctx := testkit.TenantCtx("tenant-acme")
 
 	msg := testMessage("inbox-000001")
 	if err := repo.Create(ctx, msg); err != nil {
@@ -189,7 +183,7 @@ func TestRepository_Create_NullableColumnsAndDefaults_RoundTrip(t *testing.T) {
 func TestRepository_DedupeKey_SameKeySameTenant_SecondCreateRejected(t *testing.T) {
 	db := newTestDB(t)
 	repo := NewRepository(db)
-	ctx := tenantCtx("tenant-acme")
+	ctx := testkit.TenantCtx("tenant-acme")
 
 	key := "delivery-note-42"
 	first := testMessage("inbox-000001")
@@ -229,17 +223,17 @@ func TestRepository_DedupeKey_SameKeyOtherTenant_RejectedToo(t *testing.T) {
 	key := "delivery-note-42"
 	first := testMessage("inbox-000001")
 	first.DedupeKey = &key
-	if err := repo.Create(tenantCtx("tenant-acme"), first); err != nil {
+	if err := repo.Create(testkit.TenantCtx("tenant-acme"), first); err != nil {
 		t.Fatalf("Create(tenant-acme): %v", err)
 	}
 
 	second := testMessage("inbox-000002")
 	second.DedupeKey = &key
-	if err := repo.Create(tenantCtx("tenant-bright"), second); err == nil {
+	if err := repo.Create(testkit.TenantCtx("tenant-bright"), second); err == nil {
 		t.Fatal("Create(same key, other tenant) succeeded, want a duplicate-key error")
 	}
 
-	rows, err := repo.List(tenantCtx("tenant-bright"))
+	rows, err := repo.List(testkit.TenantCtx("tenant-bright"))
 	if err != nil {
 		t.Fatalf("List(tenant-bright): %v", err)
 	}
@@ -256,7 +250,7 @@ func TestRepository_DedupeKey_SameKeyOtherTenant_RejectedToo(t *testing.T) {
 func TestRepository_DedupeKey_Nil_MultipleMessagesAllowed(t *testing.T) {
 	db := newTestDB(t)
 	repo := NewRepository(db)
-	ctx := tenantCtx("tenant-acme")
+	ctx := testkit.TenantCtx("tenant-acme")
 
 	for i := 1; i <= 3; i++ {
 		if err := repo.Create(ctx, testMessage(fmt.Sprintf("inbox-%06d", i))); err != nil {
@@ -285,18 +279,18 @@ func TestRepository_SameRecipient_TwoTenants_HaveSeparateInboxes(t *testing.T) {
 
 	acmeMsg := testMessage("inbox-acme-1")
 	acmeMsg.RecipientUserID = "user-9"
-	if err := repo.Create(tenantCtx("tenant-acme"), acmeMsg); err != nil {
+	if err := repo.Create(testkit.TenantCtx("tenant-acme"), acmeMsg); err != nil {
 		t.Fatalf("Create(tenant-acme): %v", err)
 	}
 	brightMsg := testMessage("inbox-bright-1")
 	brightMsg.RecipientUserID = "user-9"
-	if err := repo.Create(tenantCtx("tenant-bright"), brightMsg); err != nil {
+	if err := repo.Create(testkit.TenantCtx("tenant-bright"), brightMsg); err != nil {
 		t.Fatalf("Create(tenant-bright): %v", err)
 	}
 
 	assertInbox := func(tenant, wantID string) {
 		t.Helper()
-		rows, err := repo.List(tenantCtx(tenant))
+		rows, err := repo.List(testkit.TenantCtx(pkgcore.TenantID(tenant)))
 		if err != nil {
 			t.Fatalf("List(%s): %v", tenant, err)
 		}
@@ -322,7 +316,7 @@ func TestRepository_SameRecipient_TwoTenants_HaveSeparateInboxes(t *testing.T) {
 func TestRepository_Update_MarksMessageRead(t *testing.T) {
 	db := newTestDB(t)
 	repo := NewRepository(db)
-	ctx := tenantCtx("tenant-acme")
+	ctx := testkit.TenantCtx("tenant-acme")
 
 	msg := testMessage("inbox-000001")
 	if err := repo.Create(ctx, msg); err != nil {
@@ -362,11 +356,11 @@ func TestRepository_FindByID_OtherTenant_ReportsRecordNotFound(t *testing.T) {
 	repo := NewRepository(db)
 
 	msg := testMessage("inbox-000001")
-	if err := repo.Create(tenantCtx("tenant-acme"), msg); err != nil {
+	if err := repo.Create(testkit.TenantCtx("tenant-acme"), msg); err != nil {
 		t.Fatalf("Create: %v", err)
 	}
 
-	_, err := repo.FindByID(tenantCtx("tenant-bright"), msg.ID)
+	_, err := repo.FindByID(testkit.TenantCtx("tenant-bright"), msg.ID)
 	if err == nil {
 		t.Fatal("FindByID(other tenant) succeeded, want dbkit.ErrRecordNotFound")
 	}
@@ -399,7 +393,7 @@ func messageAt(id, recipient, group string, at time.Time) *InboxMessage {
 func TestRepository_ListForRecipient_OwnRowsOnly_NewestFirst(t *testing.T) {
 	db := newTestDB(t)
 	repo := NewRepository(db)
-	ctx := tenantCtx("tenant-acme")
+	ctx := testkit.TenantCtx("tenant-acme")
 
 	t1 := time.Date(2026, 9, 1, 9, 0, 0, 0, time.UTC)
 	t2 := time.Date(2026, 9, 1, 10, 0, 0, 0, time.UTC)
@@ -415,7 +409,7 @@ func TestRepository_ListForRecipient_OwnRowsOnly_NewestFirst(t *testing.T) {
 			t.Fatalf("Create(%s): %v", row.ID, err)
 		}
 	}
-	if err := repo.Create(tenantCtx("tenant-bright"), messageAt("inbox-b1", "user-7", "", t3.Add(2*time.Hour))); err != nil {
+	if err := repo.Create(testkit.TenantCtx("tenant-bright"), messageAt("inbox-b1", "user-7", "", t3.Add(2*time.Hour))); err != nil {
 		t.Fatalf("Create(other tenant): %v", err)
 	}
 
@@ -450,7 +444,7 @@ func idsOf(rows []InboxMessage) []string {
 func TestRepository_ListForRecipient_SameCreatedAt_IdDescTiebreak(t *testing.T) {
 	db := newTestDB(t)
 	repo := NewRepository(db)
-	ctx := tenantCtx("tenant-acme")
+	ctx := testkit.TenantCtx("tenant-acme")
 
 	same := time.Date(2026, 9, 1, 9, 0, 0, 0, time.UTC)
 	for _, id := range []string{"inbox-1", "inbox-2"} {
@@ -477,7 +471,7 @@ func TestRepository_ListForRecipient_SameCreatedAt_IdDescTiebreak(t *testing.T) 
 func TestRepository_ListForRecipient_ExpiredRowsStillListed(t *testing.T) {
 	db := newTestDB(t)
 	repo := NewRepository(db)
-	ctx := tenantCtx("tenant-acme")
+	ctx := testkit.TenantCtx("tenant-acme")
 
 	expired := time.Now().UTC().Add(-time.Hour)
 	msg := messageAt("inbox-expired", "user-7", "", time.Now().UTC())
@@ -505,7 +499,7 @@ func TestRepository_ListForRecipient_ExpiredRowsStillListed(t *testing.T) {
 func TestRepository_ListForRecipient_GroupFilterAndPaging(t *testing.T) {
 	db := newTestDB(t)
 	repo := NewRepository(db)
-	ctx := tenantCtx("tenant-acme")
+	ctx := testkit.TenantCtx("tenant-acme")
 
 	base := time.Date(2026, 9, 1, 9, 0, 0, 0, time.UTC)
 	rows := []*InboxMessage{
@@ -579,10 +573,10 @@ func TestRepository_ListForRecipient_OtherTenant_Invisible(t *testing.T) {
 	repo := NewRepository(db)
 
 	base := time.Date(2026, 9, 1, 9, 0, 0, 0, time.UTC)
-	if err := repo.Create(tenantCtx("tenant-acme"), messageAt("inbox-acme-1", "user-7", "", base)); err != nil {
+	if err := repo.Create(testkit.TenantCtx("tenant-acme"), messageAt("inbox-acme-1", "user-7", "", base)); err != nil {
 		t.Fatalf("Create(acme): %v", err)
 	}
-	if err := repo.Create(tenantCtx("tenant-bright"), messageAt("inbox-bright-1", "user-7", "", base.Add(time.Hour))); err != nil {
+	if err := repo.Create(testkit.TenantCtx("tenant-bright"), messageAt("inbox-bright-1", "user-7", "", base.Add(time.Hour))); err != nil {
 		t.Fatalf("Create(bright): %v", err)
 	}
 
@@ -590,7 +584,7 @@ func TestRepository_ListForRecipient_OtherTenant_Invisible(t *testing.T) {
 		{"tenant-acme", "inbox-acme-1"},
 		{"tenant-bright", "inbox-bright-1"},
 	} {
-		got, err := repo.ListForRecipient(tenantCtx(tc.tenant), "user-7", "", 50, 0)
+		got, err := repo.ListForRecipient(testkit.TenantCtx(pkgcore.TenantID(tc.tenant)), "user-7", "", 50, 0)
 		if err != nil {
 			t.Fatalf("ListForRecipient(%s): %v", tc.tenant, err)
 		}
@@ -609,7 +603,7 @@ func TestRepository_ListForRecipient_OtherTenant_Invisible(t *testing.T) {
 func TestRepository_UnreadCount_AppliesTheUnreadPredicate(t *testing.T) {
 	db := newTestDB(t)
 	repo := NewRepository(db)
-	ctx := tenantCtx("tenant-acme")
+	ctx := testkit.TenantCtx("tenant-acme")
 
 	now := time.Now().UTC()
 	build := func(id string, markRead, expired bool) *InboxMessage {
@@ -636,7 +630,7 @@ func TestRepository_UnreadCount_AppliesTheUnreadPredicate(t *testing.T) {
 	if err := repo.Create(ctx, otherRecipient); err != nil {
 		t.Fatalf("Create(other recipient): %v", err)
 	}
-	if err := repo.Create(tenantCtx("tenant-bright"), messageAt("inbox-bright", "user-7", "", now)); err != nil {
+	if err := repo.Create(testkit.TenantCtx("tenant-bright"), messageAt("inbox-bright", "user-7", "", now)); err != nil {
 		t.Fatalf("Create(other tenant): %v", err)
 	}
 
@@ -656,7 +650,7 @@ func TestRepository_UnreadCount_AppliesTheUnreadPredicate(t *testing.T) {
 func TestRepository_MarkRead_FlipsAndIsIdempotent(t *testing.T) {
 	db := newTestDB(t)
 	repo := NewRepository(db)
-	ctx := tenantCtx("tenant-acme")
+	ctx := testkit.TenantCtx("tenant-acme")
 
 	msg := testMessage("inbox-000001")
 	if err := repo.Create(ctx, msg); err != nil {
@@ -699,16 +693,16 @@ func TestRepository_MarkRead_UnknownForeignAndOtherTenant_OneRefusal(t *testing.
 	repo := NewRepository(db)
 
 	acmeMsg := testMessage("inbox-acme-1") // user-7's, in tenant-acme
-	if err := repo.Create(tenantCtx("tenant-acme"), acmeMsg); err != nil {
+	if err := repo.Create(testkit.TenantCtx("tenant-acme"), acmeMsg); err != nil {
 		t.Fatalf("Create: %v", err)
 	}
 	user9Msg := testMessage("inbox-acme-user9")
 	user9Msg.RecipientUserID = "user-9"
-	if err := repo.Create(tenantCtx("tenant-acme"), user9Msg); err != nil {
+	if err := repo.Create(testkit.TenantCtx("tenant-acme"), user9Msg); err != nil {
 		t.Fatalf("Create(user-9's): %v", err)
 	}
 	brightMsg := testMessage("inbox-bright-1")
-	if err := repo.Create(tenantCtx("tenant-bright"), brightMsg); err != nil {
+	if err := repo.Create(testkit.TenantCtx("tenant-bright"), brightMsg); err != nil {
 		t.Fatalf("Create(tenant-bright): %v", err)
 	}
 
@@ -729,10 +723,10 @@ func TestRepository_MarkRead_UnknownForeignAndOtherTenant_OneRefusal(t *testing.
 			t.Errorf("%s: message_id param = %v, want %q", name, appErr.Params["message_id"], id)
 		}
 	}
-	probe("unknown id", tenantCtx("tenant-acme"), "user-7", "inbox-nope")
-	probe("other recipient's id", tenantCtx("tenant-acme"), "user-7", user9Msg.ID)
-	probe("other tenant's id", tenantCtx("tenant-acme"), "user-7", brightMsg.ID)
-	probe("right id, right recipient, other tenant", tenantCtx("tenant-bright"), "user-7", acmeMsg.ID)
+	probe("unknown id", testkit.TenantCtx("tenant-acme"), "user-7", "inbox-nope")
+	probe("other recipient's id", testkit.TenantCtx("tenant-acme"), "user-7", user9Msg.ID)
+	probe("other tenant's id", testkit.TenantCtx("tenant-acme"), "user-7", brightMsg.ID)
+	probe("right id, right recipient, other tenant", testkit.TenantCtx("tenant-bright"), "user-7", acmeMsg.ID)
 }
 
 // TestRepository_MarkRead_ExpiredRow_StillMarkable pins the other half of
@@ -742,7 +736,7 @@ func TestRepository_MarkRead_UnknownForeignAndOtherTenant_OneRefusal(t *testing.
 func TestRepository_MarkRead_ExpiredRow_StillMarkable(t *testing.T) {
 	db := newTestDB(t)
 	repo := NewRepository(db)
-	ctx := tenantCtx("tenant-acme")
+	ctx := testkit.TenantCtx("tenant-acme")
 
 	expired := time.Now().UTC().Add(-time.Hour)
 	msg := messageAt("inbox-expired", "user-7", "", expired)
@@ -771,7 +765,7 @@ func TestRepository_MarkRead_ExpiredRow_StillMarkable(t *testing.T) {
 func TestRepository_ReadAll_FlipsOnlyTheCallerOwnsUnreadAndCounts(t *testing.T) {
 	db := newTestDB(t)
 	repo := NewRepository(db)
-	ctx := tenantCtx("tenant-acme")
+	ctx := testkit.TenantCtx("tenant-acme")
 
 	now := time.Now().UTC()
 	build := func(id string, markRead, expired bool) *InboxMessage {
@@ -797,7 +791,7 @@ func TestRepository_ReadAll_FlipsOnlyTheCallerOwnsUnreadAndCounts(t *testing.T) 
 	if err := repo.Create(ctx, otherRecipient); err != nil {
 		t.Fatalf("Create(other recipient): %v", err)
 	}
-	if err := repo.Create(tenantCtx("tenant-bright"), messageAt("inbox-bright-unread", "user-7", "", now)); err != nil {
+	if err := repo.Create(testkit.TenantCtx("tenant-bright"), messageAt("inbox-bright-unread", "user-7", "", now)); err != nil {
 		t.Fatalf("Create(other tenant): %v", err)
 	}
 
@@ -832,7 +826,7 @@ func TestRepository_ReadAll_FlipsOnlyTheCallerOwnsUnreadAndCounts(t *testing.T) 
 	if len(user9Rows) != 1 || user9Rows[0].ReadAt != nil {
 		t.Errorf("user-9's unread row was touched: %+v", user9Rows)
 	}
-	brightRows, err := repo.ListForRecipient(tenantCtx("tenant-bright"), "user-7", "", 50, 0)
+	brightRows, err := repo.ListForRecipient(testkit.TenantCtx("tenant-bright"), "user-7", "", 50, 0)
 	if err != nil {
 		t.Fatalf("ListForRecipient(bright): %v", err)
 	}
@@ -852,7 +846,7 @@ func TestRepository_ReadAll_FlipsOnlyTheCallerOwnsUnreadAndCounts(t *testing.T) 
 func TestRepository_ReadAll_FailureMidwayAppliesNothing(t *testing.T) {
 	db := newTestDB(t)
 	repo := NewRepository(db)
-	ctx := tenantCtx("tenant-acme")
+	ctx := testkit.TenantCtx("tenant-acme")
 
 	if err := repo.Create(ctx, testMessage("inbox-a")); err != nil {
 		t.Fatalf("Create(inbox-a): %v", err)

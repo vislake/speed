@@ -11,6 +11,7 @@ import (
 	"github.com/vislake/speed/go/dbkit"
 	"github.com/vislake/speed/go/dbkit/dbtest"
 	"github.com/vislake/speed/go/pkgcore"
+	"github.com/vislake/speed/go/pkgcore/testkit"
 	"github.com/vislake/speed/go/tenancy/tenancytest"
 
 	// Blank-imported for its init side effect: registers dbkit.DialectSQLite
@@ -41,8 +42,7 @@ func newRepository(t *testing.T) *Repository {
 // tenantCtx returns a context carrying tenant and a dummy actor, the shape
 // every write and read below runs under.
 func tenantCtx(tenant pkgcore.TenantID) context.Context {
-	ctx := pkgcore.WithTenant(context.Background(), tenant)
-	return pkgcore.WithActor(ctx, pkgcore.Actor{Type: pkgcore.ActorTypeUser, ID: "cases-test-user"})
+	return pkgcore.WithActor(testkit.TenantCtx(tenant), pkgcore.Actor{Type: pkgcore.ActorTypeUser, ID: "cases-test-user"})
 }
 
 // TestRepository_Case_AssertIsolated runs the mandatory tenant-isolation

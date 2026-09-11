@@ -15,6 +15,7 @@ import (
 	"github.com/vislake/speed/go/pkgcore"
 	"github.com/vislake/speed/go/pkgcore/apperr"
 	"github.com/vislake/speed/go/pkgcore/componenttest"
+	"github.com/vislake/speed/go/pkgcore/testkit"
 
 	"github.com/vislake/speed/go/storage/internal/testutil"
 )
@@ -580,7 +581,7 @@ func TestModule_Register_RegistersTheServicesJobHandlers(t *testing.T) {
 // own services run for their consumers.
 func TestModule_Objects_ReturnsAUsableRepository(t *testing.T) {
 	m := newWiredModule(t, newTestDB(t))
-	ctx := tenantCtx("tenant-a")
+	ctx := testkit.TenantCtx("tenant-a")
 	upload := newUpload("obj-1", "tenant-a", time.Now())
 
 	if err := m.Objects().Create(ctx, &upload); err != nil {

@@ -11,6 +11,7 @@ import (
 	"github.com/vislake/speed/go/pkgcore"
 	"github.com/vislake/speed/go/pkgcore/apperr"
 	"github.com/vislake/speed/go/pkgcore/componenttest"
+	"github.com/vislake/speed/go/pkgcore/testkit"
 )
 
 // testPermissions is what the host's OTHER modules declare in these tests.
@@ -99,16 +100,11 @@ func attachTestService(t *testing.T, db *gorm.DB, opts ...Option) (*Service, *pk
 	return svc, reg
 }
 
-// tenantCtx is the context a host hands in after tenancy.Middleware ran.
-func tenantCtx(tenant pkgcore.TenantID) context.Context {
-	return pkgcore.WithTenant(context.Background(), tenant)
-}
-
 // grant defines a role holding permissions and binds it to sub at scope,
 // which is the two-step setup nearly every evaluation test needs.
 func grant(t *testing.T, svc *Service, sub Subject, roleKey string, scope Scope, permissions ...string) {
 	t.Helper()
-	ctx := tenantCtx(sub.TenantID)
+	ctx := testkit.TenantCtx(sub.TenantID)
 	if _, err := svc.roles.ByKey(ctx, roleKey); err != nil {
 		if _, err := svc.DefineRole(ctx, RoleDefinition{
 			Key:            roleKey,
@@ -215,7 +211,7 @@ func TestService_RevokeRole_InvalidatesTheCacheImmediately(t *testing.T) {
 		t.Fatal("the grant was not visible before the revoke")
 	}
 
-	if err := svc.RevokeRole(tenantCtx(sub.TenantID), sub, "reader", Scope{}); err != nil {
+	if err := svc.RevokeRole(testkit.TenantCtx(sub.TenantID), sub, "reader", Scope{}); err != nil {
 		t.Fatalf("RevokeRole: %v", err)
 	}
 
@@ -244,7 +240,7 @@ func TestService_RevokeDuringInFlightLoad_DoesNotResurrectStaleGrant(t *testing.
 
 	svc.afterLoadGrants = func() {
 		svc.afterLoadGrants = nil // run exactly once
-		if err := svc.RevokeRole(tenantCtx(sub.TenantID), sub, "reader", Scope{}); err != nil {
+		if err := svc.RevokeRole(testkit.TenantCtx(sub.TenantID), sub, "reader", Scope{}); err != nil {
 			t.Fatalf("RevokeRole racing the in-flight load: %v", err)
 		}
 	}
@@ -295,7 +291,7 @@ func TestService_RevokeOnOneReplica_InvalidatesTheOther(t *testing.T) {
 		t.Fatal("replica B did not see the grant")
 	}
 
-	if err := replicaA.RevokeRole(tenantCtx(sub.TenantID), sub, "reader", Scope{}); err != nil {
+	if err := replicaA.RevokeRole(testkit.TenantCtx(sub.TenantID), sub, "reader", Scope{}); err != nil {
 		t.Fatalf("RevokeRole on replica A: %v", err)
 	}
 
@@ -431,7 +427,7 @@ func TestService_PublishFailure_IsReportedAndTheCacheIsStillInvalidated(t *testi
 	}
 	t.Cleanup(func() { _ = svc.Close() })
 
-	ctx := tenantCtx("tenant-a")
+	ctx := testkit.TenantCtx("tenant-a")
 	if _, err := svc.DefineRole(ctx, RoleDefinition{Key: "reader", Permissions: []string{"notes:read"}}); err == nil {
 		t.Fatal("DefineRole reported success although the bus rejected the announcement")
 	} else if !apperr.HasCode(err, ErrStorage.Code) {
@@ -460,7 +456,7 @@ func (*failingBus) Subscribe(string, pkgcore.EventHandler) {}
 // came from the cache rather than from the database.
 func deleteAllBindings(t *testing.T, svc *Service, tenant pkgcore.TenantID) {
 	t.Helper()
-	ctx := tenantCtx(tenant)
+	ctx := testkit.TenantCtx(tenant)
 	rows, err := svc.bindings.List(ctx)
 	if err != nil {
 		t.Fatalf("listing bindings: %v", err)

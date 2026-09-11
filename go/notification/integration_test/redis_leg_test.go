@@ -245,7 +245,7 @@ func TestRedisBus_DeliveredInbox_AnnouncesAcrossReplicas(t *testing.T) {
 			"appointment_time": "9:30 AM",
 		},
 	}
-	if _, err := writer.Deliveries().Dispatch(tenantCtx(tenant), d); err != nil {
+	if _, err := writer.Deliveries().Dispatch(testkit.TenantCtx(tenant), d); err != nil {
 		t.Fatalf("Dispatch: %v", err)
 	}
 	if len(writerQueue.tasks) != 1 {
@@ -258,7 +258,7 @@ func TestRedisBus_DeliveredInbox_AnnouncesAcrossReplicas(t *testing.T) {
 
 	// One worker attempt over the job the queue recorded: the tenant is
 	// rebuilt into the context the way jobs rebuilds it for a worker.
-	if _, err := writer.Deliveries().Handle(tenantCtx(string(task.TenantID)), &jobs.Job{
+	if _, err := writer.Deliveries().Handle(testkit.TenantCtx(task.TenantID), &jobs.Job{
 		TenantID: task.TenantID,
 		Payload:  task.Payload,
 	}, nil); err != nil {
@@ -306,7 +306,7 @@ func TestRedisBus_DeliveredInbox_AnnouncesAcrossReplicas(t *testing.T) {
 	// module's bundle across the writer's bootstrap: the title and body
 	// come from the fixture's own locale files, interpolated with the
 	// dispatch's parameters at delivery time.
-	rows, err := notification.NewRepository(db).List(tenantCtx(tenant))
+	rows, err := notification.NewRepository(db).List(testkit.TenantCtx(tenant))
 	if err != nil {
 		t.Fatalf("List inbox messages: %v", err)
 	}

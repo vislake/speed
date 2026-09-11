@@ -11,6 +11,7 @@ import (
 
 	"github.com/vislake/speed/go/dbkit"
 	"github.com/vislake/speed/go/pkgcore"
+	"github.com/vislake/speed/go/pkgcore/testkit"
 	"github.com/vislake/speed/go/tenancy/tenancytest"
 
 	"github.com/vislake/speed/go/storage/internal/testutil"
@@ -24,12 +25,6 @@ import (
 func newTestDB(t *testing.T) *gorm.DB {
 	t.Helper()
 	return testutil.NewSQLite(t, moduleName, migrations.FS)
-}
-
-// tenantCtx returns a context carrying tenant, the tenant context every
-// repository call in this module's production path is reached through.
-func tenantCtx(tenant pkgcore.TenantID) context.Context {
-	return pkgcore.WithTenant(context.Background(), tenant)
 }
 
 // seedObject creates one row through the repository under test, failing the
@@ -162,7 +157,7 @@ func TestDerivativeRepository_AssertIsolated(t *testing.T) {
 // staggered CreatedAt values land in the table exactly as given.
 func TestObjectRepository_ListPage_NewestFirst(t *testing.T) {
 	repo := NewObjectRepository(newTestDB(t))
-	ctx := tenantCtx(pkgcore.TenantID("tenant-a"))
+	ctx := testkit.TenantCtx(pkgcore.TenantID("tenant-a"))
 	base := time.Now().Add(-1 * time.Hour).Truncate(time.Second)
 
 	// obj-01 is created last (newest), obj-02 first (oldest).
@@ -206,7 +201,7 @@ func TestObjectRepository_ListPage_NewestFirst(t *testing.T) {
 // total.
 func TestObjectRepository_ListPage_ExhaustiveWalk(t *testing.T) {
 	repo := NewObjectRepository(newTestDB(t))
-	ctx := tenantCtx(pkgcore.TenantID("tenant-a"))
+	ctx := testkit.TenantCtx(pkgcore.TenantID("tenant-a"))
 	base := time.Now().Add(-1 * time.Hour).Truncate(time.Second)
 
 	seedObject(t, repo, ctx, newUpload("obj-01", "tenant-a", base.Add(5*time.Minute)))
@@ -240,7 +235,7 @@ func TestObjectRepository_ListPage_ExhaustiveWalk(t *testing.T) {
 func TestObjectRepository_ListPage_EmptyTable(t *testing.T) {
 	repo := NewObjectRepository(newTestDB(t))
 
-	page, err := repo.listPage(tenantCtx("tenant-a"), 5, "")
+	page, err := repo.listPage(testkit.TenantCtx("tenant-a"), 5, "")
 	if err != nil {
 		t.Fatalf("listPage over an empty table: %v", err)
 	}
@@ -255,7 +250,7 @@ func TestObjectRepository_ListPage_EmptyTable(t *testing.T) {
 // ambiguous.
 func TestObjectRepository_ListPage_TiesBrokenByIdDescending(t *testing.T) {
 	repo := NewObjectRepository(newTestDB(t))
-	ctx := tenantCtx(pkgcore.TenantID("tenant-a"))
+	ctx := testkit.TenantCtx(pkgcore.TenantID("tenant-a"))
 	base := time.Now().Add(-1 * time.Hour).Truncate(time.Second)
 	tie := base.Add(1 * time.Minute)
 
@@ -286,7 +281,7 @@ func TestObjectRepository_ListPage_TiesBrokenByIdDescending(t *testing.T) {
 // and the new rows only surface by starting over from the beginning.
 func TestObjectRepository_ListPage_InsertionsDoNotShiftFetchedPages(t *testing.T) {
 	repo := NewObjectRepository(newTestDB(t))
-	ctx := tenantCtx(pkgcore.TenantID("tenant-a"))
+	ctx := testkit.TenantCtx(pkgcore.TenantID("tenant-a"))
 	base := time.Now().Add(-1 * time.Hour).Truncate(time.Second)
 
 	seedObject(t, repo, ctx, newUpload("obj-01", "tenant-a", base.Add(1*time.Minute)))
@@ -352,8 +347,8 @@ func TestObjectRepository_ListPage_InsertionsDoNotShiftFetchedPages(t *testing.T
 // makes cross-tenant id reuse a schema violation by design.
 func TestObjectRepository_ListPage_IsTenantScoped(t *testing.T) {
 	repo := NewObjectRepository(newTestDB(t))
-	ctxA := tenantCtx(pkgcore.TenantID("tenant-a"))
-	ctxB := tenantCtx(pkgcore.TenantID("tenant-b"))
+	ctxA := testkit.TenantCtx(pkgcore.TenantID("tenant-a"))
+	ctxB := testkit.TenantCtx(pkgcore.TenantID("tenant-b"))
 	base := time.Now().Add(-1 * time.Hour).Truncate(time.Second)
 
 	// Interleave: A's rows are all NEWER than B's.
@@ -394,8 +389,8 @@ func TestObjectRepository_ListPage_IsTenantScoped(t *testing.T) {
 // caller cannot probe whether an id it does not own exists.
 func TestObjectRepository_ListPage_RejectsForeignOrUnknownCursor(t *testing.T) {
 	repo := NewObjectRepository(newTestDB(t))
-	ctxA := tenantCtx(pkgcore.TenantID("tenant-a"))
-	ctxB := tenantCtx(pkgcore.TenantID("tenant-b"))
+	ctxA := testkit.TenantCtx(pkgcore.TenantID("tenant-a"))
+	ctxB := testkit.TenantCtx(pkgcore.TenantID("tenant-b"))
 	base := time.Now().Add(-1 * time.Hour).Truncate(time.Second)
 
 	seedObject(t, repo, ctxA, newUpload("obj-1", "tenant-a", base.Add(2*time.Minute)))
@@ -431,7 +426,7 @@ func TestObjectRepository_ListPage_RejectsForeignOrUnknownCursor(t *testing.T) {
 // is what keeps the two forms' contracts distinct.
 func TestObjectRepository_ListPageState_CompletedRowsOnly(t *testing.T) {
 	repo := NewObjectRepository(newTestDB(t))
-	ctx := tenantCtx(pkgcore.TenantID("tenant-a"))
+	ctx := testkit.TenantCtx(pkgcore.TenantID("tenant-a"))
 	base := time.Now().Add(-1 * time.Hour).Truncate(time.Second)
 
 	// States interleave by creation time: completed rows sit at minutes 5, 3
@@ -483,7 +478,7 @@ func TestObjectRepository_ListPageState_CompletedRowsOnly(t *testing.T) {
 // state check on the filtered form alone.
 func TestObjectRepository_ListPageState_CursorRowOutsideTheState(t *testing.T) {
 	repo := NewObjectRepository(newTestDB(t))
-	ctx := tenantCtx(pkgcore.TenantID("tenant-a"))
+	ctx := testkit.TenantCtx(pkgcore.TenantID("tenant-a"))
 	base := time.Now().Add(-1 * time.Hour).Truncate(time.Second)
 
 	seedObject(t, repo, ctx, newCompleted("c-01", "tenant-a", base.Add(2*time.Minute)))
@@ -536,7 +531,7 @@ func TestObjectRepository_ListPage_FailsClosedWithoutTenant(t *testing.T) {
 // read path module_test and the service layer's tests build on.
 func TestObjectRepository_Objects_SeedAndFindByID_RoundTrip(t *testing.T) {
 	repo := NewObjectRepository(newTestDB(t))
-	ctx := tenantCtx(pkgcore.TenantID("tenant-a"))
+	ctx := testkit.TenantCtx(pkgcore.TenantID("tenant-a"))
 	upload := newUpload("obj-1", "tenant-a", time.Now())
 
 	seedObject(t, repo, ctx, upload)
@@ -597,7 +592,7 @@ func seedDerivative(t *testing.T, repo *DerivativeRepository, ctx context.Contex
 // the flip is persisted, not just returned.
 func TestObjectRepository_MarkDeleting_CompletedAdvances(t *testing.T) {
 	repo := NewObjectRepository(newTestDB(t))
-	ctx := tenantCtx(pkgcore.TenantID("tenant-a"))
+	ctx := testkit.TenantCtx(pkgcore.TenantID("tenant-a"))
 	seedObject(t, repo, ctx, newCompleted("obj-1", "tenant-a", time.Now()))
 
 	got, err := repo.markDeleting(ctx, "obj-1")
@@ -625,7 +620,7 @@ func TestObjectRepository_MarkDeleting_CompletedAdvances(t *testing.T) {
 // instead of erroring.
 func TestObjectRepository_MarkDeleting_ResumesADeclaredDelete(t *testing.T) {
 	repo := NewObjectRepository(newTestDB(t))
-	ctx := tenantCtx(pkgcore.TenantID("tenant-a"))
+	ctx := testkit.TenantCtx(pkgcore.TenantID("tenant-a"))
 	seedObject(t, repo, ctx, newCompleted("obj-1", "tenant-a", time.Now()))
 
 	if _, err := repo.markDeleting(ctx, "obj-1"); err != nil {
@@ -647,7 +642,7 @@ func TestObjectRepository_MarkDeleting_ResumesADeclaredDelete(t *testing.T) {
 // exactly as the upload in flight left it.
 func TestObjectRepository_MarkDeleting_LeavesUploadingRowsUntouched(t *testing.T) {
 	repo := NewObjectRepository(newTestDB(t))
-	ctx := tenantCtx(pkgcore.TenantID("tenant-a"))
+	ctx := testkit.TenantCtx(pkgcore.TenantID("tenant-a"))
 	seedObject(t, repo, ctx, newUpload("obj-1", "tenant-a", time.Now()))
 
 	got, err := repo.markDeleting(ctx, "obj-1")
@@ -673,8 +668,8 @@ func TestObjectRepository_MarkDeleting_LeavesUploadingRowsUntouched(t *testing.T
 // "nothing there".
 func TestObjectRepository_MarkDeleting_ReportsNotFound(t *testing.T) {
 	repo := NewObjectRepository(newTestDB(t))
-	ctxA := tenantCtx(pkgcore.TenantID("tenant-a"))
-	ctxB := tenantCtx(pkgcore.TenantID("tenant-b"))
+	ctxA := testkit.TenantCtx(pkgcore.TenantID("tenant-a"))
+	ctxB := testkit.TenantCtx(pkgcore.TenantID("tenant-b"))
 	seedObject(t, repo, ctxA, newCompleted("obj-1", "tenant-a", time.Now()))
 
 	tests := []struct {
@@ -703,7 +698,7 @@ func TestObjectRepository_MarkDeleting_ReportsNotFound(t *testing.T) {
 // row survives the full-row write untouched.
 func TestObjectRepository_FinalizeUpload_CommitsTheTransition(t *testing.T) {
 	repo := NewObjectRepository(newTestDB(t))
-	ctx := tenantCtx(pkgcore.TenantID("tenant-a"))
+	ctx := testkit.TenantCtx(pkgcore.TenantID("tenant-a"))
 	seedObject(t, repo, ctx, newUpload("obj-1", "tenant-a", time.Now()))
 
 	row, err := repo.FindByID(ctx, "obj-1")
@@ -756,7 +751,7 @@ func TestObjectRepository_FinalizeUpload_CommitsTheTransition(t *testing.T) {
 // from committing after it.
 func TestObjectRepository_FinalizeUpload_RefusesAClosedWindow(t *testing.T) {
 	repo := NewObjectRepository(newTestDB(t))
-	ctx := tenantCtx(pkgcore.TenantID("tenant-a"))
+	ctx := testkit.TenantCtx(pkgcore.TenantID("tenant-a"))
 	// newUpload's window is createdAt+30m, so a row created 31 minutes ago
 	// is strictly past its window for any now.
 	seedObject(t, repo, ctx, newUpload("obj-1", "tenant-a", time.Now().Add(-31*time.Minute)))
@@ -794,8 +789,8 @@ func TestObjectRepository_FinalizeUpload_RefusesAClosedWindow(t *testing.T) {
 // for nothing.
 func TestObjectRepository_FinalizeUpload_RefusesWhenNotAnUploadingRowHere(t *testing.T) {
 	repo := NewObjectRepository(newTestDB(t))
-	ctxA := tenantCtx(pkgcore.TenantID("tenant-a"))
-	ctxB := tenantCtx(pkgcore.TenantID("tenant-b"))
+	ctxA := testkit.TenantCtx(pkgcore.TenantID("tenant-a"))
+	ctxB := testkit.TenantCtx(pkgcore.TenantID("tenant-b"))
 	seedObject(t, repo, ctxA, newUpload("obj-1", "tenant-a", time.Now()))
 	seedObject(t, repo, ctxB, newUpload("obj-2", "tenant-b", time.Now()))
 	completed := newCompleted("obj-3", "tenant-a", time.Now())
@@ -867,7 +862,7 @@ func TestObjectRepository_DeleteObjectRows_RemovesTheRows(t *testing.T) {
 	db := newTestDB(t)
 	objects := NewObjectRepository(db)
 	derivatives := NewDerivativeRepository(db)
-	ctx := tenantCtx(pkgcore.TenantID("tenant-a"))
+	ctx := testkit.TenantCtx(pkgcore.TenantID("tenant-a"))
 	base := time.Now().Add(-1 * time.Hour).Truncate(time.Second)
 
 	seedObject(t, objects, ctx, newCompleted("obj-1", "tenant-a", base))
@@ -903,7 +898,7 @@ func TestObjectRepository_DeleteObjectRows_RemovesTheRows(t *testing.T) {
 func TestObjectRepository_DeleteObjectRows_DoesNothingForAnUnknownObject(t *testing.T) {
 	repo := NewObjectRepository(newTestDB(t))
 
-	removed, err := repo.deleteObjectRows(tenantCtx("tenant-a"), "obj-99")
+	removed, err := repo.deleteObjectRows(testkit.TenantCtx("tenant-a"), "obj-99")
 	if err != nil {
 		t.Fatalf("deleteObjectRows on an unknown object: %v", err)
 	}
@@ -918,8 +913,8 @@ func TestObjectRepository_DeleteObjectRows_DoesNothingForAnUnknownObject(t *test
 // row reads back untouched.
 func TestObjectRepository_DeleteObjectRows_IsTenantScoped(t *testing.T) {
 	repo := NewObjectRepository(newTestDB(t))
-	ctxA := tenantCtx(pkgcore.TenantID("tenant-a"))
-	ctxB := tenantCtx(pkgcore.TenantID("tenant-b"))
+	ctxA := testkit.TenantCtx(pkgcore.TenantID("tenant-a"))
+	ctxB := testkit.TenantCtx(pkgcore.TenantID("tenant-b"))
 	seedObject(t, repo, ctxA, newCompleted("obj-1", "tenant-a", time.Now()))
 
 	removed, err := repo.deleteObjectRows(ctxB, "obj-1")
@@ -940,7 +935,7 @@ func TestObjectRepository_DeleteObjectRows_IsTenantScoped(t *testing.T) {
 // in-flight delete that a sweep run re-runs the protocol over.
 func TestObjectRepository_ListStateRows_OneStateAtATime(t *testing.T) {
 	repo := NewObjectRepository(newTestDB(t))
-	ctx := tenantCtx(pkgcore.TenantID("tenant-a"))
+	ctx := testkit.TenantCtx(pkgcore.TenantID("tenant-a"))
 	base := time.Now().Add(-1 * time.Hour).Truncate(time.Second)
 
 	seedObject(t, repo, ctx, newCompleted("c-01", "tenant-a", base.Add(5*time.Minute)))
@@ -980,7 +975,7 @@ func TestObjectRepository_ListStateRows_OneStateAtATime(t *testing.T) {
 // upload problem.
 func TestObjectRepository_ListExpiredUploads_OnlyExpiredUploads(t *testing.T) {
 	repo := NewObjectRepository(newTestDB(t))
-	ctx := tenantCtx(pkgcore.TenantID("tenant-a"))
+	ctx := testkit.TenantCtx(pkgcore.TenantID("tenant-a"))
 	now := time.Now()
 
 	// Window closed at now-15m: expired.
@@ -1006,7 +1001,7 @@ func TestObjectRepository_ListExpiredUploads_OnlyExpiredUploads(t *testing.T) {
 // the NULL branch of the column can never be swept by accident.
 func TestObjectRepository_ListExpiredCompleted_OnlyExpiredCompleted(t *testing.T) {
 	repo := NewObjectRepository(newTestDB(t))
-	ctx := tenantCtx(pkgcore.TenantID("tenant-a"))
+	ctx := testkit.TenantCtx(pkgcore.TenantID("tenant-a"))
 	now := time.Now()
 
 	past := now.Add(-1 * time.Hour)
@@ -1061,7 +1056,7 @@ func TestObjectRepository_SweepListings_FailClosedWithoutTenant(t *testing.T) {
 // and rows belonging to other objects of the same tenant are never mixed in.
 func TestDerivativeRepository_ListByObject_OneObjectsDerivatives(t *testing.T) {
 	repo := NewDerivativeRepository(newTestDB(t))
-	ctx := tenantCtx(pkgcore.TenantID("tenant-a"))
+	ctx := testkit.TenantCtx(pkgcore.TenantID("tenant-a"))
 	base := time.Now().Add(-1 * time.Hour).Truncate(time.Second)
 
 	// obj-a carries two derivatives of different kinds -- the shape the
@@ -1100,7 +1095,7 @@ func TestDerivativeRepository_InsertDerivativeIfAbsent_InsertsOnce(t *testing.T)
 	db := newTestDB(t)
 	objRepo := NewObjectRepository(db)
 	repo := NewDerivativeRepository(db)
-	ctx := tenantCtx(pkgcore.TenantID("tenant-a"))
+	ctx := testkit.TenantCtx(pkgcore.TenantID("tenant-a"))
 	base := time.Now().Add(-1 * time.Hour).Truncate(time.Second)
 	seedObject(t, objRepo, ctx, newCompleted("obj-1", "tenant-a", base))
 	row := newDerivative(t, "deriv-1", "obj-1", DerivativeKindThumbnail, "tenant-a", time.Now())
@@ -1139,7 +1134,7 @@ func TestDerivativeRepository_InsertDerivativeIfAbsent_GatedOnTheObject(t *testi
 	db := newTestDB(t)
 	objRepo := NewObjectRepository(db)
 	repo := NewDerivativeRepository(db)
-	ctx := tenantCtx(pkgcore.TenantID("tenant-a"))
+	ctx := testkit.TenantCtx(pkgcore.TenantID("tenant-a"))
 	base := time.Now().Add(-1 * time.Hour).Truncate(time.Second)
 
 	assertRefused := func(t *testing.T, objectID, derivID string) {

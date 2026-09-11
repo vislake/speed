@@ -13,6 +13,7 @@ import (
 	"github.com/vislake/speed/go/pkgcore"
 	"github.com/vislake/speed/go/pkgcore/apperr"
 	"github.com/vislake/speed/go/pkgcore/i18n"
+	"github.com/vislake/speed/go/pkgcore/testkit"
 
 	"github.com/vislake/speed/go/org/locales"
 )
@@ -218,7 +219,7 @@ func TestHandleUserCreated_NoPublisher_Noop(t *testing.T) {
 		t.Fatalf("Publish: %v", err)
 	}
 
-	ctx := tenantCtx("tenant-a")
+	ctx := testkit.TenantCtx("tenant-a")
 	if _, err := m.Tree().Root(ctx); !apperr.HasCode(err, ErrNodeNotFound.Code) {
 		t.Errorf("Root() error = %v, want org.node_not_found -- nothing should have been created", err)
 	}
@@ -244,7 +245,7 @@ func TestHandleUserCreated_UnknownPayloadShape_LogsAndReturnsNil(t *testing.T) {
 		}
 	}
 
-	ctx := tenantCtx("tenant-a")
+	ctx := testkit.TenantCtx("tenant-a")
 	if _, err := m.Tree().Root(ctx); !apperr.HasCode(err, ErrNodeNotFound.Code) {
 		t.Errorf("Root() error = %v, want org.node_not_found -- an unusable payload must create nothing", err)
 	}
@@ -287,7 +288,7 @@ func TestHandleUserCreated_CreatesTheDefaultWorkspace(t *testing.T) {
 		t.Fatalf("Publish: %v", err)
 	}
 
-	ctx := tenantCtx("tenant-a")
+	ctx := testkit.TenantCtx("tenant-a")
 	root, err := m.Tree().Root(ctx)
 	if err != nil {
 		t.Fatalf("Root: %v", err)
@@ -325,7 +326,7 @@ func TestHandleUserCreated_Redelivered_IsIdempotent(t *testing.T) {
 		}
 	}
 
-	ctx := tenantCtx("tenant-a")
+	ctx := testkit.TenantCtx("tenant-a")
 	nodes, err := m.Tree().Repository().List(ctx)
 	if err != nil {
 		t.Fatalf("List nodes: %v", err)
@@ -362,11 +363,11 @@ func TestHandleUserCreated_TwoTenants_EachGetTheirOwnWorkspace(t *testing.T) {
 		}
 	}
 
-	rootA, err := m.Tree().Root(tenantCtx("tenant-a"))
+	rootA, err := m.Tree().Root(testkit.TenantCtx("tenant-a"))
 	if err != nil {
 		t.Fatalf("Root(tenant-a): %v", err)
 	}
-	rootB, err := m.Tree().Root(tenantCtx("tenant-b"))
+	rootB, err := m.Tree().Root(testkit.TenantCtx("tenant-b"))
 	if err != nil {
 		t.Fatalf("Root(tenant-b): %v", err)
 	}
@@ -376,7 +377,7 @@ func TestHandleUserCreated_TwoTenants_EachGetTheirOwnWorkspace(t *testing.T) {
 	// One person, two tenants, two memberships: that is the whole reason
 	// users are identity data and memberships are tenant-scoped link data.
 	for _, tenant := range []pkgcore.TenantID{"tenant-a", "tenant-b"} {
-		if _, err := m.Members().Get(tenantCtx(tenant), "u-shared"); err != nil {
+		if _, err := m.Members().Get(testkit.TenantCtx(tenant), "u-shared"); err != nil {
 			t.Errorf("Get membership in %s: %v", tenant, err)
 		}
 	}
@@ -396,7 +397,7 @@ func TestHandleUserCreated_DefaultWorkspaceName_ComesFromTheCatalog(t *testing.T
 		t.Fatalf("Publish: %v", err)
 	}
 
-	root, err := m.Tree().Root(tenantCtx("tenant-a"))
+	root, err := m.Tree().Root(testkit.TenantCtx("tenant-a"))
 	if err != nil {
 		t.Fatalf("Root: %v", err)
 	}
@@ -417,7 +418,7 @@ func TestHandleUserCreated_DefaultWorkspaceName_ComesFromTheCatalog(t *testing.T
 // catalog failure cannot smuggle English into a Chinese UI.
 func TestDefaultWorkspaceName_NoCatalog_FallsBackToAnIdentifier(t *testing.T) {
 	m := NewModule(nil)
-	if got := m.defaultWorkspaceName(tenantCtx("tenant-a")); got != "tenant-a" {
+	if got := m.defaultWorkspaceName(testkit.TenantCtx("tenant-a")); got != "tenant-a" {
 		t.Errorf("defaultWorkspaceName without a host = %q, want the tenant id", got)
 	}
 	if got := m.defaultWorkspaceName(context.Background()); got != defaultRootKind {
@@ -430,7 +431,7 @@ func TestDefaultWorkspaceName_NoCatalog_FallsBackToAnIdentifier(t *testing.T) {
 // reporting the bus failure would claim a write failed when it did not.
 func TestPublishEvent_BusFailure_IsSwallowed(t *testing.T) {
 	m, host := newTestModule(t)
-	ctx := tenantCtx("tenant-a")
+	ctx := testkit.TenantCtx("tenant-a")
 	host.bus.failWith = errors.New("bus is down")
 
 	if _, err := m.Tree().CreateRoot(ctx, "group", "group"); err != nil {
@@ -453,14 +454,14 @@ func TestPublishEvent_NoTenant_IsNotPublished(t *testing.T) {
 // TestPublishEvent_NoHost_IsSafe pins that a service used before the assembly
 // (or in a test that never attached a host) does not panic on publish.
 func TestPublishEvent_NoHost_IsSafe(t *testing.T) {
-	publishEvent(tenantCtx("tenant-a"), nil, EventNodeCreated, NodeCreated{NodeID: "n-1"})
+	publishEvent(testkit.TenantCtx("tenant-a"), nil, EventNodeCreated, NodeCreated{NodeID: "n-1"})
 }
 
 // TestTreeService_PublishesNodeEvents pins that every org.node.* declaration
 // has a publisher and carries the payload its EventDecl names.
 func TestTreeService_PublishesNodeEvents(t *testing.T) {
 	m, host := newTestModule(t)
-	ctx := tenantCtx("tenant-a")
+	ctx := testkit.TenantCtx("tenant-a")
 	root, left, _ := seedTree(t, m.Tree(), ctx)
 
 	created := host.bus.events(EventNodeCreated)
@@ -533,7 +534,7 @@ func TestTreeService_PublishesNodeEvents(t *testing.T) {
 func TestTreeService_NodeDeletedPayload_CarriesTheRealRemovedIDSet(t *testing.T) {
 	t.Run("a single, non-cascading delete carries exactly its own id", func(t *testing.T) {
 		m, host := newTestModule(t)
-		ctx := tenantCtx("tenant-a")
+		ctx := testkit.TenantCtx("tenant-a")
 		root, err := m.Tree().CreateRoot(ctx, "root", "workspace")
 		if err != nil {
 			t.Fatalf("CreateRoot: %v", err)
@@ -564,7 +565,7 @@ func TestTreeService_NodeDeletedPayload_CarriesTheRealRemovedIDSet(t *testing.T)
 
 	t.Run("a cascading delete carries every row the cascade actually removed", func(t *testing.T) {
 		m, host := newTestModule(t)
-		ctx := tenantCtx("tenant-a")
+		ctx := testkit.TenantCtx("tenant-a")
 		root, err := m.Tree().CreateRoot(ctx, "root", "workspace")
 		if err != nil {
 			t.Fatalf("CreateRoot: %v", err)
@@ -620,7 +621,7 @@ func TestTreeService_NodeDeletedPayload_CarriesTheRealRemovedIDSet(t *testing.T)
 // EventNodeRestored's own EventDecl names.
 func TestTreeService_PublishesNodeRestoredEvent(t *testing.T) {
 	m, host := newTestModule(t)
-	ctx := tenantCtx("tenant-a")
+	ctx := testkit.TenantCtx("tenant-a")
 	_, left, _ := seedTree(t, m.Tree(), ctx)
 
 	if err := m.Tree().Delete(ctx, left.ID, false); err != nil {

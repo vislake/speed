@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/vislake/speed/go/pkgcore/apperr"
+	"github.com/vislake/speed/go/pkgcore/testkit"
 )
 
 func TestService_Can_NoBindings_DeniesWithoutError(t *testing.T) {
@@ -122,7 +123,7 @@ func TestService_Can_AmbientTenantContext_DoesNotSteerTheRead(t *testing.T) {
 	grant(t, svc, inA, "reader", Scope{}, "notes:read")
 
 	// Ask about the tenant-b subject while ctx insists on tenant-a.
-	ok, err := svc.Can(tenantCtx("tenant-a"), inB, "read", "notes")
+	ok, err := svc.Can(testkit.TenantCtx("tenant-a"), inB, "read", "notes")
 	if err != nil {
 		t.Fatalf("Can: %v", err)
 	}
@@ -133,7 +134,7 @@ func TestService_Can_AmbientTenantContext_DoesNotSteerTheRead(t *testing.T) {
 	// And the converse: the subject's own tenant is used even when ctx
 	// carries a different one, so the decision does not depend on the
 	// host having set a matching tenant context at all.
-	ok, err = svc.Can(tenantCtx("tenant-b"), inA, "read", "notes")
+	ok, err = svc.Can(testkit.TenantCtx("tenant-b"), inA, "read", "notes")
 	if err != nil {
 		t.Fatalf("Can: %v", err)
 	}
@@ -241,10 +242,10 @@ func TestService_DataScope_SeveralNodes_AreSortedAndDeduplicated(t *testing.T) {
 	svc := newTestService(t, WithSubtreeResolver(resolver))
 	sub := Subject{TenantID: "tenant-a", UserID: "user-1"}
 	grant(t, svc, sub, "region-reader", Scope{NodeID: "node-9"}, "notes:read")
-	if err := svc.AssignRole(tenantCtx("tenant-a"), sub, "region-reader", Scope{NodeID: "node-7"}); err != nil {
+	if err := svc.AssignRole(testkit.TenantCtx("tenant-a"), sub, "region-reader", Scope{NodeID: "node-7"}); err != nil {
 		t.Fatalf("AssignRole(node-7): %v", err)
 	}
-	if err := svc.AssignRole(tenantCtx("tenant-a"), sub, "region-reader", Scope{NodeID: "node-8"}); err != nil {
+	if err := svc.AssignRole(testkit.TenantCtx("tenant-a"), sub, "region-reader", Scope{NodeID: "node-8"}); err != nil {
 		t.Fatalf("AssignRole(node-8): %v", err)
 	}
 
@@ -264,7 +265,7 @@ func TestService_DataScope_UnknownNode_ContributesNothing(t *testing.T) {
 	svc := newTestService(t, WithSubtreeResolver(resolver))
 	sub := Subject{TenantID: "tenant-a", UserID: "user-1"}
 	grant(t, svc, sub, "region-reader", Scope{NodeID: "node-7"}, "notes:read")
-	if err := svc.AssignRole(tenantCtx("tenant-a"), sub, "region-reader", Scope{NodeID: "deleted-node"}); err != nil {
+	if err := svc.AssignRole(testkit.TenantCtx("tenant-a"), sub, "region-reader", Scope{NodeID: "deleted-node"}); err != nil {
 		t.Fatalf("AssignRole(deleted-node): %v", err)
 	}
 
@@ -352,7 +353,7 @@ func TestService_DataScope_TenantWideAndNodeScoped_ForTheSamePermission_IsTenant
 	svc := newTestService(t, WithSubtreeResolver(resolver))
 	sub := Subject{TenantID: "tenant-a", UserID: "user-1"}
 	grant(t, svc, sub, "reader", Scope{}, "notes:read")
-	if err := svc.AssignRole(tenantCtx("tenant-a"), sub, "reader", Scope{NodeID: "node-7"}); err != nil {
+	if err := svc.AssignRole(testkit.TenantCtx("tenant-a"), sub, "reader", Scope{NodeID: "node-7"}); err != nil {
 		t.Fatalf("AssignRole(node-7): %v", err)
 	}
 

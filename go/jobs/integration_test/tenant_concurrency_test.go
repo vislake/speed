@@ -10,6 +10,7 @@ import (
 	"github.com/vislake/speed/go/jobs"
 	"github.com/vislake/speed/go/jobs/queue/asynq"
 	"github.com/vislake/speed/go/pkgcore"
+	"github.com/vislake/speed/go/pkgcore/testkit"
 )
 
 // blockingHandler signals startedCh with its Job's id, then blocks until
@@ -121,7 +122,7 @@ func TestRedisQueue_PerTenantConcurrencyLimiting(t *testing.T) {
 	}
 	flood.releaseCh <- struct{}{}
 
-	tenantACtx := tenantCtx(tenantA)
+	tenantACtx := testkit.TenantCtx(tenantA)
 	for _, id := range floodIDs {
 		waitForTerminal(t, tenantACtx, q, id, 10*time.Second)
 	}

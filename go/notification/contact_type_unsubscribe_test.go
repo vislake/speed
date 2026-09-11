@@ -22,6 +22,7 @@ import (
 
 	"github.com/vislake/speed/go/pkgcore"
 	"github.com/vislake/speed/go/pkgcore/apperr"
+	"github.com/vislake/speed/go/pkgcore/testkit"
 	"github.com/vislake/speed/go/tenancy/tenancytest"
 )
 
@@ -42,7 +43,7 @@ func contactWithTypeTaxonomy(t *testing.T) *contactEnv {
 // this file starts from.
 func verifiedEmailContact(t *testing.T, env *contactEnv) *VerifiedContact {
 	t.Helper()
-	contact, err := env.svc.CreateContact(tenantCtx("tenant-acme"), ContactCreateInput{
+	contact, err := env.svc.CreateContact(testkit.TenantCtx("tenant-acme"), ContactCreateInput{
 		Channel:    ChannelEmail,
 		Address:    "wangfang@external.example.com",
 		ConsentRef: "consent-ref-1",
@@ -99,7 +100,7 @@ func TestContactTypeUnsubscribe_AssertIsolated(t *testing.T) {
 // deliverability (EnsureDeliverable) included.
 func TestContact_UnsubscribeType_VerifiedContactOptsOutOfOneType(t *testing.T) {
 	env := contactWithTypeTaxonomy(t)
-	ctx := tenantCtx("tenant-acme")
+	ctx := testkit.TenantCtx("tenant-acme")
 	contact := verifiedEmailContact(t, env)
 
 	if err := env.svc.UnsubscribeType(ctx, UnsubscribeTypeInput{
@@ -158,7 +159,7 @@ func TestContact_UnsubscribeType_VerifiedContactOptsOutOfOneType(t *testing.T) {
 // never any other -- a second type's probe stays empty.
 func TestContact_UnsubscribeType_DoesNotTouchOtherTypeRows(t *testing.T) {
 	env := contactWithTypeTaxonomy(t)
-	ctx := tenantCtx("tenant-acme")
+	ctx := testkit.TenantCtx("tenant-acme")
 	contact := verifiedEmailContact(t, env)
 
 	if err := env.svc.UnsubscribeType(ctx, UnsubscribeTypeInput{ContactID: contact.ID, TypeKey: fixtureTypeAppointment}); err != nil {
@@ -180,7 +181,7 @@ func TestContact_UnsubscribeType_DoesNotTouchOtherTypeRows(t *testing.T) {
 // repeat is not a state change.
 func TestContact_UnsubscribeType_IdempotentRepeatEmitsNothing(t *testing.T) {
 	env := contactWithTypeTaxonomy(t)
-	ctx := tenantCtx("tenant-acme")
+	ctx := testkit.TenantCtx("tenant-acme")
 	contact := verifiedEmailContact(t, env)
 
 	in := UnsubscribeTypeInput{ContactID: contact.ID, TypeKey: fixtureTypeResult}
@@ -209,7 +210,7 @@ func TestContact_UnsubscribeType_IdempotentRepeatEmitsNothing(t *testing.T) {
 // (Unsubscribable false). Each refusal leaves no row behind.
 func TestContact_UnsubscribeType_RefusalMatrix(t *testing.T) {
 	env := contactWithTypeTaxonomy(t)
-	ctx := tenantCtx("tenant-acme")
+	ctx := testkit.TenantCtx("tenant-acme")
 	contact := verifiedEmailContact(t, env)
 
 	// A pending contact: create without a consent ref (email channel, so
@@ -320,7 +321,7 @@ func TestContact_UnsubscribeType_RefusalMatrix(t *testing.T) {
 // does.
 func TestContact_UnsubscribeType_UnknownTypeRefusalNamesTheKey(t *testing.T) {
 	env := contactWithTypeTaxonomy(t)
-	ctx := tenantCtx("tenant-acme")
+	ctx := testkit.TenantCtx("tenant-acme")
 	contact := verifiedEmailContact(t, env)
 
 	err := env.svc.UnsubscribeType(ctx, UnsubscribeTypeInput{
@@ -337,8 +338,8 @@ func TestContact_UnsubscribeType_UnknownTypeRefusalNamesTheKey(t *testing.T) {
 // visible from B's probe of the same contact id.
 func TestContact_UnsubscribeType_TenantScoped(t *testing.T) {
 	env := contactWithTypeTaxonomy(t)
-	ctxA := tenantCtx("tenant-acme")
-	ctxB := tenantCtx("tenant-other")
+	ctxA := testkit.TenantCtx("tenant-acme")
+	ctxB := testkit.TenantCtx("tenant-other")
 	contact := verifiedEmailContact(t, env)
 
 	err := env.svc.UnsubscribeType(ctxB, UnsubscribeTypeInput{
@@ -370,7 +371,7 @@ func TestContact_UnsubscribeType_TenantScoped(t *testing.T) {
 // status.
 func TestContact_EnsureDeliverableForType_WholeContactStatusesStillDominant(t *testing.T) {
 	env := contactWithTypeTaxonomy(t)
-	ctx := tenantCtx("tenant-acme")
+	ctx := testkit.TenantCtx("tenant-acme")
 
 	verified := verifiedEmailContact(t, env)
 	whole, err := env.svc.CreateContact(ctx, ContactCreateInput{

@@ -9,6 +9,7 @@ import (
 
 	"github.com/vislake/speed/go/dbkit"
 	"github.com/vislake/speed/go/pkgcore"
+	"github.com/vislake/speed/go/pkgcore/testkit"
 	"github.com/vislake/speed/go/tenancy/tenancytest"
 
 	"github.com/vislake/speed/go/org/internal/testutil"
@@ -20,12 +21,6 @@ import (
 func newTestDB(t *testing.T) *gorm.DB {
 	t.Helper()
 	return testutil.NewSQLite(t, moduleName, migrations.FS)
-}
-
-// tenantCtx returns a context carrying tenant, the only way any code in this
-// module ever learns which tenant it is acting for.
-func tenantCtx(tenant pkgcore.TenantID) context.Context {
-	return pkgcore.WithTenant(context.Background(), tenant)
 }
 
 // seedNode inserts one node directly through the repository, for tests that
@@ -80,7 +75,7 @@ func TestRepository_AssertIsolated(t *testing.T) {
 
 func TestRepository_subtree(t *testing.T) {
 	repo := NewRepository(newTestDB(t))
-	ctx := tenantCtx("tenant-a")
+	ctx := testkit.TenantCtx("tenant-a")
 
 	// A deliberately adversarial shape: "aa" and "aab" are siblings whose
 	// ids share a prefix, and "aa" has a two-level subtree beneath it.
@@ -122,8 +117,8 @@ func TestRepository_subtree(t *testing.T) {
 // happily return both. Only the injected tenant filter keeps them apart.
 func TestRepository_subtree_OtherTenantWithIdenticalPaths_IsNotReturned(t *testing.T) {
 	repo := NewRepository(newTestDB(t))
-	ctxA := tenantCtx("tenant-a")
-	ctxB := tenantCtx("tenant-b")
+	ctxA := testkit.TenantCtx("tenant-a")
+	ctxB := testkit.TenantCtx("tenant-b")
 
 	seedNode(t, repo, ctxA, OrgNode{ID: "a-r", Path: "/shared/", Depth: 0, Name: "root"})
 	seedNode(t, repo, ctxA, OrgNode{ID: "a-c", ParentID: "a-r", Path: "/shared/child/", Depth: 1, Name: "child"})
@@ -142,7 +137,7 @@ func TestRepository_subtree_OtherTenantWithIdenticalPaths_IsNotReturned(t *testi
 // context must error, never silently return every tenant's rows.
 func TestRepository_subtree_NoTenantContext_FailsClosed(t *testing.T) {
 	repo := NewRepository(newTestDB(t))
-	seedNode(t, repo, tenantCtx("tenant-a"), OrgNode{ID: "r", Path: "/r/", Depth: 0, Name: "root"})
+	seedNode(t, repo, testkit.TenantCtx("tenant-a"), OrgNode{ID: "r", Path: "/r/", Depth: 0, Name: "root"})
 
 	got, err := repo.subtree(context.Background(), "/r/")
 	if err == nil {
@@ -155,7 +150,7 @@ func TestRepository_subtree_NoTenantContext_FailsClosed(t *testing.T) {
 
 func TestRepository_children(t *testing.T) {
 	repo := NewRepository(newTestDB(t))
-	ctx := tenantCtx("tenant-a")
+	ctx := testkit.TenantCtx("tenant-a")
 
 	seedNode(t, repo, ctx, OrgNode{ID: "r", Path: "/r/", Depth: 0, Name: "root"})
 	seedNode(t, repo, ctx, OrgNode{ID: "b", ParentID: "r", Path: "/r/b/", Depth: 1, Name: "beta"})
@@ -185,8 +180,8 @@ func TestRepository_children(t *testing.T) {
 
 func TestRepository_findRoot(t *testing.T) {
 	repo := NewRepository(newTestDB(t))
-	ctxA := tenantCtx("tenant-a")
-	ctxB := tenantCtx("tenant-b")
+	ctxA := testkit.TenantCtx("tenant-a")
+	ctxB := testkit.TenantCtx("tenant-b")
 
 	seedNode(t, repo, ctxA, OrgNode{ID: "a-r", Path: "/a-r/", Depth: 0, Name: "root"})
 	seedNode(t, repo, ctxA, OrgNode{ID: "a-c", ParentID: "a-r", Path: "/a-r/a-c/", Depth: 1, Name: "child"})
@@ -212,8 +207,8 @@ func TestRepository_findRoot(t *testing.T) {
 
 func TestRepository_byIDs(t *testing.T) {
 	repo := NewRepository(newTestDB(t))
-	ctxA := tenantCtx("tenant-a")
-	ctxB := tenantCtx("tenant-b")
+	ctxA := testkit.TenantCtx("tenant-a")
+	ctxB := testkit.TenantCtx("tenant-b")
 
 	seedNode(t, repo, ctxA, OrgNode{ID: "r", Path: "/r/", Depth: 0, Name: "root"})
 	seedNode(t, repo, ctxA, OrgNode{ID: "m", ParentID: "r", Path: "/r/m/", Depth: 1, Name: "mid"})
@@ -250,8 +245,8 @@ func TestRepository_byIDs(t *testing.T) {
 
 func TestRepository_deleteSubtree(t *testing.T) {
 	repo := NewRepository(newTestDB(t))
-	ctxA := tenantCtx("tenant-a")
-	ctxB := tenantCtx("tenant-b")
+	ctxA := testkit.TenantCtx("tenant-a")
+	ctxB := testkit.TenantCtx("tenant-b")
 
 	seedNode(t, repo, ctxA, OrgNode{ID: "r", Path: "/r/", Depth: 0, Name: "root"})
 	seedNode(t, repo, ctxA, OrgNode{ID: "a", ParentID: "r", Path: "/r/a/", Depth: 1, Name: "a"})
@@ -292,7 +287,7 @@ func TestRepository_deleteSubtree(t *testing.T) {
 // matched == 0 means now.
 func TestRepository_deleteLeaf(t *testing.T) {
 	repo := NewRepository(newTestDB(t))
-	ctx := tenantCtx("tenant-a")
+	ctx := testkit.TenantCtx("tenant-a")
 
 	seedNode(t, repo, ctx, OrgNode{ID: "r", Path: "/r/", Depth: 0, Name: "root"})
 	seedNode(t, repo, ctx, OrgNode{ID: "a", ParentID: "r", Path: "/r/a/", Depth: 1, Name: "a"})
@@ -342,8 +337,8 @@ func TestRepository_deleteLeaf(t *testing.T) {
 // race between two concurrent creates.
 func TestRepository_SiblingNameUniqueness_IsEnforcedByTheDatabase(t *testing.T) {
 	repo := NewRepository(newTestDB(t))
-	ctxA := tenantCtx("tenant-a")
-	ctxB := tenantCtx("tenant-b")
+	ctxA := testkit.TenantCtx("tenant-a")
+	ctxB := testkit.TenantCtx("tenant-b")
 
 	seedNode(t, repo, ctxA, OrgNode{ID: "r", Path: "/r/", Depth: 0, Name: "root"})
 	seedNode(t, repo, ctxA, OrgNode{ID: "a", ParentID: "r", Path: "/r/a/", Depth: 1, Name: "North"})
@@ -435,7 +430,7 @@ func assertStringSet(t *testing.T, ids []string, want []string) {
 // must leave the row's updated_at exactly as it was.
 func TestRepository_touchLockByID_DoesNotRewriteUpdatedAt(t *testing.T) {
 	repo := NewRepository(newTestDB(t))
-	ctx := tenantCtx("tenant-a")
+	ctx := testkit.TenantCtx("tenant-a")
 
 	seedNode(t, repo, ctx, OrgNode{ID: "r", Path: "/r/", Depth: 0, Name: "root"})
 	seedNode(t, repo, ctx, OrgNode{ID: "a", ParentID: "r", Path: "/r/a/", Depth: 1, Name: "a"})

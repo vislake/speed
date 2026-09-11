@@ -7,6 +7,7 @@ import (
 
 	"github.com/vislake/speed/go/pkgcore"
 	"github.com/vislake/speed/go/pkgcore/apperr"
+	"github.com/vislake/speed/go/pkgcore/testkit"
 )
 
 // systemPurposeTenantsOfTest is the purpose TenantsOf's own tests grant
@@ -42,9 +43,9 @@ func TestMemberService_TenantsOf_AnswersAcrossTenantsUnderSystemContext(t *testi
 	svc := m.Members()
 
 	// Three tenants, each with a root the memberships can bind to.
-	acmeCtx := tenantCtx("tenant-acme")
-	globexCtx := tenantCtx("tenant-globex")
-	otherCtx := tenantCtx("tenant-other")
+	acmeCtx := testkit.TenantCtx("tenant-acme")
+	globexCtx := testkit.TenantCtx("tenant-globex")
+	otherCtx := testkit.TenantCtx("tenant-other")
 	seed := func(ctx context.Context) string {
 		t.Helper()
 		tenant, err := pkgcore.MustTenantFromContext(ctx)
@@ -125,7 +126,7 @@ func TestMemberService_TenantsOf_SystemContextGate(t *testing.T) {
 	// tenant the user genuinely belongs to: org.membership_not_found-style
 	// per-tenant facts are Get's business, and the cross-tenant enumeration
 	// needs the system grant.
-	if _, err := svc.TenantsOf(tenantCtx("tenant-acme"), "u-any"); !apperr.HasCode(err, ErrSystemContextRequired.Code) {
+	if _, err := svc.TenantsOf(testkit.TenantCtx("tenant-acme"), "u-any"); !apperr.HasCode(err, ErrSystemContextRequired.Code) {
 		t.Errorf("TenantsOf under a tenant context error = %v, want org.system_context_required", err)
 	}
 
@@ -133,7 +134,7 @@ func TestMemberService_TenantsOf_SystemContextGate(t *testing.T) {
 	// the tenant is irrelevant to the question, and refusing the
 	// combination would break the audited shape (tenancy.WithSystemContext
 	// is routinely taken while already acting in one tenant).
-	elevated, elevateErr := pkgcore.WithSystemContext(tenantCtx("tenant-acme"), pkgcore.SystemReason{
+	elevated, elevateErr := pkgcore.WithSystemContext(testkit.TenantCtx("tenant-acme"), pkgcore.SystemReason{
 		Actor:   "org-test",
 		Purpose: systemPurposeTenantsOfTest,
 	})
@@ -158,9 +159,9 @@ func TestMemberService_TenantsOf_LiveRowsOnly(t *testing.T) {
 	m, _ := newTestModule(t)
 	svc := m.Members()
 
-	acmeCtx := tenantCtx("tenant-acme")
-	globexCtx := tenantCtx("tenant-globex")
-	suspendedCtx := tenantCtx("tenant-suspended")
+	acmeCtx := testkit.TenantCtx("tenant-acme")
+	globexCtx := testkit.TenantCtx("tenant-globex")
+	suspendedCtx := testkit.TenantCtx("tenant-suspended")
 
 	sysCtx, sysErr := systemCtx(context.Background())
 	if sysErr != nil {

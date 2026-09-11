@@ -6,11 +6,12 @@ import (
 	"testing"
 
 	"github.com/vislake/speed/go/pkgcore/apperr"
+	"github.com/vislake/speed/go/pkgcore/testkit"
 )
 
 func TestScopeService_Path(t *testing.T) {
 	m, _ := newTestModule(t)
-	ctx := tenantCtx("tenant-a")
+	ctx := testkit.TenantCtx("tenant-a")
 	root, left, _ := seedTree(t, m.Tree(), ctx)
 
 	for _, node := range []*OrgNode{root, left} {
@@ -28,14 +29,14 @@ func TestScopeService_Path(t *testing.T) {
 	}
 
 	// Another tenant's node is indistinguishable from a missing one.
-	if _, err := m.scope.Path(tenantCtx("tenant-b"), root.ID); !apperr.HasCode(err, ErrNodeNotFound.Code) {
+	if _, err := m.scope.Path(testkit.TenantCtx("tenant-b"), root.ID); !apperr.HasCode(err, ErrNodeNotFound.Code) {
 		t.Errorf("Path(other tenant's node) error = %v, want org.node_not_found", err)
 	}
 }
 
 func TestScopeService_DescendantIDs(t *testing.T) {
 	m, _ := newTestModule(t)
-	ctx := tenantCtx("tenant-a")
+	ctx := testkit.TenantCtx("tenant-a")
 	root, left, right := seedTree(t, m.Tree(), ctx)
 	chair, err := m.Tree().CreateChild(ctx, left.ID, "chair 1", "room")
 	if err != nil {
@@ -79,7 +80,7 @@ func TestScopeService_DescendantIDs(t *testing.T) {
 // the two levels a group-and-store shape would prove, up to the depth bound.
 func TestScopeService_DescendantIDs_DeepChain(t *testing.T) {
 	m, _ := newTestModule(t)
-	ctx := tenantCtx("tenant-a")
+	ctx := testkit.TenantCtx("tenant-a")
 
 	root, err := m.Tree().CreateRoot(ctx, "level 0", "group")
 	if err != nil {
@@ -112,7 +113,7 @@ func TestScopeService_DescendantIDs_DeepChain(t *testing.T) {
 // door.
 func TestScopeService_MemberNodeIDs_MidTreeMember_ExcludesSiblingBranch(t *testing.T) {
 	m, _ := newTestModule(t)
-	ctx := tenantCtx("tenant-a")
+	ctx := testkit.TenantCtx("tenant-a")
 	root, left, right := seedTree(t, m.Tree(), ctx)
 	chair, err := m.Tree().CreateChild(ctx, left.ID, "chair 1", "room")
 	if err != nil {
@@ -140,7 +141,7 @@ func TestScopeService_MemberNodeIDs_MidTreeMember_ExcludesSiblingBranch(t *testi
 
 func TestScopeService_MemberNodeIDs_RootMember_SeesEverything(t *testing.T) {
 	m, _ := newTestModule(t)
-	ctx := tenantCtx("tenant-a")
+	ctx := testkit.TenantCtx("tenant-a")
 	root, left, right := seedTree(t, m.Tree(), ctx)
 
 	if _, err := m.Members().Add(ctx, "u-owner", root.ID); err != nil {
@@ -163,7 +164,7 @@ func TestScopeService_MemberNodeIDs_RootMember_SeesEverything(t *testing.T) {
 // fail-closed outcome.
 func TestScopeService_MemberNodeIDs_NoMembership_IsEmptyNotAnError(t *testing.T) {
 	m, _ := newTestModule(t)
-	ctx := tenantCtx("tenant-a")
+	ctx := testkit.TenantCtx("tenant-a")
 	seedTree(t, m.Tree(), ctx)
 
 	got, err := m.scope.MemberNodeIDs(ctx, "u-stranger")
@@ -179,7 +180,7 @@ func TestScopeService_MemberNodeIDs_NoMembership_IsEmptyNotAnError(t *testing.T)
 // an ACTIVE membership grants visibility.
 func TestScopeService_MemberNodeIDs_SuspendedMember_SeesNothing(t *testing.T) {
 	m, _ := newTestModule(t)
-	ctx := tenantCtx("tenant-a")
+	ctx := testkit.TenantCtx("tenant-a")
 	root, _, _ := seedTree(t, m.Tree(), ctx)
 
 	seedMembership(t, m.Members().Repository(), ctx, Membership{
@@ -199,8 +200,8 @@ func TestScopeService_MemberNodeIDs_SuspendedMember_SeesNothing(t *testing.T) {
 // about a user who is a member of ANOTHER tenant reveals nothing.
 func TestScopeService_MemberNodeIDs_CrossTenantProbe_IsEmpty(t *testing.T) {
 	m, _ := newTestModule(t)
-	ctxA := tenantCtx("tenant-a")
-	ctxB := tenantCtx("tenant-b")
+	ctxA := testkit.TenantCtx("tenant-a")
+	ctxB := testkit.TenantCtx("tenant-b")
 
 	rootA, _, _ := seedTree(t, m.Tree(), ctxA)
 	if _, err := m.Members().Add(ctxA, "u-shared", rootA.ID); err != nil {
@@ -224,7 +225,7 @@ func TestScopeService_MemberNodeIDs_CrossTenantProbe_IsEmpty(t *testing.T) {
 // an error that would fail the consumer's whole request.
 func TestScopeService_MemberNodeIDs_DanglingMembership_FailsClosed(t *testing.T) {
 	m, _ := newTestModule(t)
-	ctx := tenantCtx("tenant-a")
+	ctx := testkit.TenantCtx("tenant-a")
 	seedTree(t, m.Tree(), ctx)
 
 	seedMembership(t, m.Members().Repository(), ctx, Membership{
@@ -255,7 +256,7 @@ func TestScopeService_MemberNodeIDs_DanglingMembership_FailsClosed(t *testing.T)
 // an error.
 func TestScopeService_MemberNodeIDs_RestoredMembershipOnDeadNode_FailsClosed(t *testing.T) {
 	m, _ := newTestModule(t)
-	ctx := tenantCtx("tenant-a")
+	ctx := testkit.TenantCtx("tenant-a")
 	root, left, _ := seedTree(t, m.Tree(), ctx)
 
 	if _, err := m.Members().Add(ctx, "u-owner", root.ID); err != nil {
@@ -295,7 +296,7 @@ func TestScopeService_MemberNodeIDs_RestoredMembershipOnDeadNode_FailsClosed(t *
 // exists for anybody who does cache it.
 func TestScopeService_MemberNodeIDs_AfterAMove_FollowsTheSubtree(t *testing.T) {
 	m, _ := newTestModule(t)
-	ctx := tenantCtx("tenant-a")
+	ctx := testkit.TenantCtx("tenant-a")
 	root, left, right := seedTree(t, m.Tree(), ctx)
 	chair, err := m.Tree().CreateChild(ctx, right.ID, "chair 1", "room")
 	if err != nil {
@@ -341,7 +342,7 @@ func TestScopeService_MemberNodeIDs_AfterAMove_FollowsTheSubtree(t *testing.T) {
 // resolve the descendant under its real parent and nowhere else.
 func TestScopeService_MemberNodeIDs_AfterRestoreOfMovedAncestor_ResolvesUnderTheRealParent(t *testing.T) {
 	m, _ := newTestModule(t)
-	ctx := tenantCtx("tenant-a")
+	ctx := testkit.TenantCtx("tenant-a")
 	_, north, south := seedTree(t, m.Tree(), ctx)
 	hub, err := m.Tree().CreateChild(ctx, north.ID, "Regional Hub", "group")
 	if err != nil {

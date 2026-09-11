@@ -16,6 +16,7 @@ import (
 	"testing"
 
 	"github.com/vislake/speed/go/pkgcore"
+	"github.com/vislake/speed/go/pkgcore/testkit"
 	"github.com/vislake/speed/go/rbac"
 )
 
@@ -31,7 +32,7 @@ func TestPostgres_RevokeRole_ThenAssignRole_SameScope_Succeeds(t *testing.T) {
 	db := openRBACPostgres(t, ctx, startPostgresContainer(t, ctx))
 	svc := attachRBACService(t, db, pkgcore.NewMemoryEventBus())
 
-	tenantCtx := tenantContext("tenant-a")
+	tenantCtx := testkit.TenantCtx("tenant-a")
 	sub := rbac.Subject{TenantID: "tenant-a", UserID: "user-1"}
 	if _, err := svc.DefineRole(tenantCtx, rbac.RoleDefinition{
 		Key:            "region-reader",
@@ -93,7 +94,7 @@ func TestPostgres_RestoreRole_UndoesTheRevoke(t *testing.T) {
 	db := openRBACPostgres(t, ctx, startPostgresContainer(t, ctx))
 	svc := attachRBACService(t, db, pkgcore.NewMemoryEventBus())
 
-	tenantCtx := tenantContext("tenant-a")
+	tenantCtx := testkit.TenantCtx("tenant-a")
 	sub := rbac.Subject{TenantID: "tenant-a", UserID: "user-1"}
 	if _, err := svc.DefineRole(tenantCtx, rbac.RoleDefinition{
 		Key:            "region-reader",
@@ -148,7 +149,7 @@ func TestPostgres_RestoreRole_NothingToRestore_IsReported(t *testing.T) {
 	db := openRBACPostgres(t, ctx, startPostgresContainer(t, ctx))
 	svc := attachRBACService(t, db, pkgcore.NewMemoryEventBus())
 
-	tenantCtx := tenantContext("tenant-a")
+	tenantCtx := testkit.TenantCtx("tenant-a")
 	sub := rbac.Subject{TenantID: "tenant-a", UserID: "user-1"}
 	if _, err := svc.DefineRole(tenantCtx, rbac.RoleDefinition{
 		Key:            "region-reader",
@@ -179,7 +180,7 @@ func TestPostgres_RevokeOriginMarker_ScopesTheOrgRestorePaths(t *testing.T) {
 	db := openRBACPostgres(t, ctx, startPostgresContainer(t, ctx))
 	svc := attachRBACService(t, db, bus)
 
-	tenantCtx := tenantContext("tenant-a")
+	tenantCtx := testkit.TenantCtx("tenant-a")
 	define := func(key string) {
 		t.Helper()
 		if _, err := svc.DefineRole(tenantCtx, rbac.RoleDefinition{
@@ -192,7 +193,7 @@ func TestPostgres_RevokeOriginMarker_ScopesTheOrgRestorePaths(t *testing.T) {
 	}
 	publish := func(eventType string, tenant string, payload any) {
 		t.Helper()
-		if err := bus.Publish(tenantContext(pkgcore.TenantID(tenant)), pkgcore.Event{
+		if err := bus.Publish(testkit.TenantCtx(pkgcore.TenantID(tenant)), pkgcore.Event{
 			Type:     eventType,
 			TenantID: pkgcore.TenantID(tenant),
 			Payload:  payload,

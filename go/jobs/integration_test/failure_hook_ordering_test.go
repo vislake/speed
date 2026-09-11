@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/vislake/speed/go/jobs"
+	"github.com/vislake/speed/go/pkgcore/testkit"
 )
 
 // failureHookOrderingTimeout bounds how long this file's test waits for
@@ -104,7 +105,7 @@ func TestAsynqQueue_OnFailure_ObservesTaskNotYetArchived(t *testing.T) {
 	// The Job DOES reach StatusDeadLetter -- just strictly after OnFailure
 	// already ran, never before, which is the whole ordering this test
 	// pins.
-	final := waitForTerminal(t, tenantCtx("tenant-a"), q, id, failureHookOrderingTimeout)
+	final := waitForTerminal(t, testkit.TenantCtx("tenant-a"), q, id, failureHookOrderingTimeout)
 	if final.Status != jobs.StatusDeadLetter {
 		t.Fatalf("final Status = %v, want %v", final.Status, jobs.StatusDeadLetter)
 	}

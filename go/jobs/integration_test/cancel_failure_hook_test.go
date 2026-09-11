@@ -10,6 +10,7 @@ import (
 
 	"github.com/vislake/speed/go/jobs"
 	"github.com/vislake/speed/go/pkgcore"
+	"github.com/vislake/speed/go/pkgcore/testkit"
 )
 
 // cancelDuringFinalAttemptHandler always fails from Handle and records every
@@ -91,7 +92,7 @@ func TestRedisQueue_CancelDuringFinalAttempt_SkipsOnFailureHook(t *testing.T) {
 		t.Fatal("Handle never started")
 	}
 
-	tctx := tenantCtx(tenant)
+	tctx := testkit.TenantCtx(tenant)
 	if cancelErr := q.Cancel(tctx, id); cancelErr != nil {
 		t.Fatalf("Cancel() error = %v", cancelErr)
 	}

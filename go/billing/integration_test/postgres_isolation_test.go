@@ -53,7 +53,6 @@
 package billing_test
 
 import (
-	"context"
 	"fmt"
 	"testing"
 
@@ -73,13 +72,6 @@ import (
 func newPostgres(t *testing.T) *gorm.DB {
 	t.Helper()
 	return testutil.NewPostgres(t, "billing", migrations.FS)
-}
-
-// tenantCtx is the context a host hands a tenant-scoped repository call
-// after tenancy.Middleware (or, in this package's case, the equivalent
-// hand-built pkgcore.WithTenant) has resolved the tenant.
-func tenantCtx(tenant pkgcore.TenantID) context.Context {
-	return pkgcore.WithTenant(context.Background(), tenant)
 }
 
 // TestCreditBalanceRepository_AssertIsolated_Postgres re-runs go/billing's

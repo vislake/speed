@@ -18,6 +18,7 @@ import (
 	"github.com/vislake/speed/go/pkgcore"
 	"github.com/vislake/speed/go/pkgcore/apperr"
 	"github.com/vislake/speed/go/pkgcore/componenttest"
+	"github.com/vislake/speed/go/pkgcore/testkit"
 )
 
 // This file holds the deterministic PostgreSQL proofs behind
@@ -302,7 +303,7 @@ func TestDeleteSubtreeEventIDs_MoveOutDuringCascade_NoOvercount_Postgres(t *test
 	for round := 0; round < rounds; round++ {
 		label := fmt.Sprintf("round %d", round)
 		tenant := pkgcore.TenantID(fmt.Sprintf("tenant-move-out-%d", round))
-		ctx := tenantCtx(tenant)
+		ctx := testkit.TenantCtx(tenant)
 
 		root, err := tree.CreateRoot(ctx, fmt.Sprintf("root-%d", round), "group")
 		if err != nil {
@@ -394,7 +395,7 @@ func TestDeleteSubtreeEventIDs_MoveInDuringCascade_NoUnderCount_Postgres(t *test
 	for round := 0; round < rounds; round++ {
 		label := fmt.Sprintf("round %d", round)
 		tenant := pkgcore.TenantID(fmt.Sprintf("tenant-move-in-%d", round))
-		ctx := tenantCtx(tenant)
+		ctx := testkit.TenantCtx(tenant)
 
 		root, err := tree.CreateRoot(ctx, fmt.Sprintf("root-%d", round), "group")
 		if err != nil {
@@ -508,7 +509,7 @@ func TestDeleteSubtree_MemberAddToInteriorDescendant_DuringCascade_NoDanglingMem
 	for round := 0; round < rounds; round++ {
 		label := fmt.Sprintf("round %d", round)
 		tenant := pkgcore.TenantID(fmt.Sprintf("tenant-add-race-%d", round))
-		ctx := tenantCtx(tenant)
+		ctx := testkit.TenantCtx(tenant)
 
 		root, err := tree.CreateRoot(ctx, fmt.Sprintf("root-%d", round), "group")
 		if err != nil {

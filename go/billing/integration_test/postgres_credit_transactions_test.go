@@ -17,6 +17,7 @@ import (
 	"github.com/vislake/speed/go/billing/migrations"
 	"github.com/vislake/speed/go/dbkit"
 	"github.com/vislake/speed/go/pkgcore/apperr"
+	"github.com/vislake/speed/go/pkgcore/testkit"
 )
 
 // newPostgresDB returns a fresh migrated PostgreSQL *gorm.DB -- the
@@ -51,7 +52,7 @@ func newPostgresDB(t *testing.T) *gorm.DB {
 func TestPostgres_PreDeduct_IdempotentRetry_ReturnsTheSameReservation(t *testing.T) {
 	db := newPostgresDB(t)
 	svc := billing.NewCreditService(db)
-	ctx := tenantCtx("tenant-a")
+	ctx := testkit.TenantCtx("tenant-a")
 
 	if _, err := svc.Grant(ctx, billing.GrantInput{Amount: 100}); err != nil {
 		t.Fatalf("Grant: %v", err)
@@ -104,7 +105,7 @@ func TestPostgres_PreDeduct_IdempotentRetry_ReturnsTheSameReservation(t *testing
 // lifecycle on the real server.
 func TestPostgres_CreditLifecycle_ReserveConfirmRefundAndRetries(t *testing.T) {
 	svc := billing.NewCreditService(newPostgresDB(t))
-	ctx := tenantCtx("tenant-a")
+	ctx := testkit.TenantCtx("tenant-a")
 
 	if _, err := svc.Grant(ctx, billing.GrantInput{Amount: 100}); err != nil {
 		t.Fatalf("Grant: %v", err)
@@ -197,7 +198,7 @@ func TestPostgres_CreditLifecycle_ReserveConfirmRefundAndRetries(t *testing.T) {
 // unit test uses.
 func TestPostgres_PreDeduct_ConcurrentOverBalance_OnlyOneSucceeds(t *testing.T) {
 	svc := billing.NewCreditService(newPostgresDB(t))
-	ctx := tenantCtx("tenant-a")
+	ctx := testkit.TenantCtx("tenant-a")
 
 	const balance = 100
 	const deductEach = 60 // two of these (120) exceed the 100 balance -- at most one may succeed.
@@ -255,7 +256,7 @@ func TestPostgres_PreDeduct_ConcurrentOverBalance_OnlyOneSucceeds(t *testing.T) 
 func TestPostgres_Expire_KeyedRetry_DoesNotDoubleApply(t *testing.T) {
 	db := newPostgresDB(t)
 	svc := billing.NewCreditService(db)
-	ctx := tenantCtx("tenant-a")
+	ctx := testkit.TenantCtx("tenant-a")
 
 	if _, err := svc.Grant(ctx, billing.GrantInput{Amount: 100}); err != nil {
 		t.Fatalf("Grant: %v", err)

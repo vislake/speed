@@ -10,6 +10,7 @@ import (
 	"gorm.io/gorm"
 
 	"github.com/vislake/speed/go/pkgcore"
+	"github.com/vislake/speed/go/pkgcore/testkit"
 	"github.com/vislake/speed/go/tenancy/tenancytest"
 )
 
@@ -62,7 +63,7 @@ func TestPreferenceRepository_ByUserAndType_NoRow_ReturnsNilNil(t *testing.T) {
 	db := newTestDB(t)
 	repo := NewPreferenceRepository(db)
 
-	got, err := repo.ByUserAndType(tenantCtx("tenant-acme"), "user-7", "clinic.appointment_reminder")
+	got, err := repo.ByUserAndType(testkit.TenantCtx("tenant-acme"), "user-7", "clinic.appointment_reminder")
 	if err != nil {
 		t.Fatalf("ByUserAndType on an empty table: %v", err)
 	}
@@ -82,11 +83,11 @@ func TestPreferenceRepository_ByUserAndType_OtherTenantsRow_Invisible(t *testing
 	repo := NewPreferenceRepository(db)
 
 	pref := newTestPreference("pref-000001")
-	if err := repo.Create(tenantCtx("tenant-acme"), pref); err != nil {
+	if err := repo.Create(testkit.TenantCtx("tenant-acme"), pref); err != nil {
 		t.Fatalf("Create(tenant-acme): %v", err)
 	}
 
-	got, err := repo.ByUserAndType(tenantCtx("tenant-bright"), pref.RecipientUserID, pref.TypeKey)
+	got, err := repo.ByUserAndType(testkit.TenantCtx("tenant-bright"), pref.RecipientUserID, pref.TypeKey)
 	if err != nil {
 		t.Fatalf("ByUserAndType(other tenant): %v", err)
 	}
@@ -103,7 +104,7 @@ func TestPreferenceRepository_ByUserAndType_OtherTenantsRow_Invisible(t *testing
 func TestPreferenceRepository_DuplicateQuestion_SecondCreateRejected(t *testing.T) {
 	db := newTestDB(t)
 	repo := NewPreferenceRepository(db)
-	ctx := tenantCtx("tenant-acme")
+	ctx := testkit.TenantCtx("tenant-acme")
 
 	first := newTestPreference("pref-000001")
 	if err := repo.Create(ctx, first); err != nil {
@@ -137,23 +138,23 @@ func TestPreferenceRepository_SameQuestion_TwoTenants_TwoAnswers(t *testing.T) {
 	repo := NewPreferenceRepository(db)
 
 	acmePref := newTestPreference("pref-acme-1")
-	if err := repo.Create(tenantCtx("tenant-acme"), acmePref); err != nil {
+	if err := repo.Create(testkit.TenantCtx("tenant-acme"), acmePref); err != nil {
 		t.Fatalf("Create(tenant-acme): %v", err)
 	}
 	brightPref := newTestPreference("pref-bright-1")
 	brightPref.Channels = channelsJSON([]string{ChannelSMS})
-	if err := repo.Create(tenantCtx("tenant-bright"), brightPref); err != nil {
+	if err := repo.Create(testkit.TenantCtx("tenant-bright"), brightPref); err != nil {
 		t.Fatalf("Create(tenant-bright): %v", err)
 	}
 
-	acmeGot, err := repo.ByUserAndType(tenantCtx("tenant-acme"), "user-7", "clinic.appointment_reminder")
+	acmeGot, err := repo.ByUserAndType(testkit.TenantCtx("tenant-acme"), "user-7", "clinic.appointment_reminder")
 	if err != nil {
 		t.Fatalf("ByUserAndType(tenant-acme): %v", err)
 	}
 	if acmeGot == nil || string(acmeGot.Channels) != `["in_app","email"]` {
 		t.Errorf("tenant-acme read = %v, want its own [in_app, email] row", acmeGot)
 	}
-	brightGot, err := repo.ByUserAndType(tenantCtx("tenant-bright"), "user-7", "clinic.appointment_reminder")
+	brightGot, err := repo.ByUserAndType(testkit.TenantCtx("tenant-bright"), "user-7", "clinic.appointment_reminder")
 	if err != nil {
 		t.Fatalf("ByUserAndType(tenant-bright): %v", err)
 	}
@@ -171,7 +172,7 @@ func TestPreferenceRepository_SameQuestion_TwoTenants_TwoAnswers(t *testing.T) {
 func TestPreferenceRepository_ListByUser_OrderedAndScoped(t *testing.T) {
 	db := newTestDB(t)
 	repo := NewPreferenceRepository(db)
-	ctx := tenantCtx("tenant-acme")
+	ctx := testkit.TenantCtx("tenant-acme")
 
 	order := []string{
 		"clinic.security_alert",
@@ -195,7 +196,7 @@ func TestPreferenceRepository_ListByUser_OrderedAndScoped(t *testing.T) {
 		t.Fatalf("Create(other recipient): %v", err)
 	}
 	cross := newTestPreference("pref-cross-1")
-	if err := repo.Create(tenantCtx("tenant-bright"), cross); err != nil {
+	if err := repo.Create(testkit.TenantCtx("tenant-bright"), cross); err != nil {
 		t.Fatalf("Create(tenant-bright): %v", err)
 	}
 
@@ -229,7 +230,7 @@ func TestPreferenceRepository_ListByUser_OrderedAndScoped(t *testing.T) {
 func TestPreferenceRepository_RoundTrip(t *testing.T) {
 	db := newTestDB(t)
 	repo := NewPreferenceRepository(db)
-	ctx := tenantCtx("tenant-acme")
+	ctx := testkit.TenantCtx("tenant-acme")
 
 	pref := newTestPreference("pref-000001")
 	if err := repo.Create(ctx, pref); err != nil {

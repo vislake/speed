@@ -9,6 +9,7 @@ import (
 
 	"github.com/vislake/speed/go/jobs"
 	"github.com/vislake/speed/go/pkgcore"
+	"github.com/vislake/speed/go/pkgcore/testkit"
 )
 
 // TestRedisQueue_Cancel_PendingJobNeverRuns proves a cancelled-before-its-
@@ -62,7 +63,7 @@ func TestRedisQueue_Cancel_RunningJob(t *testing.T) {
 		t.Fatal("Handle never started")
 	}
 
-	tctx := tenantCtx(tenant)
+	tctx := testkit.TenantCtx(tenant)
 	if cancelErr := q.Cancel(tctx, id); cancelErr != nil {
 		t.Fatalf("Cancel() error = %v", cancelErr)
 	}

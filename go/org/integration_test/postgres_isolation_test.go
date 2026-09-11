@@ -18,7 +18,6 @@
 package org_test
 
 import (
-	"context"
 	"fmt"
 	"testing"
 
@@ -26,6 +25,7 @@ import (
 
 	"github.com/vislake/speed/go/dbkit"
 	"github.com/vislake/speed/go/pkgcore"
+	"github.com/vislake/speed/go/pkgcore/testkit"
 	"github.com/vislake/speed/go/tenancy/tenancytest"
 
 	"github.com/vislake/speed/go/org"
@@ -68,10 +68,6 @@ func newIndexer(t *testing.T) *dbkit.BlindIndexer {
 		t.Fatalf("NewBlindIndexer: %v", err)
 	}
 	return indexer
-}
-
-func tenantCtx(tenant pkgcore.TenantID) context.Context {
-	return pkgcore.WithTenant(context.Background(), tenant)
 }
 
 // TestOrgNodeRepository_AssertIsolated_Postgres re-runs go/org's own
@@ -144,7 +140,7 @@ func TestMembershipRepository_AssertIsolated_Postgres(t *testing.T) {
 				Name: fmt.Sprintf("node-%d", n), Kind: "group",
 			}
 		}
-		if err := nodes.Create(tenantCtx(tenant), node); err != nil {
+		if err := nodes.Create(testkit.TenantCtx(tenant), node); err != nil {
 			t.Fatalf("seed node for membership fixture %d: %v", n, err)
 		}
 		return &org.Membership{

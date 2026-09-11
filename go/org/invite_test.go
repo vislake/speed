@@ -18,6 +18,7 @@ import (
 	"github.com/vislake/speed/go/org/internal/testutil"
 	"github.com/vislake/speed/go/org/migrations"
 	"github.com/vislake/speed/go/pkgcore/apperr"
+	"github.com/vislake/speed/go/pkgcore/testkit"
 	"github.com/vislake/speed/go/ratelimit"
 )
 
@@ -35,7 +36,7 @@ type inviteFixture struct {
 func newInviteFixture(t *testing.T) inviteFixture {
 	t.Helper()
 	m, host := newTestModule(t)
-	ctx := tenantCtx("tenant-a")
+	ctx := testkit.TenantCtx("tenant-a")
 	root, left, right := seedTree(t, m.Tree(), ctx)
 	if _, err := m.Members().Add(ctx, "u-inviter", root.ID); err != nil {
 		t.Fatalf("Add(inviter): %v", err)
@@ -288,7 +289,7 @@ func TestInviteService_Invite_RateLimited_PerTenant(t *testing.T) {
 	}
 
 	// Another tenant is unaffected: the key carries the tenant.
-	other := tenantCtx("tenant-b")
+	other := testkit.TenantCtx("tenant-b")
 	otherRoot, err := f.m.Tree().CreateRoot(other, "their group", "group")
 	if err != nil {
 		t.Fatalf("CreateRoot(tenant-b): %v", err)
@@ -341,7 +342,7 @@ func TestInviteService_Invite_GateFailure_IsNotSilentlyEnabled(t *testing.T) {
 
 func TestInviteService_Invite_RejectedInputs(t *testing.T) {
 	f := newInviteFixture(t)
-	foreign, err := f.m.Tree().CreateRoot(tenantCtx("tenant-b"), "their group", "group")
+	foreign, err := f.m.Tree().CreateRoot(testkit.TenantCtx("tenant-b"), "their group", "group")
 	if err != nil {
 		t.Fatalf("CreateRoot(tenant-b): %v", err)
 	}
@@ -505,7 +506,7 @@ func TestInviteService_Accept_NoTenantInContext_ResolvesTenantFromToken(t *testi
 
 	// The invitation row flipped to accepted under that same tenant, and the
 	// joined event announced the tenant it actually happened in.
-	stored, err := f.m.Invitations().Repository().FindByID(tenantCtx("tenant-a"), result.Invitation.ID)
+	stored, err := f.m.Invitations().Repository().FindByID(testkit.TenantCtx("tenant-a"), result.Invitation.ID)
 	if err != nil {
 		t.Fatalf("FindByID: %v", err)
 	}
@@ -608,7 +609,7 @@ func TestInviteService_Accept_CrossTenantToken_ReturnsInvitationNotFound(t *test
 	f := newInviteFixture(t)
 	result := f.invite(t, "ada@example.test")
 
-	other := tenantCtx("tenant-b")
+	other := testkit.TenantCtx("tenant-b")
 	if _, err := f.m.Tree().CreateRoot(other, "their group", "group"); err != nil {
 		t.Fatalf("CreateRoot(tenant-b): %v", err)
 	}
@@ -855,7 +856,7 @@ func TestInviteService_List(t *testing.T) {
 	}
 
 	// Another tenant sees none of them.
-	other, err := f.m.Invitations().List(tenantCtx("tenant-b"))
+	other, err := f.m.Invitations().List(testkit.TenantCtx("tenant-b"))
 	if err != nil {
 		t.Fatalf("List(tenant-b): %v", err)
 	}
@@ -892,7 +893,7 @@ func TestInviteService_NoTenantContext_FailsClosed(t *testing.T) {
 func TestInviteService_NoIndexer_RefusesToInvite(t *testing.T) {
 	m, host := newTestModule(t)
 	m.invites.indexer = nil
-	ctx := tenantCtx("tenant-a")
+	ctx := testkit.TenantCtx("tenant-a")
 	root, _, _ := seedTree(t, m.Tree(), ctx)
 
 	_, err := m.Invitations().Invite(ctx, InviteRequest{Email: "ada@example.test", NodeID: root.ID})
@@ -1063,7 +1064,7 @@ func errParam(t *testing.T, err error, key string) any {
 // same org.invitation_already_accepted a caller who had observed the
 // accepted state directly would get.
 func TestInviteService_Revoke_RacingAccept_NoRevokedStatusWithLiveMembership(t *testing.T) {
-	ctx := tenantCtx("tenant-a")
+	ctx := testkit.TenantCtx("tenant-a")
 
 	dsn := filepath.Join(t.TempDir(), "revoke-accept-race.sqlite")
 	db1, err := dbkit.Open(context.Background(), dbkit.Options{Dialect: dbkit.DialectSQLite, DSN: dsn})

@@ -7,6 +7,7 @@ import (
 
 	"github.com/vislake/speed/go/org"
 	"github.com/vislake/speed/go/pkgcore/apperr"
+	"github.com/vislake/speed/go/pkgcore/testkit"
 )
 
 // TestTreeService_Delete_ThenCreateChild_SameSiblingName_Succeeds_Postgres
@@ -23,7 +24,7 @@ import (
 // exists to avoid, per its own header comment.
 func TestTreeService_Delete_ThenCreateChild_SameSiblingName_Succeeds_Postgres(t *testing.T) {
 	tree := org.NewTreeService(newPostgres(t))
-	ctx := tenantCtx("tenant-a")
+	ctx := testkit.TenantCtx("tenant-a")
 
 	root, err := tree.CreateRoot(ctx, "Acme Dental", "group")
 	if err != nil {
@@ -66,7 +67,7 @@ func TestTreeService_Delete_ThenCreateChild_SameSiblingName_Succeeds_Postgres(t 
 // un-hides rows identically on both dialects.
 func TestTreeService_Restore_RecreatesLiveTree_Postgres(t *testing.T) {
 	tree := org.NewTreeService(newPostgres(t))
-	ctx := tenantCtx("tenant-a")
+	ctx := testkit.TenantCtx("tenant-a")
 
 	root, err := tree.CreateRoot(ctx, "Acme Dental", "group")
 	if err != nil {
@@ -116,7 +117,7 @@ func TestMemberService_Remove_ThenAdd_SameUser_Succeeds_Postgres(t *testing.T) {
 	db := newPostgres(t)
 	tree := org.NewTreeService(db)
 	members := org.NewMemberService(db, tree)
-	ctx := tenantCtx("tenant-a")
+	ctx := testkit.TenantCtx("tenant-a")
 
 	root, err := tree.CreateRoot(ctx, "Acme Dental", "group")
 	if err != nil {
@@ -164,7 +165,7 @@ func TestMemberService_Restore_ThenGet_Postgres(t *testing.T) {
 	db := newPostgres(t)
 	tree := org.NewTreeService(db)
 	members := org.NewMemberService(db, tree)
-	ctx := tenantCtx("tenant-a")
+	ctx := testkit.TenantCtx("tenant-a")
 
 	root, err := tree.CreateRoot(ctx, "Acme Dental", "group")
 	if err != nil {
@@ -217,7 +218,7 @@ func TestMemberService_Restore_ThenGet_Postgres(t *testing.T) {
 // frees immediately on real PostgreSQL.
 func TestTreeService_CreateRoot_AfterSoftDeletedRoot_Succeeds_Postgres(t *testing.T) {
 	tree := org.NewTreeService(newPostgres(t))
-	ctx := tenantCtx("tenant-a")
+	ctx := testkit.TenantCtx("tenant-a")
 
 	original, err := tree.CreateRoot(ctx, "Acme Dental", "group")
 	if err != nil {

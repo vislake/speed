@@ -66,6 +66,7 @@ import (
 	"github.com/vislake/speed/go/pkgcore/apperr"
 	"github.com/vislake/speed/go/pkgcore/componenttest"
 	"github.com/vislake/speed/go/pkgcore/i18n"
+	"github.com/vislake/speed/go/pkgcore/testkit"
 	"github.com/vislake/speed/go/tenancy/tenancytest"
 )
 
@@ -186,12 +187,6 @@ func (r *stubUserResolver) Resolve(_ context.Context, userID string) (notificati
 		return notification.UserAddresses{}, r.err
 	}
 	return r.byUser[userID], nil
-}
-
-// tenantCtx wraps ctx's background with the tenant a service call runs
-// under -- the only way a tenant ever travels into the module.
-func tenantCtx(tenant string) context.Context {
-	return pkgcore.WithTenant(context.Background(), pkgcore.TenantID(tenant))
 }
 
 // codeOf returns the apperr code of err, failing the test when err is not
@@ -500,7 +495,7 @@ func TestPostgres_ConsentFlow_SingleWinnerVerifyAndDeliverabilityGate(t *testing
 	module, _, smsBuf := bootModule(t, ctx, db)
 	svc := module.Contacts()
 	const tenant = "tenant-acme"
-	cctx := tenantCtx(tenant)
+	cctx := testkit.TenantCtx(tenant)
 
 	// Contact A: an SMS double opt-in, still pending. The deliverability
 	// gate must refuse it before verification.

@@ -12,6 +12,7 @@ import (
 	"github.com/vislake/speed/go/org/api"
 	"github.com/vislake/speed/go/pkgcore/apperr"
 	"github.com/vislake/speed/go/pkgcore/i18n"
+	"github.com/vislake/speed/go/pkgcore/testkit"
 )
 
 // fixedSubject is a SubjectResolver that answers the same way for every
@@ -82,7 +83,7 @@ func assertErrorCode(t *testing.T, rec *httptest.ResponseRecorder, wantStatus in
 
 func TestHandler_OrgCreateNode_RootThenChild(t *testing.T) {
 	h, _, _ := newTestHandler(t, nil)
-	ctx := tenantCtx("tenant-a")
+	ctx := testkit.TenantCtx("tenant-a")
 
 	rec := doRequest(h, ctx, http.MethodPost, "/api/v1/org/nodes", api.OrgCreateNodeRequest{Name: "Acme Dental"})
 	if rec.Code != http.StatusCreated {
@@ -119,7 +120,7 @@ func TestHandler_OrgCreateNode_RootThenChild(t *testing.T) {
 
 func TestHandler_OrgCreateNode_SecondRoot_Returns409(t *testing.T) {
 	h, _, _ := newTestHandler(t, nil)
-	ctx := tenantCtx("tenant-a")
+	ctx := testkit.TenantCtx("tenant-a")
 
 	doRequest(h, ctx, http.MethodPost, "/api/v1/org/nodes", api.OrgCreateNodeRequest{Name: "First"})
 	rec := doRequest(h, ctx, http.MethodPost, "/api/v1/org/nodes", api.OrgCreateNodeRequest{Name: "Second"})
@@ -128,7 +129,7 @@ func TestHandler_OrgCreateNode_SecondRoot_Returns409(t *testing.T) {
 
 func TestHandler_OrgCreateNode_MalformedBody_Returns400(t *testing.T) {
 	h, _, _ := newTestHandler(t, nil)
-	ctx := tenantCtx("tenant-a")
+	ctx := testkit.TenantCtx("tenant-a")
 
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/org/nodes", strings.NewReader("{not json")).WithContext(ctx)
 	rec := httptest.NewRecorder()
@@ -138,7 +139,7 @@ func TestHandler_OrgCreateNode_MalformedBody_Returns400(t *testing.T) {
 
 func TestHandler_OrgListNodes_NoRootYet_ReturnsEmptyList(t *testing.T) {
 	h, _, _ := newTestHandler(t, nil)
-	ctx := tenantCtx("tenant-a")
+	ctx := testkit.TenantCtx("tenant-a")
 
 	rec := doRequest(h, ctx, http.MethodGet, "/api/v1/org/nodes", nil)
 	if rec.Code != http.StatusOK {
@@ -153,7 +154,7 @@ func TestHandler_OrgListNodes_NoRootYet_ReturnsEmptyList(t *testing.T) {
 
 func TestHandler_OrgListNodes_WithoutParentID_ReturnsWholeTree(t *testing.T) {
 	h, m, _ := newTestHandler(t, nil)
-	ctx := tenantCtx("tenant-a")
+	ctx := testkit.TenantCtx("tenant-a")
 	seedTree(t, m.tree, ctx)
 
 	rec := doRequest(h, ctx, http.MethodGet, "/api/v1/org/nodes", nil)
@@ -166,7 +167,7 @@ func TestHandler_OrgListNodes_WithoutParentID_ReturnsWholeTree(t *testing.T) {
 
 func TestHandler_OrgListNodes_WithParentID_ReturnsOnlyChildren(t *testing.T) {
 	h, m, _ := newTestHandler(t, nil)
-	ctx := tenantCtx("tenant-a")
+	ctx := testkit.TenantCtx("tenant-a")
 	root, _, _ := seedTree(t, m.tree, ctx)
 
 	rec := doRequest(h, ctx, http.MethodGet, "/api/v1/org/nodes?parentId="+root.ID, nil)
@@ -179,7 +180,7 @@ func TestHandler_OrgListNodes_WithParentID_ReturnsOnlyChildren(t *testing.T) {
 
 func TestHandler_OrgGetNode_NotFound_Returns404(t *testing.T) {
 	h, _, _ := newTestHandler(t, nil)
-	ctx := tenantCtx("tenant-a")
+	ctx := testkit.TenantCtx("tenant-a")
 
 	rec := doRequest(h, ctx, http.MethodGet, "/api/v1/org/nodes/does-not-exist", nil)
 	assertErrorCode(t, rec, http.StatusNotFound, ErrNodeNotFound.Code)
@@ -187,7 +188,7 @@ func TestHandler_OrgGetNode_NotFound_Returns404(t *testing.T) {
 
 func TestHandler_OrgRenameNode(t *testing.T) {
 	h, m, _ := newTestHandler(t, nil)
-	ctx := tenantCtx("tenant-a")
+	ctx := testkit.TenantCtx("tenant-a")
 	root, _, _ := seedTree(t, m.tree, ctx)
 
 	rec := doRequest(h, ctx, http.MethodPatch, "/api/v1/org/nodes/"+root.ID, api.OrgRenameNodeRequest{Name: "Renamed"})
@@ -203,7 +204,7 @@ func TestHandler_OrgRenameNode(t *testing.T) {
 
 func TestHandler_OrgMoveNode_IntoOwnSubtree_Returns409(t *testing.T) {
 	h, m, _ := newTestHandler(t, nil)
-	ctx := tenantCtx("tenant-a")
+	ctx := testkit.TenantCtx("tenant-a")
 	root, left, _ := seedTree(t, m.tree, ctx)
 
 	rec := doRequest(h, ctx, http.MethodPost, "/api/v1/org/nodes/"+root.ID+"/move", api.OrgMoveNodeRequest{ParentID: left.ID})
@@ -212,7 +213,7 @@ func TestHandler_OrgMoveNode_IntoOwnSubtree_Returns409(t *testing.T) {
 
 func TestHandler_OrgMoveNode_Success(t *testing.T) {
 	h, m, _ := newTestHandler(t, nil)
-	ctx := tenantCtx("tenant-a")
+	ctx := testkit.TenantCtx("tenant-a")
 	root, left, right := seedTree(t, m.tree, ctx)
 	_ = root
 
@@ -233,7 +234,7 @@ func TestHandler_OrgMoveNode_Success(t *testing.T) {
 // see TreeService.Delete's own doc comment.
 func TestHandler_OrgDeleteNode_WithChildrenNoCascade_Returns409(t *testing.T) {
 	h, m, _ := newTestHandler(t, nil)
-	ctx := tenantCtx("tenant-a")
+	ctx := testkit.TenantCtx("tenant-a")
 	_, left, _ := seedTree(t, m.tree, ctx)
 	if _, err := m.tree.CreateChild(ctx, left.ID, "grandchild", "store"); err != nil {
 		t.Fatalf("CreateChild: %v", err)
@@ -249,7 +250,7 @@ func TestHandler_OrgDeleteNode_WithChildrenNoCascade_Returns409(t *testing.T) {
 // doc comment.
 func TestHandler_OrgDeleteNode_Cascade_Returns204(t *testing.T) {
 	h, m, _ := newTestHandler(t, nil)
-	ctx := tenantCtx("tenant-a")
+	ctx := testkit.TenantCtx("tenant-a")
 	_, left, right := seedTree(t, m.tree, ctx)
 	grandchild, err := m.tree.CreateChild(ctx, left.ID, "grandchild", "store")
 	if err != nil {
@@ -273,7 +274,7 @@ func TestHandler_OrgDeleteNode_Cascade_Returns204(t *testing.T) {
 
 func TestHandler_OrgListMembers_NoRootYet_ReturnsEmptyList(t *testing.T) {
 	h, _, _ := newTestHandler(t, nil)
-	ctx := tenantCtx("tenant-a")
+	ctx := testkit.TenantCtx("tenant-a")
 
 	rec := doRequest(h, ctx, http.MethodGet, "/api/v1/org/members", nil)
 	if rec.Code != http.StatusOK {
@@ -292,7 +293,7 @@ func TestHandler_OrgListMembers_NoRootYet_ReturnsEmptyList(t *testing.T) {
 // to it.
 func TestHandler_OrgListMembers_ScopesToSubtree(t *testing.T) {
 	h, m, _ := newTestHandler(t, nil)
-	ctx := tenantCtx("tenant-a")
+	ctx := testkit.TenantCtx("tenant-a")
 	root, left, right := seedTree(t, m.tree, ctx)
 
 	if _, err := m.members.Add(ctx, "u-left", left.ID); err != nil {
@@ -315,7 +316,7 @@ func TestHandler_OrgListMembers_ScopesToSubtree(t *testing.T) {
 
 func TestHandler_OrgRemoveMember_LastActiveMember_Returns409(t *testing.T) {
 	h, m, _ := newTestHandler(t, nil)
-	ctx := tenantCtx("tenant-a")
+	ctx := testkit.TenantCtx("tenant-a")
 	root, _, _ := seedTree(t, m.tree, ctx)
 	if _, err := m.members.Add(ctx, "u-1", root.ID); err != nil {
 		t.Fatalf("Add: %v", err)
@@ -327,7 +328,7 @@ func TestHandler_OrgRemoveMember_LastActiveMember_Returns409(t *testing.T) {
 
 func TestHandler_OrgRemoveMember_NotTheLastMember_Returns204(t *testing.T) {
 	h, m, _ := newTestHandler(t, nil)
-	ctx := tenantCtx("tenant-a")
+	ctx := testkit.TenantCtx("tenant-a")
 	root, _, _ := seedTree(t, m.tree, ctx)
 	if _, err := m.members.Add(ctx, "u-1", root.ID); err != nil {
 		t.Fatalf("Add: %v", err)
@@ -344,7 +345,7 @@ func TestHandler_OrgRemoveMember_NotTheLastMember_Returns204(t *testing.T) {
 
 func TestHandler_OrgCreateInvitation_NoSubjectResolver_Returns401(t *testing.T) {
 	h, m, _ := newTestHandler(t, nil)
-	ctx := tenantCtx("tenant-a")
+	ctx := testkit.TenantCtx("tenant-a")
 	root, _, _ := seedTree(t, m.tree, ctx)
 
 	rec := doRequest(h, ctx, http.MethodPost, "/api/v1/org/invitations", api.OrgCreateInvitationRequest{
@@ -355,7 +356,7 @@ func TestHandler_OrgCreateInvitation_NoSubjectResolver_Returns401(t *testing.T) 
 
 func TestHandler_OrgCreateInvitation_UnresolvedSubject_Returns401(t *testing.T) {
 	h, m, _ := newTestHandler(t, fixedSubject{ok: false})
-	ctx := tenantCtx("tenant-a")
+	ctx := testkit.TenantCtx("tenant-a")
 	root, _, _ := seedTree(t, m.tree, ctx)
 
 	rec := doRequest(h, ctx, http.MethodPost, "/api/v1/org/invitations", api.OrgCreateInvitationRequest{
@@ -375,7 +376,7 @@ func TestHandler_OrgCreateInvitation_UnresolvedSubject_Returns401(t *testing.T) 
 // TestHandler_OrgListInvitations_Success_ExposesNoBlindIndex.
 func TestHandler_OrgCreateInvitation_Success_NeverExposesEmailTokenOrBlindIndex(t *testing.T) {
 	h, m, host := newTestHandler(t, fixedSubject{userID: "u-inviter", ok: true})
-	ctx := tenantCtx("tenant-a")
+	ctx := testkit.TenantCtx("tenant-a")
 	root, _, _ := seedTree(t, m.tree, ctx)
 
 	rec := doRequest(h, ctx, http.MethodPost, "/api/v1/org/invitations", api.OrgCreateInvitationRequest{
@@ -423,7 +424,7 @@ func TestHandler_OrgCreateInvitation_Success_NeverExposesEmailTokenOrBlindIndex(
 
 func TestHandler_OrgListInvitations_ReturnsPending(t *testing.T) {
 	h, m, _ := newTestHandler(t, fixedSubject{userID: "u-inviter", ok: true})
-	ctx := tenantCtx("tenant-a")
+	ctx := testkit.TenantCtx("tenant-a")
 	root, _, _ := seedTree(t, m.tree, ctx)
 
 	doRequest(h, ctx, http.MethodPost, "/api/v1/org/invitations", api.OrgCreateInvitationRequest{
@@ -455,7 +456,7 @@ func TestHandler_OrgListInvitations_ReturnsPending(t *testing.T) {
 // none of the list's business.
 func TestHandler_OrgListInvitations_Success_ExposesNoBlindIndex(t *testing.T) {
 	h, m, _ := newTestHandler(t, fixedSubject{userID: "u-inviter", ok: true})
-	ctx := tenantCtx("tenant-a")
+	ctx := testkit.TenantCtx("tenant-a")
 	root, _, _ := seedTree(t, m.tree, ctx)
 
 	// Several pending invitations, created the way a caller (and an
@@ -504,7 +505,7 @@ func TestHandler_OrgListInvitations_Success_ExposesNoBlindIndex(t *testing.T) {
 
 func TestHandler_OrgAcceptInvitation_NoSubjectResolver_Returns401(t *testing.T) {
 	h, _, _ := newTestHandler(t, nil)
-	ctx := tenantCtx("tenant-a")
+	ctx := testkit.TenantCtx("tenant-a")
 
 	rec := doRequest(h, ctx, http.MethodPost, "/api/v1/org/invitations/accept", api.OrgAcceptInvitationRequest{Token: "whatever"})
 	assertErrorCode(t, rec, http.StatusUnauthorized, ErrSubjectUnresolved.Code)
@@ -515,7 +516,7 @@ func TestHandler_OrgAcceptInvitation_NoSubjectResolver_Returns401(t *testing.T) 
 // by another, producing a membership bound to the invited node.
 func TestHandler_OrgAcceptInvitation_Success(t *testing.T) {
 	inviteH, m, host := newTestHandler(t, fixedSubject{userID: "u-inviter", ok: true})
-	ctx := tenantCtx("tenant-a")
+	ctx := testkit.TenantCtx("tenant-a")
 	root, left, _ := seedTree(t, m.tree, ctx)
 	// The inviter must be a member for org's own invariants to hold once
 	// rbac exists; today nothing enforces it, so seeding it costs nothing
@@ -567,7 +568,7 @@ func TestHandler_OrgAcceptInvitation_Success(t *testing.T) {
 // which pins that the exception is accept alone.
 func TestHandler_OrgAcceptInvitation_NoTenantInContext_Succeeds(t *testing.T) {
 	inviteH, m, host := newTestHandler(t, fixedSubject{userID: "u-inviter", ok: true})
-	ctx := tenantCtx("tenant-a")
+	ctx := testkit.TenantCtx("tenant-a")
 	root, left, _ := seedTree(t, m.tree, ctx)
 	if _, err := m.members.Add(ctx, "u-inviter", root.ID); err != nil {
 		t.Fatalf("Add: %v", err)
@@ -643,7 +644,7 @@ func doRequestWithHeaders(h *Handler, ctx context.Context, method, path string, 
 // so a later send renders the same language whichever operator triggers it.
 func TestHandler_OrgCreateInvitation_LocaleChain(t *testing.T) {
 	h, m, _ := newTestHandler(t, fixedSubject{userID: "u-inviter", ok: true})
-	ctx := tenantCtx("tenant-a")
+	ctx := testkit.TenantCtx("tenant-a")
 	root, _, _ := seedTree(t, m.tree, ctx)
 
 	// The body's declared locale outranks the requester's header.

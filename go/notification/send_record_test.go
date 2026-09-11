@@ -10,6 +10,7 @@ import (
 	"gorm.io/gorm"
 
 	"github.com/vislake/speed/go/pkgcore/apperr"
+	"github.com/vislake/speed/go/pkgcore/testkit"
 	"github.com/vislake/speed/go/tenancy/tenancytest"
 )
 
@@ -82,7 +83,7 @@ func TestSendRecordRepository_ByTenantAndKey_EmptyTable_ReturnsNil(t *testing.T)
 	db := newTestDB(t)
 	repo := NewSendRecordRepository(db)
 
-	got, err := repo.ByTenantAndKey(tenantCtx("tenant-acme"), "tenant-acme", "never-seen-key")
+	got, err := repo.ByTenantAndKey(testkit.TenantCtx("tenant-acme"), "tenant-acme", "never-seen-key")
 	if err != nil {
 		t.Fatalf("ByTenantAndKey: %v", err)
 	}
@@ -103,7 +104,7 @@ func TestSendRecordRepository_ByTenantAndKey_MatchingRow_ReturnsIt(t *testing.T)
 	want.DurationMs = 42
 	insertSendRecordFixture(t, db, want)
 
-	got, err := repo.ByTenantAndKey(tenantCtx("tenant-acme"), "tenant-acme", "delivery-key-1")
+	got, err := repo.ByTenantAndKey(testkit.TenantCtx("tenant-acme"), "tenant-acme", "delivery-key-1")
 	if err != nil {
 		t.Fatalf("ByTenantAndKey: %v", err)
 	}
@@ -129,7 +130,7 @@ func TestSendRecordRepository_ByTenantAndKey_IsScopedPerTenant(t *testing.T) {
 
 	insertSendRecordFixture(t, db, testSendRecord(t, "sr-0001", "tenant-acme", "shared-key"))
 
-	got, err := repo.ByTenantAndKey(tenantCtx("tenant-bright"), "tenant-bright", "shared-key")
+	got, err := repo.ByTenantAndKey(testkit.TenantCtx("tenant-bright"), "tenant-bright", "shared-key")
 	if err != nil {
 		t.Fatalf("ByTenantAndKey: %v", err)
 	}
@@ -150,10 +151,10 @@ func TestSendRecordRepository_Create_DuplicatePairWithinTenant_Refused(t *testin
 
 	rec1 := testSendRecord(t, "sr-0001", "tenant-acme", "delivery-key-1")
 	rec2 := testSendRecord(t, "sr-0002", "tenant-acme", "delivery-key-1")
-	if err := repo.Create(tenantCtx("tenant-acme"), rec1); err != nil {
+	if err := repo.Create(testkit.TenantCtx("tenant-acme"), rec1); err != nil {
 		t.Fatalf("Create(first): %v", err)
 	}
-	if err := repo.Create(tenantCtx("tenant-acme"), rec2); err == nil {
+	if err := repo.Create(testkit.TenantCtx("tenant-acme"), rec2); err == nil {
 		t.Fatal("Create(duplicate tenant+key) succeeded, want the unique-index violation")
 	}
 
@@ -175,7 +176,7 @@ func TestSendRecordRepository_Save_UpsertsInPlace(t *testing.T) {
 	repo := NewSendRecordRepository(db)
 
 	rec := testSendRecord(t, "sr-0001", "tenant-acme", "delivery-key-1")
-	ctx := tenantCtx("tenant-acme")
+	ctx := testkit.TenantCtx("tenant-acme")
 	if err := repo.Create(ctx, rec); err != nil {
 		t.Fatalf("Create: %v", err)
 	}
@@ -221,11 +222,11 @@ func TestSendRecordRepository_Save_InsertsWhenAbsent(t *testing.T) {
 
 	rec := testSendRecord(t, "sr-0001", "tenant-acme", "delivery-key-1")
 	rec.Status = SendRecordStatusFailed
-	if err := repo.Save(tenantCtx("tenant-acme"), rec); err != nil {
+	if err := repo.Save(testkit.TenantCtx("tenant-acme"), rec); err != nil {
 		t.Fatalf("Save on an absent id: %v", err)
 	}
 
-	got, err := repo.ByTenantAndKey(tenantCtx("tenant-acme"), "tenant-acme", "delivery-key-1")
+	got, err := repo.ByTenantAndKey(testkit.TenantCtx("tenant-acme"), "tenant-acme", "delivery-key-1")
 	if err != nil {
 		t.Fatalf("ByTenantAndKey: %v", err)
 	}
@@ -244,7 +245,7 @@ func TestSendRecordRepository_Save_InsertsWhenAbsent(t *testing.T) {
 func TestSendRecordRepository_SaveGuarded_RefusesToDowngradeSucceededRow(t *testing.T) {
 	db := newTestDB(t)
 	repo := NewSendRecordRepository(db)
-	ctx := tenantCtx("tenant-acme")
+	ctx := testkit.TenantCtx("tenant-acme")
 
 	insertSendRecordFixture(t, db, testSendRecord(t, "sr-0001", "tenant-acme", "delivery-key-1"))
 	before, err := repo.ByTenantAndKey(ctx, "tenant-acme", "delivery-key-1")
@@ -311,7 +312,7 @@ func TestSendRecordRepository_SaveGuarded_LandsWhenTheGuardAllows(t *testing.T) 
 		t.Run(tc.name, func(t *testing.T) {
 			db := newTestDB(t)
 			repo := NewSendRecordRepository(db)
-			ctx := tenantCtx("tenant-acme")
+			ctx := testkit.TenantCtx("tenant-acme")
 
 			seeded := testSendRecord(t, "sr-0001", "tenant-acme", "delivery-key-1")
 			seeded.Status = tc.seed
@@ -356,7 +357,7 @@ func TestSendRecordRepository_SaveGuarded_LandsWhenTheGuardAllows(t *testing.T) 
 func TestSendRecordRepository_SaveGuarded_AllowsASucceededResettle(t *testing.T) {
 	db := newTestDB(t)
 	repo := NewSendRecordRepository(db)
-	ctx := tenantCtx("tenant-acme")
+	ctx := testkit.TenantCtx("tenant-acme")
 
 	insertSendRecordFixture(t, db, testSendRecord(t, "sr-0001", "tenant-acme", "delivery-key-1"))
 
@@ -389,7 +390,7 @@ func TestSendRecordRepository_SaveGuarded_AbsentId_IsARefusalNotACreate(t *testi
 
 	rec := testSendRecord(t, "sr-never", "tenant-acme", "delivery-key-1")
 	rec.Status = SendRecordStatusFailed
-	landed, err := repo.SaveGuarded(tenantCtx("tenant-acme"), rec)
+	landed, err := repo.SaveGuarded(testkit.TenantCtx("tenant-acme"), rec)
 	if err != nil {
 		t.Fatalf("SaveGuarded: %v", err)
 	}
@@ -416,7 +417,7 @@ func TestSendRecordRepository_SaveGuarded_AbsentId_IsARefusalNotACreate(t *testi
 func TestSendRecordRepository_SaveGuarded_ConcurrentRefusalsKeepTheSucceededRow(t *testing.T) {
 	db := newTestDB(t)
 	repo := NewSendRecordRepository(db)
-	ctx := tenantCtx("tenant-acme")
+	ctx := testkit.TenantCtx("tenant-acme")
 
 	insertSendRecordFixture(t, db, testSendRecord(t, "sr-0001", "tenant-acme", "delivery-key-1"))
 	before, err := repo.ByTenantAndKey(ctx, "tenant-acme", "delivery-key-1")
@@ -489,7 +490,7 @@ func TestSendRecordRepository_SaveGuarded_ConcurrentRefusalsKeepTheSucceededRow(
 func TestSendRecordRepository_SaveGuarded_ConcurrentSettleRaceConvergesSucceeded(t *testing.T) {
 	db := newTestDB(t)
 	repo := NewSendRecordRepository(db)
-	ctx := tenantCtx("tenant-acme")
+	ctx := testkit.TenantCtx("tenant-acme")
 
 	seeded := testSendRecord(t, "sr-0001", "tenant-acme", "delivery-key-1")
 	seeded.Status = SendRecordStatusFailed
@@ -547,7 +548,7 @@ func TestSendRecordRepository_ListByFilter_NoTenant_Refused(t *testing.T) {
 	db := newTestDB(t)
 	repo := NewSendRecordRepository(db)
 
-	_, err := repo.ListByFilter(tenantCtx("tenant-acme"), SendRecordFilter{Limit: 50})
+	_, err := repo.ListByFilter(testkit.TenantCtx("tenant-acme"), SendRecordFilter{Limit: 50})
 	if !apperr.HasCode(err, ErrSendRecordTenantRequired.Code) {
 		t.Fatalf("ListByFilter with no TenantID error = %v, want %s", err, ErrSendRecordTenantRequired.Code)
 	}
@@ -563,7 +564,7 @@ func TestSendRecordRepository_ListByFilter_IsScopedPerTenant(t *testing.T) {
 	insertSendRecordFixture(t, db, testSendRecord(t, "sr-acme-1", "tenant-acme", "key-1"))
 	insertSendRecordFixture(t, db, testSendRecord(t, "sr-bright-1", "tenant-bright", "key-2"))
 
-	got, err := repo.ListByFilter(tenantCtx("tenant-acme"), SendRecordFilter{TenantID: "tenant-acme", Limit: 50})
+	got, err := repo.ListByFilter(testkit.TenantCtx("tenant-acme"), SendRecordFilter{TenantID: "tenant-acme", Limit: 50})
 	if err != nil {
 		t.Fatalf("ListByFilter: %v", err)
 	}
@@ -594,7 +595,7 @@ func TestSendRecordRepository_ListByFilter_ChannelAndStatus_Match(t *testing.T) 
 	smsSucceeded.Status = SendRecordStatusSucceeded
 	insertSendRecordFixture(t, db, smsSucceeded)
 
-	got, err := repo.ListByFilter(tenantCtx("tenant-acme"), SendRecordFilter{
+	got, err := repo.ListByFilter(testkit.TenantCtx("tenant-acme"), SendRecordFilter{
 		TenantID: "tenant-acme",
 		Channel:  ChannelEmail,
 		Status:   SendRecordStatusFailed,
@@ -632,7 +633,7 @@ func TestSendRecordRepository_ListByFilter_TimeRange_ExcludesOutsideRecords(t *t
 		t.Fatalf("postdate sr-future: %v", err)
 	}
 
-	got, err := repo.ListByFilter(tenantCtx("tenant-acme"), SendRecordFilter{
+	got, err := repo.ListByFilter(testkit.TenantCtx("tenant-acme"), SendRecordFilter{
 		TenantID: "tenant-acme",
 		From:     time.Now().Add(-24 * time.Hour),
 		To:       time.Now().Add(24 * time.Hour),
@@ -664,7 +665,7 @@ func TestSendRecordRepository_ListByFilter_NewestFirstWithLimitAndOffset(t *test
 		}
 	}
 
-	all, err := repo.ListByFilter(tenantCtx("tenant-acme"), SendRecordFilter{TenantID: "tenant-acme", Limit: 50})
+	all, err := repo.ListByFilter(testkit.TenantCtx("tenant-acme"), SendRecordFilter{TenantID: "tenant-acme", Limit: 50})
 	if err != nil {
 		t.Fatalf("ListByFilter: %v", err)
 	}
@@ -672,7 +673,7 @@ func TestSendRecordRepository_ListByFilter_NewestFirstWithLimitAndOffset(t *test
 		t.Fatalf("ListByFilter order = %+v, want newest first (sr-3, sr-2, sr-1)", all)
 	}
 
-	page, err := repo.ListByFilter(tenantCtx("tenant-acme"), SendRecordFilter{TenantID: "tenant-acme", Limit: 1, Offset: 1})
+	page, err := repo.ListByFilter(testkit.TenantCtx("tenant-acme"), SendRecordFilter{TenantID: "tenant-acme", Limit: 1, Offset: 1})
 	if err != nil {
 		t.Fatalf("ListByFilter(paged): %v", err)
 	}
@@ -697,7 +698,7 @@ func TestSendRecordRepository_ListByFilter_NewestFirstWithLimitAndOffset(t *test
 func TestSendRecordRepository_SaveGuarded_PreservesCreatedAt(t *testing.T) {
 	db := newTestDB(t)
 	repo := NewSendRecordRepository(db)
-	ctx := tenantCtx("tenant-acme")
+	ctx := testkit.TenantCtx("tenant-acme")
 
 	first := testSendRecord(t, "sr-0001", "tenant-acme", "delivery-key-1")
 	first.Status = SendRecordStatusFailed
@@ -778,19 +779,19 @@ func TestSendRecordRepository_ListByFilter_ValidatesLimitAndOffset(t *testing.T)
 	insertSendRecordFixture(t, db, testSendRecord(t, "sr-1", "tenant-acme", "key-1"))
 	insertSendRecordFixture(t, db, testSendRecord(t, "sr-2", "tenant-acme", "key-2"))
 
-	_, err := repo.ListByFilter(tenantCtx("tenant-acme"), SendRecordFilter{TenantID: "tenant-acme"})
+	_, err := repo.ListByFilter(testkit.TenantCtx("tenant-acme"), SendRecordFilter{TenantID: "tenant-acme"})
 	if err == nil {
 		t.Fatal("ListByFilter with a zero Limit succeeded, want the coded refusal (a zero limit is an unbounded read in gorm)")
 	}
 	assertCode(t, err, "notification.send_record_filter_invalid")
 
-	_, err = repo.ListByFilter(tenantCtx("tenant-acme"), SendRecordFilter{TenantID: "tenant-acme", Limit: 50, Offset: -1})
+	_, err = repo.ListByFilter(testkit.TenantCtx("tenant-acme"), SendRecordFilter{TenantID: "tenant-acme", Limit: 50, Offset: -1})
 	if err == nil {
 		t.Fatal("ListByFilter with a negative Offset succeeded, want the coded refusal")
 	}
 	assertCode(t, err, "notification.send_record_filter_invalid")
 
-	got, err := repo.ListByFilter(tenantCtx("tenant-acme"), SendRecordFilter{TenantID: "tenant-acme", Limit: 50})
+	got, err := repo.ListByFilter(testkit.TenantCtx("tenant-acme"), SendRecordFilter{TenantID: "tenant-acme", Limit: 50})
 	if err != nil {
 		t.Fatalf("ListByFilter(valid page): %v", err)
 	}

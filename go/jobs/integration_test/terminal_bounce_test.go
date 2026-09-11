@@ -14,6 +14,7 @@ import (
 	"github.com/vislake/speed/go/jobs"
 	"github.com/vislake/speed/go/jobs/queue/asynq"
 	"github.com/vislake/speed/go/pkgcore"
+	"github.com/vislake/speed/go/pkgcore/testkit"
 )
 
 // This file proves, against a real asynq.Server dequeuing from a real
@@ -107,7 +108,7 @@ func TestRedisQueue_TerminalAttemptTenantBounce_ArchivesAndFiresFailureHook(t *t
 	if err := q.RegisterHandler(failer); err != nil {
 		t.Fatalf("RegisterHandler(failer) error = %v", err)
 	}
-	ctxT := tenantCtx(tenant)
+	ctxT := testkit.TenantCtx(tenant)
 
 	// Step 1: B's first attempt fails genuinely -- wait until the Job is
 	// Retrying to prove Retried was consumed (retried == maxRetry == 1)

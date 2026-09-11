@@ -38,6 +38,7 @@ import (
 	_ "github.com/vislake/speed/go/dbkit/dialect/postgres"
 	"github.com/vislake/speed/go/pkgcore"
 	"github.com/vislake/speed/go/pkgcore/componenttest"
+	"github.com/vislake/speed/go/pkgcore/testkit"
 )
 
 // pgItems and pgFlags are the schema this tier's tests fold into their
@@ -183,10 +184,6 @@ func systemWriteContext(t *testing.T) context.Context {
 	return ctx
 }
 
-func tenantContext(tenant string) context.Context {
-	return pkgcore.WithTenant(context.Background(), pkgcore.TenantID(tenant))
-}
-
 // TestPostgres_Service_ServesTheScopeHierarchy is the service's scope
 // contract on a real PostgreSQL server: the system row serves every
 // tenant, a tenant override beats it for its own tenant only, a repeated
@@ -220,33 +217,33 @@ func TestPostgres_Service_ServesTheScopeHierarchy(t *testing.T) {
 	}
 
 	for name, tenant := range map[string]string{"tenant-a": "tenant-a", "tenant-b": "tenant-b"} {
-		v, err := svc.Get(tenantContext(tenant), "brand.site_name")
+		v, err := svc.Get(testkit.TenantCtx(pkgcore.TenantID(tenant)), "brand.site_name")
 		if err != nil || v.Data != "Global Co 2" {
 			t.Fatalf("%s reads brand.site_name = %+v, %v; want the system row", name, v, err)
 		}
 	}
-	if err := svc.Set(tenantContext("tenant-a"), config.ScopeTenant, "brand.site_name", config.Value{Data: "Studio A"}, "alice"); err != nil {
+	if err := svc.Set(testkit.TenantCtx("tenant-a"), config.ScopeTenant, "brand.site_name", config.Value{Data: "Studio A"}, "alice"); err != nil {
 		t.Fatalf("tenant-a Set: %v", err)
 	}
-	if v, err := svc.Get(tenantContext("tenant-a"), "brand.site_name"); err != nil || v.Data != "Studio A" || v.Scope != config.ScopeTenant {
+	if v, err := svc.Get(testkit.TenantCtx("tenant-a"), "brand.site_name"); err != nil || v.Data != "Studio A" || v.Scope != config.ScopeTenant {
 		t.Fatalf("tenant-a reads brand.site_name = %+v, %v; want its own override", v, err)
 	}
-	if v, err := svc.Get(tenantContext("tenant-b"), "brand.site_name"); err != nil || v.Data != "Global Co 2" {
+	if v, err := svc.Get(testkit.TenantCtx("tenant-b"), "brand.site_name"); err != nil || v.Data != "Global Co 2" {
 		t.Fatalf("tenant-b reads brand.site_name = %+v, %v; the tenant-a override must stay isolated", v, err)
 	}
 
 	// The flag chain is off by default; tenant-a's own write turns it on
 	// for tenant-a alone.
-	if enabled, err := svc.IsEnabled(tenantContext("tenant-a"), "ai.premium_upsell"); err != nil || enabled {
+	if enabled, err := svc.IsEnabled(testkit.TenantCtx("tenant-a"), "ai.premium_upsell"); err != nil || enabled {
 		t.Fatalf("IsEnabled before the tenant write = %v, %v; want false", enabled, err)
 	}
-	if err := svc.Set(tenantContext("tenant-a"), config.ScopeTenant, "ai.smile_preview", config.Value{Data: true}, "alice"); err != nil {
+	if err := svc.Set(testkit.TenantCtx("tenant-a"), config.ScopeTenant, "ai.smile_preview", config.Value{Data: true}, "alice"); err != nil {
 		t.Fatalf("flag Set: %v", err)
 	}
-	if enabled, err := svc.IsEnabled(tenantContext("tenant-a"), "ai.premium_upsell"); err != nil || !enabled {
+	if enabled, err := svc.IsEnabled(testkit.TenantCtx("tenant-a"), "ai.premium_upsell"); err != nil || !enabled {
 		t.Fatalf("IsEnabled after the tenant write = %v, %v; want true", enabled, err)
 	}
-	if enabled, err := svc.IsEnabled(tenantContext("tenant-b"), "ai.premium_upsell"); err != nil || enabled {
+	if enabled, err := svc.IsEnabled(testkit.TenantCtx("tenant-b"), "ai.premium_upsell"); err != nil || enabled {
 		t.Fatalf("tenant-b IsEnabled = %v, %v; the tenant-a flag write must not leak", enabled, err)
 	}
 
@@ -269,11 +266,11 @@ func TestPostgres_SensitiveValue_LiesEncryptedAtRest(t *testing.T) {
 	cipher := pgCipher(t)
 	svc := attachConfigService(t, db, pkgcore.NewMemoryEventBus(), cipher)
 
-	if err := svc.Set(tenantContext("tenant-a"), config.ScopeTenant, "support.reply_email", config.Value{Data: "ops@example.com"}, "alice"); err != nil {
+	if err := svc.Set(testkit.TenantCtx("tenant-a"), config.ScopeTenant, "support.reply_email", config.Value{Data: "ops@example.com"}, "alice"); err != nil {
 		t.Fatalf("Set: %v", err)
 	}
 
-	v, err := svc.Get(tenantContext("tenant-a"), "support.reply_email")
+	v, err := svc.Get(testkit.TenantCtx("tenant-a"), "support.reply_email")
 	if err != nil {
 		t.Fatalf("Get: %v", err)
 	}
@@ -317,10 +314,10 @@ func TestPostgres_Refresh_HealsARowWrittenBehindTheService(t *testing.T) {
 	db := openConfigPostgres(t, ctx, startPostgresContainer(t, ctx))
 	svc := attachConfigService(t, db, pkgcore.NewMemoryEventBus(), pgCipher(t))
 
-	if err := svc.Set(tenantContext("tenant-a"), config.ScopeTenant, "brand.site_name", config.Value{Data: "Studio A"}, "alice"); err != nil {
+	if err := svc.Set(testkit.TenantCtx("tenant-a"), config.ScopeTenant, "brand.site_name", config.Value{Data: "Studio A"}, "alice"); err != nil {
 		t.Fatalf("Set: %v", err)
 	}
-	if v, err := svc.Get(tenantContext("tenant-a"), "brand.site_name"); err != nil || v.Data != "Studio A" {
+	if v, err := svc.Get(testkit.TenantCtx("tenant-a"), "brand.site_name"); err != nil || v.Data != "Studio A" {
 		t.Fatalf("warm read = %+v, %v", v, err)
 	}
 
@@ -335,13 +332,13 @@ func TestPostgres_Refresh_HealsARowWrittenBehindTheService(t *testing.T) {
 	}
 
 	// The stale cache still serves the old value until the sweep runs.
-	if v, err := svc.Get(tenantContext("tenant-a"), "brand.site_name"); err != nil || v.Data != "Studio A" {
+	if v, err := svc.Get(testkit.TenantCtx("tenant-a"), "brand.site_name"); err != nil || v.Data != "Studio A" {
 		t.Fatalf("pre-sweep read = %+v, %v; want the stale cached value", v, err)
 	}
 	if err := svc.Refresh(ctx); err != nil {
 		t.Fatalf("Refresh: %v", err)
 	}
-	if v, err := svc.Get(tenantContext("tenant-a"), "brand.site_name"); err != nil || v.Data != "Studio A2" {
+	if v, err := svc.Get(testkit.TenantCtx("tenant-a"), "brand.site_name"); err != nil || v.Data != "Studio A2" {
 		t.Fatalf("post-sweep read = %+v, %v; Refresh must have invalidated the changed row", v, err)
 	}
 }
@@ -355,7 +352,7 @@ func TestPostgres_RawSQL_LocatesTheExactRow(t *testing.T) {
 	db := openConfigPostgres(t, ctx, startPostgresContainer(t, ctx))
 	svc := attachConfigService(t, db, pkgcore.NewMemoryEventBus(), pgCipher(t))
 
-	if err := svc.Set(tenantContext("tenant-a"), config.ScopeTenant, "brand.site_name", config.Value{Data: "Studio A"}, "alice"); err != nil {
+	if err := svc.Set(testkit.TenantCtx("tenant-a"), config.ScopeTenant, "brand.site_name", config.Value{Data: "Studio A"}, "alice"); err != nil {
 		t.Fatalf("Set: %v", err)
 	}
 	if err := svc.Set(systemWriteContext(t), config.ScopeSystem, "brand.site_name", config.Value{Data: "Global Co"}, "ops-1"); err != nil {

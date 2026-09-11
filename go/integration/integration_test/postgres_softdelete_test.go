@@ -41,6 +41,7 @@ import (
 	"github.com/vislake/speed/go/integration"
 	"github.com/vislake/speed/go/pkgcore"
 	"github.com/vislake/speed/go/pkgcore/componenttest"
+	"github.com/vislake/speed/go/pkgcore/testkit"
 )
 
 // testWebhookCipherKey is the AES key WebhookSecretSerializerName is
@@ -114,12 +115,6 @@ func openIntegrationPostgres(t *testing.T, ctx context.Context, pgContainer *pos
 		t.Fatalf("applying the integration migrations on PostgreSQL: %v", err)
 	}
 	return db
-}
-
-// tenantContext is the context a host hands in after tenancy.Middleware
-// has resolved the tenant.
-func tenantContext(tenant pkgcore.TenantID) context.Context {
-	return pkgcore.WithTenant(context.Background(), tenant)
 }
 
 // attachIntegrationService builds a fully Attach-ed Module/Service pair
@@ -196,7 +191,7 @@ func TestPostgres_DeleteWebhookSubscription_MarksInsteadOfPhysicallyRemoving(t *
 
 	seedWebhookSubscription(t, db, "sub-1", "tenant-a", true)
 
-	if deleteErr := svc.DeleteWebhookSubscription(tenantContext("tenant-a"), "sub-1"); deleteErr != nil {
+	if deleteErr := svc.DeleteWebhookSubscription(testkit.TenantCtx("tenant-a"), "sub-1"); deleteErr != nil {
 		t.Fatalf("DeleteWebhookSubscription: %v", deleteErr)
 	}
 
@@ -213,7 +208,7 @@ func TestPostgres_DeleteWebhookSubscription_MarksInsteadOfPhysicallyRemoving(t *
 		t.Fatal("deleted_at is NULL after Delete, want it set -- Delete must mark, never physically remove")
 	}
 
-	list, listErr := svc.ListWebhookSubscriptions(tenantContext("tenant-a"))
+	list, listErr := svc.ListWebhookSubscriptions(testkit.TenantCtx("tenant-a"))
 	if listErr != nil {
 		t.Fatalf("ListWebhookSubscriptions: %v", listErr)
 	}
@@ -239,14 +234,14 @@ func TestPostgres_RestoreWebhookSubscription_UndoesTheDelete(t *testing.T) {
 	// fan-out just because it was restored.
 	seedWebhookSubscription(t, db, "sub-1", "tenant-a", true)
 
-	if deleteErr := svc.DeleteWebhookSubscription(tenantContext("tenant-a"), "sub-1"); deleteErr != nil {
+	if deleteErr := svc.DeleteWebhookSubscription(testkit.TenantCtx("tenant-a"), "sub-1"); deleteErr != nil {
 		t.Fatalf("DeleteWebhookSubscription: %v", deleteErr)
 	}
-	if restoreErr := svc.RestoreWebhookSubscription(tenantContext("tenant-a"), "sub-1"); restoreErr != nil {
+	if restoreErr := svc.RestoreWebhookSubscription(testkit.TenantCtx("tenant-a"), "sub-1"); restoreErr != nil {
 		t.Fatalf("RestoreWebhookSubscription: %v", restoreErr)
 	}
 
-	list, err := svc.ListWebhookSubscriptions(tenantContext("tenant-a"))
+	list, err := svc.ListWebhookSubscriptions(testkit.TenantCtx("tenant-a"))
 	if err != nil {
 		t.Fatalf("ListWebhookSubscriptions: %v", err)
 	}
@@ -287,7 +282,7 @@ func TestPostgres_RestoreWebhookSubscription_LiveSubscription_ReturnsNotFound(t 
 
 	seedWebhookSubscription(t, db, "sub-1", "tenant-a", true)
 
-	restoreErr := svc.RestoreWebhookSubscription(tenantContext("tenant-a"), "sub-1")
+	restoreErr := svc.RestoreWebhookSubscription(testkit.TenantCtx("tenant-a"), "sub-1")
 	if restoreErr == nil {
 		t.Fatal("RestoreWebhookSubscription on a never-deleted subscription = nil, want an error")
 	}
@@ -316,7 +311,7 @@ func seedWebhookSubscription(t *testing.T, db *gorm.DB, id string, tenant pkgcor
 		Active:     active,
 		CreatedBy:  "user-1",
 	}
-	if err := repo.Create(tenantContext(tenant), row); err != nil {
+	if err := repo.Create(testkit.TenantCtx(tenant), row); err != nil {
 		t.Fatalf("seeding a webhook subscription row: %v", err)
 	}
 }

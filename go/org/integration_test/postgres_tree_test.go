@@ -8,6 +8,7 @@ import (
 
 	"github.com/vislake/speed/go/org"
 	"github.com/vislake/speed/go/pkgcore/apperr"
+	"github.com/vislake/speed/go/pkgcore/testkit"
 )
 
 // nodeIDs projects a node slice onto its ids, sorted, so a set comparison
@@ -50,7 +51,7 @@ func TestSubtree_SiblingSharingAnIDPrefix_Postgres(t *testing.T) {
 	db := newPostgres(t)
 	repo := org.NewRepository(db)
 	tree := org.NewTreeService(db)
-	ctx := tenantCtx("tenant-a")
+	ctx := testkit.TenantCtx("tenant-a")
 
 	// Ids are all-lowercase hex, the alphabet path.go's dialect-identity
 	// proof pins ("00", not "r"): a non-hex id would fail TreeService's own
@@ -87,7 +88,7 @@ func TestSubtree_SiblingSharingAnIDPrefix_Postgres(t *testing.T) {
 // engines.
 func TestTreeService_Move_RewritesTheWholeSubtree_Postgres(t *testing.T) {
 	tree := org.NewTreeService(newPostgres(t))
-	ctx := tenantCtx("tenant-a")
+	ctx := testkit.TenantCtx("tenant-a")
 
 	root, err := tree.CreateRoot(ctx, "root", "group")
 	if err != nil {
@@ -148,7 +149,7 @@ func TestTreeService_Move_RewritesTheWholeSubtree_Postgres(t *testing.T) {
 // on both engines.
 func TestTreeService_Delete_WithCascade_RemovesTheWholeSubtree_Postgres(t *testing.T) {
 	tree := org.NewTreeService(newPostgres(t))
-	ctx := tenantCtx("tenant-a")
+	ctx := testkit.TenantCtx("tenant-a")
 
 	root, err := tree.CreateRoot(ctx, "root", "group")
 	if err != nil {
@@ -187,7 +188,7 @@ func TestTreeService_Delete_WithCascade_RemovesTheWholeSubtree_Postgres(t *testi
 // never disagree about how deep a tree may go.
 func TestTreeService_MaxDepth_Postgres(t *testing.T) {
 	tree := org.NewTreeService(newPostgres(t))
-	ctx := tenantCtx("tenant-a")
+	ctx := testkit.TenantCtx("tenant-a")
 
 	node, err := tree.CreateRoot(ctx, "root", "group")
 	if err != nil {

@@ -2,6 +2,7 @@ package org
 
 import (
 	"context"
+	"github.com/vislake/speed/go/pkgcore/testkit"
 	"testing"
 )
 
@@ -32,7 +33,7 @@ var (
 // a consumer holding only its own interface can call every method.
 func TestScope_IsSatisfiedStructurally(t *testing.T) {
 	m, _ := newTestModule(t)
-	ctx := tenantCtx("tenant-a")
+	ctx := testkit.TenantCtx("tenant-a")
 	root, _, _ := seedTree(t, m.Tree(), ctx)
 
 	var consumer rbacShapedScope = m.scope

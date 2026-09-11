@@ -167,7 +167,7 @@ func newHandlerEnv(t *testing.T) *handlerEnv {
 // exactly as delivered messages do.
 func (e *handlerEnv) insertMessage(t *testing.T, tenant string, msg *InboxMessage) {
 	t.Helper()
-	if err := e.inbox.Create(tenantCtx(tenant), msg); err != nil {
+	if err := e.inbox.Create(testkit.TenantCtx(pkgcore.TenantID(tenant)), msg); err != nil {
 		t.Fatalf("insert inbox row %s: %v", msg.ID, err)
 	}
 }
@@ -194,7 +194,7 @@ func mustMessageWithRecipient(id, recipient string) *InboxMessage {
 // the JSON request body.
 func (e *handlerEnv) do(t *testing.T, method, path string, body any) *httptest.ResponseRecorder {
 	t.Helper()
-	return e.doCtx(t, tenantCtx(handlerTenant), method, path, body, nil)
+	return e.doCtx(t, testkit.TenantCtx(handlerTenant), method, path, body, nil)
 }
 
 // doCtx is do with the request context, headers and body supplied by the
@@ -788,7 +788,7 @@ func TestHandler_ListTypes_DirectoryInDeclarationOrder(t *testing.T) {
 	env := newHandlerEnv(t)
 	env.host.catalog = testClinicCatalog(t)
 
-	rec := env.doCtx(t, tenantCtx(handlerTenant), http.MethodGet, apiPath+"/types", nil, map[string]string{"Accept-Language": "zh-CN"})
+	rec := env.doCtx(t, testkit.TenantCtx(handlerTenant), http.MethodGet, apiPath+"/types", nil, map[string]string{"Accept-Language": "zh-CN"})
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200 (body %s)", rec.Code, rec.Body.String())
 	}
@@ -866,7 +866,7 @@ func TestHandler_ListTypes_NegotiatesTheDescriptionLanguage(t *testing.T) {
 			if tc.header != "" {
 				header = map[string]string{"Accept-Language": tc.header}
 			}
-			rec := env.doCtx(t, tenantCtx(handlerTenant), http.MethodGet, apiPath+"/types", nil, header)
+			rec := env.doCtx(t, testkit.TenantCtx(handlerTenant), http.MethodGet, apiPath+"/types", nil, header)
 			resp := decodeJSONBody[api.NotificationListTypesResponse](t, rec)
 			if len(resp.Items) == 0 || resp.Items[0].Description != tc.want {
 				t.Errorf("description = %q, want %q", resp.Items[0].Description, tc.want)
@@ -918,7 +918,7 @@ func TestHandler_ListTypes_ProfileTierAnswersWhenTheHeaderDoesNot(t *testing.T) 
 			if tc.header != "" {
 				header = map[string]string{"Accept-Language": tc.header}
 			}
-			rec := env.doCtx(t, tenantCtx(handlerTenant), http.MethodGet, apiPath+"/types", nil, header)
+			rec := env.doCtx(t, testkit.TenantCtx(handlerTenant), http.MethodGet, apiPath+"/types", nil, header)
 			resp := decodeJSONBody[api.NotificationListTypesResponse](t, rec)
 			if len(resp.Items) == 0 || resp.Items[0].Description != tc.want {
 				t.Errorf("description = %q, want %q", resp.Items[0].Description, tc.want)
@@ -1381,7 +1381,7 @@ func sseFrames(t *testing.T, body string) []string {
 // cannot race the subscription.
 func (e *handlerEnv) openStream(t *testing.T) (*flushRecorder, context.CancelFunc, <-chan struct{}) {
 	t.Helper()
-	ctx, cancel := context.WithCancel(tenantCtx(handlerTenant))
+	ctx, cancel := context.WithCancel(testkit.TenantCtx(handlerTenant))
 	rec := newFlushRecorder()
 	done := make(chan struct{})
 	go func() {
@@ -1585,7 +1585,7 @@ func TestHandler_Stream_RefusesAResponseWriterThatCannotFlush(t *testing.T) {
 	env := newHandlerEnv(t)
 
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, apiPath+"/stream", nil).WithContext(tenantCtx(handlerTenant))
+	req := httptest.NewRequest(http.MethodGet, apiPath+"/stream", nil).WithContext(testkit.TenantCtx(handlerTenant))
 	env.h.ServeHTTP(nonFlushingResponseWriter{rec: rec}, req)
 	assertEnvelope(t, rec, http.StatusInternalServerError, "notification.internal_error")
 }
@@ -1629,7 +1629,7 @@ func TestHandler_Stream_FindsFlusherThroughAWrappingResponseWriter(t *testing.T)
 
 	rec := newFlushRecorder()
 	wrapped := unwrappingResponseWriter{ResponseWriter: rec}
-	ctx, cancel := context.WithCancel(tenantCtx(handlerTenant))
+	ctx, cancel := context.WithCancel(testkit.TenantCtx(handlerTenant))
 	defer cancel()
 	done := make(chan struct{})
 	go func() {
@@ -1712,7 +1712,7 @@ func TestHandler_Stream_OwnAnnouncementsSurviveACrossTenantFlood(t *testing.T) {
 
 	rec := newFlushRecorder()
 	gated := &gatedFlushWriter{rec: rec}
-	ctx, cancel := context.WithCancel(tenantCtx(handlerTenant))
+	ctx, cancel := context.WithCancel(testkit.TenantCtx(handlerTenant))
 	defer cancel()
 	done := make(chan struct{})
 	go func() {

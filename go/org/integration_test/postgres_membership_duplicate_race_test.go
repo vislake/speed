@@ -10,6 +10,7 @@ import (
 	"github.com/vislake/speed/go/org"
 	"github.com/vislake/speed/go/pkgcore"
 	"github.com/vislake/speed/go/pkgcore/apperr"
+	"github.com/vislake/speed/go/pkgcore/testkit"
 )
 
 // This file holds the deterministic PostgreSQL proof behind
@@ -78,7 +79,7 @@ func TestMemberService_ConcurrentAddSameUser_LoserAnswersMembershipExists_Postgr
 	for round := 0; round < rounds; round++ {
 		label := fmt.Sprintf("round %d", round)
 		tenant := pkgcore.TenantID(fmt.Sprintf("tenant-dup-%d", round))
-		ctx := tenantCtx(tenant)
+		ctx := testkit.TenantCtx(tenant)
 
 		root, err := tree.CreateRoot(ctx, fmt.Sprintf("root-%d", round), "group")
 		if err != nil {

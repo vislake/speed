@@ -28,7 +28,6 @@ import (
 
 	"github.com/vislake/speed/go/jobs"
 	"github.com/vislake/speed/go/jobs/queue/asynq"
-	"github.com/vislake/speed/go/pkgcore"
 	"github.com/vislake/speed/go/pkgcore/redistest"
 )
 
@@ -161,10 +160,4 @@ func pollUntil(t *testing.T, ctx context.Context, q jobs.Queue, id jobs.JobID, t
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
-}
-
-// tenantCtx returns a context carrying tenant as pkgcore's current tenant --
-// what a caller polling Queue.Get/Cancel on tenant's own behalf presents.
-func tenantCtx(tenant pkgcore.TenantID) context.Context {
-	return pkgcore.WithTenant(context.Background(), tenant)
 }

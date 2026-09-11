@@ -11,6 +11,7 @@ import (
 	"github.com/vislake/speed/go/jobs"
 	"github.com/vislake/speed/go/jobs/internal/testutil"
 	"github.com/vislake/speed/go/pkgcore"
+	"github.com/vislake/speed/go/pkgcore/testkit"
 )
 
 // This file proves, against a real asynq.Server dequeuing from a real
@@ -74,7 +75,7 @@ func TestRedisQueue_JobMetrics_SucceededAndDeadLetterAttemptsRecorded(t *testing
 		t.Fatalf("Enqueue(metric-fail) error = %v", err)
 	}
 
-	ctxT := tenantCtx(pkgcore.TenantID("tenant-a"))
+	ctxT := testkit.TenantCtx(pkgcore.TenantID("tenant-a"))
 	if job := waitForTerminal(t, ctxT, q, okID, 10*time.Second); job.Status != jobs.StatusSucceeded {
 		t.Fatalf("metric-ok Job status = %v, want %v", job.Status, jobs.StatusSucceeded)
 	}

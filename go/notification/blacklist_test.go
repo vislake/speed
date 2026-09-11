@@ -6,6 +6,8 @@ import (
 
 	"gorm.io/gorm"
 
+	"github.com/vislake/speed/go/pkgcore"
+	"github.com/vislake/speed/go/pkgcore/testkit"
 	"github.com/vislake/speed/go/tenancy/tenancytest"
 )
 
@@ -64,7 +66,7 @@ func TestPlatformBlacklist_IsBlacklisted_EmptyTable_ReportsFalse(t *testing.T) {
 	db := newTestDB(t)
 	repo := NewPlatformBlacklistRepository(db)
 
-	got, err := repo.IsBlacklisted(tenantCtx("tenant-acme"), ChannelSMS, "some-index")
+	got, err := repo.IsBlacklisted(testkit.TenantCtx("tenant-acme"), ChannelSMS, "some-index")
 	if err != nil {
 		t.Fatalf("IsBlacklisted on an empty table: %v", err)
 	}
@@ -82,7 +84,7 @@ func TestPlatformBlacklist_IsBlacklisted_EmptyTable_ReportsFalse(t *testing.T) {
 func TestPlatformBlacklist_IsBlacklisted_MatchingRow_ReportsTrue(t *testing.T) {
 	db := newTestDB(t)
 	repo := NewPlatformBlacklistRepository(db)
-	ctx := tenantCtx("tenant-acme")
+	ctx := testkit.TenantCtx("tenant-acme")
 
 	insertBlacklistFixture(t, db, "blk-001", ChannelEmail, "index-email-42", BlacklistReasonComplaint)
 
@@ -150,7 +152,7 @@ func TestPlatformBlacklist_IsBlacklisted_VisibleAcrossTenants(t *testing.T) {
 		{ChannelSMS, "index-email-7", false},
 	} {
 		for _, tenant := range []string{"tenant-acme", "tenant-bright"} {
-			got, err := repo.IsBlacklisted(tenantCtx(tenant), probe.channel, probe.index)
+			got, err := repo.IsBlacklisted(testkit.TenantCtx(pkgcore.TenantID(tenant)), probe.channel, probe.index)
 			if err != nil {
 				t.Fatalf("IsBlacklisted(tenant %s, %s, %s): %v", tenant, probe.channel, probe.index, err)
 			}

@@ -229,11 +229,11 @@ func TestRedisBus_RemoteSet_ConvergesThePeer(t *testing.T) {
 	// Replica A writes the tenant override; replica B's first read may
 	// still race the delivery, so it is allowed to reach the value through
 	// the database -- that read is what warms B's cache with the old value.
-	if err := svcA.Set(tenantContext("tenant-a"), config.ScopeTenant, "brand.site_name", config.Value{Data: "Studio A"}, "alice"); err != nil {
+	if err := svcA.Set(testkit.TenantCtx("tenant-a"), config.ScopeTenant, "brand.site_name", config.Value{Data: "Studio A"}, "alice"); err != nil {
 		t.Fatalf("svcA.Set(Studio A): %v", err)
 	}
 	testkit.Eventually(t, "replica B to converge to the first write", func() bool {
-		v, err := svcB.Get(tenantContext("tenant-a"), "brand.site_name")
+		v, err := svcB.Get(testkit.TenantCtx("tenant-a"), "brand.site_name")
 		return err == nil && v.Data == "Studio A"
 	})
 	testkit.Eventually(t, "the peer spy to record the first write", func() bool {
@@ -249,11 +249,11 @@ func TestRedisBus_RemoteSet_ConvergesThePeer(t *testing.T) {
 	// only the remote invalidation can move it to Studio A2 within the
 	// deadline, because B's poller is disabled (WithPollInterval(0) in
 	// attachConfigService).
-	if err := svcA.Set(tenantContext("tenant-a"), config.ScopeTenant, "brand.site_name", config.Value{Data: "Studio A2"}, "alice"); err != nil {
+	if err := svcA.Set(testkit.TenantCtx("tenant-a"), config.ScopeTenant, "brand.site_name", config.Value{Data: "Studio A2"}, "alice"); err != nil {
 		t.Fatalf("svcA.Set(Studio A2): %v", err)
 	}
 	testkit.Eventually(t, "replica B to converge to the second write", func() bool {
-		v, err := svcB.Get(tenantContext("tenant-a"), "brand.site_name")
+		v, err := svcB.Get(testkit.TenantCtx("tenant-a"), "brand.site_name")
 		return err == nil && v.Data == "Studio A2"
 	})
 	testkit.Eventually(t, "the peer spy to record the second write", func() bool {
@@ -295,19 +295,19 @@ func TestRedisBus_RemoteSensitiveChange_CarriesOnlyTheMarker(t *testing.T) {
 
 	// Two changes, so the second event's OldValue is the first plaintext --
 	// which must also arrive redacted.
-	if err := svcA.Set(tenantContext("tenant-a"), config.ScopeTenant, "support.reply_email", config.Value{Data: "first@example.com"}, "alice"); err != nil {
+	if err := svcA.Set(testkit.TenantCtx("tenant-a"), config.ScopeTenant, "support.reply_email", config.Value{Data: "first@example.com"}, "alice"); err != nil {
 		t.Fatalf("svcA.Set(first): %v", err)
 	}
 	testkit.Eventually(t, "replica B to serve the first sensitive value", func() bool {
-		v, err := svcB.Get(tenantContext("tenant-a"), "support.reply_email")
+		v, err := svcB.Get(testkit.TenantCtx("tenant-a"), "support.reply_email")
 		return err == nil && v.Data == "first@example.com" && !v.Redacted
 	})
 
-	if err := svcA.Set(tenantContext("tenant-a"), config.ScopeTenant, "support.reply_email", config.Value{Data: "second@example.com"}, "alice"); err != nil {
+	if err := svcA.Set(testkit.TenantCtx("tenant-a"), config.ScopeTenant, "support.reply_email", config.Value{Data: "second@example.com"}, "alice"); err != nil {
 		t.Fatalf("svcA.Set(second): %v", err)
 	}
 	testkit.Eventually(t, "replica B to converge to the second sensitive value", func() bool {
-		v, err := svcB.Get(tenantContext("tenant-a"), "support.reply_email")
+		v, err := svcB.Get(testkit.TenantCtx("tenant-a"), "support.reply_email")
 		return err == nil && v.Data == "second@example.com" && !v.Redacted
 	})
 

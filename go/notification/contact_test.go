@@ -19,6 +19,7 @@ import (
 	"github.com/vislake/speed/go/pkgcore/apperr"
 	"github.com/vislake/speed/go/pkgcore/componenttest"
 	"github.com/vislake/speed/go/pkgcore/i18n"
+	"github.com/vislake/speed/go/pkgcore/testkit"
 	"github.com/vislake/speed/go/ratelimit"
 	"github.com/vislake/speed/go/tenancy/tenancytest"
 
@@ -411,8 +412,8 @@ func TestContact_AssertIsolated(t *testing.T) {
 // the dedupe probe a create runs is exactly this method.
 func TestContact_ByChannelAndAddressIndex_TenantScoped(t *testing.T) {
 	env := newContactEnv(t)
-	ctxA := tenantCtx("tenant-acme")
-	ctxB := tenantCtx("tenant-other")
+	ctxA := testkit.TenantCtx("tenant-acme")
+	ctxB := testkit.TenantCtx("tenant-other")
 	const address = "scoped@example.com"
 	index := mustIndex(t, env.svc.emailIndexer, address)
 
@@ -454,7 +455,7 @@ func TestContact_ByChannelAndAddressIndex_TenantScoped(t *testing.T) {
 // one SMS line total, however many gate checks run.
 func TestContact_CreateDoubleOptIn_SMS_VerifiesAndBecomesDeliverable(t *testing.T) {
 	env := newContactEnv(t)
-	ctx := tenantCtx("tenant-acme")
+	ctx := testkit.TenantCtx("tenant-acme")
 
 	contact, err := env.svc.CreateContact(ctx, ContactCreateInput{Channel: ChannelSMS, Address: testPhone})
 	if err != nil {
@@ -554,7 +555,7 @@ func TestContact_CreateDoubleOptIn_SMS_VerifiesAndBecomesDeliverable(t *testing.
 // type is the hash that was sent.
 func TestContact_CreateDoubleOptIn_Email_RendersAndStoresHash(t *testing.T) {
 	env := newContactEnv(t)
-	ctx := tenantCtx("tenant-acme")
+	ctx := testkit.TenantCtx("tenant-acme")
 
 	// Deliberately mixed-case input: the stored and messaged address must be
 	// the normalized lowercase form.
@@ -598,7 +599,7 @@ func TestContact_CreateDoubleOptIn_Email_RendersAndStoresHash(t *testing.T) {
 // empty capture is a real state, not an error).
 func TestContact_CreateDoubleOptIn_CodeLanguageChain(t *testing.T) {
 	env := newContactEnv(t)
-	ctx := tenantCtx("tenant-acme")
+	ctx := testkit.TenantCtx("tenant-acme")
 
 	if _, err := env.svc.CreateContact(ctx, ContactCreateInput{Channel: ChannelEmail, Address: "zh-code@example.com", Locale: "zh-CN"}); err != nil {
 		t.Fatalf("CreateContact(zh-CN): %v", err)
@@ -629,7 +630,7 @@ func TestContact_CreateDoubleOptIn_CodeLanguageChain(t *testing.T) {
 // without any stored state changing.
 func TestContact_ResendCode_CodeLanguageChain(t *testing.T) {
 	env := newContactEnv(t)
-	ctx := tenantCtx("tenant-acme")
+	ctx := testkit.TenantCtx("tenant-acme")
 
 	contact, err := env.svc.CreateContact(ctx, ContactCreateInput{Channel: ChannelEmail, Address: "resend-locale@example.com"})
 	if err != nil {
@@ -653,7 +654,7 @@ func TestContact_ResendCode_CodeLanguageChain(t *testing.T) {
 // but the attempt's rate-limit budget).
 func TestContact_VerifyCode_WrongCodeRefusedThenCorrectWorks(t *testing.T) {
 	env := newContactEnv(t)
-	ctx := tenantCtx("tenant-acme")
+	ctx := testkit.TenantCtx("tenant-acme")
 
 	contact, err := env.svc.CreateContact(ctx, ContactCreateInput{Channel: ChannelEmail, Address: "wrong-right@example.com"})
 	if err != nil {
@@ -683,7 +684,7 @@ func TestContact_VerifyCode_WrongCodeRefusedThenCorrectWorks(t *testing.T) {
 // Status still pending.)
 func TestContact_VerifyCode_ReturnsVerifiedSnapshot(t *testing.T) {
 	env := newContactEnv(t)
-	ctx := tenantCtx("tenant-acme")
+	ctx := testkit.TenantCtx("tenant-acme")
 
 	contact, err := env.svc.CreateContact(ctx, ContactCreateInput{Channel: ChannelSMS, Address: testPhone})
 	if err != nil {
@@ -714,7 +715,7 @@ func TestContact_VerifyCode_SMSCarriesMessageIdentityAndParams(t *testing.T) {
 	env := newContactEnv(t)
 	rec := &recordingSMSSender{}
 	env.svc.sms = rec
-	ctx := tenantCtx("tenant-acme")
+	ctx := testkit.TenantCtx("tenant-acme")
 
 	if _, err := env.svc.CreateContact(ctx, ContactCreateInput{Channel: ChannelSMS, Address: testPhone}); err != nil {
 		t.Fatalf("CreateContact: %v", err)
@@ -756,7 +757,7 @@ func TestContact_VerifyCode_SMSCarriesTheRenderedLocale(t *testing.T) {
 	env := newContactEnv(t)
 	rec := &recordingSMSSender{}
 	env.svc.sms = rec
-	ctx := tenantCtx("tenant-acme")
+	ctx := testkit.TenantCtx("tenant-acme")
 
 	if _, err := env.svc.CreateContact(ctx, ContactCreateInput{Channel: ChannelSMS, Address: testPhone, Locale: "zh-CN"}); err != nil {
 		t.Fatalf("CreateContact: %v", err)
@@ -779,7 +780,7 @@ func TestContact_VerifyCode_SMSCarriesTheRenderedLocale(t *testing.T) {
 // "already used" oracle), and the audit trail records the transition once.
 func TestContact_VerifyCode_ReplayRefused(t *testing.T) {
 	env := newContactEnv(t)
-	ctx := tenantCtx("tenant-acme")
+	ctx := testkit.TenantCtx("tenant-acme")
 
 	contact, err := env.svc.CreateContact(ctx, ContactCreateInput{Channel: ChannelEmail, Address: "replay@example.com"})
 	if err != nil {
@@ -806,7 +807,7 @@ func TestContact_VerifyCode_ReplayRefused(t *testing.T) {
 // is refused with the same invalid-code answer an expiry must produce.
 func TestContact_VerifyCode_ExpiredCodeRefused(t *testing.T) {
 	env := newContactEnv(t)
-	ctx := tenantCtx("tenant-acme")
+	ctx := testkit.TenantCtx("tenant-acme")
 
 	contact, err := env.svc.CreateContact(ctx, ContactCreateInput{Channel: ChannelEmail, Address: "expiry@example.com"})
 	if err != nil {
@@ -833,7 +834,7 @@ func TestContact_VerifyCode_ExpiredCodeRefused(t *testing.T) {
 // astronomically unlikely event that the two codes are equal.
 func TestContact_ResendCode_Rotates(t *testing.T) {
 	env := newContactEnv(t)
-	ctx := tenantCtx("tenant-acme")
+	ctx := testkit.TenantCtx("tenant-acme")
 
 	contact, err := env.svc.CreateContact(ctx, ContactCreateInput{Channel: ChannelEmail, Address: "rotate@example.com"})
 	if err != nil {
@@ -873,7 +874,7 @@ func TestContact_ResendCode_Rotates(t *testing.T) {
 // dedupe keys on the normalized blind index).
 func TestContact_CreateContact_DedupeReturnsExistingRowNoResend(t *testing.T) {
 	env := newContactEnv(t)
-	ctx := tenantCtx("tenant-acme")
+	ctx := testkit.TenantCtx("tenant-acme")
 
 	first, err := env.svc.CreateContact(ctx, ContactCreateInput{Channel: ChannelEmail, Address: "Case@Example.com"})
 	if err != nil {
@@ -901,7 +902,7 @@ func TestContact_CreateContact_DedupeReturnsExistingRowNoResend(t *testing.T) {
 // audit event, and the deliverability gate passes immediately.
 func TestContact_CreateContact_AttestedImmediatelyVerified(t *testing.T) {
 	env := newContactEnv(t)
-	ctx := tenantCtx("tenant-acme")
+	ctx := testkit.TenantCtx("tenant-acme")
 	const ref = "intake/2026-09/0001"
 
 	contact, err := env.svc.CreateContact(ctx, ContactCreateInput{
@@ -957,7 +958,7 @@ func TestContact_CreateContact_AttestedImmediatelyVerified(t *testing.T) {
 // second message goes out.
 func TestContact_AttestationNeverOverwritesPendingRow(t *testing.T) {
 	env := newContactEnv(t)
-	ctx := tenantCtx("tenant-acme")
+	ctx := testkit.TenantCtx("tenant-acme")
 	const address = "in-flight@example.com"
 
 	pending, err := env.svc.CreateContact(ctx, ContactCreateInput{Channel: ChannelEmail, Address: address})
@@ -998,7 +999,7 @@ func TestContact_AttestationNeverOverwritesPendingRow(t *testing.T) {
 // undone by a fresh create.
 func TestContact_Unsubscribe_PermanentAndIdempotent(t *testing.T) {
 	env := newContactEnv(t)
-	ctx := tenantCtx("tenant-acme")
+	ctx := testkit.TenantCtx("tenant-acme")
 
 	contact, err := env.svc.CreateContact(ctx, ContactCreateInput{Channel: ChannelEmail, Address: "opt-out@example.com"})
 	if err != nil {
@@ -1068,7 +1069,7 @@ func TestContact_Unsubscribe_PermanentAndIdempotent(t *testing.T) {
 // consent transition).
 func TestContact_MarkBounced_TerminalAndIdempotent(t *testing.T) {
 	env := newContactEnv(t)
-	ctx := tenantCtx("tenant-acme")
+	ctx := testkit.TenantCtx("tenant-acme")
 
 	contact, err := env.svc.CreateContact(ctx, ContactCreateInput{Channel: ChannelSMS, Address: testPhone})
 	if err != nil {
@@ -1117,7 +1118,7 @@ func TestContact_MarkBounced_TerminalAndIdempotent(t *testing.T) {
 // unsubscribe refusal, never the bounce.
 func TestContact_MarkBounced_NeverOverwritesThePermanentUnsubscribe(t *testing.T) {
 	env := newContactEnv(t)
-	ctx := tenantCtx("tenant-acme")
+	ctx := testkit.TenantCtx("tenant-acme")
 
 	contact, err := env.svc.CreateContact(ctx, ContactCreateInput{Channel: ChannelSMS, Address: testPhone})
 	if err != nil {
@@ -1153,7 +1154,7 @@ func TestContact_MarkBounced_NeverOverwritesThePermanentUnsubscribe(t *testing.T
 // bounce marking must survive the race.
 func TestContact_MarkBouncedCAS_RefusesAnUnsubscribedRow(t *testing.T) {
 	env := newContactEnv(t)
-	ctx := tenantCtx("tenant-acme")
+	ctx := testkit.TenantCtx("tenant-acme")
 
 	contact, err := env.svc.CreateContact(ctx, ContactCreateInput{Channel: ChannelSMS, Address: testPhone})
 	if err != nil {
@@ -1185,7 +1186,7 @@ func TestContact_MarkBouncedCAS_RefusesAnUnsubscribedRow(t *testing.T) {
 // five entry points uniformly.
 func TestContact_UnknownIDReturnsNotFound(t *testing.T) {
 	env := newContactEnv(t)
-	ctx := tenantCtx("tenant-acme")
+	ctx := testkit.TenantCtx("tenant-acme")
 	const missing = "contact-does-not-exist"
 
 	if _, err := env.svc.EnsureDeliverable(ctx, missing); err == nil {
@@ -1223,7 +1224,7 @@ func TestContact_UnknownIDReturnsNotFound(t *testing.T) {
 // all refused before anything is written or sent.
 func TestContact_Validation_InvalidChannelAndAddress(t *testing.T) {
 	env := newContactEnv(t)
-	ctx := tenantCtx("tenant-acme")
+	ctx := testkit.TenantCtx("tenant-acme")
 
 	if _, err := env.svc.CreateContact(ctx, ContactCreateInput{Channel: "push", Address: testPhone}); err == nil {
 		t.Error("CreateContact on channel push succeeded, want refusal")
@@ -1267,7 +1268,7 @@ func TestContact_Validation_InvalidChannelAndAddress(t *testing.T) {
 // assertion is for).
 func TestContact_AddressEncryptedAtRest(t *testing.T) {
 	env := newContactEnv(t)
-	ctx := tenantCtx("tenant-acme")
+	ctx := testkit.TenantCtx("tenant-acme")
 	const plaintext = "encrypt-me@example.com"
 
 	contact, err := env.svc.CreateContact(ctx, ContactCreateInput{Channel: ChannelEmail, Address: plaintext})
@@ -1306,7 +1307,7 @@ func TestContact_AddressEncryptedAtRest(t *testing.T) {
 // message goes out.
 func TestContact_SendRateLimit_PerAddress(t *testing.T) {
 	env := newContactEnv(t)
-	ctx := tenantCtx("tenant-acme")
+	ctx := testkit.TenantCtx("tenant-acme")
 	const address = "send-limit@example.com"
 
 	contact, err := env.svc.CreateContact(ctx, ContactCreateInput{Channel: ChannelEmail, Address: address})
@@ -1337,7 +1338,7 @@ func TestContact_SendRateLimit_PerAddress(t *testing.T) {
 // flooded by a hammering tenant.
 func TestContact_SendRateLimit_PerTenant(t *testing.T) {
 	env := newContactEnv(t)
-	ctx := tenantCtx("tenant-acme")
+	ctx := testkit.TenantCtx("tenant-acme")
 
 	for i := 0; i < contactCodeSendDailyPerTenant; i++ {
 		if _, err := env.svc.CreateContact(ctx, ContactCreateInput{
@@ -1369,7 +1370,7 @@ func TestContact_SendRateLimit_PerTenant(t *testing.T) {
 // than silently allowing the guess that broke the budget.
 func TestContact_VerifyRateLimit_PerAddress(t *testing.T) {
 	env := newContactEnv(t)
-	ctx := tenantCtx("tenant-acme")
+	ctx := testkit.TenantCtx("tenant-acme")
 	const address = "verify-limit@example.com"
 
 	contact, err := env.svc.CreateContact(ctx, ContactCreateInput{Channel: ChannelEmail, Address: address})
@@ -1410,7 +1411,7 @@ func TestContact_VerifyRateLimit_PerAddress(t *testing.T) {
 // and the refusal must answer with the name, not the index.
 func TestContact_RateLimitRefusal_ReportsNameNeverKey(t *testing.T) {
 	env := newContactEnv(t)
-	ctx := tenantCtx("tenant-acme")
+	ctx := testkit.TenantCtx("tenant-acme")
 	const address = "oracle@example.com"
 
 	// Exhaust the shared per-address send budget from one tenant: one
@@ -1430,7 +1431,7 @@ func TestContact_RateLimitRefusal_ReportsNameNeverKey(t *testing.T) {
 	// dedupe probe misses (rows are tenant-scoped), the shared budget
 	// denies, and the refusal must report the name with no trace of the
 	// index its key embeds.
-	otherCtx := tenantCtx("tenant-acme-2")
+	otherCtx := testkit.TenantCtx("tenant-acme-2")
 	index := mustIndex(t, env.svc.emailIndexer, address)
 	if _, err := env.svc.CreateContact(otherCtx, ContactCreateInput{Channel: ChannelEmail, Address: address}); err == nil {
 		t.Fatal("the second tenant's create succeeded, want the shared per-address denial")
@@ -1455,7 +1456,7 @@ func TestContact_RateLimitRefusal_ReportsNameNeverKey(t *testing.T) {
 // survived, the retried create would have deduped onto it and sent nothing.
 func TestContact_CreateCodeSendFailure_DeletesRow(t *testing.T) {
 	env := newContactEnv(t)
-	ctx := tenantCtx("tenant-acme")
+	ctx := testkit.TenantCtx("tenant-acme")
 	const address = "rollback@example.com"
 
 	env.host.mailer.failWith = errors.New("smtp down")
@@ -1507,7 +1508,7 @@ func contactRowAt(t *testing.T, env *contactEnv, id, address string, at time.Tim
 // serves without pagination.
 func TestContact_ListForTenant_NewestFirst_TenantScoped(t *testing.T) {
 	env := newContactEnv(t)
-	ctx := tenantCtx("tenant-acme")
+	ctx := testkit.TenantCtx("tenant-acme")
 
 	t1 := time.Date(2026, 9, 1, 9, 0, 0, 0, time.UTC)
 	t2 := time.Date(2026, 9, 1, 10, 0, 0, 0, time.UTC)
@@ -1523,7 +1524,7 @@ func TestContact_ListForTenant_NewestFirst_TenantScoped(t *testing.T) {
 		}
 	}
 	other := contactRowAt(t, env, "contact-b1", "other-tenant@example.com", t3.Add(time.Hour))
-	if err := env.svc.repo.Create(tenantCtx("tenant-bright"), other); err != nil {
+	if err := env.svc.repo.Create(testkit.TenantCtx("tenant-bright"), other); err != nil {
 		t.Fatalf("Create(other tenant): %v", err)
 	}
 
@@ -1558,7 +1559,7 @@ func contactIDsOf(rows []VerifiedContact) []string {
 // same-instant rows in an order that can change between reads.
 func TestContact_ListForTenant_SameCreatedAt_IdDescTiebreak(t *testing.T) {
 	env := newContactEnv(t)
-	ctx := tenantCtx("tenant-acme")
+	ctx := testkit.TenantCtx("tenant-acme")
 
 	same := time.Date(2026, 9, 1, 9, 0, 0, 0, time.UTC)
 	for _, tc := range []struct{ id, address string }{
@@ -1591,7 +1592,7 @@ func TestContact_ListForTenant_SameCreatedAt_IdDescTiebreak(t *testing.T) {
 // (FindByID/ByChannelAndAddressIndex), where the serializer still decrypts.
 func TestContactService_List_ReturnsTheRosterNewestFirst(t *testing.T) {
 	env := newContactEnv(t)
-	ctx := tenantCtx("tenant-acme")
+	ctx := testkit.TenantCtx("tenant-acme")
 
 	t1 := time.Date(2026, 9, 1, 9, 0, 0, 0, time.UTC)
 	t2 := time.Date(2026, 9, 1, 10, 0, 0, 0, time.UTC)
@@ -1604,7 +1605,7 @@ func TestContactService_List_ReturnsTheRosterNewestFirst(t *testing.T) {
 			t.Fatalf("Create(%s): %v", row.ID, err)
 		}
 	}
-	if err := env.svc.repo.Create(tenantCtx("tenant-bright"), contactRowAt(t, env, "contact-other", "other@example.com", t2.Add(time.Hour))); err != nil {
+	if err := env.svc.repo.Create(testkit.TenantCtx("tenant-bright"), contactRowAt(t, env, "contact-other", "other@example.com", t2.Add(time.Hour))); err != nil {
 		t.Fatalf("Create(other tenant): %v", err)
 	}
 
@@ -1654,7 +1655,7 @@ func TestContactService_List_ReturnsTheRosterNewestFirst(t *testing.T) {
 func TestContact_CodeSendFailure_CarriesOnlyTheBoundedClassification(t *testing.T) {
 	t.Run("email", func(t *testing.T) {
 		env := newContactEnv(t)
-		ctx := tenantCtx("tenant-acme")
+		ctx := testkit.TenantCtx("tenant-acme")
 		const address = "verify@example.com"
 
 		env.host.mailer.failWith = fmt.Errorf("smtp: 550 <%s>: mailbox unavailable: %w", address, pkgcore.ErrTransportPermanent)
@@ -1688,7 +1689,7 @@ func TestContact_CodeSendFailure_CarriesOnlyTheBoundedClassification(t *testing.
 	})
 	t.Run("sms", func(t *testing.T) {
 		env := newContactEnv(t)
-		ctx := tenantCtx("tenant-acme")
+		ctx := testkit.TenantCtx("tenant-acme")
 		const address = testPhone
 
 		env.svc.sms = &recordingSMSSender{failWith: fmt.Errorf("sms: 550 %s: network glitch", address)}
@@ -1748,7 +1749,7 @@ func (s scriptedLimiter) Allow(context.Context, string, ratelimit.Limit) (rateli
 // must carry 0, never a negative whole-second count.
 func TestContact_ResendCode_SubSecondWindowTail_RetryAfterRoundsUp(t *testing.T) {
 	env := newContactEnv(t)
-	ctx := tenantCtx("tenant-acme")
+	ctx := testkit.TenantCtx("tenant-acme")
 	const address = "window-tail@example.com"
 
 	contact, err := env.svc.CreateContact(ctx, ContactCreateInput{Channel: ChannelEmail, Address: address})

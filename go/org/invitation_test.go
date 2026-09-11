@@ -15,6 +15,7 @@ import (
 	"github.com/vislake/speed/go/dbkit"
 	"github.com/vislake/speed/go/pkgcore"
 	"github.com/vislake/speed/go/pkgcore/apperr"
+	"github.com/vislake/speed/go/pkgcore/testkit"
 	"github.com/vislake/speed/go/tenancy/tenancytest"
 
 	"github.com/vislake/speed/go/org/migrations"
@@ -137,7 +138,7 @@ func TestInvitationTokenIndex_AssertNotTenantScoped(t *testing.T) {
 func TestInvitationRepository_CreatePending_WritesTheTokenIndexRow(t *testing.T) {
 	db := newInvitationTestDB(t)
 	repo := NewInvitationRepository(db)
-	ctx := tenantCtx("tenant-a")
+	ctx := testkit.TenantCtx("tenant-a")
 	indexer := newTestEmailIndexer(t)
 
 	index, indexErr := indexer.Index("ada@example.test")
@@ -176,7 +177,7 @@ func TestInvitationRepository_CreatePending_WritesTheTokenIndexRow(t *testing.T)
 	// another tenant than the one the index names -- and the tenant-scoped
 	// byTokenHash, re-entered under the resolved tenant, finds the very row
 	// createPending inserted.
-	inv, err := repo.byTokenHash(tenantCtx(tenant), invitation.TokenHash)
+	inv, err := repo.byTokenHash(testkit.TenantCtx(tenant), invitation.TokenHash)
 	if err != nil {
 		t.Fatalf("byTokenHash under the resolved tenant: %v", err)
 	}
@@ -192,7 +193,7 @@ func TestInvitationRepository_CreatePending_WritesTheTokenIndexRow(t *testing.T)
 func TestInvitation_EmailIsStoredEncrypted(t *testing.T) {
 	db := newInvitationTestDB(t)
 	repo := NewInvitationRepository(db)
-	ctx := tenantCtx("tenant-a")
+	ctx := testkit.TenantCtx("tenant-a")
 	indexer := newTestEmailIndexer(t)
 
 	const address = "Ada.Lovelace@Example.TEST"
@@ -353,8 +354,8 @@ func TestNewInvitationToken(t *testing.T) {
 
 func TestInvitationRepository_byTokenHash(t *testing.T) {
 	repo := NewInvitationRepository(newInvitationTestDB(t))
-	ctxA := tenantCtx("tenant-a")
-	ctxB := tenantCtx("tenant-b")
+	ctxA := testkit.TenantCtx("tenant-a")
+	ctxB := testkit.TenantCtx("tenant-b")
 	indexer := newTestEmailIndexer(t)
 
 	index, err := indexer.Index("ada@example.test")
@@ -389,7 +390,7 @@ func TestInvitationRepository_byTokenHash(t *testing.T) {
 
 func TestInvitationRepository_pendingByEmail(t *testing.T) {
 	repo := NewInvitationRepository(newInvitationTestDB(t))
-	ctx := tenantCtx("tenant-a")
+	ctx := testkit.TenantCtx("tenant-a")
 	indexer := newTestEmailIndexer(t)
 
 	index, err := indexer.Index("ada@example.test")
@@ -439,7 +440,7 @@ func TestInvitationRepository_pendingByEmail(t *testing.T) {
 
 func TestInvitationRepository_byStatus(t *testing.T) {
 	repo := NewInvitationRepository(newInvitationTestDB(t))
-	ctx := tenantCtx("tenant-a")
+	ctx := testkit.TenantCtx("tenant-a")
 	indexer := newTestEmailIndexer(t)
 
 	// Three different addresses, not one: migrations/{postgres,sqlite}/

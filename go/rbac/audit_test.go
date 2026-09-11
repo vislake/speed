@@ -11,6 +11,7 @@ import (
 
 	"github.com/vislake/speed/go/dbkit/audit"
 	"github.com/vislake/speed/go/pkgcore"
+	"github.com/vislake/speed/go/pkgcore/testkit"
 )
 
 // This file pins the audit side of role management: the four
@@ -87,7 +88,7 @@ func TestService_AssignRole_EmitsAnAuditedRowWithTheActingOperator(t *testing.T)
 	// non-empty actor naming the operator.
 	svc, reg := newTestServiceWithRegistry(t)
 
-	ctx := tenantCtx("tenant-a")
+	ctx := testkit.TenantCtx("tenant-a")
 	if _, err := svc.DefineRole(ctx, RoleDefinition{Key: "reader", Permissions: []string{"notes:read"}}); err != nil {
 		t.Fatalf("DefineRole: %v", err)
 	}
@@ -119,7 +120,7 @@ func TestService_AssignRole_EmitsForTenantSubjectsAsUserActors(t *testing.T) {
 	// one (audit.go's withAuditActor).
 	svc, reg := newTestServiceWithRegistry(t)
 
-	ctx := tenantCtx("tenant-a")
+	ctx := testkit.TenantCtx("tenant-a")
 	if _, err := svc.DefineRole(ctx, RoleDefinition{Key: "reader", Permissions: []string{"notes:read"}}); err != nil {
 		t.Fatalf("DefineRole: %v", err)
 	}
@@ -142,7 +143,7 @@ func TestService_RevokeRole_EmitsAnAuditedRowWithTheActingOperator(t *testing.T)
 	// non-empty actor naming the operator.
 	svc, reg := newTestServiceWithRegistry(t)
 
-	ctx := tenantCtx("tenant-a")
+	ctx := testkit.TenantCtx("tenant-a")
 	if _, err := svc.DefineRole(ctx, RoleDefinition{Key: "reader", Permissions: []string{"notes:read"}}); err != nil {
 		t.Fatalf("DefineRole: %v", err)
 	}
@@ -172,7 +173,7 @@ func TestService_RestoreRole_EmitsAnAuditedRowForTheRestoredGrant(t *testing.T) 
 	// the role and the grantee tuple.
 	svc, reg := newTestServiceWithRegistry(t)
 
-	ctx := tenantCtx("tenant-a")
+	ctx := testkit.TenantCtx("tenant-a")
 	if _, err := svc.DefineRole(ctx, RoleDefinition{Key: "reader", Permissions: []string{"notes:read"}}); err != nil {
 		t.Fatalf("DefineRole: %v", err)
 	}
@@ -232,13 +233,13 @@ func TestService_RoleWrite_RecordsTheContextActorWithOnBehalfOfUnchanged(t *test
 	// Actor.
 	svc, reg := newTestServiceWithRegistry(t)
 
-	ctx := tenantCtx("tenant-a")
+	ctx := testkit.TenantCtx("tenant-a")
 	if _, err := svc.DefineRole(ctx, RoleDefinition{Key: "reader", Permissions: []string{"notes:read"}}); err != nil {
 		t.Fatalf("DefineRole: %v", err)
 	}
 	grantee := Subject{TenantID: "tenant-a", UserID: "target-user"}
 
-	impersonatedCtx := pkgcore.WithActor(tenantCtx("tenant-a"),
+	impersonatedCtx := pkgcore.WithActor(testkit.TenantCtx("tenant-a"),
 		pkgcore.Actor{Type: pkgcore.ActorTypeUser, ID: "target-user"})
 	impersonatedCtx = pkgcore.WithOnBehalfOf(impersonatedCtx,
 		pkgcore.Actor{Type: pkgcore.ActorTypePlatformAdmin, ID: "admin-1"})
@@ -269,7 +270,7 @@ func TestService_NoopWrites_EmitNoAuditRow(t *testing.T) {
 	// double-recording.
 	svc, reg := newTestServiceWithRegistry(t)
 
-	ctx := tenantCtx("tenant-a")
+	ctx := testkit.TenantCtx("tenant-a")
 	if _, err := svc.DefineRole(ctx, RoleDefinition{Key: "reader", Permissions: []string{"notes:read"}}); err != nil {
 		t.Fatalf("DefineRole: %v", err)
 	}

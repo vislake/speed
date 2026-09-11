@@ -9,6 +9,7 @@ import (
 
 	"github.com/vislake/speed/go/pkgcore"
 	"github.com/vislake/speed/go/pkgcore/apperr"
+	"github.com/vislake/speed/go/pkgcore/testkit"
 	"github.com/vislake/speed/go/tenancy/tenancytest"
 )
 
@@ -95,8 +96,8 @@ func TestMembership_TableNameAndTenantScoping(t *testing.T) {
 
 func TestMembershipRepository_byUser(t *testing.T) {
 	repo := NewMembershipRepository(newTestDB(t))
-	ctxA := tenantCtx("tenant-a")
-	ctxB := tenantCtx("tenant-b")
+	ctxA := testkit.TenantCtx("tenant-a")
+	ctxB := testkit.TenantCtx("tenant-b")
 
 	seedMembership(t, repo, ctxA, Membership{ID: "m-1", UserID: "u-1", NodeID: "n-1", Status: MembershipStatusActive})
 
@@ -121,8 +122,8 @@ func TestMembershipRepository_byUser(t *testing.T) {
 
 func TestMembershipRepository_byNodeIDs(t *testing.T) {
 	repo := NewMembershipRepository(newTestDB(t))
-	ctx := tenantCtx("tenant-a")
-	other := tenantCtx("tenant-b")
+	ctx := testkit.TenantCtx("tenant-a")
+	other := testkit.TenantCtx("tenant-b")
 
 	seedMembership(t, repo, ctx, Membership{ID: "m-1", UserID: "u-b", NodeID: "n-1", Status: MembershipStatusActive})
 	seedMembership(t, repo, ctx, Membership{ID: "m-2", UserID: "u-a", NodeID: "n-1", Status: MembershipStatusActive})
@@ -152,7 +153,7 @@ func TestMembershipRepository_byNodeIDs(t *testing.T) {
 
 func TestMembershipRepository_activeSample(t *testing.T) {
 	repo := NewMembershipRepository(newTestDB(t))
-	ctx := tenantCtx("tenant-a")
+	ctx := testkit.TenantCtx("tenant-a")
 
 	seedMembership(t, repo, ctx, Membership{ID: "m-1", UserID: "u-1", NodeID: "n-1", Status: MembershipStatusActive})
 	seedMembership(t, repo, ctx, Membership{ID: "m-2", UserID: "u-2", NodeID: "n-1", Status: MembershipStatusSuspended})
@@ -177,7 +178,7 @@ func TestMembershipRepository_activeSample(t *testing.T) {
 
 func TestMemberService_Add(t *testing.T) {
 	m, _ := newTestModule(t)
-	ctx := tenantCtx("tenant-a")
+	ctx := testkit.TenantCtx("tenant-a")
 	root, left, _ := seedTree(t, m.Tree(), ctx)
 
 	membership, err := m.Members().Add(ctx, "u-1", left.ID)
@@ -199,7 +200,7 @@ func TestMemberService_Add(t *testing.T) {
 
 func TestMemberService_Add_UnknownNode(t *testing.T) {
 	m, _ := newTestModule(t)
-	ctx := tenantCtx("tenant-a")
+	ctx := testkit.TenantCtx("tenant-a")
 	seedTree(t, m.Tree(), ctx)
 
 	if _, err := m.Members().Add(ctx, "u-1", "00000000-0000-4000-8000-000000000000"); !apperr.HasCode(err, ErrNodeNotFound.Code) {
@@ -211,12 +212,12 @@ func TestMemberService_Add_UnknownNode(t *testing.T) {
 // id from another tenant is indistinguishable from one that does not exist.
 func TestMemberService_Add_CrossTenantNode_ReportsNodeNotFound(t *testing.T) {
 	m, _ := newTestModule(t)
-	foreign, err := m.Tree().CreateRoot(tenantCtx("tenant-b"), "their group", "group")
+	foreign, err := m.Tree().CreateRoot(testkit.TenantCtx("tenant-b"), "their group", "group")
 	if err != nil {
 		t.Fatalf("CreateRoot(tenant-b): %v", err)
 	}
 
-	ctxA := tenantCtx("tenant-a")
+	ctxA := testkit.TenantCtx("tenant-a")
 	seedTree(t, m.Tree(), ctxA)
 	if _, err := m.Members().Add(ctxA, "u-1", foreign.ID); !apperr.HasCode(err, ErrNodeNotFound.Code) {
 		t.Errorf("Add(another tenant's node) error = %v, want org.node_not_found", err)
@@ -225,7 +226,7 @@ func TestMemberService_Add_CrossTenantNode_ReportsNodeNotFound(t *testing.T) {
 
 func TestMemberService_Add_EmptyUserID(t *testing.T) {
 	m, _ := newTestModule(t)
-	ctx := tenantCtx("tenant-a")
+	ctx := testkit.TenantCtx("tenant-a")
 	root, _, _ := seedTree(t, m.Tree(), ctx)
 
 	if _, err := m.Members().Add(ctx, "", root.ID); !apperr.HasCode(err, ErrMembershipNotFound.Code) {
@@ -238,7 +239,7 @@ func TestMemberService_Add_EmptyUserID(t *testing.T) {
 // tenant root and the seat, every later call creates neither.
 func TestMemberService_EnsureRootSeat_CreatesOnceThenReturnsTheSameSeat(t *testing.T) {
 	m, _ := newTestModule(t)
-	ctx := tenantCtx("tenant-a")
+	ctx := testkit.TenantCtx("tenant-a")
 
 	first, err := m.Members().EnsureRootSeat(ctx, "u-1", "Demo Tenant", "group")
 	if err != nil {
@@ -277,7 +278,7 @@ func TestMemberService_EnsureRootSeat_CreatesOnceThenReturnsTheSameSeat(t *testi
 // already has a tree keeps its stored root whatever name the caller passes.
 func TestMemberService_EnsureRootSeat_LeavesAnExistingDeeperSeatWhereItIs(t *testing.T) {
 	m, _ := newTestModule(t)
-	ctx := tenantCtx("tenant-a")
+	ctx := testkit.TenantCtx("tenant-a")
 	root, left, _ := seedTree(t, m.Tree(), ctx)
 
 	placed, err := m.Members().Add(ctx, "u-1", left.ID)
@@ -307,7 +308,7 @@ func TestMemberService_EnsureRootSeat_LeavesAnExistingDeeperSeatWhereItIs(t *tes
 // repeated call named.
 func TestMemberService_ensure_IsIdempotentAndNeverRebinds(t *testing.T) {
 	m, _ := newTestModule(t)
-	ctx := tenantCtx("tenant-a")
+	ctx := testkit.TenantCtx("tenant-a")
 	root, left, _ := seedTree(t, m.Tree(), ctx)
 
 	first, created, err := m.Members().ensure(ctx, "u-1", left.ID)
@@ -328,7 +329,7 @@ func TestMemberService_ensure_IsIdempotentAndNeverRebinds(t *testing.T) {
 
 func TestMemberService_List_SubtreeRoster(t *testing.T) {
 	m, _ := newTestModule(t)
-	ctx := tenantCtx("tenant-a")
+	ctx := testkit.TenantCtx("tenant-a")
 	root, left, right := seedTree(t, m.Tree(), ctx)
 	chair, err := m.Tree().CreateChild(ctx, left.ID, "chair 1", "room")
 	if err != nil {
@@ -375,7 +376,7 @@ func TestMemberService_List_SubtreeRoster(t *testing.T) {
 
 func TestMemberService_List_UnknownNode(t *testing.T) {
 	m, _ := newTestModule(t)
-	ctx := tenantCtx("tenant-a")
+	ctx := testkit.TenantCtx("tenant-a")
 	seedTree(t, m.Tree(), ctx)
 
 	if _, err := m.Members().List(ctx, "00000000-0000-4000-8000-000000000000"); !apperr.HasCode(err, ErrNodeNotFound.Code) {
@@ -385,7 +386,7 @@ func TestMemberService_List_UnknownNode(t *testing.T) {
 
 func TestMemberService_Remove_PublishesTheEvent(t *testing.T) {
 	m, host := newTestModule(t)
-	ctx := tenantCtx("tenant-a")
+	ctx := testkit.TenantCtx("tenant-a")
 	root, left, _ := seedTree(t, m.Tree(), ctx)
 
 	if _, err := m.Members().Add(ctx, "u-owner", root.ID); err != nil {
@@ -424,7 +425,7 @@ func TestMemberService_Remove_PublishesTheEvent(t *testing.T) {
 // member, so a tenant emptied this way could never be re-entered.
 func TestMemberService_Remove_LastActiveMember_IsRefused(t *testing.T) {
 	m, host := newTestModule(t)
-	ctx := tenantCtx("tenant-a")
+	ctx := testkit.TenantCtx("tenant-a")
 	root, _, _ := seedTree(t, m.Tree(), ctx)
 
 	if _, err := m.Members().Add(ctx, "u-only", root.ID); err != nil {
@@ -448,7 +449,7 @@ func TestMemberService_Remove_LastActiveMember_IsRefused(t *testing.T) {
 // removal would only strand the row.
 func TestMemberService_Remove_LastSuspendedMember_IsAllowed(t *testing.T) {
 	m, _ := newTestModule(t)
-	ctx := tenantCtx("tenant-a")
+	ctx := testkit.TenantCtx("tenant-a")
 	root, _, _ := seedTree(t, m.Tree(), ctx)
 
 	seedMembership(t, m.Members().Repository(), ctx, Membership{
@@ -462,7 +463,7 @@ func TestMemberService_Remove_LastSuspendedMember_IsAllowed(t *testing.T) {
 
 func TestMemberService_Remove_UnknownUser(t *testing.T) {
 	m, _ := newTestModule(t)
-	ctx := tenantCtx("tenant-a")
+	ctx := testkit.TenantCtx("tenant-a")
 	seedTree(t, m.Tree(), ctx)
 
 	if err := m.Members().Remove(ctx, "u-nobody"); !apperr.HasCode(err, ErrMembershipNotFound.Code) {
@@ -502,7 +503,7 @@ func TestMemberService_NoTenantContext_EveryOperationFailsClosed(t *testing.T) {
 // regression the migration exists to avoid.
 func TestMemberService_Remove_ThenAdd_SameUser_Succeeds(t *testing.T) {
 	m, _ := newTestModule(t)
-	ctx := tenantCtx("tenant-a")
+	ctx := testkit.TenantCtx("tenant-a")
 	root, left, _ := seedTree(t, m.Tree(), ctx)
 
 	if _, err := m.Members().Add(ctx, "u-owner", root.ID); err != nil {
@@ -539,7 +540,7 @@ func TestMemberService_Remove_ThenAdd_SameUser_Succeeds(t *testing.T) {
 // half of Restore's collapsed not-found signal.
 func TestMemberService_Restore_UnknownID_ReturnsMembershipNotFound(t *testing.T) {
 	m, _ := newTestModule(t)
-	ctx := tenantCtx("tenant-a")
+	ctx := testkit.TenantCtx("tenant-a")
 	seedTree(t, m.Tree(), ctx)
 
 	_, err := m.Members().Restore(ctx, "nope")
@@ -553,7 +554,7 @@ func TestMemberService_Restore_UnknownID_ReturnsMembershipNotFound(t *testing.T)
 // Restore to undo.
 func TestMemberService_Restore_LiveMembership_ReturnsMembershipNotFound(t *testing.T) {
 	m, _ := newTestModule(t)
-	ctx := tenantCtx("tenant-a")
+	ctx := testkit.TenantCtx("tenant-a")
 	root, _, _ := seedTree(t, m.Tree(), ctx)
 	live, err := m.Members().Add(ctx, "u-owner", root.ID)
 	if err != nil {
@@ -571,7 +572,7 @@ func TestMemberService_Restore_LiveMembership_ReturnsMembershipNotFound(t *testi
 // intact and visible to ordinary reads again.
 func TestMemberService_Restore_RoundTrip(t *testing.T) {
 	m, host := newTestModule(t)
-	ctx := tenantCtx("tenant-a")
+	ctx := testkit.TenantCtx("tenant-a")
 	root, left, _ := seedTree(t, m.Tree(), ctx)
 
 	if _, err := m.Members().Add(ctx, "u-owner", root.ID); err != nil {
@@ -625,7 +626,7 @@ func TestMemberService_Restore_RoundTrip(t *testing.T) {
 // Restore of an already-restored row has nothing to undo.
 func TestMemberService_Restore_Twice_SecondCallReturnsMembershipNotFound(t *testing.T) {
 	m, _ := newTestModule(t)
-	ctx := tenantCtx("tenant-a")
+	ctx := testkit.TenantCtx("tenant-a")
 	root, _, _ := seedTree(t, m.Tree(), ctx)
 	if _, err := m.Members().Add(ctx, "u-owner", root.ID); err != nil {
 		t.Fatalf("Add(owner): %v", err)
@@ -673,7 +674,7 @@ func TestMemberService_Remove_ConcurrentLastTwoActiveMembers(t *testing.T) {
 	const trialAttempts = 50
 	for attempt := 0; attempt < trialAttempts; attempt++ {
 		m, _ := newTestModule(t)
-		ctx := tenantCtx("tenant-a")
+		ctx := testkit.TenantCtx("tenant-a")
 		root, _, _ := seedTree(t, m.Tree(), ctx)
 
 		if _, err := m.Members().Add(ctx, "u-a", root.ID); err != nil {
@@ -742,7 +743,7 @@ func TestMemberService_Remove_ConcurrentLastTwoActiveMembers(t *testing.T) {
 // members remains after.
 func TestMemberService_Remove_ConcurrentDistinctUsers_BothSucceed(t *testing.T) {
 	m, _ := newTestModule(t)
-	ctx := tenantCtx("tenant-a")
+	ctx := testkit.TenantCtx("tenant-a")
 	root, _, _ := seedTree(t, m.Tree(), ctx)
 
 	for _, u := range []string{"u-a", "u-b", "u-c"} {
@@ -786,7 +787,7 @@ func TestMemberService_Remove_ConcurrentDistinctUsers_BothSucceed(t *testing.T) 
 // org.membership_exists Add itself answers when the seat is taken.
 func TestMemberService_Restore_SeatReused_AnswersMembershipExists(t *testing.T) {
 	m, _ := newTestModule(t)
-	ctx := tenantCtx("tenant-a")
+	ctx := testkit.TenantCtx("tenant-a")
 	root, left, _ := seedTree(t, m.Tree(), ctx)
 
 	if _, err := m.Members().Add(ctx, "u-owner", root.ID); err != nil {
@@ -833,7 +834,7 @@ func TestMemberService_Restore_SeatReused_AnswersMembershipExists(t *testing.T) 
 // byte-identical, updated_at included.
 func TestMemberService_Remove_DoesNotTouchOtherMembersUpdatedAt(t *testing.T) {
 	m, _ := newTestModule(t)
-	ctx := tenantCtx("tenant-a")
+	ctx := testkit.TenantCtx("tenant-a")
 	root, left, right := seedTree(t, m.Tree(), ctx)
 
 	if _, err := m.Members().Add(ctx, "u-owner", root.ID); err != nil {

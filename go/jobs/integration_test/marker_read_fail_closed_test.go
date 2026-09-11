@@ -15,6 +15,7 @@ import (
 	"github.com/vislake/speed/go/jobs"
 	"github.com/vislake/speed/go/jobs/queue/asynq"
 	"github.com/vislake/speed/go/pkgcore"
+	"github.com/vislake/speed/go/pkgcore/testkit"
 )
 
 // This file proves, against a real asynq.Server dequeuing from a real
@@ -85,7 +86,7 @@ func TestRedisQueue_UnreadableCancellationMarker_RefusesToRunUntilReadableAgain(
 	if err != nil {
 		t.Fatalf("Enqueue() error = %v", err)
 	}
-	if err := q.Cancel(tenantCtx(tenant), id); err != nil {
+	if err := q.Cancel(testkit.TenantCtx(tenant), id); err != nil {
 		t.Fatalf("Cancel() error = %v", err)
 	}
 
@@ -117,7 +118,7 @@ func TestRedisQueue_UnreadableCancellationMarker_RefusesToRunUntilReadableAgain(
 	if got := calls.Load(); got != 0 {
 		t.Fatalf("Handle ran %d times while the cancellation marker was unreadable, want 0: a Job whose cancellation state cannot be verified must never execute", got)
 	}
-	if _, err := q.Get(tenantCtx(tenant), id); err == nil {
+	if _, err := q.Get(testkit.TenantCtx(tenant), id); err == nil {
 		t.Fatal("Get() succeeded while the cancellation marker was unreadable, want an error: a Job whose cancellation state cannot be verified must never be reported as its natural state (here StatusRetrying)")
 	}
 
@@ -127,7 +128,7 @@ func TestRedisQueue_UnreadableCancellationMarker_RefusesToRunUntilReadableAgain(
 	if err := raw.Del(ctx, markerKey).Err(); err != nil {
 		t.Fatalf("repair (del sabotage): %v", err)
 	}
-	terminal := waitForTerminal(t, tenantCtx(tenant), q, id, 10*time.Second)
+	terminal := waitForTerminal(t, testkit.TenantCtx(tenant), q, id, 10*time.Second)
 	if terminal.Status != jobs.StatusSucceeded {
 		t.Fatalf("Status = %v, want %v once the marker read works again", terminal.Status, jobs.StatusSucceeded)
 	}
@@ -188,7 +189,7 @@ func TestRedisQueue_Get_UnreadableCancellationMarker_NeverReportsSucceeded(t *te
 	if err != nil {
 		t.Fatalf("Enqueue() error = %v", err)
 	}
-	if err := q.Cancel(tenantCtx(tenant), id); err != nil {
+	if err := q.Cancel(testkit.TenantCtx(tenant), id); err != nil {
 		t.Fatalf("Cancel() error = %v", err)
 	}
 
@@ -204,7 +205,7 @@ func TestRedisQueue_Get_UnreadableCancellationMarker_NeverReportsSucceeded(t *te
 	if got := calls.Load(); got != 0 {
 		t.Fatalf("Handle ran %d times for a Cancelled Job, want 0 (the Completed record is the skip's)", got)
 	}
-	if job, err := q.Get(tenantCtx(tenant), id); err != nil {
+	if job, err := q.Get(testkit.TenantCtx(tenant), id); err != nil {
 		t.Fatalf("Get() error = %v", err)
 	} else if job.Status != jobs.StatusCancelled {
 		t.Fatalf("Status = %v, want %v (the cancellation overlay over the skipped run's Completed record)", job.Status, jobs.StatusCancelled)
@@ -227,7 +228,7 @@ func TestRedisQueue_Get_UnreadableCancellationMarker_NeverReportsSucceeded(t *te
 	// (StatusSucceeded with an empty Result) after only logging the read
 	// failure would serve a caller a success that never happened; the
 	// error is returned instead, for the caller to retry.
-	if job, err := q.Get(tenantCtx(tenant), id); err == nil {
+	if job, err := q.Get(testkit.TenantCtx(tenant), id); err == nil {
 		t.Fatalf("Get() = Status %v with an empty Result after a marker-read failure, want an error: a possibly-cancelled Job must never be reported as succeeded (job: %+v)", job.Status, job)
 	}
 
@@ -242,7 +243,7 @@ func TestRedisQueue_Get_UnreadableCancellationMarker_NeverReportsSucceeded(t *te
 	if err := raw.Set(ctx, markerKey, time.Now().UTC().Format(time.RFC3339Nano), 0).Err(); err != nil {
 		t.Fatalf("repair (restore marker): %v", err)
 	}
-	job, err := q.Get(tenantCtx(tenant), id)
+	job, err := q.Get(testkit.TenantCtx(tenant), id)
 	if err != nil {
 		t.Fatalf("Get() error after repair = %v, want nil", err)
 	}
@@ -295,7 +296,7 @@ func TestRedisQueue_DeadLetterJobs_UnreadableCancellationMarker_FailsClosed(t *t
 	if err != nil {
 		t.Fatalf("Enqueue() error = %v", err)
 	}
-	if job := waitForTerminal(t, tenantCtx(tenant), q, id, 10*time.Second); job.Status != jobs.StatusDeadLetter {
+	if job := waitForTerminal(t, testkit.TenantCtx(tenant), q, id, 10*time.Second); job.Status != jobs.StatusDeadLetter {
 		t.Fatalf("Status = %v, want %v", job.Status, jobs.StatusDeadLetter)
 	}
 
@@ -314,7 +315,7 @@ func TestRedisQueue_DeadLetterJobs_UnreadableCancellationMarker_FailsClosed(t *t
 	// The regression: the whole listing fails closed on the unreadable
 	// marker -- reporting the archived Job as its natural StatusDeadLetter
 	// would fail this test.
-	if got, err := q.DeadLetterJobs(tenantCtx(tenant)); err == nil {
+	if got, err := q.DeadLetterJobs(testkit.TenantCtx(tenant)); err == nil {
 		t.Fatalf("DeadLetterJobs() returned %d job(s) after a marker-read failure, want an error: an archived Job a concurrent Cancel may have settled as StatusCancelled must never be reported as StatusDeadLetter while its cancellation state cannot be read", len(got))
 	}
 
@@ -323,7 +324,7 @@ func TestRedisQueue_DeadLetterJobs_UnreadableCancellationMarker_FailsClosed(t *t
 	if err := raw.Del(ctx, markerKey).Err(); err != nil {
 		t.Fatalf("repair (del sabotage): %v", err)
 	}
-	got, err := q.DeadLetterJobs(tenantCtx(tenant))
+	got, err := q.DeadLetterJobs(testkit.TenantCtx(tenant))
 	if err != nil {
 		t.Fatalf("DeadLetterJobs() error after repair = %v, want nil", err)
 	}

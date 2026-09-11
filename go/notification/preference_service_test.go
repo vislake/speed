@@ -15,6 +15,7 @@ import (
 	"github.com/vislake/speed/go/dbkit"
 	"github.com/vislake/speed/go/pkgcore"
 	"github.com/vislake/speed/go/pkgcore/apperr"
+	"github.com/vislake/speed/go/pkgcore/testkit"
 
 	"github.com/vislake/speed/go/notification/internal/testutil"
 	"github.com/vislake/speed/go/notification/migrations"
@@ -103,10 +104,10 @@ func assertNoParam(t *testing.T, err error, key string) {
 func TestPreferenceService_Set_MissingRecipient_RefusedBeforeAnythingElse(t *testing.T) {
 	svc := attachedService(t)
 
-	err := svc.Set(tenantCtx("tenant-acme"), "", fixtureTypeAppointment, []string{ChannelInApp})
+	err := svc.Set(testkit.TenantCtx("tenant-acme"), "", fixtureTypeAppointment, []string{ChannelInApp})
 	assertCode(t, err, "notification.recipient_required")
 
-	unknown := svc.Set(tenantCtx("tenant-acme"), "", "clinic.never_declared", []string{ChannelInApp})
+	unknown := svc.Set(testkit.TenantCtx("tenant-acme"), "", "clinic.never_declared", []string{ChannelInApp})
 	assertCode(t, unknown, "notification.recipient_required")
 }
 
@@ -116,7 +117,7 @@ func TestPreferenceService_Set_MissingRecipient_RefusedBeforeAnythingElse(t *tes
 func TestPreferenceService_Set_UnknownType_Refused(t *testing.T) {
 	svc := attachedService(t)
 
-	err := svc.Set(tenantCtx("tenant-acme"), "user-7", "clinic.never_declared", []string{ChannelInApp, ChannelEmail})
+	err := svc.Set(testkit.TenantCtx("tenant-acme"), "user-7", "clinic.never_declared", []string{ChannelInApp, ChannelEmail})
 	assertCode(t, err, "notification.type_not_found")
 	assertParam(t, err, "type_key", "clinic.never_declared")
 }
@@ -128,7 +129,7 @@ func TestPreferenceService_Set_UnknownType_Refused(t *testing.T) {
 // never a fabricated list.
 func TestPreferenceService_Set_DetachedService_NoTaxonomy_EveryTypeUnknown(t *testing.T) {
 	svc := detachedService(t)
-	ctx := tenantCtx("tenant-acme")
+	ctx := testkit.TenantCtx("tenant-acme")
 
 	err := svc.Set(ctx, "user-7", fixtureTypeAppointment, []string{ChannelInApp})
 	assertCode(t, err, "notification.type_not_found")
@@ -162,7 +163,7 @@ func TestPreferenceService_Set_InvalidSelections_RefusedWithParams(t *testing.T)
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			svc := attachedService(t)
-			err := svc.Set(tenantCtx("tenant-acme"), "user-7", tc.typeKey, tc.channels)
+			err := svc.Set(testkit.TenantCtx("tenant-acme"), "user-7", tc.typeKey, tc.channels)
 			assertCode(t, err, "notification.preference_invalid_channels")
 			assertParam(t, err, "type_key", tc.typeKey)
 			assertParam(t, err, "channels", strings.Join(tc.channels, ", "))
@@ -178,7 +179,7 @@ func TestPreferenceService_Set_InvalidSelections_RefusedWithParams(t *testing.T)
 func TestPreferenceService_Set_EmptySelection_OnTransactionalType_Refused(t *testing.T) {
 	svc := attachedService(t)
 
-	err := svc.Set(tenantCtx("tenant-acme"), "user-7", fixtureTypeSecurity, nil)
+	err := svc.Set(testkit.TenantCtx("tenant-acme"), "user-7", fixtureTypeSecurity, nil)
 	assertCode(t, err, "notification.preference_optout_not_allowed")
 	assertParam(t, err, "type_key", fixtureTypeSecurity)
 	assertNoParam(t, err, "channels")
@@ -192,7 +193,7 @@ func TestPreferenceService_Set_EmptySelection_OnTransactionalType_Refused(t *tes
 // (opt-out), which is the whole point of the empty-array encoding.
 func TestPreferenceService_Set_EmptySelection_OnUnsubscribableType_StoresOptOut(t *testing.T) {
 	svc := attachedService(t)
-	ctx := tenantCtx("tenant-acme")
+	ctx := testkit.TenantCtx("tenant-acme")
 
 	if err := svc.Set(ctx, "user-7", fixtureTypeAppointment, nil); err != nil {
 		t.Fatalf("Set(empty selection on unsubscribable type): %v", err)
@@ -225,7 +226,7 @@ func TestPreferenceService_Set_EmptySelection_OnUnsubscribableType_StoresOptOut(
 // hash, so their determinism is the point.
 func TestPreferenceService_Set_StoresChannelsInCanonicalOrder(t *testing.T) {
 	svc := attachedService(t)
-	ctx := tenantCtx("tenant-acme")
+	ctx := testkit.TenantCtx("tenant-acme")
 
 	if err := svc.Set(ctx, "user-7", fixtureTypeAppointment, []string{ChannelSMS, ChannelEmail, ChannelInApp}); err != nil {
 		t.Fatalf("Set: %v", err)
@@ -250,7 +251,7 @@ func TestPreferenceService_Set_StoresChannelsInCanonicalOrder(t *testing.T) {
 // type) is what the matrix's unique index guarantees.
 func TestPreferenceService_Set_SecondWrite_OverwritesSingleRow(t *testing.T) {
 	svc := attachedService(t)
-	ctx := tenantCtx("tenant-acme")
+	ctx := testkit.TenantCtx("tenant-acme")
 
 	if err := svc.Set(ctx, "user-7", fixtureTypeAppointment, []string{ChannelSMS}); err != nil {
 		t.Fatalf("Set(first): %v", err)
@@ -313,7 +314,7 @@ func TestPreferenceService_Set_NoTenantInContext_FailsClosed(t *testing.T) {
 // consult it (see Get's doc comment).
 func TestPreferenceService_Get_NoStoredPreference_ReturnsNilNil(t *testing.T) {
 	svc := attachedService(t)
-	ctx := tenantCtx("tenant-acme")
+	ctx := testkit.TenantCtx("tenant-acme")
 
 	for _, typeKey := range []string{fixtureTypeAppointment, "clinic.never_declared"} {
 		pref, err := svc.Get(ctx, "user-7", typeKey)
@@ -334,7 +335,7 @@ func TestPreferenceService_Get_NoStoredPreference_ReturnsNilNil(t *testing.T) {
 // declaration the next call reads.
 func TestPreferenceService_ResolveChannels_NoPreference_ReturnsDeclaredDefaults(t *testing.T) {
 	svc := attachedService(t)
-	ctx := tenantCtx("tenant-acme")
+	ctx := testkit.TenantCtx("tenant-acme")
 
 	first, err := svc.ResolveChannels(ctx, "user-7", fixtureTypeAppointment)
 	if err != nil {
@@ -360,7 +361,7 @@ func TestPreferenceService_ResolveChannels_NoPreference_ReturnsDeclaredDefaults(
 // the defaults -- is what a recipient actually gets, defaults be damned.
 func TestPreferenceService_ResolveChannels_StoredPreference_Wins(t *testing.T) {
 	svc := attachedService(t)
-	ctx := tenantCtx("tenant-acme")
+	ctx := testkit.TenantCtx("tenant-acme")
 
 	if err := svc.Set(ctx, "user-7", fixtureTypeAppointment, []string{ChannelEmail}); err != nil {
 		t.Fatalf("Set: %v", err)
@@ -384,11 +385,11 @@ func TestPreferenceService_ResolveChannels_StoredPreference_Wins(t *testing.T) {
 func TestPreferenceService_ResolveChannels_OtherTenantsPreference_Invisible(t *testing.T) {
 	svc := attachedService(t)
 
-	if err := svc.Set(tenantCtx("tenant-acme"), "user-7", fixtureTypeAppointment, []string{ChannelSMS}); err != nil {
+	if err := svc.Set(testkit.TenantCtx("tenant-acme"), "user-7", fixtureTypeAppointment, []string{ChannelSMS}); err != nil {
 		t.Fatalf("Set(tenant-acme): %v", err)
 	}
 
-	got, err := svc.ResolveChannels(tenantCtx("tenant-bright"), "user-7", fixtureTypeAppointment)
+	got, err := svc.ResolveChannels(testkit.TenantCtx("tenant-bright"), "user-7", fixtureTypeAppointment)
 	if err != nil {
 		t.Fatalf("ResolveChannels(tenant-bright): %v", err)
 	}
@@ -404,7 +405,7 @@ func TestPreferenceService_ResolveChannels_OtherTenantsPreference_Invisible(t *t
 // order, and other recipients' and other tenants' rows were set alongside.
 func TestPreferenceService_ListForUser_StoredRowsOrderedByTypeKey(t *testing.T) {
 	svc := attachedService(t)
-	ctx := tenantCtx("tenant-acme")
+	ctx := testkit.TenantCtx("tenant-acme")
 
 	for _, typeKey := range []string{fixtureTypeSecurity, fixtureTypeAppointment, fixtureTypeResult} {
 		if err := svc.Set(ctx, "user-7", typeKey, []string{ChannelInApp}); err != nil {
@@ -413,7 +414,7 @@ func TestPreferenceService_ListForUser_StoredRowsOrderedByTypeKey(t *testing.T) 
 	}
 	// Same recipient elsewhere, and another recipient here: neither may leak
 	// into user-7's tenant-acme list.
-	if err := svc.Set(tenantCtx("tenant-bright"), "user-7", fixtureTypeAppointment, []string{ChannelEmail}); err != nil {
+	if err := svc.Set(testkit.TenantCtx("tenant-bright"), "user-7", fixtureTypeAppointment, []string{ChannelEmail}); err != nil {
 		t.Fatalf("Set(tenant-bright): %v", err)
 	}
 	if err := svc.Set(ctx, "user-8", fixtureTypeAppointment, []string{ChannelEmail}); err != nil {
@@ -489,7 +490,7 @@ func TestPreferenceService_ConcurrentFirstWrites_ConvergeOnSingleRow(t *testing.
 	db := newBusyTimeoutSQLite(t)
 	svc := NewPreferenceService(db)
 	svc.attachTypes(fixtureRegistrar{types: fixtureTypes})
-	ctx := tenantCtx("tenant-acme")
+	ctx := testkit.TenantCtx("tenant-acme")
 
 	const writers = 2
 	const rounds = 5

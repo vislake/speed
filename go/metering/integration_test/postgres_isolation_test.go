@@ -66,7 +66,6 @@
 package metering_test
 
 import (
-	"context"
 	"fmt"
 	"testing"
 	"time"
@@ -87,13 +86,6 @@ import (
 func newPostgres(t *testing.T) *gorm.DB {
 	t.Helper()
 	return testutil.NewPostgres(t, "metering", migrations.FS)
-}
-
-// tenantCtx is the context a host hands a tenant-scoped repository call
-// after tenancy.Middleware (or, in this package's case, the equivalent
-// hand-built pkgcore.WithTenant) has resolved the tenant.
-func tenantCtx(tenant pkgcore.TenantID) context.Context {
-	return pkgcore.WithTenant(context.Background(), tenant)
 }
 
 // TestSummaryRepository_AssertIsolated_Postgres re-runs go/metering's own

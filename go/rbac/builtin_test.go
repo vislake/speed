@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/vislake/speed/go/pkgcore"
+	"github.com/vislake/speed/go/pkgcore/testkit"
 )
 
 // permissionsOf reads back what a role actually grants, sorted.
@@ -31,7 +32,7 @@ func permissionsOf(t *testing.T, svc *Service, ctx context.Context, key string) 
 
 func TestService_EnsureBuiltinRoles_SeedsTheThreeRoles(t *testing.T) {
 	svc := newTestService(t)
-	ctx := tenantCtx("tenant-a")
+	ctx := testkit.TenantCtx("tenant-a")
 
 	if err := svc.EnsureBuiltinRoles(ctx); err != nil {
 		t.Fatalf("EnsureBuiltinRoles: %v", err)
@@ -56,7 +57,7 @@ func TestService_EnsureBuiltinRoles_OwnerHoldsEveryDeclaredPermission(t *testing
 	// would have no way to delegate it either, since delegation is itself
 	// a permission.
 	svc := newTestService(t)
-	ctx := tenantCtx("tenant-a")
+	ctx := testkit.TenantCtx("tenant-a")
 	if err := svc.EnsureBuiltinRoles(ctx); err != nil {
 		t.Fatalf("EnsureBuiltinRoles: %v", err)
 	}
@@ -72,7 +73,7 @@ func TestService_EnsureBuiltinRoles_AdminHoldsEverythingExceptGrantAuthority(t *
 	// identical, and an admin could grant themselves anything an owner
 	// has -- which makes the distinction cosmetic rather than a boundary.
 	svc := newTestService(t)
-	ctx := tenantCtx("tenant-a")
+	ctx := testkit.TenantCtx("tenant-a")
 	if err := svc.EnsureBuiltinRoles(ctx); err != nil {
 		t.Fatalf("EnsureBuiltinRoles: %v", err)
 	}
@@ -99,7 +100,7 @@ func TestService_EnsureBuiltinRoles_MemberHoldsNothing(t *testing.T) {
 	// ordinary member should hold is a product decision, and a guess here
 	// would hand out access nobody chose.
 	svc := newTestService(t)
-	ctx := tenantCtx("tenant-a")
+	ctx := testkit.TenantCtx("tenant-a")
 	if err := svc.EnsureBuiltinRoles(ctx); err != nil {
 		t.Fatalf("EnsureBuiltinRoles: %v", err)
 	}
@@ -130,7 +131,7 @@ func TestService_EnsureBuiltinRoles_IsIdempotentAndSilentOnASecondRun(t *testing
 	// otherwise a fleet restart would flush every replica's decision cache
 	// for no reason.
 	svc, reg := newTestServiceWithRegistry(t)
-	ctx := tenantCtx("tenant-a")
+	ctx := testkit.TenantCtx("tenant-a")
 	if err := svc.EnsureBuiltinRoles(ctx); err != nil {
 		t.Fatalf("first EnsureBuiltinRoles: %v", err)
 	}
@@ -172,7 +173,7 @@ func TestService_EnsureBuiltinRoles_ConcurrentSeeds_NeitherFailsTheBoot(t *testi
 	db := newRBACTestDB(t)
 	_, replicaA, replicaB := twoReplicas(t, db)
 
-	ctx := tenantCtx("tenant-a")
+	ctx := testkit.TenantCtx("tenant-a")
 	replicaA.beforeRoleCreate = func() {
 		replicaA.beforeRoleCreate = nil // run exactly once
 		if err := replicaB.EnsureBuiltinRoles(ctx); err != nil {
@@ -213,7 +214,7 @@ func TestService_EnsureBuiltinRoles_WidensOwnerWhenTheCatalogGrows(t *testing.T)
 	// existed would have an owner who could not use it, with nothing
 	// reporting why.
 	svc, reg := newTestServiceWithRegistry(t)
-	ctx := tenantCtx("tenant-a")
+	ctx := testkit.TenantCtx("tenant-a")
 	if err := svc.EnsureBuiltinRoles(ctx); err != nil {
 		t.Fatalf("EnsureBuiltinRoles: %v", err)
 	}
@@ -245,7 +246,7 @@ func TestService_EnsureBuiltinRoles_NarrowsWhenAPermissionDisappears(t *testing.
 	// removed from the catalog must stop being granted, rather than the
 	// role quietly keeping authority nobody declares any more.
 	svc := newTestService(t)
-	ctx := tenantCtx("tenant-a")
+	ctx := testkit.TenantCtx("tenant-a")
 	if err := svc.EnsureBuiltinRoles(ctx); err != nil {
 		t.Fatalf("EnsureBuiltinRoles: %v", err)
 	}
@@ -271,11 +272,11 @@ func TestService_EnsureBuiltinRoles_SeedsOneTenantOnly(t *testing.T) {
 	// The seed reads and writes within a single tenant; there is
 	// deliberately no cross-tenant template to copy from.
 	svc := newTestService(t)
-	if err := svc.EnsureBuiltinRoles(tenantCtx("tenant-a")); err != nil {
+	if err := svc.EnsureBuiltinRoles(testkit.TenantCtx("tenant-a")); err != nil {
 		t.Fatalf("EnsureBuiltinRoles: %v", err)
 	}
 
-	roles, err := svc.roles.List(tenantCtx("tenant-b"))
+	roles, err := svc.roles.List(testkit.TenantCtx("tenant-b"))
 	if err != nil {
 		t.Fatalf("List in tenant-b: %v", err)
 	}
@@ -327,7 +328,7 @@ func TestService_EnsureBuiltinRoles_ThenOwnerCanEverything(t *testing.T) {
 	// The end-to-end shape a host gets at boot: seed, bind the tenant's
 	// creator to owner, and every declared permission is available.
 	svc := newTestService(t)
-	ctx := tenantCtx("tenant-a")
+	ctx := testkit.TenantCtx("tenant-a")
 	if err := svc.EnsureBuiltinRoles(ctx); err != nil {
 		t.Fatalf("EnsureBuiltinRoles: %v", err)
 	}

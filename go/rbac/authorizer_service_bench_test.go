@@ -23,6 +23,7 @@ import (
 	"github.com/vislake/speed/go/dbkit"
 	"github.com/vislake/speed/go/pkgcore"
 	"github.com/vislake/speed/go/pkgcore/componenttest"
+	"github.com/vislake/speed/go/pkgcore/testkit"
 )
 
 // serviceBenchSink keeps the last decision reachable so the compiler cannot
@@ -108,7 +109,7 @@ func newBenchService(b *testing.B) *Service {
 // over.
 func seedBenchTenant(b *testing.B, svc *Service) []Subject {
 	b.Helper()
-	ctx := tenantCtx(benchRBACTenant)
+	ctx := testkit.TenantCtx(benchRBACTenant)
 
 	if _, err := svc.DefineRole(ctx, RoleDefinition{
 		Key:            benchMemberRole,

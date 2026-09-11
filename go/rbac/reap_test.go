@@ -10,6 +10,7 @@ import (
 
 	"github.com/vislake/speed/go/pkgcore"
 	"github.com/vislake/speed/go/pkgcore/apperr"
+	"github.com/vislake/speed/go/pkgcore/testkit"
 )
 
 // removedMember is the shape org's own MemberRemoved payload takes on the
@@ -124,7 +125,7 @@ func TestService_OnMemberRemoved_ReapsTheRemovedMembersBindingsAndSparesEveryone
 		t.Errorf("the writer binding was revoked at node %q, want node-1", byRole["writer"])
 	}
 
-	rows, err := svc.bindings.ByUser(tenantCtx("tenant-a"), "user-gone")
+	rows, err := svc.bindings.ByUser(testkit.TenantCtx("tenant-a"), "user-gone")
 	if err != nil {
 		t.Fatalf("listing the removed member's remaining bindings: %v", err)
 	}
@@ -146,7 +147,7 @@ func TestService_OnMemberRemoved_RestoreInterleavingKeepsTheReapSoftAndIdempoten
 	sub := Subject{TenantID: "tenant-a", UserID: "user-gone"}
 	grant(t, svc, sub, "reader", Scope{}, "notes:read")
 
-	ctx := tenantCtx(sub.TenantID)
+	ctx := testkit.TenantCtx(sub.TenantID)
 	if err := svc.RevokeRole(ctx, sub, "reader", Scope{}); err != nil {
 		t.Fatalf("manual revoke before the removal: %v", err)
 	}
@@ -305,7 +306,7 @@ func TestService_OnMemberRemoved_OneFailedReapDoesNotAbortTheRest(t *testing.T) 
 	svc, reg := newTestServiceWithRegistry(t)
 	sub := Subject{TenantID: "tenant-a", UserID: "user-gone"}
 
-	ctx := tenantCtx(sub.TenantID)
+	ctx := testkit.TenantCtx(sub.TenantID)
 	if _, err := svc.DefineRole(ctx, RoleDefinition{Key: "reader", Permissions: []string{"notes:read"}}); err != nil {
 		t.Fatalf("DefineRole(reader): %v", err)
 	}
@@ -467,7 +468,7 @@ func TestService_OnNodeDeleted_CascadeReap_NoPerBindingReReads(t *testing.T) {
 	counts := newStatementCounter(t, db)
 	svc, reg := attachTestService(t, db)
 
-	ctx := tenantCtx("tenant-a")
+	ctx := testkit.TenantCtx("tenant-a")
 	for _, roleKey := range []string{"reader", "writer"} {
 		if _, err := svc.DefineRole(ctx, RoleDefinition{Key: roleKey, Permissions: []string{"notes:read", "notes:write"}}); err != nil {
 			t.Fatalf("DefineRole(%s): %v", roleKey, err)
@@ -587,7 +588,7 @@ func TestService_OnNodeDeleted_ReapsBindingsScopedToDeletedNodesAndSparesEveryon
 		}
 	}
 
-	rows, err := svc.bindings.ByNodes(tenantCtx("tenant-a"), []string{"node-deleted"})
+	rows, err := svc.bindings.ByNodes(testkit.TenantCtx("tenant-a"), []string{"node-deleted"})
 	if err != nil {
 		t.Fatalf("listing remaining bindings at the deleted node: %v", err)
 	}
@@ -636,7 +637,7 @@ func TestService_OnNodeDeleted_CascadeReapsEveryBindingInOnePass(t *testing.T) {
 		t.Fatalf("got %d %s events, want 3 (one per binding across the cascaded nodes)", len(revoked), EventRoleBindingRevoked)
 	}
 
-	rows, err := svc.bindings.ByNodes(tenantCtx("tenant-a"), []string{"root", "child-a", "child-b", "sibling"})
+	rows, err := svc.bindings.ByNodes(testkit.TenantCtx("tenant-a"), []string{"root", "child-a", "child-b", "sibling"})
 	if err != nil {
 		t.Fatalf("listing remaining bindings: %v", err)
 	}
@@ -735,7 +736,7 @@ func TestService_OnNodeDeleted_WireShapesAllReapTheSameBindings(t *testing.T) {
 		sub := Subject{TenantID: "tenant-a", UserID: "user-1"}
 		grant(t, svc, sub, "reader", Scope{NodeID: shape.nodeID}, "notes:read")
 		publishNodeDeleted(t, reg, sub.TenantID, shape.payload)
-		rows, err := svc.bindings.ByNodes(tenantCtx("tenant-a"), []string{shape.nodeID})
+		rows, err := svc.bindings.ByNodes(testkit.TenantCtx("tenant-a"), []string{shape.nodeID})
 		if err != nil {
 			t.Fatalf("listing bindings at %s: %v", shape.nodeID, err)
 		}
@@ -757,7 +758,7 @@ func TestService_OnNodeDeleted_OneFailedReapDoesNotAbortTheRest(t *testing.T) {
 	svc, reg := newTestServiceWithRegistry(t)
 	sub := Subject{TenantID: "tenant-a", UserID: "user-1"}
 
-	ctx := tenantCtx(sub.TenantID)
+	ctx := testkit.TenantCtx(sub.TenantID)
 	if _, err := svc.DefineRole(ctx, RoleDefinition{Key: "reader", Permissions: []string{"notes:read"}}); err != nil {
 		t.Fatalf("DefineRole(reader): %v", err)
 	}
@@ -891,11 +892,11 @@ func TestService_OnMemberRestored_ReinstatesTheReapedBindingsAndSparesEveryoneEl
 	// the same user id with a manually revoked grant in tenant-b, and one
 	// in the system domain.
 	grant(t, svc, sameUserOtherTenant, "reader", Scope{}, "notes:read")
-	if err := svc.RevokeRole(tenantCtx("tenant-b"), sameUserOtherTenant, "reader", Scope{}); err != nil {
+	if err := svc.RevokeRole(testkit.TenantCtx("tenant-b"), sameUserOtherTenant, "reader", Scope{}); err != nil {
 		t.Fatalf("revoking the tenant-b grant: %v", err)
 	}
 	grant(t, svc, sameUserSystemDomain, "reader", Scope{}, "notes:read")
-	if err := svc.RevokeRole(tenantCtx(SystemDomain), sameUserSystemDomain, "reader", Scope{}); err != nil {
+	if err := svc.RevokeRole(testkit.TenantCtx(SystemDomain), sameUserSystemDomain, "reader", Scope{}); err != nil {
 		t.Fatalf("revoking the system-domain grant: %v", err)
 	}
 
@@ -956,7 +957,7 @@ func TestService_OnMemberRestored_ReinstatesTheReapedBindingsAndSparesEveryoneEl
 		t.Errorf("the writer grant was restored at node %q, want node-1", byRole["writer"])
 	}
 
-	rows, err := svc.bindings.RevokedByUser(tenantCtx("tenant-a"), "user-gone")
+	rows, err := svc.bindings.RevokedByUser(testkit.TenantCtx("tenant-a"), "user-gone")
 	if err != nil {
 		t.Fatalf("listing the restored member's revoked bindings: %v", err)
 	}
@@ -971,7 +972,7 @@ func TestService_OnMemberRestored_ReinstatesTheReapedBindingsAndSparesEveryoneEl
 		{"tenant-b", "user-gone"},
 		{SystemDomain, "user-gone"},
 	} {
-		rows, err := svc.bindings.RevokedByUser(tenantCtx(probe.tenant), probe.user)
+		rows, err := svc.bindings.RevokedByUser(testkit.TenantCtx(probe.tenant), probe.user)
 		if err != nil {
 			t.Fatalf("listing %s's revoked bindings: %v", probe.tenant, err)
 		}
@@ -1024,7 +1025,7 @@ func TestService_OnMemberRestored_DeliberateRevocationPredatingTheRemoval_StaysR
 	sub := Subject{TenantID: "tenant-a", UserID: "user-gone"}
 	grant(t, svc, sub, "owner", Scope{}, "notes:read")
 
-	ctx := tenantCtx(sub.TenantID)
+	ctx := testkit.TenantCtx(sub.TenantID)
 	if err := svc.RevokeRole(ctx, sub, "owner", Scope{}); err != nil {
 		t.Fatalf("manual revoke before the removal: %v", err)
 	}
@@ -1064,7 +1065,7 @@ func TestService_OnMemberRestored_ForeignPayloadsAreDroppedWithoutError(t *testi
 	svc, reg := newTestServiceWithRegistry(t)
 	sub := Subject{TenantID: "tenant-a", UserID: "user-kept"}
 	grant(t, svc, sub, "reader", Scope{}, "notes:read")
-	if err := svc.RevokeRole(tenantCtx("tenant-a"), sub, "reader", Scope{}); err != nil {
+	if err := svc.RevokeRole(testkit.TenantCtx("tenant-a"), sub, "reader", Scope{}); err != nil {
 		t.Fatalf("revoking the grant the drops must not restore: %v", err)
 	}
 
@@ -1179,7 +1180,7 @@ func TestService_OnMemberRestored_OneFailedRestoreDoesNotAbortTheRest(t *testing
 	svc, reg := newTestServiceWithRegistry(t)
 	sub := Subject{TenantID: "tenant-a", UserID: "user-gone"}
 
-	ctx := tenantCtx(sub.TenantID)
+	ctx := testkit.TenantCtx(sub.TenantID)
 	if _, err := svc.DefineRole(ctx, RoleDefinition{Key: "reader", Permissions: []string{"notes:read"}}); err != nil {
 		t.Fatalf("DefineRole(reader): %v", err)
 	}
@@ -1282,7 +1283,7 @@ func TestService_OnMemberRestored_NodeDeletedAtMemberRestore_StaysRevokedUntilTh
 	tree := &stubResolver{paths: map[string]string{"node-1": "/tenant-a/node-1"}}
 	svc, reg := newTestServiceWithRegistry(t, WithSubtreeResolver(tree))
 	member := Subject{TenantID: "tenant-a", UserID: "user-member"}
-	ctx := tenantCtx("tenant-a")
+	ctx := testkit.TenantCtx("tenant-a")
 	grant(t, svc, member, "reader", Scope{NodeID: "node-1"}, "notes:read")
 
 	// Node deletion: org's tree now hides node-1 -- the resolver answers
@@ -1363,7 +1364,7 @@ func TestService_OnMemberRestored_NodeDeletedWhileMemberGone_StaysRevokedUntilTh
 	tree := &stubResolver{paths: map[string]string{"node-1": "/tenant-a/node-1"}}
 	svc, reg := newTestServiceWithRegistry(t, WithSubtreeResolver(tree))
 	member := Subject{TenantID: "tenant-a", UserID: "user-member"}
-	ctx := tenantCtx("tenant-a")
+	ctx := testkit.TenantCtx("tenant-a")
 	grant(t, svc, member, "reader", Scope{NodeID: "node-1"}, "notes:read")
 
 	publishMemberRemoved(t, reg, "tenant-a", removedMember{UserID: member.UserID})
@@ -1432,7 +1433,7 @@ func TestService_OnMemberRestored_NodeUnverifiable_FailsClosed(t *testing.T) {
 	if ok, err := svc.Can(context.Background(), sub, "write", "notes"); err != nil || ok {
 		t.Fatalf("the node-scoped grant was re-instated with no resolver to verify its node: Can = %v, %v; want false", ok, err)
 	}
-	rows, err := svc.bindings.RevokedByUser(tenantCtx("tenant-a"), sub.UserID)
+	rows, err := svc.bindings.RevokedByUser(testkit.TenantCtx("tenant-a"), sub.UserID)
 	if err != nil {
 		t.Fatalf("listing the restored member's revoked bindings: %v", err)
 	}
@@ -1455,7 +1456,7 @@ func TestService_OnMemberRestored_NodeUnverifiable_FailsClosed(t *testing.T) {
 	if ok, canErr := svc2.Can(context.Background(), sub2, "write", "notes"); canErr != nil || ok {
 		t.Fatalf("the node-scoped grant was re-instated while the resolver was erroring: Can = %v, %v; want false", ok, canErr)
 	}
-	rows, err = svc2.bindings.RevokedByUser(tenantCtx("tenant-a"), sub2.UserID)
+	rows, err = svc2.bindings.RevokedByUser(testkit.TenantCtx("tenant-a"), sub2.UserID)
 	if err != nil {
 		t.Fatalf("listing the restored member's revoked bindings: %v", err)
 	}
@@ -1515,7 +1516,7 @@ func TestService_OnNodeRestored_ReinstatesBindingsScopedToTheRestoredNodeAndSpar
 	grant(t, svc, sameNodeOtherTenant, "reader", Scope{NodeID: "node-restored"}, "notes:read")
 	// The tenant-b row is revoked manually -- the event below names the
 	// same node id in tenant-a, and must not reach across.
-	if err := svc.RevokeRole(tenantCtx("tenant-b"), sameNodeOtherTenant, "reader", Scope{NodeID: "node-restored"}); err != nil {
+	if err := svc.RevokeRole(testkit.TenantCtx("tenant-b"), sameNodeOtherTenant, "reader", Scope{NodeID: "node-restored"}); err != nil {
 		t.Fatalf("revoking the tenant-b grant: %v", err)
 	}
 
@@ -1614,7 +1615,7 @@ func TestService_OnNodeRestored_ForeignPayloadsAreDroppedWithoutError(t *testing
 	svc, reg := newTestServiceWithRegistry(t)
 	sub := Subject{TenantID: "tenant-a", UserID: "user-1"}
 	grant(t, svc, sub, "reader", Scope{NodeID: "node-1"}, "notes:read")
-	if err := svc.RevokeRole(tenantCtx("tenant-a"), sub, "reader", Scope{NodeID: "node-1"}); err != nil {
+	if err := svc.RevokeRole(testkit.TenantCtx("tenant-a"), sub, "reader", Scope{NodeID: "node-1"}); err != nil {
 		t.Fatalf("revoking the grant the drops must not restore: %v", err)
 	}
 
@@ -1699,7 +1700,7 @@ func TestService_OnNodeRestored_WireShapesAllReinstateTheSameBindings(t *testing
 		grant(t, svc, sub, "reader", Scope{NodeID: shape.nodeID}, "notes:read")
 		publishNodeDeleted(t, reg, sub.TenantID, deletedNode{DeletedNodeIds: []string{shape.nodeID}})
 		publishNodeRestored(t, reg, sub.TenantID, shape.payload)
-		rows, err := svc.bindings.RevokedByNodes(tenantCtx("tenant-a"), []string{shape.nodeID})
+		rows, err := svc.bindings.RevokedByNodes(testkit.TenantCtx("tenant-a"), []string{shape.nodeID})
 		if err != nil {
 			t.Fatalf("listing revoked bindings at %s: %v", shape.nodeID, err)
 		}
@@ -1727,7 +1728,7 @@ func TestService_OnNodeRestored_MemberRemovedWhileNodeDeleted_IsNotReinstated(t 
 
 	removed := Subject{TenantID: "tenant-a", UserID: "user-removed"}
 	kept := Subject{TenantID: "tenant-a", UserID: "user-kept"}
-	ctx := tenantCtx("tenant-a")
+	ctx := testkit.TenantCtx("tenant-a")
 	grant(t, svc, removed, "reader", Scope{NodeID: "node-1"}, "notes:read")
 	grant(t, svc, kept, "reader", Scope{NodeID: "node-1"}, "notes:read")
 
@@ -1813,7 +1814,7 @@ func TestService_OnNodeRestored_MemberRemovedBeforeTheNodeDeleted_IsNotReinstate
 	if ok, err := svc.Can(context.Background(), removed, "read", "notes"); err != nil || ok {
 		t.Fatalf("the removed member regained authorization with the node: Can = %v, %v; want false", ok, err)
 	}
-	rows, err := svc.bindings.RevokedByUser(tenantCtx("tenant-a"), removed.UserID)
+	rows, err := svc.bindings.RevokedByUser(testkit.TenantCtx("tenant-a"), removed.UserID)
 	if err != nil {
 		t.Fatalf("listing the removed member's revoked bindings: %v", err)
 	}
@@ -1837,7 +1838,7 @@ func TestService_OnNodeRestored_ReinstatesOnlyRowsTheNodeDeletionItselfReaped(t 
 
 	deliberate := Subject{TenantID: "tenant-a", UserID: "user-deliberate"}
 	reaped := Subject{TenantID: "tenant-a", UserID: "user-reaped"}
-	ctx := tenantCtx("tenant-a")
+	ctx := testkit.TenantCtx("tenant-a")
 	grant(t, svc, deliberate, "reader", Scope{NodeID: "node-1"}, "notes:read")
 	grant(t, svc, reaped, "reader", Scope{NodeID: "node-1"}, "notes:read")
 
@@ -1881,7 +1882,7 @@ func TestService_OnMemberRemoved_ClaimsOnlyTheNodeReapedRows(t *testing.T) {
 
 	sub := Subject{TenantID: "tenant-a", UserID: "user-gone"}
 	other := Subject{TenantID: "tenant-a", UserID: "user-other"}
-	ctx := tenantCtx("tenant-a")
+	ctx := testkit.TenantCtx("tenant-a")
 
 	// Row at node-1: the node-deletion reap writes it (node deleted while
 	// the member still held the grant).

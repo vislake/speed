@@ -158,7 +158,7 @@ func newQueueTestService(t *testing.T, db *gorm.DB, opts ...Option) (*Service, *
 // liveBindings returns the user's still-live bindings in tenant.
 func liveBindings(t *testing.T, svc *Service, tenant pkgcore.TenantID, userID string) []RoleBinding {
 	t.Helper()
-	rows, err := svc.bindings.ByUser(tenantCtx(tenant), userID)
+	rows, err := svc.bindings.ByUser(testkit.TenantCtx(tenant), userID)
 	if err != nil {
 		t.Fatalf("listing %s's bindings: %v", userID, err)
 	}
@@ -328,7 +328,7 @@ func TestMemberReapTask_TransientFailureFailsTheAttempt_AndARetryConverges(t *te
 		Payload:  payload,
 	}
 	task := memberReapTask{svc: svc}
-	ctx := tenantCtx(removed.TenantID)
+	ctx := testkit.TenantCtx(removed.TenantID)
 
 	if err := db.Exec("ALTER TABLE rbac_role_bindings RENAME TO rbac_role_bindings_hidden").Error; err != nil {
 		t.Fatalf("hiding the bindings table: %v", err)
@@ -435,7 +435,7 @@ func TestMemberReapTask_UnreadablePayload_FailsTheAttempt(t *testing.T) {
 	// retries, then dead-letters with the alert) rather than silently
 	// succeeding with the removal's bindings untouched.
 	svc, _ := attachTestService(t, newRBACTestDB(t))
-	ctx := tenantCtx("tenant-a")
+	ctx := testkit.TenantCtx("tenant-a")
 
 	if _, err := (memberReapTask{svc: svc}).Handle(ctx, &jobs.Job{
 		ID: jobs.JobID("j"), Type: taskTypeReapMember, TenantID: "tenant-a", Payload: []byte("not json"),

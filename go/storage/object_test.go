@@ -18,6 +18,7 @@ import (
 	"github.com/vislake/speed/go/observability"
 	"github.com/vislake/speed/go/pkgcore"
 	"github.com/vislake/speed/go/pkgcore/apperr"
+	"github.com/vislake/speed/go/pkgcore/testkit"
 
 	"gorm.io/gorm"
 
@@ -158,7 +159,7 @@ var _ hostSeams = (*fakeHost)(nil)
 // stderr on every Info and Warn.
 func serviceCtx(tenant pkgcore.TenantID) context.Context {
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	return observability.WithLogger(tenantCtx(tenant), logger)
+	return observability.WithLogger(testkit.TenantCtx(tenant), logger)
 }
 
 // testServiceConfig returns the policy the lifecycle tests run under: a 1 MiB

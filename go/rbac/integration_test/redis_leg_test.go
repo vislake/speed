@@ -156,7 +156,7 @@ func TestRedisBus_RevokeOnOneReplica_ConvergesTheOther(t *testing.T) {
 	peerBus.Subscribe(rbac.EventRoleChanged, spy.handler())
 	warmUp(t, writerBus, spy)
 
-	tenantCtx := tenantContext("tenant-a")
+	tenantCtx := testkit.TenantCtx("tenant-a")
 	sub := rbac.Subject{TenantID: "tenant-a", UserID: "user-1"}
 	if _, err := writer.DefineRole(tenantCtx, rbac.RoleDefinition{
 		Key:            "reader",
@@ -200,7 +200,7 @@ func TestRedisBus_RestoreOnOneReplica_ConvergesTheOther(t *testing.T) {
 	peerBus.Subscribe(rbac.EventRoleChanged, spy.handler())
 	warmUp(t, writerBus, spy)
 
-	tenantCtx := tenantContext("tenant-a")
+	tenantCtx := testkit.TenantCtx("tenant-a")
 	sub := rbac.Subject{TenantID: "tenant-a", UserID: "user-1"}
 	if _, err := writer.DefineRole(tenantCtx, rbac.RoleDefinition{
 		Key:            "reader",
@@ -241,7 +241,7 @@ func TestRedisBus_AssignOnOneReplica_ConvergesTheOther(t *testing.T) {
 	peerBus.Subscribe(rbac.EventRoleChanged, spy.handler())
 	warmUp(t, writerBus, spy)
 
-	tenantCtx := tenantContext("tenant-a")
+	tenantCtx := testkit.TenantCtx("tenant-a")
 	sub := rbac.Subject{TenantID: "tenant-a", UserID: "user-1"}
 	if _, err := writer.DefineRole(tenantCtx, rbac.RoleDefinition{
 		Key:            "reader",
@@ -281,7 +281,7 @@ func TestRedisBus_RolePermissionChange_ConvergesTheOther(t *testing.T) {
 	peerBus.Subscribe(rbac.EventRoleChanged, spy.handler())
 	warmUp(t, writerBus, spy)
 
-	tenantCtx := tenantContext("tenant-a")
+	tenantCtx := testkit.TenantCtx("tenant-a")
 	sub := rbac.Subject{TenantID: "tenant-a", UserID: "user-1"}
 	if _, err := writer.DefineRole(tenantCtx, rbac.RoleDefinition{
 		Key:            "owner",
@@ -329,7 +329,7 @@ func TestRedisBus_RemoteEvent_ArrivesAsAJSONMap(t *testing.T) {
 	peerBus.Subscribe(rbac.EventRoleChanged, warmUpSpy.handler())
 	warmUp(t, writerBus, warmUpSpy)
 
-	tenantCtx := tenantContext("tenant-a")
+	tenantCtx := testkit.TenantCtx("tenant-a")
 	sub := rbac.Subject{TenantID: "tenant-a", UserID: "user-1"}
 	if _, err := writer.DefineRole(tenantCtx, rbac.RoleDefinition{
 		Key:            "reader",

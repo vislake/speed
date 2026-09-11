@@ -14,6 +14,7 @@ import (
 	"github.com/vislake/speed/go/dbkit"
 	"github.com/vislake/speed/go/jobs"
 	"github.com/vislake/speed/go/pkgcore"
+	"github.com/vislake/speed/go/pkgcore/testkit"
 
 	"github.com/vislake/speed/go/storage/internal/testutil"
 )
@@ -85,7 +86,7 @@ func newCleanupHarness(t *testing.T) (*LifecycleService, *ObjectService, *Derive
 func seedCompletedWithBytes(t *testing.T, life *LifecycleService, store *fakeStore, id string, tenant pkgcore.TenantID) Object {
 	t.Helper()
 	row := newCompleted(id, tenant, time.Now().Add(-2*time.Hour))
-	seedObject(t, life.objects, tenantCtx(tenant), row)
+	seedObject(t, life.objects, testkit.TenantCtx(tenant), row)
 	store.objects[row.Key] = bytes.Repeat([]byte{0xAB}, 64)
 	return row
 }
@@ -105,7 +106,7 @@ func seedDerivativeBytes(t *testing.T, life *LifecycleService, store *fakeStore,
 		MIME:        "image/png",
 		Size:        64,
 	}
-	seedDerivative(t, life.derivatives, tenantCtx(tenant), d)
+	seedDerivative(t, life.derivatives, testkit.TenantCtx(tenant), d)
 	store.objects[key] = bytes.Repeat([]byte{0xCD}, 64)
 }
 
@@ -217,7 +218,7 @@ func TestLifecycleService_Delete_ConvergesOnAnObjectItCannotSee(t *testing.T) {
 	}
 
 	// The row and its bytes survive, owned by tenant-a exactly as before.
-	got, err := life.objects.FindByID(tenantCtx("tenant-a"), row.ID)
+	got, err := life.objects.FindByID(testkit.TenantCtx("tenant-a"), row.ID)
 	if err != nil {
 		t.Fatalf("FindByID(%s) after the foreign delete: %v", row.ID, err)
 	}
@@ -952,7 +953,7 @@ func TestEnqueueExpirySweep_DeadLetteredWindowDoesNotPoisonLaterOnes(t *testing.
 	}
 
 	ctx := serviceCtx("tenant-a")
-	getCtx := tenantCtx(pkgcore.TenantID("tenant-a"))
+	getCtx := testkit.TenantCtx(pkgcore.TenantID("tenant-a"))
 	life.now = func() time.Time { return windowA }
 	if err := life.EnqueueExpirySweep(ctx); err != nil {
 		t.Fatalf("first EnqueueExpirySweep: %v", err)
