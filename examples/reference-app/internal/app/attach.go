@@ -70,15 +70,16 @@ func SocialChannelFlagKey(name string) string {
 // system row down, so every request sees the same answer, while a
 // tenant-tier row can still narrow a channel for one tenant.
 //
-// The step must run after Bootstrap: a system-tier write needs the audited
-// system context under config.SystemPurposeSystemWrite, a purpose config's
-// own Register declares during Bootstrap, and the schema the write
-// validates against is frozen by configModule.Attach. Running here, before
-// any route can serve, makes the page/API agreement hold from the very
-// first request: without the gate wired into authn, config rows could hide
-// a channel on the page while its endpoint kept issuing tokens; without
-// this step, the wired gate would refuse a channel this host genuinely
-// configured.
+// The step must run after Bootstrap: a system-tier write needs the system
+// context under config.SystemPurposeSystemWrite, a purpose the config
+// component declares in its descriptor -- registered at the assembly's Init
+// entry, before this step's own Init callback runs -- and the schema the
+// write validates against is frozen by configModule.Attach. Running here,
+// before any route can serve, makes the page/API agreement hold from the
+// very first request: without the gate wired into authn, config rows could
+// hide a channel on the page while its endpoint kept issuing tokens;
+// without this step, the wired gate would refuse a channel this host
+// genuinely configured.
 //
 // No providers assembled means no rows are written at all, and the schema
 // defaults alone keep password and SMS sign-in open. The writes are
@@ -285,11 +286,12 @@ func (b *serverBuild) runPostAttach(ctx context.Context, view assemblyView) erro
 	}
 
 	// The ai-gateway platform credentials: written only when the matching
-	// API key is set (an empty default is the zero-setup posture). Both
-	// must run after Bootstrap, because aiGatewayModule.Register is what
-	// calls pkgcore.RegisterSystemPurpose(aigateway.SystemPurposeCredentialWrite)
-	// -- WithSystemContext below refuses an unregistered purpose. The bare
-	// pkgcore.WithSystemContext rather than the audited
+	// API key is set (an empty default is the zero-setup posture).
+	// WithSystemContext below accepts aigateway.SystemPurposeCredentialWrite
+	// because the ai-gateway component declares it in its descriptor, and
+	// the assembler registers every declared purpose at the Init stage's
+	// entry -- before any Init callback, this step's own included, runs.
+	// The bare pkgcore.WithSystemContext rather than the audited
 	// tenancy.WithSystemContext is deliberate, for this boot-time
 	// precondition: the writes are config-driven declarations re-affirmed
 	// identically on every restart under the fixed "reference-app-boot"

@@ -419,18 +419,25 @@ func (r *ComponentRegistry) Verify(ctx context.Context) error {
 	return nil
 }
 
-// Init runs the fourth stage: the declaration seats open, every constructed
-// component's Init callback runs in dependency order (declaring into the
-// seats, wiring dependencies and publishing runtime services with Put), the
-// seats close again, and the assembly's closing validation runs over the
-// finished declarations: the one-key-one-layer check between the selected
-// components' BootstrapKeys and the runtime configuration seat, the
-// feature-graph check (ValidateFeatureGraph over the Features seat), and
-// the system-purpose collection, which registers every selected component's
-// declared purposes together.
+// Init runs the fourth stage: every selected component's declared system
+// purposes register first, at the stage's entry and before any Init
+// callback runs -- a callback may open a system context under a purpose
+// another selected component declared, so the registration cannot wait for
+// the closing validation. Then the declaration seats open, every
+// constructed component's Init callback runs in dependency order (declaring
+// into the seats, wiring dependencies and publishing runtime services with
+// Put), the seats close again, and the assembly's closing validation runs
+// over the finished declarations: the one-key-one-layer check between the
+// selected components' BootstrapKeys and the runtime configuration seat,
+// and the feature-graph check (ValidateFeatureGraph over the Features
+// seat).
 func (r *ComponentRegistry) Init(ctx context.Context) error {
 	if err := r.beginStage(stageInit); err != nil {
 		return err
+	}
+
+	if err := r.registerSystemPurposes(); err != nil {
+		return r.failStage(ctx, stageInit, "", err)
 	}
 
 	r.openSeats()
@@ -451,9 +458,6 @@ func (r *ComponentRegistry) Init(ctx context.Context) error {
 		return r.failStage(ctx, stageInit, "", err)
 	}
 	if err := ValidateFeatureGraph(r.Features); err != nil {
-		return r.failStage(ctx, stageInit, "", err)
-	}
-	if err := r.registerSystemPurposes(); err != nil {
 		return r.failStage(ctx, stageInit, "", err)
 	}
 

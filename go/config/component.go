@@ -74,7 +74,7 @@ func component() pkgcore.Component {
 		ConfigSchema: (*componentConfig)(nil),
 		// The one system context this module takes -- the system-scope
 		// configuration write -- is descriptor data the assembly registers
-		// when its Init stage closes.
+		// at the Init stage's entry, before any Init callback runs.
 		SystemPurposes: []pkgcore.SystemPurpose{SystemPurposeSystemWrite},
 		// The process-start key material the module's cipher is built from.
 		// It is descriptor data: the loader resolves it before anything is

@@ -44,8 +44,8 @@ import (
 //
 // SystemPurposes declares SystemPurposeAdminCrossTenant: the one audited
 // purpose every cross-tenant operation this module performs acts under. The
-// assembly registers it when it closes its Init stage, after every Init
-// callback has run.
+// assembly registers it at the Init stage's entry, before any Init callback
+// runs.
 //
 // Init runs the module's one declaration entry point, Register, then
 // AttachRBAC -- the *rbac.Service whose catalog snapshot is already frozen

@@ -111,9 +111,9 @@ const (
 // they are all instances of the same underlying operation -- "admin
 // acting across the tenant boundary it does not itself belong to". The
 // purpose is descriptor data: the component descriptor (component.go)
-// declares it as SystemPurposes, which the assembly registers when it
-// closes its Init stage and the transition bridge registers inside the
-// module's own registration turn.
+// declares it as SystemPurposes, which the assembly registers at the Init
+// stage's entry and the transition bridge registers inside the module's own
+// registration turn.
 const SystemPurposeAdminCrossTenant pkgcore.SystemPurpose = "admin.cross_tenant"
 
 // NotificationTypeImpersonationStarted is the notification type the

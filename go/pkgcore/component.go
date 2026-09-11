@@ -178,12 +178,13 @@ type Component struct {
 
 	// SystemPurposes declares the system-context purposes this component
 	// acts under: the reasons it may legitimately operate outside an
-	// ordinary tenant context. The assembly collects every selected
-	// component's declarations during the Init stage's closing validation
-	// and registers them together -- a purpose two selected components
-	// both declare fails the assembly before anything is registered, so
-	// the set WithSystemContext accepts is exactly the set the assembly
-	// agreed on.
+	// ordinary tenant context. The assembly registers every selected
+	// component's declarations together at the Init stage's entry, before
+	// any Init callback runs -- a callback may open a system context under
+	// a purpose another selected component declared. A purpose two selected
+	// components both declare fails the assembly before anything is
+	// registered, so the set WithSystemContext accepts is exactly the set
+	// the assembly agreed on.
 	SystemPurposes []SystemPurpose
 
 	// Migrations carries the component's versioned SQL migrations, one

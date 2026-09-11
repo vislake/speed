@@ -235,8 +235,8 @@ func (m *Module) OpenAPISpec() []byte { return nil }
 // (export_cleanup.go). The module's two audited system purposes are
 // descriptor data, not declarations made here: the component descriptor
 // (component.go) carries them as SystemPurposes, which the assembly
-// registers when it closes its Init stage and the transition bridge
-// registers inside the module's own registration turn.
+// registers at the Init stage's entry and the transition bridge registers
+// inside the module's own registration turn.
 // It refuses to proceed without a queue (ErrQueueRequired) -- see
 // WithQueue's doc comment. ExportService's SharingCreator is not part of this: it is not
 // a pkgcore.Registry seam, so WithSharing wires it directly at Module

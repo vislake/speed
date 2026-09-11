@@ -187,6 +187,63 @@ func TestRun_BootsServesHealthzAndShutsDownCleanly(t *testing.T) {
 	}
 }
 
+// TestRun_BootsWithConfiguredImageCredential pins the boot of a host whose
+// composition configures the ai-gateway image credential: the platform
+// credential write runs inside the post-attach step's Init callback under
+// aigateway.SystemPurposeCredentialWrite, so a healthy boot proves the
+// assembly registers a component's declared system purposes before any Init
+// callback runs. The base URL is required alongside the key; the loopback
+// discard port keeps it inert -- boot stores the credential, it never dials
+// the provider.
+func TestRun_BootsWithConfiguredImageCredential(t *testing.T) {
+	testutil.ClearBootstrapEnv(t)
+
+	port := freeTCPPort(t)
+	t.Setenv("PORT", port)
+	t.Setenv("APP_DB_PATH", filepath.Join(t.TempDir(), "run-image-credential.sqlite"))
+	t.Setenv("APP_AI_GATEWAY_IMAGE_API_KEY", "sk-test")
+	t.Setenv("APP_AI_GATEWAY_IMAGE_BASE_URL", "http://127.0.0.1:9")
+
+	baseCtx := obs.WithLogger(context.Background(), slog.New(slog.NewJSONHandler(io.Discard, nil)))
+	ctx, cancel := context.WithCancel(baseCtx)
+	defer cancel()
+
+	done := make(chan error, 1)
+	go func() { done <- run(ctx) }()
+
+	// The server is healthy when its own healthz answers 200 -- polled with
+	// the very probe the Dockerfile HEALTHCHECK uses. A run() that returns
+	// early (the boot refused the composition) fails the test immediately
+	// rather than burning the poll deadline.
+	deadline := time.Now().Add(120 * time.Second)
+	healthy := false
+	for time.Now().Before(deadline) {
+		select {
+		case err := <-done:
+			t.Fatalf("run() returned before answering healthz = %v, want a running server", err)
+		default:
+		}
+		if err := runHealthcheck(context.Background(), port); err == nil {
+			healthy = true
+			break
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+	if !healthy {
+		t.Fatal("run() booted no server answering healthz within 120s")
+	}
+
+	cancel()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("run() after cancel error = %v, want nil (a clean shutdown)", err)
+		}
+	case <-time.After(120 * time.Second):
+		t.Fatal("run() did not return within 120s of the cancel")
+	}
+}
+
 // TestRun_PortAlreadyTaken_ReturnsTheServeError drives run's serve-failure
 // exit: with the configured port already bound by another listener,
 // ListenAndServe answers immediately with the bind refusal, the serve

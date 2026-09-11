@@ -36,8 +36,7 @@ import (
 //
 // SystemPurposes declares the two audited purposes the module acts under:
 // the retention sweep and the right-to-erasure execution. The assembly
-// registers them when it closes its Init stage, after every Init callback
-// has run.
+// registers them at the Init stage's entry, before any Init callback runs.
 //
 // Init runs the module's one declaration entry point, Register, inside the
 // assembly's Init stage -- the one stage whose seats accept writes -- so the

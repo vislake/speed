@@ -804,6 +804,57 @@ func TestInitClosingValidation(t *testing.T) {
 	})
 }
 
+// TestSystemPurposesRegisteredAtInitEntry pins the ordering contract host
+// boot steps rely on: every selected component's declared purposes are
+// registered at the Init stage's entry, before any Init callback runs, so a
+// callback can open a system context under a purpose another selected
+// component declared.
+func TestSystemPurposesRegisteredAtInitEntry(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("another component's Init callback sees the declared purpose", func(t *testing.T) {
+		purpose := SystemPurpose("test.initentry.cross_component")
+		declarer := plainComponent("initentry.declarer", &compTokenA{})
+		declarer.SystemPurposes = []SystemPurpose{purpose}
+		user := plainComponent("initentry.user", &compTokenB{})
+		var callbackErr error
+		user.Init = func(ctx context.Context, _ *ComponentRegistry, _ any) error {
+			_, callbackErr = WithSystemContext(ctx, SystemReason{Actor: "test-actor", Purpose: purpose})
+			return callbackErr
+		}
+
+		reg := newTestRegistry(t, declarer, user)
+		reg.Put(testComposition(
+			configEntry{key: "initentry.declarer", value: nil},
+			configEntry{key: "initentry.user", value: nil},
+		))
+		if err := runStages(ctx, reg); err != nil {
+			t.Fatalf("stages = %v", err)
+		}
+		if callbackErr != nil {
+			t.Errorf("WithSystemContext inside an Init callback = %v, want nil", callbackErr)
+		}
+	})
+
+	t.Run("the declaring component's own Init callback sees its purpose", func(t *testing.T) {
+		purpose := SystemPurpose("test.initentry.self")
+		declarer := plainComponent("initentry.self", &compTokenA{})
+		declarer.SystemPurposes = []SystemPurpose{purpose}
+		declarer.Init = func(context.Context, *ComponentRegistry, any) error {
+			if !systemPurposeRegistered(purpose) {
+				return fmt.Errorf("system purpose %q is not registered at the declaring component's own Init callback", purpose)
+			}
+			return nil
+		}
+
+		reg := newTestRegistry(t, declarer)
+		reg.Put(testComposition(configEntry{key: "initentry.self", value: nil}))
+		if err := runStages(ctx, reg); err != nil {
+			t.Fatalf("stages = %v", err)
+		}
+	})
+}
+
 func TestAssetsCollectsOnlyCarriersInPlanOrder(t *testing.T) {
 	ctx := context.Background()
 	withAssets := Component{

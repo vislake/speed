@@ -19,10 +19,10 @@ const moduleName = "ai-gateway"
 // registration path) when it builds the system context that authorizes a
 // platform-wide credential write (CredentialService.SetPlatformCredential).
 // The purpose is descriptor data: the component descriptor (component.go)
-// declares it as SystemPurposes, which the assembly registers when it
-// closes its Init stage and the transition bridge registers inside the
-// module's own registration turn, so a host that bootstraps this module
-// never needs to register it by hand.
+// declares it as SystemPurposes, which the assembly registers at the Init
+// stage's entry and the transition bridge registers inside the module's own
+// registration turn, so a host that bootstraps this module never needs to
+// register it by hand.
 const SystemPurposeCredentialWrite pkgcore.SystemPurpose = "ai-gateway.credential_write"
 
 // The permissions ai-gateway contributes to the platform's permission
