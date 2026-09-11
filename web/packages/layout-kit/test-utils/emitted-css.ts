@@ -15,6 +15,14 @@
  * *and* its `@media` guard) was wired into the page; it does not prove
  * the layout looks correct at any real viewport width, which jsdom
  * cannot render at all.
+ *
+ * The file is package-local by design rather than one shared module:
+ * test helpers live under each package's own test-utils/ directory and
+ * are reached by relative import only, no shared test-support package
+ * exists in the workspace, and the packages' `exports` maps do not
+ * expose test-utils -- so a suite in a sibling package has no
+ * importable path to this probe and carries its own byte-identical
+ * copy instead.
  */
 export function emittedStyleText(): string {
   return Array.from(document.querySelectorAll('style'))
