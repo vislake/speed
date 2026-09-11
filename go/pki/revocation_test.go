@@ -636,14 +636,14 @@ func newTestCAServiceWithBus(t *testing.T) (*CAService, *eventRecorder) {
 // this file needs, since VerifyCertificate walks a real chain.
 func issueTestCertificate(t *testing.T, ca *CAService, ctx context.Context) (*Authority, *Certificate) {
 	t.Helper()
-	root, err := ca.CreateRootCA(ctx, RootCAParams{
+	root, err := ca.CreateRootCA(ctx, CAParams{
 		Subject:  pkix.Name{CommonName: "speed Root CA"},
 		NotAfter: time.Now().Add(24 * time.Hour),
 	})
 	if err != nil {
 		t.Fatalf("CreateRootCA: %v", err)
 	}
-	intermediate, err := ca.CreateIntermediateCA(ctx, root.ID, IntermediateCAParams{
+	intermediate, err := ca.CreateIntermediateCA(ctx, root.ID, CAParams{
 		Subject:  pkix.Name{CommonName: "speed Intermediate CA"},
 		NotAfter: time.Now().Add(12 * time.Hour),
 	})

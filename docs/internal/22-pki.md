@@ -70,7 +70,7 @@ X.509 层建立在密钥生命周期层之上：一张证书就是"一把有生�
 **残留面精确记录**（每条即未来仍可自由调整之处，及不消费的理由，与 `go/pki/AGENTS.md`"X.509 layer: real consumer, precise residuals"一节同源）：
 
 - **两个 JWKS 导出**（`ExportAuthorityChainJWKS` 与 HTTP `pki_getAuthorityJwks`/`pki_getKeyJwks`）仍无调用方：本应用的外部验证者直接拿原始证书与 CRL 文档，不需要 JWKS。
-- **CRLDP 扩展嵌入路径**：应用权威不带 `CRLDistributionPoint`（应用没有可声明的公开 origin），`RootCAParams`/`IntermediateCAParams.CRLDistributionPoint` 的真实证书嵌入未被走到。
+- **CRLDP 扩展嵌入路径**：应用权威不带 `CRLDistributionPoint`（应用没有可声明的公开 origin），`CAParams.CRLDistributionPoint` 的真实证书嵌入未被走到。
 - **`EnqueueCRLRegenerate` 周期性调度仍不接线**：应用的验证路径是行状态 + 链验证，CRL 流程内按需 Go API 生成 + HTTP 拉取；周期性刷新依旧没有读者在等。
 - **`pki_authorities`/`pki_certificates` 的到期驱动生命周期仍未建**：现在可点名等待对象——签章证书有真实的 365 天有效期，过期即分享拒发，续期/告警机制的受益者有名有实。
 - **`AuthorityStatusRevoked` 仍无写入方法**：链拒绝路径经由模块自身直接播种的测试驱动，与应用无关。

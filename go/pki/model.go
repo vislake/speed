@@ -231,7 +231,7 @@ type Authority struct {
 	// authority signs", the same convention every NotAfter/validity field
 	// in this module already follows for an unset value: never a broken
 	// placeholder URL. It is set once, at CreateRootCA/CreateIntermediateCA
-	// time (RootCAParams/IntermediateCAParams.CRLDistributionPoint), and
+	// time (CAParams.CRLDistributionPoint), and
 	// read at issuance time by CreateIntermediateCA/IssueCertificate to
 	// populate the CHILD certificate's CRLDistributionPoints extension -- a
 	// certificate's CRLDP names where to fetch the CRL that lists ITS

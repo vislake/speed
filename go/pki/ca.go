@@ -200,12 +200,19 @@ func (s *CAService) publish(ctx context.Context, evt pkgcore.Event) {
 	}
 }
 
-// RootCAParams configures CreateRootCA.
-type RootCAParams struct {
-	// Subject is the root certificate's subject.
+// CAParams configures CreateRootCA and CreateIntermediateCA. Both calls
+// issue a CA certificate from the same three caller-stated facts --
+// subject, validity, and where the authority's own CRL will be served --
+// and differ only in issuance policy the methods themselves fix (the root
+// is self-signed and path-length-unconstrained; the intermediate is
+// signed by its parent and capped at MaxPathLen 0), never in what the
+// caller declares.
+type CAParams struct {
+	// Subject is the certificate's subject -- the root's or the
+	// intermediate's, whichever authority the call issues.
 	Subject pkix.Name
-	// NotAfter is when the root certificate stops being valid. NotBefore is
-	// always time.Now() at issuance.
+	// NotAfter is when the issued CA certificate stops being valid.
+	// NotBefore is always time.Now() at issuance.
 	NotAfter time.Time
 	// CRLDistributionPoint is the URL this authority's own CRL will be
 	// served at, recorded on the resulting Authority row and read at
@@ -218,7 +225,9 @@ type RootCAParams struct {
 	// comment for the full "child cert names ITS issuer's CRL" argument).
 	// The root certificate's OWN CertificatePEM never carries this
 	// extension -- nothing signs the root, so it has no meaningful "my
-	// issuer's CRL" to name.
+	// issuer's CRL" to name -- and an intermediate's own certificate
+	// carries its PARENT's CRLDistributionPoint, never this value (see
+	// CreateIntermediateCA's own doc comment).
 	CRLDistributionPoint string
 }
 
@@ -228,7 +237,7 @@ type RootCAParams struct {
 // seam, never in the clear in this method's memory beyond what
 // crypto/ed25519.GenerateKey itself produces and Signer.GenerateKey then
 // takes custody of.
-func (s *CAService) CreateRootCA(ctx context.Context, params RootCAParams) (*Authority, error) {
+func (s *CAService) CreateRootCA(ctx context.Context, params CAParams) (*Authority, error) {
 	keyRef, pub, err := s.signer.GenerateKey(ctx, AlgorithmEd25519)
 	if err != nil {
 		return nil, err
@@ -325,22 +334,6 @@ func (s *CAService) checkNoRevokedAuthorityInChain(ctx context.Context, authorit
 	}
 }
 
-// IntermediateCAParams configures CreateIntermediateCA.
-type IntermediateCAParams struct {
-	// Subject is the intermediate certificate's subject.
-	Subject pkix.Name
-	// NotAfter is when the intermediate certificate stops being valid.
-	NotAfter time.Time
-	// CRLDistributionPoint is where THIS intermediate's own CRL will be
-	// served -- recorded on the resulting Authority row exactly like
-	// RootCAParams.CRLDistributionPoint, and read at issuance time for
-	// certificates this new intermediate itself signs. It is unrelated to
-	// the parent's CRLDistributionPoint, which is what gets embedded into
-	// the intermediate CERTIFICATE this call issues (see CreateIntermediateCA's
-	// own doc comment).
-	CRLDistributionPoint string
-}
-
 // CreateIntermediateCA generates a new key pair and issues a CA certificate
 // signed by parentID's authority, storing the result in pki_authorities.
 // The intermediate's MaxPathLen is 0: it may sign end-entity certificates
@@ -364,7 +357,7 @@ type IntermediateCAParams struct {
 // extension entirely, never a broken placeholder URL. This is unrelated to
 // params.CRLDistributionPoint, which names where the NEW intermediate's own
 // CRL will be served, for certificates IT goes on to sign.
-func (s *CAService) CreateIntermediateCA(ctx context.Context, parentID string, params IntermediateCAParams) (*Authority, error) {
+func (s *CAService) CreateIntermediateCA(ctx context.Context, parentID string, params CAParams) (*Authority, error) {
 	parent, err := s.authorities.FindByID(ctx, parentID)
 	if err != nil {
 		return nil, err

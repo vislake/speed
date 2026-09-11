@@ -74,7 +74,7 @@ authnModule := authn.NewModule(db, authn.WithKeySource(keySource), /* ... */)
 
 // X.509 layer, when you issue certificates:
 ca := pkiModule.CA()
-err := ca.CreateRootCA(ctx, pki.RootCAParams{ /* subject, validity */ })
+err := ca.CreateRootCA(ctx, pki.CAParams{ /* subject, validity */ })
 ```
 
 Lifecycle plumbing: after the assembly, call `EnsurePurpose` for each

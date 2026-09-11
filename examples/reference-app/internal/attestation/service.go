@@ -127,7 +127,7 @@ func (s *Service) EnsureAuthorityChain(ctx context.Context) error {
 		return err
 	}
 	if rootID == "" {
-		root, createErr := s.chain.CreateRootCA(ctx, pki.RootCAParams{
+		root, createErr := s.chain.CreateRootCA(ctx, pki.CAParams{
 			Subject:  pkix.Name{CommonName: attestationRootSubjectCN},
 			NotAfter: time.Now().Add(attestationRootLifetime),
 		})
@@ -142,7 +142,7 @@ func (s *Service) EnsureAuthorityChain(ctx context.Context) error {
 		return err
 	}
 	if intermediateID == "" {
-		intermediate, createErr := s.chain.CreateIntermediateCA(ctx, rootID, pki.IntermediateCAParams{
+		intermediate, createErr := s.chain.CreateIntermediateCA(ctx, rootID, pki.CAParams{
 			Subject:  pkix.Name{CommonName: attestationIntermediateSubjectCN},
 			NotAfter: time.Now().Add(attestationIssuerLifetime),
 		})

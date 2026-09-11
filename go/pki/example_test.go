@@ -118,7 +118,7 @@ func newExampleModule(name string) (*pki.Module, *sql.DB, error) {
 // exported API, returning the three resulting rows.
 func exampleChain(ca *pki.CAService) (root, intermediate *pki.Authority, cert *pki.Certificate, err error) {
 	ctx := context.Background()
-	root, err = ca.CreateRootCA(ctx, pki.RootCAParams{
+	root, err = ca.CreateRootCA(ctx, pki.CAParams{
 		Subject:  pkix.Name{CommonName: "speed Root CA"},
 		NotAfter: time.Now().Add(10 * 365 * 24 * time.Hour),
 	})
@@ -126,7 +126,7 @@ func exampleChain(ca *pki.CAService) (root, intermediate *pki.Authority, cert *p
 		return nil, nil, nil, err
 	}
 
-	intermediate, err = ca.CreateIntermediateCA(ctx, root.ID, pki.IntermediateCAParams{
+	intermediate, err = ca.CreateIntermediateCA(ctx, root.ID, pki.CAParams{
 		Subject:  pkix.Name{CommonName: "speed Intermediate CA"},
 		NotAfter: time.Now().Add(5 * 365 * 24 * time.Hour),
 	})

@@ -36,7 +36,7 @@ func TestCAService_GenerateCRL_EmptyWhenNoRevocations(t *testing.T) {
 	ca := newTestCAService(t)
 	ctx := context.Background()
 
-	root, err := ca.CreateRootCA(ctx, RootCAParams{
+	root, err := ca.CreateRootCA(ctx, CAParams{
 		Subject:  pkix.Name{CommonName: "speed Root CA"},
 		NotAfter: time.Now().Add(24 * time.Hour),
 	})
@@ -110,7 +110,7 @@ func TestCAService_GenerateCRL_IncrementsCRLNumber(t *testing.T) {
 	ca := newTestCAService(t)
 	ctx := context.Background()
 
-	root, err := ca.CreateRootCA(ctx, RootCAParams{
+	root, err := ca.CreateRootCA(ctx, CAParams{
 		Subject:  pkix.Name{CommonName: "speed Root CA"},
 		NotAfter: time.Now().Add(24 * time.Hour),
 	})
@@ -158,7 +158,7 @@ func TestCAService_GenerateCRL_ConcurrentCalls_EveryCallLandsItsOwnNumber(t *tes
 
 	for trial := 0; trial < trials; trial++ {
 		ca := newTestCAService(t)
-		root, err := ca.CreateRootCA(ctx, RootCAParams{
+		root, err := ca.CreateRootCA(ctx, CAParams{
 			Subject:  pkix.Name{CommonName: "speed Root CA"},
 			NotAfter: time.Now().Add(24 * time.Hour),
 		})
@@ -222,7 +222,7 @@ func TestCAService_GenerateCRL_WrapsSignerFailureAsErrSignerUnavailable(t *testi
 	ca := NewCAService(failing, "local", NewAuthorityRepository(db), NewCertificateRepository(db), NewCertificateRevocationRepository(db))
 	ctx := context.Background()
 
-	root, err := ca.CreateRootCA(ctx, RootCAParams{
+	root, err := ca.CreateRootCA(ctx, CAParams{
 		Subject:  pkix.Name{CommonName: "speed Root CA"},
 		NotAfter: time.Now().Add(24 * time.Hour),
 	})
@@ -240,14 +240,14 @@ func TestCAService_RegenerateAllCRLs_RegeneratesEveryAuthority(t *testing.T) {
 	ca := newTestCAService(t)
 	ctx := context.Background()
 
-	root, err := ca.CreateRootCA(ctx, RootCAParams{
+	root, err := ca.CreateRootCA(ctx, CAParams{
 		Subject:  pkix.Name{CommonName: "speed Root CA"},
 		NotAfter: time.Now().Add(24 * time.Hour),
 	})
 	if err != nil {
 		t.Fatalf("CreateRootCA: %v", err)
 	}
-	intermediate, err := ca.CreateIntermediateCA(ctx, root.ID, IntermediateCAParams{
+	intermediate, err := ca.CreateIntermediateCA(ctx, root.ID, CAParams{
 		Subject:  pkix.Name{CommonName: "speed Intermediate CA"},
 		NotAfter: time.Now().Add(12 * time.Hour),
 	})
@@ -317,7 +317,7 @@ func TestCAService_EnqueueCRLRegenerate_Enqueues(t *testing.T) {
 func TestCrlRegenerateHandler(t *testing.T) {
 	ca := newTestCAService(t)
 	ctx := context.Background()
-	root, err := ca.CreateRootCA(ctx, RootCAParams{
+	root, err := ca.CreateRootCA(ctx, CAParams{
 		Subject:  pkix.Name{CommonName: "speed Root CA"},
 		NotAfter: time.Now().Add(24 * time.Hour),
 	})

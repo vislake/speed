@@ -43,7 +43,7 @@ func TestCAService_CreateRootCA_IssuesASelfSignedCertificate(t *testing.T) {
 	ca := newTestCAService(t)
 	ctx := context.Background()
 
-	authority, err := ca.CreateRootCA(ctx, RootCAParams{
+	authority, err := ca.CreateRootCA(ctx, CAParams{
 		Subject:  pkix.Name{CommonName: "speed Root CA"},
 		NotAfter: time.Now().Add(24 * time.Hour),
 	})
@@ -83,7 +83,7 @@ func TestCAService_CreateIntermediateCA_SignedByTheRoot(t *testing.T) {
 	ca := newTestCAService(t)
 	ctx := context.Background()
 
-	root, err := ca.CreateRootCA(ctx, RootCAParams{
+	root, err := ca.CreateRootCA(ctx, CAParams{
 		Subject:  pkix.Name{CommonName: "speed Root CA"},
 		NotAfter: time.Now().Add(48 * time.Hour),
 	})
@@ -91,7 +91,7 @@ func TestCAService_CreateIntermediateCA_SignedByTheRoot(t *testing.T) {
 		t.Fatalf("CreateRootCA: %v", err)
 	}
 
-	intermediate, err := ca.CreateIntermediateCA(ctx, root.ID, IntermediateCAParams{
+	intermediate, err := ca.CreateIntermediateCA(ctx, root.ID, CAParams{
 		Subject:  pkix.Name{CommonName: "speed Intermediate CA"},
 		NotAfter: time.Now().Add(24 * time.Hour),
 	})
@@ -126,7 +126,7 @@ func TestCAService_CreateIntermediateCA_SignedByTheRoot(t *testing.T) {
 
 func TestCAService_CreateIntermediateCA_UnknownParent(t *testing.T) {
 	ca := newTestCAService(t)
-	_, err := ca.CreateIntermediateCA(context.Background(), "does-not-exist", IntermediateCAParams{
+	_, err := ca.CreateIntermediateCA(context.Background(), "does-not-exist", CAParams{
 		Subject:  pkix.Name{CommonName: "orphan"},
 		NotAfter: time.Now().Add(time.Hour),
 	})
@@ -139,14 +139,14 @@ func TestCAService_IssueCertificate_FullChain(t *testing.T) {
 	ca := newTestCAService(t)
 	ctx := pkgcore.WithTenant(context.Background(), pkgcore.TenantID("tenant-acme"))
 
-	root, err := ca.CreateRootCA(context.Background(), RootCAParams{
+	root, err := ca.CreateRootCA(context.Background(), CAParams{
 		Subject:  pkix.Name{CommonName: "speed Root CA"},
 		NotAfter: time.Now().Add(72 * time.Hour),
 	})
 	if err != nil {
 		t.Fatalf("CreateRootCA: %v", err)
 	}
-	intermediate, err := ca.CreateIntermediateCA(context.Background(), root.ID, IntermediateCAParams{
+	intermediate, err := ca.CreateIntermediateCA(context.Background(), root.ID, CAParams{
 		Subject:  pkix.Name{CommonName: "speed Intermediate CA"},
 		NotAfter: time.Now().Add(48 * time.Hour),
 	})
@@ -201,7 +201,7 @@ func TestCAService_IssueCertificate_FullChain(t *testing.T) {
 func TestCAService_IssueCertificate_RequiresTenant(t *testing.T) {
 	ca := newTestCAService(t)
 
-	root, err := ca.CreateRootCA(context.Background(), RootCAParams{
+	root, err := ca.CreateRootCA(context.Background(), CAParams{
 		Subject:  pkix.Name{CommonName: "speed Root CA"},
 		NotAfter: time.Now().Add(time.Hour),
 	})
@@ -229,7 +229,7 @@ func TestCAService_CreateIntermediateCA_EmbedsParentsCRLDistributionPoint(t *tes
 	ca := newTestCAService(t)
 	ctx := context.Background()
 
-	root, err := ca.CreateRootCA(ctx, RootCAParams{
+	root, err := ca.CreateRootCA(ctx, CAParams{
 		Subject:              pkix.Name{CommonName: "speed Root CA"},
 		NotAfter:             time.Now().Add(24 * time.Hour),
 		CRLDistributionPoint: "https://pki.example.com/root.crl",
@@ -238,7 +238,7 @@ func TestCAService_CreateIntermediateCA_EmbedsParentsCRLDistributionPoint(t *tes
 		t.Fatalf("CreateRootCA: %v", err)
 	}
 
-	intermediate, err := ca.CreateIntermediateCA(ctx, root.ID, IntermediateCAParams{
+	intermediate, err := ca.CreateIntermediateCA(ctx, root.ID, CAParams{
 		Subject:  pkix.Name{CommonName: "speed Intermediate CA"},
 		NotAfter: time.Now().Add(12 * time.Hour),
 	})
@@ -262,7 +262,7 @@ func TestCAService_CreateIntermediateCA_NoParentCRLDistributionPoint_OmitsExtens
 	ca := newTestCAService(t)
 	ctx := context.Background()
 
-	root, err := ca.CreateRootCA(ctx, RootCAParams{
+	root, err := ca.CreateRootCA(ctx, CAParams{
 		Subject:  pkix.Name{CommonName: "speed Root CA"},
 		NotAfter: time.Now().Add(24 * time.Hour),
 	})
@@ -270,7 +270,7 @@ func TestCAService_CreateIntermediateCA_NoParentCRLDistributionPoint_OmitsExtens
 		t.Fatalf("CreateRootCA: %v", err)
 	}
 
-	intermediate, err := ca.CreateIntermediateCA(ctx, root.ID, IntermediateCAParams{
+	intermediate, err := ca.CreateIntermediateCA(ctx, root.ID, CAParams{
 		Subject:  pkix.Name{CommonName: "speed Intermediate CA"},
 		NotAfter: time.Now().Add(12 * time.Hour),
 	})
@@ -313,7 +313,7 @@ func TestCAService_CreateIntermediateCA_RevokedParent_Refused(t *testing.T) {
 	ca := newTestCAService(t)
 	ctx := context.Background()
 
-	root, err := ca.CreateRootCA(ctx, RootCAParams{
+	root, err := ca.CreateRootCA(ctx, CAParams{
 		Subject:  pkix.Name{CommonName: "speed Root CA"},
 		NotAfter: time.Now().Add(48 * time.Hour),
 	})
@@ -326,7 +326,7 @@ func TestCAService_CreateIntermediateCA_RevokedParent_Refused(t *testing.T) {
 		t.Fatalf("seed revoked parent authority: %v", err)
 	}
 
-	_, err = ca.CreateIntermediateCA(ctx, root.ID, IntermediateCAParams{
+	_, err = ca.CreateIntermediateCA(ctx, root.ID, CAParams{
 		Subject:  pkix.Name{CommonName: "speed Intermediate CA"},
 		NotAfter: time.Now().Add(24 * time.Hour),
 	})
@@ -364,14 +364,14 @@ func TestCAService_IssueCertificate_RevokedAuthority_Refused(t *testing.T) {
 // direct-authority check the two single-hop tests above already pin.
 func issueRootAndIntermediate(t *testing.T, ca *CAService, ctx context.Context) (*Authority, *Authority) {
 	t.Helper()
-	root, err := ca.CreateRootCA(ctx, RootCAParams{
+	root, err := ca.CreateRootCA(ctx, CAParams{
 		Subject:  pkix.Name{CommonName: "speed Root CA"},
 		NotAfter: time.Now().Add(48 * time.Hour),
 	})
 	if err != nil {
 		t.Fatalf("CreateRootCA: %v", err)
 	}
-	intermediate, err := ca.CreateIntermediateCA(ctx, root.ID, IntermediateCAParams{
+	intermediate, err := ca.CreateIntermediateCA(ctx, root.ID, CAParams{
 		Subject:  pkix.Name{CommonName: "speed Intermediate CA"},
 		NotAfter: time.Now().Add(24 * time.Hour),
 	})
@@ -403,7 +403,7 @@ func TestCAService_CreateIntermediateCA_RevokedRootAncestor_Refused(t *testing.T
 		t.Fatalf("seed revoked root ancestor: %v", err)
 	}
 
-	_, err := ca.CreateIntermediateCA(ctx, intermediate.ID, IntermediateCAParams{
+	_, err := ca.CreateIntermediateCA(ctx, intermediate.ID, CAParams{
 		Subject:  pkix.Name{CommonName: "speed Intermediate CA"},
 		NotAfter: time.Now().Add(24 * time.Hour),
 	})
@@ -449,7 +449,7 @@ func TestCAService_IssueCertificate_EmbedsAuthoritysCRLDistributionPoint(t *test
 	ca := newTestCAService(t)
 	ctx := pkgcore.WithTenant(context.Background(), pkgcore.TenantID("tenant-acme"))
 
-	root, err := ca.CreateRootCA(ctx, RootCAParams{
+	root, err := ca.CreateRootCA(ctx, CAParams{
 		Subject:              pkix.Name{CommonName: "speed Root CA"},
 		NotAfter:             time.Now().Add(24 * time.Hour),
 		CRLDistributionPoint: "https://pki.example.com/root.crl",

@@ -59,7 +59,7 @@ authnModule := authn.NewModule(db, authn.WithKeySource(keySource), /* ... */)
 
 // 要签发证书时,X.509 层:
 ca := pkiModule.CA()
-err := ca.CreateRootCA(ctx, pki.RootCAParams{ /* subject、有效期 */ })
+err := ca.CreateRootCA(ctx, pki.CAParams{ /* subject、有效期 */ })
 ```
 
 生命周期管道:在 装配返回之后为你产品签名的每个 purpose 调

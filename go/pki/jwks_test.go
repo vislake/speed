@@ -206,7 +206,7 @@ func TestCAService_ExportAuthorityChainJWKS_ChainOrder(t *testing.T) {
 func TestCAService_ExportAuthorityChainJWKS_RootOnly(t *testing.T) {
 	ca := newTestCAService(t)
 	ctx := context.Background()
-	root, err := ca.CreateRootCA(ctx, RootCAParams{
+	root, err := ca.CreateRootCA(ctx, CAParams{
 		Subject:  pkix.Name{CommonName: "speed Root CA"},
 		NotAfter: time.Now().Add(24 * time.Hour),
 	})
@@ -306,14 +306,14 @@ func TestCAService_ExportAuthorityChainJWKS_ExcludesAuthoritiesOutsideTheirValid
 	ctx := pkgcore.WithTenant(context.Background(), pkgcore.TenantID("tenant-acme"))
 	base := time.Now()
 
-	root, err := ca.CreateRootCA(ctx, RootCAParams{
+	root, err := ca.CreateRootCA(ctx, CAParams{
 		Subject:  pkix.Name{CommonName: "speed Root CA"},
 		NotAfter: base.Add(7 * 24 * time.Hour),
 	})
 	if err != nil {
 		t.Fatalf("CreateRootCA: %v", err)
 	}
-	intermediate, err := ca.CreateIntermediateCA(ctx, root.ID, IntermediateCAParams{
+	intermediate, err := ca.CreateIntermediateCA(ctx, root.ID, CAParams{
 		Subject:  pkix.Name{CommonName: "speed Intermediate CA"},
 		NotAfter: base.Add(24 * time.Hour),
 	})
@@ -344,7 +344,7 @@ func TestCAService_ExportAuthorityChainJWKS_ExcludesAuthoritiesOutsideTheirValid
 func TestCAService_ExportAuthorityChainJWKS_RoundTripsThroughStandardJWKParse(t *testing.T) {
 	ca := newTestCAService(t)
 	ctx := context.Background()
-	root, err := ca.CreateRootCA(ctx, RootCAParams{
+	root, err := ca.CreateRootCA(ctx, CAParams{
 		Subject:  pkix.Name{CommonName: "speed Root CA"},
 		NotAfter: time.Now().Add(24 * time.Hour),
 	})

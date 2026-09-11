@@ -118,7 +118,7 @@ const (
 // declare-but-do-not-read discipline every config item in this file
 // follows: ConfigCRLDistributionPoint's own value is never consulted
 // anywhere -- a caller passes CRLDistributionPoint directly on
-// RootCAParams/IntermediateCAParams (ca.go), so this item exists purely as
+// CAParams (ca.go), so this item exists purely as
 // a declared, admin-visible schema entry, for a host that wants to show or
 // validate the value before passing it through its own wiring.
 // ConfigCRLValidity's real default lives as DefaultCRLValidity (crl.go),
@@ -159,7 +159,7 @@ const (
 	ConfigRenewalLeadTime = "pki.renewal_lead_time"
 	// ConfigCRLDistributionPoint is the default CRL distribution point URL
 	// a host may want to show or validate before passing it through
-	// RootCAParams/IntermediateCAParams.CRLDistributionPoint -- see this
+	// CAParams.CRLDistributionPoint -- see this
 	// const block's own doc comment for why the module's code never reads
 	// it directly.
 	ConfigCRLDistributionPoint = "pki.crl_distribution_point"
@@ -174,7 +174,7 @@ const (
 // per pkgcore.Module.Register's own "must not perform I/O; it only
 // declares" contract, and pki carries no config.Service dependency to read
 // a live value with. A caller passes NotAfter directly (see
-// RootCAParams/IntermediateCAParams/CertificateParams); wiring the declared
+// CAParams/CertificateParams); wiring the declared
 // config keys into that decision is the host's job.
 //
 // ConfigPropagationWindow and ConfigRenewalLeadTime follow the identical

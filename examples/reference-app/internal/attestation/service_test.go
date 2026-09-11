@@ -387,7 +387,7 @@ func TestService_EnsureAuthorityChain_IgnoresUnrelatedAuthorities(t *testing.T) 
 
 	// A second root with an unrelated subject, minted out from under the
 	// fixed-subject lookup.
-	if _, err := fx.chain.CreateRootCA(context.Background(), pki.RootCAParams{
+	if _, err := fx.chain.CreateRootCA(context.Background(), pki.CAParams{
 		Subject:  pkix.Name{CommonName: "some other clinic CA"},
 		NotAfter: time.Now().Add(attestationRootLifetime),
 	}); err != nil {

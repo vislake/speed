@@ -184,7 +184,7 @@ func TestHandler_PkiGetKeyJwks(t *testing.T) {
 func TestHandler_PkiGetAuthorityJwks(t *testing.T) {
 	h, _, ca := newHandlerHarness(t)
 	ctx := context.Background()
-	root, err := ca.CreateRootCA(ctx, RootCAParams{
+	root, err := ca.CreateRootCA(ctx, CAParams{
 		Subject:  pkix.Name{CommonName: "speed Root CA"},
 		NotAfter: time.Now().Add(24 * time.Hour),
 	})
@@ -224,14 +224,14 @@ func TestHandler_PkiGetAuthorityJwks_RevokedAuthorityInChain_Refused(t *testing.
 	h, _, ca := newHandlerHarness(t)
 	ctx := context.Background()
 
-	root, err := ca.CreateRootCA(ctx, RootCAParams{
+	root, err := ca.CreateRootCA(ctx, CAParams{
 		Subject:  pkix.Name{CommonName: "speed Root CA"},
 		NotAfter: time.Now().Add(48 * time.Hour),
 	})
 	if err != nil {
 		t.Fatalf("CreateRootCA: %v", err)
 	}
-	intermediate, err := ca.CreateIntermediateCA(ctx, root.ID, IntermediateCAParams{
+	intermediate, err := ca.CreateIntermediateCA(ctx, root.ID, CAParams{
 		Subject:  pkix.Name{CommonName: "speed Intermediate CA"},
 		NotAfter: time.Now().Add(24 * time.Hour),
 	})
@@ -259,7 +259,7 @@ func TestHandler_PkiGetAuthorityJwks_RevokedAuthorityInChain_Refused(t *testing.
 func TestHandler_PkiGetAuthorityCrl_NotGeneratedYet(t *testing.T) {
 	h, _, ca := newHandlerHarness(t)
 	ctx := context.Background()
-	root, err := ca.CreateRootCA(ctx, RootCAParams{
+	root, err := ca.CreateRootCA(ctx, CAParams{
 		Subject:  pkix.Name{CommonName: "speed Root CA"},
 		NotAfter: time.Now().Add(24 * time.Hour),
 	})
@@ -276,7 +276,7 @@ func TestHandler_PkiGetAuthorityCrl_NotGeneratedYet(t *testing.T) {
 func TestHandler_PkiGetAuthorityCrl_ServesTheStoredDocument(t *testing.T) {
 	h, _, ca := newHandlerHarness(t)
 	ctx := context.Background()
-	root, err := ca.CreateRootCA(ctx, RootCAParams{
+	root, err := ca.CreateRootCA(ctx, CAParams{
 		Subject:  pkix.Name{CommonName: "speed Root CA"},
 		NotAfter: time.Now().Add(24 * time.Hour),
 	})
