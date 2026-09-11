@@ -23,9 +23,9 @@
 # parameters bound as extra typed arguments -- which is what the app's
 # ServeMux-based wiring implements, plus the Handler/HandlerFromMux/
 # HandlerWithOptions registration helpers whose method+path patterns are
-# derived from the spec fragment itself (replacing what used to be a
-# hand-written registration of the same patterns -- one less copy of
-# path+method truth to keep in step with the spec by hand).
+# derived from the spec fragment itself (no hand-written registration of
+# the same patterns -- the spec fragment is the only hand-maintained copy
+# of path+method truth).
 #
 # output-options.name-normalizer: the default normalizer would name a spec
 # property "id" as the Go field Id; ToCamelCaseWithInitialisms applies the
