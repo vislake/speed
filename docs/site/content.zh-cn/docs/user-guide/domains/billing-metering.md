@@ -32,7 +32,7 @@ flowchart LR
   告警。它的摄取带幂等收据,所以中断后重投不会重复计数。
 
 两级都汇入同一个进程内 `Aggregator`:实时计数器、数据库汇总行、超
-额阈值事件。`billing` 模块的配额裁决经 `UsageReader` 接缝读*实时*
+额阈值事件。`billing` 模块的配额裁决经 `UsageReader` 模块读*实时*
 计数器——绝不读汇总表,否则聚合延迟会让超配额请求漏过去。
 
 ## Billing:权益与信用点账本
@@ -219,7 +219,7 @@ func entitledMeteredAndCharged() {
 
 这段演练演示了三个契约事实:`PreDeduct`/`Confirm`/`Refund` 三件套带
 键且幂等——重放一次结算会收敛到第一次调用的行,而不是重复扣两次;
-配额裁决经 `UsageReader` 接缝读实时计数器,超额不可能因聚合延迟漏
+配额裁决经 `UsageReader` 模块读实时计数器,超额不可能因聚合延迟漏
 过去;计费级用量写在*你的*事务里,绝不会像一次性付讫的 analytics
 记录那样被静默丢弃(analytics 级是同一条管道:用独立的 feature 键调
 `AnalyticsRecorder.Record`——绝不要用计费级路径也在测量的 feature

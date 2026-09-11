@@ -31,7 +31,7 @@ org 是 speed 的组织模块:每个租户一棵树、一张绑在节点上的�
 
 当成员关系有结构范围:多层组织里成员只能看、只能动自己的子树,名册
 按子树读回,邮件邀请作为加入路径。它也是 `authn` 的
-`MembershipReader` 与 `rbac` 的 `SubtreeResolver` 两个接缝背后的规范
+`MembershipReader` 与 `rbac` 的 `SubtreeResolver` 两个模块背后的规范
 实现。扁平「组织」同样适用:一个根,成员都在它之下。
 
 ## 接线与最少使用
@@ -102,6 +102,6 @@ org.subject_unresolved`)。
 
 ## Source
 
-- [go/org/AGENTS.md](https://github.com/vislake/speed/blob/main/go/org/AGENTS.md)——权威文档(树形、邀请、接缝、并发、规则)
+- [go/org/AGENTS.md](https://github.com/vislake/speed/blob/main/go/org/AGENTS.md)——权威文档(树形、邀请、模块、并发、规则)
 - HTTP 片段:[go/org/api/openapi.yaml](https://github.com/vislake/speed/blob/main/go/org/api/openapi.yaml)
 - 相关:域指南[身份与访问](/zh-cn/docs/user-guide/domains/identity-access/)与[租户与组织](/zh-cn/docs/user-guide/domains/tenancy-and-org/),以及本组页面[authn](/zh-cn/docs/user-guide/modules/identity/authn/)与[rbac](/zh-cn/docs/user-guide/modules/identity/rbac/)

@@ -1,7 +1,7 @@
 ---
 title: 搭建前端
 weight: 8
-description: 用 @speed npm 包组合前端——包的分层、唯一的 HTTP 接缝、会话家族,以及把它们装到一起的 shell。
+description: 用 @speed npm 包组合前端——包的分层、唯一的 HTTP 绑定点、会话家族,以及把它们装到一起的 shell。
 ---
 
 # 搭建前端
@@ -36,7 +36,7 @@ flowchart BT
   重试、每个失败归一成一个携带 API 信封 `code` 的 `ApiError`。别的
   包不自己发 HTTP。
 - **生成面**——`@speed/api-sdk` 是合并 API 文档的生成类型化客户端,
-  通过一个手写接缝(`bindRequestFn`)绑到你的客户端上,react-query
+  通过一个手写绑定点(`bindRequestFn`)绑到你的客户端上,react-query
   hooks 跑在共享 QueryClient 上。
 - **会话与身份**——`@speed/auth-core` 是无头会话状态机(访问令牌在
   store,刷新令牌只在会话闭包);`auth-ui` 渲染登录家族;`account-ui`
@@ -134,7 +134,7 @@ const accessTokenStore = createMemoryAccessTokenStore()
 const session = createAuthSession(accessTokenStore)
 attachSession(session)
 
-// 3. The app's one HTTP client, bound into the generated SDK's seam.
+// 3. The app's one HTTP client, bound into the generated SDK's binding.
 bindRequestFn(
   createClient({
     baseUrl: window.location.origin,

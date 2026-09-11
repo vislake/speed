@@ -89,7 +89,7 @@ flowchart BT
 不过截止日期——CI 强制才活得过。同样的逻辑把 `api-client` 与
 `api-sdk` 分开:SDK 的生成入口每次再生成都被整体覆盖(文件头写着
 DO NOT EDIT),手写运行时必须住在再生成永远够不到的独立包里。生成
-代码自己不碰网络:每次调用都经包内唯一手写接缝(`bindRequestFn`)
+代码自己不碰网络:每次调用都经包内唯一手写绑定(`bindRequestFn`)
 适配,宿主启动时把自己的客户端绑定一次,last-bind-wins。一次绑定
 因此给全平台每一次生成调用同一套认证、重试与错误语义——reference
 app 的 web 宿主就是该组合成立的证明,它把唯一一个真实客户端绑给
@@ -159,7 +159,7 @@ HttpOnly 存储也没有可依赖的对象。
 [搭建前端](/zh-cn/docs/user-guide/domains/frontend-building/)领域
 指南覆盖组合步骤;reference app 的 web 宿主
 (`examples/reference-app/web`)是全部宿主契约——命名空间、会话、
-客户端、接缝绑定、视图机——一次组合齐、并由应用自身套件钉住的地
+客户端、SDK 绑定、视图机——一次组合齐、并由应用自身套件钉住的地
 方。
 
 ## Source

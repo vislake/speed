@@ -22,10 +22,10 @@ bookCollapseSection: true
 
 三个模块之间没有任何一个 import 另一个——依赖图里没有它们之间的边,
 这不是疏漏,而是设计。authn 永不 import org:成员关系经宿主的
-`MembershipReader` 接缝询问,org 的名册是它的规范实现。rbac 永不
+`MembershipReader` 模块询问,org 的名册是它的规范实现。rbac 永不
 import authn:授权对身份只知一件事——`Subject{TenantID, UserID}`——
 由认证方组装。rbac 永不 import org:节点在树里的位置经
-`SubtreeResolver` 接缝询问,宿主用 org 的只读 `Scope` 视图实现它。org
+`SubtreeResolver` 模块询问,宿主用 org 的只读 `Scope` 视图实现它。org
 永不 import authn:它经 `authn.user.created` 事件得知新用户的存在。把
 三个名字放在一起的只有组装它们的宿主——参考应用就是现成的例子。
 

@@ -1,7 +1,7 @@
 ---
 title: "@speed/api-sdk"
 weight: 6
-description: "合并 API 文档的生成类型面——orval 产物经唯一手写接缝(bindRequestFn)绑到主机的客户端,react-query hooks 跑在共享的 QueryClient 上,无租户概念、无 i18n 资源。"
+description: "合并 API 文档的生成类型面——orval 产物经唯一手写绑定点(bindRequestFn)绑到主机的客户端,react-query hooks 跑在共享的 QueryClient 上,无租户概念、无 i18n 资源。"
 ---
 
 # @speed/api-sdk
@@ -17,7 +17,7 @@ DO-NOT-EDIT 头:生成器与已提交产物之间的工具漂移,会以头部本
 diff 显现。
 
 它不是什么:它自己不执行任何 HTTP。每个生成调用都经过本包唯一的
-手写接缝——`src/runtime.ts`,以 `@speed/api-sdk/runtime` 子路径导出——
+手写绑定——`src/runtime.ts`,以 `@speed/api-sdk/runtime` 子路径导出——
 它把 orval 的 axios 形状调用适配到你主机在 bootstrap 时绑定过一次的
 `@speed/api-client` 请求函数上。
 
@@ -28,7 +28,7 @@ diff 显现。
 ([@speed/api-client](/zh-cn/docs/user-guide/modules/web/api-client/)
 的 `speed/no-direct-http` 规则强制执行这一点)。本包也是 workspace
 内消费方的编译地板:[@speed/auth-core](/zh-cn/docs/user-guide/modules/web/auth-core/)
-通过这个接缝驱动生成的 authn 会话面;账号组件族把生成的 hooks 渲染
+通过这个绑定点驱动生成的 authn 会话面;账号组件族把生成的 hooks 渲染
 进组件树。
 
 你自己应用的 API 不在这里。参考应用的 notes、cases 与 smilesim
@@ -61,7 +61,7 @@ bindRequestFn(
 import 的 mutator)与 `speedRequestCredentialless`——把 authn 会话
 刷新请求声明为无凭据(`omitAccessToken`)的逐操作覆盖,因此它不带
 `Authorization` 头,它的 401 在客户端"仅限 bearer"的刷新规则下保持
-终结,而不是再次进入刷新路径。app-owned SDK 自己的接缝 re-export
+终结,而不是再次进入刷新路径。app-owned SDK 自己的绑定 re-export
 这个子路径,所以一次 `bindRequestFn` 调用同时服务两个生成面。
 
 再生成在 `web/` 下依次运行 `pnpm dlx orval@8.17.0 --config

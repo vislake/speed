@@ -117,4 +117,4 @@ flowchart TD
 - [前端架构](/zh-cn/docs/developer-docs/frontend-architecture/)——"会话状态:仅内存"一节就是本包
 - 它所驱动的面的 Go 侧:[authn](/zh-cn/docs/developer-docs/modules/identity/authn/)——本会话所依的生成操作与令牌契约来自这个模块
 - 怎么用:[用户指南的 auth-core 页](/zh-cn/docs/user-guide/modules/web/auth-core/)
-- web HTTP 组其余设计页:[api-client](/zh-cn/docs/developer-docs/modules/web/api-client/)——传输、令牌存储与刷新缝;[api-sdk](/zh-cn/docs/developer-docs/modules/web/api-sdk/)——生成操作与无凭据刷新 mutator
+- web HTTP 组其余设计页:[api-client](/zh-cn/docs/developer-docs/modules/web/api-client/)——传输、令牌存储与刷新选项;[api-sdk](/zh-cn/docs/developer-docs/modules/web/api-sdk/)——生成操作与无凭据刷新 mutator

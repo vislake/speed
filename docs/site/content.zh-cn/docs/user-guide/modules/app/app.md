@@ -1,7 +1,7 @@
 ---
 title: app
 weight: 1
-description: "应用装配层:解析配置与 composition 的装载器、七阶段组件驱动、固定中间件链,以及每个宿主启动都经其组装的、无 import 缝桥接。"
+description: "应用装配层:解析配置与 composition 的装载器、七阶段组件驱动、固定中间件链,以及每个宿主启动都经其组装的、无 import 桥接。"
 ---
 
 # app
@@ -58,12 +58,12 @@ pre-auth 端点、覆盖 GET 与 HEAD 的 tenancy 选项)。
 |---|---|---|
 | `go/app`(根) | 引擎:装载器、驱动器、`RunAssembly`、observability 组件、共享 HTTP 帮手 | 每个组装 |
 | `go/app/chain` | 固定中间件链:`chain.Standard`(从注册表推导)与 `chain.Chain`(自定义布局) | 组装链的宿主 |
-| `go/app/bridges` | 无 import 缝桥接:`Entitlements`、`UsageRecorder`、`OrgFeatureGate`、`AuthnFeatureGate`、`ShareExpiryReader` | 接这些模块的宿主 |
+| `go/app/bridges` | 无 import 桥接:`Entitlements`、`UsageRecorder`、`OrgFeatureGate`、`AuthnFeatureGate`、`ShareExpiryReader` | 接这些模块的宿主 |
 
 拆分依据是依赖成本,不是口味:根包的裸消费者付根包的闭包——36 条
 `// indirect`,含 `config` 拖进的 GORM 栈——所以根绝不 import 链或
 桥接的参与者;链的闭包以链自身参与者为界(含 authn 与 rbac);桥
-接只有接缝两端模块的宿主才付费。
+接只由接线桥两端模块的宿主付费。
 
 ## 接线
 
@@ -157,7 +157,7 @@ allowlist)→ 你的受保护 handler**;两个分支从 authn 的输出按结构
 宿主直接组装 `chain.Chain`/`chain.Config`;不含 authn 模块的选集则
 完全不走链。
 
-## 缝桥接
+## 桥接
 
 两个模块可以结构兼容却谁都不能 import 对方——各自具名类型差到直接
 赋值无法编译。`go/app/bridges` 存放每一对的机械适配器,宿主把接线
@@ -165,10 +165,10 @@ allowlist)→ 你的受保护 handler**;两个分支从 authn 的输出按结构
 
 | 桥接 | 连接 | 接线写法 |
 |---|---|---|
-| `Entitlements` | billing 的权益检查 → ai-gateway 的权益缝 | `aigateway.WithEntitlements(bridges.Entitlements(billingModule.Entitlements()))` |
-| `UsageRecorder` | metering 的分析级记录器 → ai-gateway 的用量缝 | `aigateway.WithUsageRecorder(bridges.UsageRecorder(meteringModule.Recorder()))` |
-| `OrgFeatureGate` | config 的惰性 handle → org 的功能门缝 | `org.WithFeatureGate(bridges.OrgFeatureGate(configModule.Handle()))` |
-| `AuthnFeatureGate` | config 的惰性 handle → authn 的功能门缝 | `authn.WithFeatureGate(bridges.AuthnFeatureGate(configModule.Handle()))` |
+| `Entitlements` | billing 的权益检查 → ai-gateway 的权益模块 | `aigateway.WithEntitlements(bridges.Entitlements(billingModule.Entitlements()))` |
+| `UsageRecorder` | metering 的分析级记录器 → ai-gateway 的用量模块 | `aigateway.WithUsageRecorder(bridges.UsageRecorder(meteringModule.Recorder()))` |
+| `OrgFeatureGate` | config 的惰性 handle → org 的功能门模块 | `org.WithFeatureGate(bridges.OrgFeatureGate(configModule.Handle()))` |
+| `AuthnFeatureGate` | config 的惰性 handle → authn 的功能门模块 | `authn.WithFeatureGate(bridges.AuthnFeatureGate(configModule.Handle()))` |
 | `ShareExpiryReader` | config 的惰性 handle → sharing 的租户配置读取器 | `sharing.WithTenantConfigReader(bridges.ShareExpiryReader{Handle: configModule.Handle()})` |
 
 三个功能门桥接出于同一个时序原因:`sharing.Module`(以及各门的消

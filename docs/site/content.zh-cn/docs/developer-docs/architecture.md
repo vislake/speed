@@ -26,7 +26,7 @@ Go 模块的依赖严格自底向上;下图按依赖方向自下而上绘制:
 
 ```mermaid
 graph BT
-    pkgcore["pkgcore<br/>assembly contract, seams, registry, tenant context"]
+    pkgcore["pkgcore<br/>assembly contract, modules, registry, tenant context"]
     dbkit["dbkit<br/>dual-dialect DB, migrations, Repository, encryption"]
     obs["observability<br/>OTel, middleware, structured logging"]
     tenancy["tenancy<br/>resolution middleware, plugin, isolation suites"]
@@ -75,14 +75,14 @@ graph BT
     billing --> jobs
     ai --> jobs
     ai --> storage
-    ai -.->|"Entitlements seam"| billing
-    ai -.->|"UsageRecorder seam"| metering
+    ai -.->|"Entitlements module"| billing
+    ai -.->|"UsageRecorder module"| metering
     sharing --> tenancy
     sharing --> ratelimit
-    sharing -.->|"ResourceResolver seam"| storage
+    sharing -.->|"ResourceResolver module"| storage
     integ --> jobs
     integ --> ratelimit
-    integ -.->|"MembershipChecker seam"| org
+    integ -.->|"MembershipChecker module"| org
     comp --> tenancy
     comp --> jobs
     comp --> storage
@@ -108,11 +108,11 @@ web 包以分层 npm workspace 镜像同一形态——设计令牌与 i18n 在�
 两件事互不决定,把它们焊成一个开关是设计错误:
 
 - **部署模式**——这套系统以几个副本运行、可依赖哪些外部设施。
-- **实现组装**——每个基础设施接缝具体选用哪套实现。
+- **实现组装**——每个基础设施模块具体选用哪套实现。
 
 反例说明为什么:单进程部署对接真实 Stripe、真实 SMTP、真实 S3,是小客户安装的常规生产形态;分布式部署同样可以在联调环境挂 Mailpit 与支付沙箱。"外部服务真不真"是环境与凭证问题,不是副本数问题。
 
-因此:**部署模式不选择实现,它只约束实现。** `pkgcore` 的每个基础设施接缝(`KVStore`、`EventBus`、`Mailer`、`ObjectStore`)都是带 N 套实现的接口,N ≥ 1——绝不是固定两套。每个组件声明它所提供实现的能力:`MultiReplicaSafe`(多副本可共享这份状态)、`SurvivesRestart`(状态跨进程重启仍在)、`Stateless`(没有重启会丢失的东西——控制台发信器因此跳过对它毫无意义的横幅警告)。每种部署模式声明自己要求什么,装配的 Prepare 阶段把每个被选组件的声明与该模式做比较。无法在所声明模式下运行的组装**启动即失败**,报 `ErrCapabilityUnsatisfied`,点名组件、缺失的能力位与模式——绝不会是"缺少分布式实现"这类泛化错误,因为一旦存在 N 套实现,这句话就不再有任何含义。仅缺 `SurvivesRestart` 是响亮的启动横幅而非失败:组装可以运行,但操作者必须确切知道哪些数据不跨重启存活。
+因此:**部署模式不选择实现,它只约束实现。** `pkgcore` 的每个基础设施模块(`KVStore`、`EventBus`、`Mailer`、`ObjectStore`)都是带 N 套实现的接口,N ≥ 1——绝不是固定两套。每个组件声明它所提供实现的能力:`MultiReplicaSafe`(多副本可共享这份状态)、`SurvivesRestart`(状态跨进程重启仍在)、`Stateless`(没有重启会丢失的东西——控制台发信器因此跳过对它毫无意义的横幅警告)。每种部署模式声明自己要求什么,装配的 Prepare 阶段把每个被选组件的声明与该模式做比较。无法在所声明模式下运行的组装**启动即失败**,报 `ErrCapabilityUnsatisfied`,点名组件、缺失的能力位与模式——绝不会是"缺少分布式实现"这类泛化错误,因为一旦存在 N 套实现,这句话就不再有任何含义。仅缺 `SurvivesRestart` 是响亮的启动横幅而非失败:组装可以运行,但操作者必须确切知道哪些数据不跨重启存活。
 
 ```mermaid
 flowchart TD

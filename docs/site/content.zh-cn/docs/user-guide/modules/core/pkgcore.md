@@ -1,7 +1,7 @@
 ---
 title: pkgcore
 weight: 1
-description: "依赖底座——模块/组件组装契约、租户上下文、基础设施接缝接口、结构化错误与合并后的消息目录。"
+description: "依赖底座——模块/组件组装契约、租户上下文、基础设施模块接口、结构化错误与合并后的消息目录。"
 ---
 
 # pkgcore
@@ -12,11 +12,11 @@ speed 服务的依赖底座:每个其他 Go 模块都导入它,而它不导入�
 pkgcore 只拥有七样东西:模块/组件组装契约——每个模块实现随附一个
 `Component` 描述符,其 `Init` 回调执行一次
 `Register(reg *pkgcore.ComponentRegistry)` 声明体;租户上下文与裸的系统
-上下文标记;基础设施接缝接口 `KVStore`、`EventBus`、`Mailer`、
+上下文标记;基础设施模块接口 `KVStore`、`EventBus`、`Mailer`、
 `ObjectStore` 及各自的进程内实现(内存存储与总线、控制台发信器、
 本地对象存储,同时充当测试替身);装配借以解析并校验组合的
 组件注册表/能力机制;合并后的后端消息目录;`DeploymentMode` 枚举;
-以及每条接缝的每个实现都必须通过的契约套件(`eventbustest`、
+以及每个模块的每个实现都必须通过的契约套件(`eventbustest`、
 `kvstoretest`、`mailertest`、`objectstoretest`)。它的子包承载各有
 归属的部件:`apperr`(每个模块返回的结构化错误)、`config`(启动参数
 的加载器——只处理进程启动值)与 `i18n`(以接收方语言渲染后端生成的
@@ -26,7 +26,7 @@ pkgcore 只拥有七样东西:模块/组件组装契约——每个模块实现�
 ## 何时选用
 
 永远选用:平台每个模块都建在 pkgcore 上,所以每个 speed 二进制都
-携带它;消费方在自己的接缝处也握着 pkgcore 的类型——租户来自
+携带它;消费方在自己一侧也握着 pkgcore 的类型——租户来自
 `pkgcore.TenantID` 上下文,被拒的操作以 `apperr` 码应答,
 `ComponentRegistry` 的访问器交出已解析的总线与存储。在其中,你
 扮演两种角色之一:
@@ -126,9 +126,9 @@ if err := app.Assemble(ctx, reg, spec); err != nil {
   `ObjectStore()` 与合并后的 `Locales()` 目录,装配不携带时各自
   为 nil。`EventBus()` 就是注册器背后的总线,宿主发布进模块订阅
   的地方。
-- **接缝与能力**——每个接缝接口按已注册实现里最弱的那一个设计
+- **模块与能力**——每个模块接口按已注册实现里最弱的那一个设计
   (`KVStore` 上没有服务端脚本);实现声明自己的能力位:四个基础设施
-  接缝上是 `MultiReplicaSafe`/`SurvivesRestart`/`Stateless`(由装配
+  模块上是 `MultiReplicaSafe`/`SurvivesRestart`/`Stateless`(由装配
   校验),go/pki 的 `Signer` 实现另有 `KeyNeverLeavesBoundary`——经
   Signer 自己的注册表声明,装配并不把它与任何要求作比较(该缺口由
   go/pki 自己的文档记录)。装配的 Prepare 阶段让无法满足所声明模式
@@ -154,7 +154,7 @@ if err := app.Assemble(ctx, reg, spec); err != nil {
   访问器加其背后的注册器),绝不作为新的描述符回调。
 - `Register` 不得做 I/O;注册器错误绝不是合并——跨模块重复键会让
   注册失败。
-- 不要为接缝写 mock:`NewMemoryKVStore`、`NewMemoryEventBus`、
+- 不要为模块写 mock:`NewMemoryKVStore`、`NewMemoryEventBus`、
   `NewConsoleMailer`、`NewLocalObjectStore` 就是测试替身;四条
   契约套件是任何自注册实现的强制检查。
 - 启动 `config.Loader` 只处理启动值——运行时与租户可覆盖的设置

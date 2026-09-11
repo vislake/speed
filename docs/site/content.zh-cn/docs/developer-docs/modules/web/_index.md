@@ -10,7 +10,7 @@ bookCollapseSection: true
 `web/packages` 下的十二个 `@speed/*` 包是 speed 产品的前端半边,而且重复了后端同款形态决策:不是一个应用,而是同一锁步版本下、由产品宿主组装进自己应用的库。[前端架构](/zh-cn/docs/developer-docs/frontend-architecture/)页画了完整的依赖图;本组导览用每包一句话划分职责、说明本组与仓库 Go 一侧的关系,并点出下面每个包页都会回到的两条设计线索。按层分工:
 
 - **地基,与认证无关**——每个渲染包所坐的地板。`@speed/tokens`——设计令牌树,零依赖纯数据,默认树深冻结,只许经类型化 copy-on-write 差异覆盖。`@speed/i18n`——每宿主一个 react-i18next 实例、协商确定的起始语言、注册前先校验覆盖与键集对等的命名空间,跨语言回退被构造性地设为不可能。`@speed/ui-kit`——把合并后的令牌树映射成 MUI v9 主题的主题工厂,外加七个只渲染宿主所给状态的受控组件。`@speed/layout-kit`——共享应用外壳(`AppShell`、`RouteGuard`),放行/拒绝/待定的裁决以宿主注入的值抵达,包自身不携带任何导航或认证逻辑。
-- **唯一 HTTP 客户端**——`@speed/api-client`,手写 HTTP 的唯一归宿:可注入 `fetch`、纯内存令牌存储、静默单飞 401 刷新、保守的瞬时重试、一切失败归一为一个 `ApiError`。以及 `@speed/api-sdk`,合并 API 文档的生成类型面,自身不发任何 HTTP——每次调用都经 `bindRequestFn` 这一条接缝适配到那个客户端上。
+- **唯一 HTTP 客户端**——`@speed/api-client`,手写 HTTP 的唯一归宿:可注入 `fetch`、纯内存令牌存储、静默单飞 401 刷新、保守的瞬时重试、一切失败归一为一个 `ApiError`。以及 `@speed/api-sdk`,合并 API 文档的生成类型面,自身不发任何 HTTP——每次调用都经 `bindRequestFn` 这一条绑定点适配到那个客户端上。
 - **会话与身份**——`@speed/auth-core`,基于生成 authn 面的纯内存会话状态机;`@speed/auth-ui`,登录组件族;`@speed/account-ui`,登录后的账户页;`@speed/tenancy-ui`,租户切换控件。
 - **组装**——`@speed/product-shell`,三分支视图机(登出、登入、会话已死),把外壳、登录族与会话钩子组装在一起。
 - **业务只读面**——`@speed/billing-ui`,基于生成 billing 操作的账单文档只读面——领域只读面的范式。

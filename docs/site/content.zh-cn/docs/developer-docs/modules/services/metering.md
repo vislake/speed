@@ -17,7 +17,7 @@ description: "go/metering 的设计:两级可靠性的用量计量——fail-ope
 聚合与超额阈值跨越事件——刻意不带 Plan/Feature/Entitlement 领域
 模型、信用点或配额执行中的任何一件。那些住在 `go/billing` 里,
 它在模块图中位于 metering 之上并 import 它:billing 的 `UsageReader`
-缝由 metering 的 `Aggregator` 结构性满足,配额决定经它读实时用量
+模块由 metering 的 `Aggregator` 结构性满足,配额决定经它读实时用量
 计数。"零用量"绝不能对超额租户 fail-open,所以未接线的 reader 是
 编码化错误,绝不是猜一个额度。
 
@@ -127,7 +127,7 @@ pending 行的后台进程;作用域仓储没有跨租户读路径,而受审计�
   `metering_ingest_receipts`,平台数据 `metering_outbox_records`。
 - 唯一发布的事件(`metering.overage_threshold.crossed`)、声明的配
   置项、`metering.*` 下的双语文案错误目录。
-- 参考应用内的消费:`ai-gateway` 用量记录器缝在每次成功 AI 调用
+- 参考应用内的消费:`ai-gateway` 用量记录器模块在每次成功 AI 调用
   上喂分析级,admin 用量汇总端点读回结果行;`go/billing` 经结构
   化 `UsageReader` 是 metering 的第一个消费者。
 

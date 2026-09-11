@@ -1,7 +1,7 @@
 ---
 title: "@speed/api-client"
 weight: 5
-description: "前端唯一手写 HTTP 的家——createClient:可注入 fetch、纯内存的访问令牌存储、静默单飞 401 刷新、保守的瞬时重试、ApiError 归一化与 Reporter 接缝。"
+description: "前端唯一手写 HTTP 的家——createClient:可注入 fetch、纯内存的访问令牌存储、静默单飞 401 刷新、保守的瞬时重试、ApiError 归一化与 Reporter 接口。"
 ---
 
 # @speed/api-client
@@ -24,7 +24,7 @@ storage API:错误 `code` 在消费方自己的目录里映射成双语文本;�
 它不是什么:它不是会话层。刷新令牌从不进入本包——authn API 在
 签发令牌的响应体里返回它、也不设刷新 cookie——所以像
 [@speed/auth-core](/zh-cn/docs/user-guide/modules/web/auth-core/) 这样
-的会话层把它握在闭包里,驱动刷新操作走本包只负责定义的那个接缝。
+的会话层把它握在闭包里,驱动刷新操作走本包只负责定义的那个选项。
 
 ## 何时使用
 
@@ -82,7 +82,7 @@ bindRequestFn(
   如实以 `client.http.<status>` 呈现。用 `isApiError` 区分错误;
   `isTransportFailure` 回答"请求是否从未完成"(`status` 为 0——这是
   任何 HTTP 响应都带不来的状态,答案无法伪造)。
-- **不带 storage API 的 Bearer 认证。** `AccessTokenStore` 接缝只有
+- **不带 storage API 的 Bearer 认证。** `AccessTokenStore` 接口只有
   两个同步方法(`get`/`set`);本包只提供内存实现。令牌在每次尝试前
   重新读取,所以重试的请求带着新令牌。请求可以声明
   `omitAccessToken`,不带凭据出行、不被 store 触碰。任何地方都没有
@@ -109,7 +109,7 @@ bindRequestFn(
   包装:中止你的 signal 会 reject 原始的 `AbortError`,查询层因此
   保持标准的取消语义。每尝试的超时覆盖响应体,退避睡眠也与你的
   signal 赛跑。
-- **结构化上报。** `Reporter` 接缝收到常量的英文消息加 snake_case
+- **结构化上报。** `Reporter` 接口收到常量的英文消息加 snake_case
   属性;默认 sink 写到 `console.error`/`console.warn`(浏览器没有
   结构化日志后端),主机通过 `ClientOptions.reporter` 替换它。
 - **config hooks** 位于隔离的 `./react` 子路径,让 React 不进入主

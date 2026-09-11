@@ -97,7 +97,7 @@ saasctl db migrate [go.mod]
 `APP_DB_PATH` 永远优先,相对路径按同一方式锚定。拒绝都点名原因:
 没有 speed require、文件没有 `schema_migrations` 台账、路径存在但
 不是普通文件。两种部署形态都接受——生成项目的数据库在两者之下都
-说 SQLite;形态改变的是接缝,从来不是方言。任何副本启动前先把
+说 SQLite;形态改变的是组件,从来不是方言。任何副本启动前先把
 命令跑完:共享的 SQLite 文件经不起并发写入。
 
 ## `config print`——预览一次启动会用到的配置
@@ -146,8 +146,8 @@ import——各宿主自己的 `server.go` 把组件注册到
 `/healthz` 与 `/api/v1/config/public` 应答 200,注册应答 201;但骨架
 出厂状态下密码登录不可能成功:没有成员库,authn 每次登录都经
 宿主注入的 `MembershipReader` 复核成员身份,空 reader 失败即关闭
-——错密码与对密码都应答 401 `authn.invalid_credentials`。接好那条
-接缝是点名给所有者的第一个任务。在下一个发布落地之前,生成项目带着
+——错密码与对密码都应答 401 `authn.invalid_credentials`。接好那个
+模块是点名给所有者的第一个任务。在下一个发布落地之前,生成项目带着
 过渡态——require 的版本串由指向该 checkout 的 `replace` 指令覆盖
 (零占位版本与个别真实版本并存)、`go.sum` 要等第一次消费方
 `go mod tidy` 才会生成——而 `upgrade` 就是发布被消费时走的那条机制。

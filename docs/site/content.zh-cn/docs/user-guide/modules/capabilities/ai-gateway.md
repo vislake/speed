@@ -9,7 +9,7 @@ weight: 2
 ai-gateway 是 speed 的 AI 网关:覆盖每个 LLM 与图像生成厂商的一层抽
 象。业务代码只调 `Gateway` 门面——同步 `Chat`/`ChatStream`,或纯异
 步的 `GenerateImage`——绝不直接碰厂商 SDK;provider 注册在
-`ChatProvider`/`ImageProvider` 接缝之后,租户经分作用域的凭据库自带
+`ChatProvider`/`ImageProvider` 模块接口之后,租户经分作用域的凭据库自带
 密钥。
 
 ## 它做什么
@@ -26,7 +26,7 @@ OpenAI 兼容线协议写;`ChatProviderRegistry` 是第三方 provider 注册
 `ai_gateway_credentials` 表——`CredentialScopeSystem` 或
 `CredentialScopeTenant`,租户覆盖、回落平台默认——API key 列加密落
 库。**图像面。** `ImageProvider`(`TextToImage`/`ImageToImage`/
-`Inpaint`)镜像对话接缝,自带默认实现与注册表;`Gateway.GenerateImage`
+`Inpaint`)镜像对话模块,自带默认实现与注册表;`Gateway.GenerateImage`
 *没有*同步对应物——它校验、查权益、把恰好一个 `jobs` 任务入队并
 立刻返回其 `JobID`。job handler 是存储 I/O 唯一发生的地方,调用方
 经 `jobs.Queue.Get` 读回结果:成功 job 的 `Result.Data` 反序列化成
@@ -77,7 +77,7 @@ _ = json.Unmarshal(job.Result.Data, &res)
 构建的纯对话网关不注册任何 job handler,`GenerateImage` 答
 `ErrImageGenerationUnavailable`。路由与凭据命名空间两半共用——逻辑
 前缀别撞(`chat:`、`image:`)。`Entitlements` 与 `UsageRecorder` 都是
-结构化类型、可选的接缝,由 `billing.EntitlementsService` 与
+结构化类型、可选的模块接口,由 `billing.EntitlementsService` 与
 `metering.Recorder` 无需 import 边即可满足。租户 BYOK 凭据走 HTTP
 写:`PUT /api/v1/ai-gateway/credentials/{provider}/tenant`(门禁
 `ai-gateway:write`)或 `.../platform`(`ai-gateway:manage_platform`);
@@ -113,11 +113,11 @@ _ = json.Unmarshal(job.Result.Data, &res)
   provider,或让它解析在平台级,即为修复。
 - 图像 job 无进度上报(单次厂商调用没有天然中间点),除尝试调用外
   也没有表面能查哪些逻辑键已路由。
-- `UsageRecorder` 是分析级、失败开放的接缝;要给 AI 用量收费的宿主
+- `UsageRecorder` 是分析级、失败开放的模块;要给 AI 用量收费的宿主
   照参考应用 smilesim 的形态做(入队前预留积分、job 到终态时结算,
   下面垫着持久预留记账)。
 
 ### 出处
 
-- [go/ai-gateway/AGENTS.md](https://github.com/vislake/speed/blob/main/go/ai-gateway/AGENTS.md)——权威文档(provider 接缝、凭据库、异步管线、SSRF 姿态、限制)
+- [go/ai-gateway/AGENTS.md](https://github.com/vislake/speed/blob/main/go/ai-gateway/AGENTS.md)——权威文档(provider 模块、凭据库、异步管线、SSRF 姿态、限制)
 - 相关页面:[billing](/zh-cn/docs/user-guide/modules/capabilities/billing/)、[metering](/zh-cn/docs/user-guide/modules/services/metering/)、[storage](/zh-cn/docs/user-guide/modules/services/storage/)、域指南[存储、分享与 AI](/zh-cn/docs/user-guide/domains/storage-sharing-and-ai/)

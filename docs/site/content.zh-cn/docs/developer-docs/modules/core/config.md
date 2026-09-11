@@ -63,7 +63,7 @@ flowchart LR
 
 ## 对外的稳定面
 
-Register/Attach 接缝(`ErrAlreadyAttached`/`ErrCipherRequired`/`ErrServiceNotAttached`)、`Service` 的读写面(`Get`/`GetTyped`/`Set`/`Watch`/`IsEnabled`/`EnabledFlags`/`PublicSnapshot`/`Refresh`/`Close`)、作用域词汇及其资格、`ConfigItem`/`FeatureFlag` 声明契约、导出的 `PathPublic`/`PathSystemFeatures` 常量、两个端点的 OpenAPI 片段(`api/openapi.yaml`)、其生成的 `api.ServerInterface` 与两个端点的响应形态、`config.item.changed` 事件形态,以及 `config.*` 错误码族。
+Register/Attach 接口(`ErrAlreadyAttached`/`ErrCipherRequired`/`ErrServiceNotAttached`)、`Service` 的读写面(`Get`/`GetTyped`/`Set`/`Watch`/`IsEnabled`/`EnabledFlags`/`PublicSnapshot`/`Refresh`/`Close`)、作用域词汇及其资格、`ConfigItem`/`FeatureFlag` 声明契约、导出的 `PathPublic`/`PathSystemFeatures` 常量、两个端点的 OpenAPI 片段(`api/openapi.yaml`)、其生成的 `api.ServerInterface` 与两个端点的响应形态、`config.item.changed` 事件形态,以及 `config.*` 错误码族。
 
 ## Source
 

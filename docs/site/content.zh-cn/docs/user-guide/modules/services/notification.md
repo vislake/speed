@@ -19,7 +19,7 @@ notification 是 speed 的外发消息模块:把租户的通知投递给它所�
 自己的双语 locale 包里,按 `<type_key>.<channel>.<part>` id 惯例,
 投递时按收件人 locale 渲染。模块自己的表不持任何身份数据:用户是
 一个不透明 id,用户收件人的外发地址在发送时经宿主的
-`UserAddressResolver` 接缝读取。
+`UserAddressResolver` 模块读取。
 
 投递天生异步。`Dispatch` 只校验并入队——每位收件人每通道一个
 job;worker 重建租户上下文,在**发送时**重查偏好、同意与地址——
@@ -48,7 +48,7 @@ job;worker 重建租户上下文,在**发送时**重查偏好、同意与地址�
 
 ```go
 m := notification.NewModule(db,
-    notification.WithSMSSender(pkgcore.NewConsoleSMSSender()), // pkgcore 的 SMS 接缝——console、HTTP 网关或运营商适配器
+    notification.WithSMSSender(pkgcore.NewConsoleSMSSender()), // pkgcore 的 SMS 模块——console、HTTP 网关或运营商适配器
     notification.WithMailFrom("no-reply@example.com"),
     notification.WithContactEmailIndexer(emailIndexer),   // dbkit.NewBlindIndexer,over notification.AddressIndexColumn
     notification.WithContactPhoneIndexer(phoneIndexer),   // 索引键必须与加密键不同
@@ -102,5 +102,5 @@ m := notification.NewModule(db,
 
 ### 出处
 
-- [go/notification/AGENTS.md](https://github.com/vislake/speed/blob/main/go/notification/AGENTS.md)——权威文档(投递流水线、同意状态机、宿主接缝、规则、未实现清单)
+- [go/notification/AGENTS.md](https://github.com/vislake/speed/blob/main/go/notification/AGENTS.md)——权威文档(投递流水线、同意状态机、宿主模块、规则、未实现清单)
 - 相关页面:[平台服务](../)、域指南[任务与通知](../../../domains/jobs-and-notifications/)

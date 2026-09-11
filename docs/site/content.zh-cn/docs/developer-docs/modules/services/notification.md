@@ -17,7 +17,7 @@ description: "go/notification 的设计:活类型注册表而非模板库、两�
 模块是依赖图的**叶子**,这一事实驱动了下面几乎一切。它永不 import
 `authn`、`rbac` 或 `org`:用户是从已验证调用者或领域事件学到的不
 透明 id;用户的地址是身份数据,在发送时刻经宿主提供的
-`UserAddressResolver` 缝解析,从不在这里落表。业务模块也永不
+`UserAddressResolver` 模块解析,从不在这里落表。业务模块也永不
 import `notification`——它们发布领域事件,**宿主**订阅并调
 `Deliveries().Dispatch`,决定哪些事件变成哪些通知。模块自己的
 `Register` 除自身 inbox-created 事件(供本副本实时扇出)外不订阅
@@ -117,7 +117,7 @@ flowchart TD
     W["worker rebuilds tenant context from the job"]
     W --> R["send-time rechecks:<br/>preferences, consent, addresses, live taxonomy"]
     R --> X["copy rendered for the recipient's locale<br/>from the merged catalog"]
-    X --> C["channel legs: inbox row, email via the Mailer seam,<br/>SMS via the pkgcore SMSSender seam"]
+    X --> C["channel legs: inbox row, email via the Mailer module,<br/>SMS via the pkgcore SMSSender module"]
     C --> S["one send_records row per attempted channel"]
     Ev --> H --> D
     R -->|"refused or skipped"| S
@@ -132,7 +132,7 @@ flowchart TD
 - **没有聚合与投递限流。** 模块的限流管验证码发送与同意创建路径;
   常规投递按渲染原样发出。重放去重折叠相同的重复派发;刻意重发
   携带新的一次性发生标记。
-- **地址走缝而非身份表。** 用户收件人的验证按契约委托给宿主——
+- **地址经模块解析,而非身份表。** 用户收件人的验证按契约委托给宿主——
   resolver 必须返回宿主已验证的地址。这种不对称被写明:
   永不向未验证地址发送的规则在联系人侧以代码执行、在用户侧以契
   约执行,因为外部联系人没有宿主侧身份存储,而用户有。
@@ -160,7 +160,7 @@ flowchart TD
   [pki](/zh-cn/docs/developer-docs/modules/services/pki/)、
   [integration](/zh-cn/docs/developer-docs/modules/services/integration/)、
   [metering](/zh-cn/docs/developer-docs/modules/services/metering/)
-- [总体架构](/zh-cn/docs/developer-docs/architecture/)——中间件链、消息目录、短信缝
+- [总体架构](/zh-cn/docs/developer-docs/architecture/)——中间件链、消息目录、短信模块
 - 使用:[用户指南的
   notification](/zh-cn/docs/user-guide/modules/services/notification/)、
   [任务与通知域页](/zh-cn/docs/user-guide/domains/jobs-and-notifications/),

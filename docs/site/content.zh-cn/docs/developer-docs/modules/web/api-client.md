@@ -8,7 +8,7 @@ description: "为什么 api-client 是前端唯一的手写 HTTP 层:构造时�
 
 前端发出的每一个请求——`@speed/api-sdk` 的生成调用、`@speed/auth-core`
 会话的操作、宿主自己的 config 读取——都经由一次 `createClient` 调用
-构建出的那一个请求函数。本页解释这条唯一接缝背后的设计决策,以及每
+构建出的那一个请求函数。本页解释这条唯一入口背后的设计决策,以及每
 一项决策在回应什么威胁;日常怎么调用,看[用户指南的 api-client 使用页](/zh-cn/docs/user-guide/modules/web/api-client/)。
 
 ## 职责与边界
@@ -48,7 +48,7 @@ description: "为什么 api-client 是前端唯一的手写 HTTP 层:构造时�
 ## 设计:为什么访问令牌住在内存
 
 `localStorage` 里的访问令牌,是 XSS 随手拿走的凭据。令牌存储是一个
-朴素的双方法接缝(`get` / `set`);内存实现是本包提供的唯一实现,这里
+朴素的双方法接口(`get` / `set`);内存实现是本包提供的唯一实现,这里
 根本不存在 storage API。两个推论随之而来:令牌在每次尝试前重读,所以
 刷新后的重试带着新令牌;请求可以声明 `omitAccessToken` 即使在持有令
 牌时也完全跳过存储——生成的会话刷新操作正是这样声明的(见
@@ -56,7 +56,7 @@ description: "为什么 api-client 是前端唯一的手写 HTTP 层:构造时�
 
 刷新令牌同样不是本包的业务:authn API 在签发令牌的响应体里返回它、
 不设刷新 cookie,所以由会话层(`@speed/auth-core`)在闭包里持有并驱动
-刷新操作。`api-client` 只定义缝:`refreshAccessToken?: () =>
+刷新操作。`api-client` 只定义选项:`refreshAccessToken?: () =>
 Promise<boolean>`。
 
 同一条逐尝试重读的纪律还管着一个非凭据头:
@@ -103,7 +103,7 @@ trace id——降级成合成的 `client.http.401`。
 常量与 `httpErrorCode(status)`;`AccessTokenStore` 类型与
 `createMemoryAccessTokenStore()`;`RetryPolicy` 类型、冻结的
 `DEFAULT_RETRY_POLICY` 与纯函数 `retryDelayMs` / `retryAfterDelayMs`;
-带 console 默认实现的 `Reporter` 缝;两个 pre-auth config 抓取器
+带 console 默认实现的 `Reporter` 接口;两个 pre-auth config 抓取器
 (`fetchPublicConfig` / `fetchSystemFeatures`,走
 `CONFIG_PUBLIC_PATH` / `SYSTEM_FEATURES_PATH`,与 `go/config` 及其
 OpenAPI 片段手工保持同步——片段生成的操作为主消费面,这两个封装是
@@ -121,5 +121,5 @@ OpenAPI 片段手工保持同步——片段生成的操作为主消费面,这�
 
 - [前端架构](/zh-cn/docs/developer-docs/frontend-architecture/)——本页挂靠的分层综述;"唯一的手写 HTTP 之家"一节就是本包
 - 怎么用:[用户指南的 api-client 页](/zh-cn/docs/user-guide/modules/web/api-client/)
-- web HTTP 组其余设计页:[api-sdk](/zh-cn/docs/developer-docs/modules/web/api-sdk/)——经由这条缝调用的生成面;[auth-core](/zh-cn/docs/developer-docs/modules/web/auth-core/)——填充刷新缝的会话层
+- web HTTP 组其余设计页:[api-sdk](/zh-cn/docs/developer-docs/modules/web/api-sdk/)——经由这条绑定调用的生成面;[auth-core](/zh-cn/docs/developer-docs/modules/web/auth-core/)——提供刷新函数的会话层
 - 两个 config 抓取器的 Go 侧:[config](/zh-cn/docs/developer-docs/modules/core/config/)

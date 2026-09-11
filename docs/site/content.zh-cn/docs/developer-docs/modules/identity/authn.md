@@ -13,7 +13,7 @@ description: "认证设计——调用者是谁,绝不是他能做什么:身份�
 authn 拥有身份域:账号、凭证、会话及其撤销,密码、手机号加短信码、社交渠道与企业 SSO 各条登录通路,MFA 与 step-up,以及同一会话内的租户切换。它发布 `authn.user.created`,自己什么也不发——`notification` 与 `org` 各自对事件作出反应。边界在每一侧都按同一条纪律画:
 
 - **没有角色或策略判定。** `Principal` 刻意不带权限清单——令牌里的权限会随签发冻结整个令牌生命期。能做什么是 rbac 的问题。
-- **没有成员关系,没有组织树。** "这个用户是不是这个租户的活跃成员"经由宿主注入的 `MembershipReader` 接缝询问(org 的名册是规范实现);接缝缺失就拒绝,绝不放行。
+- **没有成员关系,没有组织树。** "这个用户是不是这个租户的活跃成员"经由宿主注入的 `MembershipReader` 模块询问(org 的名册是规范实现);模块缺失就拒绝,绝不放行。
 - **验证码之外不发任何消息**——安全规则单列的同步例外。SAML、WebAuthn/passkey、QQ/微博/支付宝渠道则按设计缺席:SAML 会把依赖强加给每个消费方、覆盖的却只是 OIDC 已覆盖的企业场景,后两者还在等一个设计决定。
 
 ## 身份表刻意不租户化
@@ -28,10 +28,10 @@ authn 拥有身份域:账号、凭证、会话及其撤销,密码、手机号加
 
 访问令牌用 Ed25519 EdDSA 签名,短时效,携带 `sub`/`tid`/`sid`/`amr`——刻意**不带 email**(bearer 凭证会被复制进客户端存储、代理日志与 trace 属性,本模块控制不了那些地方的脱敏)也**不带权限**(会随签发冻结)。
 
-- `Signer`/`Verifier` 在每次 `Issue`/`Verify` 时从 `KeySource` 接缝现取密钥,不持固定密钥集。`WithKeySource` 是唯一、强制的注入点——被删的静态 `KeySet` API 没有向后兼容路径:一条后备密钥通路就是第二条签令牌的路。
-- 接缝由 `go/pki` 的 `Service` 结构化满足,两个方向都没有 import 边;pki 在接缝背后拥有密钥生命周期状态机(`pending → active → retiring → retired`),由自己的到期扫描驱动,authn 只消费密钥。
+- `Signer`/`Verifier` 在每次 `Issue`/`Verify` 时从 `KeySource` 模块现取密钥,不持固定密钥集。`WithKeySource` 是唯一、强制的注入点——被删的静态 `KeySet` API 没有向后兼容路径:一条后备密钥通路就是第二条签令牌的路。
+- 模块接口由 `go/pki` 的 `Service` 结构化满足,两个方向都没有 import 边;pki 在该模块接口背后拥有密钥生命周期状态机(`pending → active → retiring → retired`),由自己的到期扫描驱动,authn 只消费密钥。
 
-接缝存在,是因为长期有效的签名密钥是单点故障:一旦泄露,它伪造的令牌无人能辨。生命周期按计划退役旧钥、所有副本读同一批密钥行,轮换不需要协同重部署。验证还有第二道防线:令牌头的 `alg` 要对着签名密钥自己声明的算法核对,叠加在解析器单-EdDSA 白名单之上。
+模块接口存在,是因为长期有效的签名密钥是单点故障:一旦泄露,它伪造的令牌无人能辨。生命周期按计划退役旧钥、所有副本读同一批密钥行,轮换不需要协同重部署。验证还有第二道防线:令牌头的 `alg` 要对着签名密钥自己声明的算法核对,叠加在解析器单-EdDSA 白名单之上。
 
 ## 会话:有状态,因为撤销是硬需求
 
@@ -86,6 +86,6 @@ TOTP 只用标准库实现,钉在 RFC 4226/6238 官方测试向量上;开通发�
 
 ## 相关页
 
-- [identity 组设计](/zh-cn/docs/developer-docs/modules/identity/)——组内 hub;[org 设计](/zh-cn/docs/developer-docs/modules/identity/org/)——authn 接缝背后的成员答案;[rbac 设计](/zh-cn/docs/developer-docs/modules/identity/rbac/)——从不 import 本模块的授权侧
+- [identity 组设计](/zh-cn/docs/developer-docs/modules/identity/)——组内 hub;[org 设计](/zh-cn/docs/developer-docs/modules/identity/org/)——authn 模块背后的成员答案;[rbac 设计](/zh-cn/docs/developer-docs/modules/identity/rbac/)——从不 import 本模块的授权侧
 - [总体架构](/zh-cn/docs/developer-docs/architecture/)——中间件顺序与接线契约
 - 用户指南:[authn 模块](/zh-cn/docs/user-guide/modules/identity/authn/)、[身份与访问域页](/zh-cn/docs/user-guide/domains/identity-access/)、[identity 组模块](/zh-cn/docs/user-guide/modules/identity/)

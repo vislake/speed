@@ -28,7 +28,7 @@ Invoice 模型的读面。[用户指南的 billing-ui
   谁的发票由调用方的访问令牌决定,所以区块零 prop,租户绝不是
   prop 或请求头。
 - **没有自己的会话层。** store 装着宿主登录流程预先种下的 bearer
-  token;有会话层的宿主经客户端的 `refreshAccessToken` 接缝接入刷
+  token;有会话层的宿主经客户端的 `refreshAccessToken` 选项接入刷
   新。被拒的读原样浮出自己的码。
 - **只用生成 hooks。** 读走生成进 `@speed/api-sdk` 的 react-query
   hooks,经宿主的 QueryClient——本包宿主在主题树之外多供的唯

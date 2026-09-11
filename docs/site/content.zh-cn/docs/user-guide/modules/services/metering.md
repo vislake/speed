@@ -34,7 +34,7 @@ metering 是 speed 的用量计量模块:业务代码经一个 `Recorder` 接口
 径记录,会把可丢与不可丢的数据混进无人能归属的一行。
 
 它**不是**什么:无 Plan/Feature/Entitlement 模型、无积分、无配额
-强制(那是 `go/billing` 的地盘——billing 的 `UsageReader` 接缝由
+强制(那是 `go/billing` 的地盘——billing 的 `UsageReader` 模块由
 `*metering.Aggregator` 结构化满足,供配额判定);无 HTTP 面或
 OpenAPI 片段(它是业务模块进程内调用的 Go 级 API);无分布式聚合
 后端——进程内后端就是已交付的那个。

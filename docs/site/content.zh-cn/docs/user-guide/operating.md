@@ -19,10 +19,10 @@ description: saasctl 生成项目的日常维护——它可以运行的两种�
 默认是 `standalone`。
 
 - **Standalone(单进程)**——一个进程、一个 SQLite 文件,每条基础设施
-  接缝(事件总线、KV 存储、邮件、对象存储)都用进程内实现。零外部
+  模块(事件总线、KV 存储、邮件、对象存储)都用进程内实现。零外部
   依赖;本地开发与小规模单机部署跑的就是它。
 - **Distributed(分布式)**——同一个二进制,以多个副本运行。需要跨副本
-  共享的接缝从环境变量组装真实实现:`APP_REDIS_ADDR` 接出 Redis 支撑
+  共享的模块从环境变量组装真实实现:`APP_REDIS_ADDR` 接出 Redis 支撑
   的事件总线与 KV 存储,`APP_S3_*` 组接 S3 兼容对象存储,`APP_SMTP_*`
   一对接真实邮件,`APP_SMS_GATEWAY_URL` 接 authn 的短信通道。
 

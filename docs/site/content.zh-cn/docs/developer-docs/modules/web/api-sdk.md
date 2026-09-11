@@ -1,7 +1,7 @@
 ---
 title: "@speed/api-sdk:API 契约的生成半面"
 weight: 6
-description: "为什么前端类型面由 orval 从合并文档生成:唯一手写传输接缝 bindRequestFn、不进 lockfile 的固定版本生成器、无凭据刷新 mutator、平台合并成员资格,以及为什么生成代码不带租户概念、不带 i18n 资源。"
+description: "为什么前端类型面由 orval 从合并文档生成:唯一手写传输绑定 bindRequestFn、不进 lockfile 的固定版本生成器、无凭据刷新 mutator、平台合并成员资格,以及为什么生成代码不带租户概念、不带 i18n 资源。"
 ---
 
 # @speed/api-sdk:API 契约的生成半面
@@ -9,8 +9,8 @@ description: "为什么前端类型面由 orval 从合并文档生成:唯一手�
 speed API 契约的后端半面是参与编译的生成服务端代码;本包是同一条纪律
 的前端半面。操作函数、TanStack Query 钩子与响应模型都是 orval 从合并
 OpenAPI 文档生成的输出,它们发出的每一个 HTTP 调用都经由
-`@speed/api-sdk` 的传输缝路由到 `@speed/api-client`,这里除一个接缝文
-件外没有任何手写。本页解释全生成面与那条缝的设计;再生成机制在
+`@speed/api-sdk` 的传输绑定路由到 `@speed/api-client`,这里除一个绑定文
+件外没有任何手写。本页解释全生成面与那条绑定的设计;再生成机制在
 [API 契约](/zh-cn/docs/developer-docs/api-contract/)页,怎么消费这个包
 看[用户指南的 api-sdk 使用页](/zh-cn/docs/user-guide/modules/web/api-sdk/)。
 
@@ -45,7 +45,7 @@ DO-NOT-EDIT 头是机制的一部分,不是装饰:它携带固定的 orval 版�
 禁止在 `src/` 里加第二个手写文件来补生成缺口——工具问题归工具解决
 (见下面的 fixup),永远不归已交付源码。
 
-## 设计:为什么传输缝是一个文件、一次绑定
+## 设计:为什么传输绑定是一个文件、一次绑定
 
 生成代码不能知道宿主如何接它的 HTTP 传输——base URL、令牌存储、刷
 新、重试、超时、reporter 全是宿主 `createClient` 配置的事。
@@ -87,7 +87,7 @@ cases、smilesim)刻意不是——它们是应用自己的 API,由 app 自有�
 
 ## 对外稳定面
 
-冻结的是接缝与过程,不是文件清单:`./runtime` 子路径
+冻结的是绑定与过程,不是文件清单:`./runtime` 子路径
 (`bindRequestFn`、`speedRequest` mutator、
 `speedRequestCredentialless` 覆盖)手写且稳定;DO-NOT-EDIT 边界是一
 份契约——`src/index.ts` 就是 orval 8.17.0 从合并文档生成出的样子,
@@ -104,4 +104,4 @@ react-query v5)是宿主组合所依据的共享 QueryClient 契约。
 - [API 契约](/zh-cn/docs/developer-docs/api-contract/)——本包是其前端半面的 spec-first 纪律、生成腿与 porcelain 门
 - [前端架构](/zh-cn/docs/developer-docs/frontend-architecture/)——生成包在分层中的位置
 - 怎么用:[用户指南的 api-sdk 页](/zh-cn/docs/user-guide/modules/web/api-sdk/)
-- web HTTP 组其余设计页:[api-client](/zh-cn/docs/developer-docs/modules/web/api-client/)——接缝背后的传输;[auth-core](/zh-cn/docs/developer-docs/modules/web/auth-core/)——生成 authn 面的第一个工作区内编译消费者
+- web HTTP 组其余设计页:[api-client](/zh-cn/docs/developer-docs/modules/web/api-client/)——绑定背后的传输;[auth-core](/zh-cn/docs/developer-docs/modules/web/auth-core/)——生成 authn 面的第一个工作区内编译消费者

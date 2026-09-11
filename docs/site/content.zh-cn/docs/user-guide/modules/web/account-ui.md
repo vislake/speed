@@ -23,7 +23,7 @@ description: "已登录账号管理家族——带逐会话与批量撤销的会
 
 层级比 auth-ui 高一层,站在 api-sdk 契约的生成 hooks 一侧:**读经
 `@tanstack/react-query` 生成进 `@speed/api-sdk` 的 hooks,跑在宿主的
-QueryClient 上**;写经同一 `bindRequestFn` 接缝上的生成 mutation——
+QueryClient 上**;写经同一 `bindRequestFn` 绑定点上的生成 mutation——
 这里没有任何东西读存储、挂接会话、导航或直接碰网络。两个区块以
 `@speed/auth-core` 会话为 prop,各自只为恰好一个会话操作
 (`SocialBindingsSection` 用于添加区的授权 URL 请求,`MfaSection` 用

@@ -19,7 +19,7 @@ description: "已登录的账号管理组件族——为什么读走生成式 re
 密码设置)都是宿主内容。边界沿用的纪律与同层家族一致:
 
 - **读走生成进 `@speed/api-sdk` 的 react-query hooks、经宿主的
-  QueryClient**;写走同一接缝的生成 mutation。这里
+  QueryClient**;写走同一绑定的生成 mutation。这里
   不读存储、不 attach 会话、不导航、不直连网络。
 - **session 以 prop 出现,恰好只在生成面表达不出的会话操作处**——
   添加区的授权 URL 请求、挑战对话框的 step-up 验证。两个只读区块

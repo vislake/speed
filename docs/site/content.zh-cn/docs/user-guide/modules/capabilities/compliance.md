@@ -27,7 +27,7 @@ compliance 是 speed 的治理层:保留窗口清扫、被遗忘权编排、数�
   符,都会在任何参与者运行、任何系统上下文进入之前被拒。重跑收
   敛:参与者对自己已完成的工作报 `(0, nil)`。
 - **`ExportService.Export(tenant)`**——把每个参与者的 `Export` 数据
-  收进一份可存储的 `ExportManifest`,经 `ObjectStore` 接缝存下,再
+  收进一份可存储的 `ExportManifest`,经 `ObjectStore` 模块存下,再
   铸造一份 24 小时、单次查看、无密码的 `go/sharing` 分享
   (`Sensitive: true`)完成投递,返回对象 key、清单与分享 token。
 - **`AuditQuery`**——租户作用域 `Query`(或系统上下文门禁的
@@ -92,7 +92,7 @@ _, err := c.Erasure().Erase(ctx, pkgcore.SubjectRef{
   `HardDelete`,让跨租户不可擦属性可证;参与者报出的计数即使自己报
   错也保留,审计绝不少报一次不可逆操作真正毁掉的东西。
 - **一次导出是一整个租户,绝不是单个主体**,以带凭据的一次性交接
-  投递:单次查看、无密码、24 小时过期(可经导出投递读取器接缝按租
+  投递:单次查看、无密码、24 小时过期(可经导出投递读取器模块按租
   户调,钳在 `go/sharing` 上限内)。投递失败删掉已存的清单;投递成
   功的由模块自己的 `compliance.export_manifests` 参与者在过了保留
   窗口后回收。每次导出留两条轨迹:compliance 的请求与投递记录,加

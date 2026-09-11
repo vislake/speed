@@ -25,7 +25,7 @@ flowchart LR
 
 任何不该在 HTTP 请求内同步跑的操作——长任务、需要重试的工作、响应
 发出后仍要发生的工作——都走 `jobs.Queue`。队列是一个小巧的可移植契
-约(`Enqueue` / `Get` / `Cancel`),背后是同一个接缝的两个实现:
+约(`Enqueue` / `Get` / `Cancel`),背后是同一个模块的两个实现:
 `StandaloneQueue`(SQLite 支撑,单进程部署)与 `go/jobs/queue/asynq` 的
 Redis 支撑 `asynq.Queue`(分布式部署)。你的代码只面向 `Queue` 接口;
 跑哪个实现是组装层决定。

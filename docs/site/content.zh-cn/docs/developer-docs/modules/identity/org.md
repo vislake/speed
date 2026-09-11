@@ -18,7 +18,7 @@ description: "组织树设计——邻接加物化路径,而非闭包表或递�
 - 成员关系上的角色——`rbac` 按 (tenant, user, node) 键控的策略;`[]string` 列没有可移植的双方言形态。
 - 邀请邮件之外的任何消息——`notification`;业务模块发布事件,发什么由订阅方决定。
 - 吊销被移除成员的会话——`authn`;org 发布 `org.member.removed`,伸手进会话状态正是这个事件存在的意义。
-- 真实的 `SubjectResolver`——`authn`;org 只提供接缝与失败即拒默认(未接线时 401)。
+- 真实的 `SubjectResolver`——`authn`;org 只提供模块接口与失败即拒默认(未接线时 401)。
 - 动态配置 schema——一个也没有:界都是常量,经选项覆盖;声明一份 org 会静默无视的 schema,是撒谎的 schema。
 
 ## 树:邻接加物化路径
@@ -91,11 +91,11 @@ flowchart TD
 
 **接受是无租户的,解析是诚实的。** 新被邀请的人没有受邀租户的成员关系、通常也没有令牌——在令牌之上再要租户 claim,会让邀请这个流程存在的意义本身不可能。接受路径从令牌自己解析出邀请的租户:经一张刻意窄小、不租户化的 `token_hash → tenant_id` 索引表,与每次邀请同事务写入,然后原封不动重入普通租户化流程。索引行从不更新,所以被吊销或过期的令牌仍能解析、回答各自的编码错误,而不是误导性的查无此邀请。谁在接受由宿主的 `SubjectResolver` 证明,它未接线时失败即拒——送到一个邮箱的令牌并不证明令牌背后地址的归属。
 
-## authn 订阅与免 import 接缝
+## authn 订阅与免 import 模块接口
 
 `authn.user.created` 是 org 与 authn 唯一的协调点,它的字符串名只出现在一处。org 订阅——绝不声明或发布外来事件,那会在 bootstrap 撞车——契约是韧性:发布方不存在不是错误;不认识的负载丢弃而不让发布方失败;无租户的事件什么都不做;真事件重建租户上下文、幂等地确保根与成员关系。
 
-同一种结构手法朝外指:`Scope`、`FeatureGate`、`SubjectResolver` 的每个签名只用标准库类型,消费方在自己包里声明同一组方法、结构化地接受 org 的实现——rbac 永远不知道 `OrgNode` 是什么,因为返回 `[]OrgNode` 的方法会毁掉这个性质。`FeatureGate` 是同一手法指向 config 的 `IsEnabled`;`SubjectResolver` 是认证侧填的接缝。
+同一种结构手法朝外指:`Scope`、`FeatureGate`、`SubjectResolver` 的每个签名只用标准库类型,消费方在自己包里声明同一组方法、结构化地接受 org 的实现——rbac 永远不知道 `OrgNode` 是什么,因为返回 `[]OrgNode` 的方法会毁掉这个性质。`FeatureGate` 是同一手法指向 config 的 `IsEnabled`;`SubjectResolver` 是认证侧填的模块接口。
 
 ## 值得知道的取舍
 
@@ -112,6 +112,6 @@ flowchart TD
 
 ## 相关页
 
-- [identity 组设计](/zh-cn/docs/developer-docs/modules/identity/)——组内 hub;[authn 设计](/zh-cn/docs/developer-docs/modules/identity/authn/)——org 名册应答的接缝;[rbac 设计](/zh-cn/docs/developer-docs/modules/identity/rbac/)——org 的树为之划范围的授权、org 的事件驱动的收割
+- [identity 组设计](/zh-cn/docs/developer-docs/modules/identity/)——组内 hub;[authn 设计](/zh-cn/docs/developer-docs/modules/identity/authn/)——org 名册应答的模块;[rbac 设计](/zh-cn/docs/developer-docs/modules/identity/rbac/)——org 的树为之划范围的授权、org 的事件驱动的收割
 - [总体架构](/zh-cn/docs/developer-docs/architecture/)——数据分域与免 import 纪律
 - 用户指南:[org 模块](/zh-cn/docs/user-guide/modules/identity/org/)、[身份与访问域页](/zh-cn/docs/user-guide/domains/identity-access/)、[identity 组模块](/zh-cn/docs/user-guide/modules/identity/)

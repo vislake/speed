@@ -53,7 +53,7 @@ flowchart LR
 
 ## 导出:收集、落盘、经 sharing 投递
 
-`ExportService.Export` 把每个参与者的数据收进一份清单,经 ObjectStore 接缝落盘,再经 `SharingCreator`——通常是真实的 `go/sharing.Service`——铸成一份 **24 小时、单次浏览、无密码**的分享。直接 import `go/sharing` 是让依赖图规则显形的架构对照:compliance 坐在 sharing *之上*,import 边合法——约束 billing 与 ai-gateway 的同层无 import 规则在这两者之间不适用,`SharingCreator` 接口是为测试隔离而存在,不是为躲开 import。投递形状经过斟酌:一个租户的完整数据是沉重的包裹,窗口取小时级而非 sharing 通用性的 30 天;单次浏览的 256 位令牌本身已是凭据,密码——需要单独投递渠道给收件人——只添活动部件,不加安全。导出以 `Sensitive: true` 创建,sharing 自己的敏感资源审计动作因此与 compliance 的请求与投递记录并行触发:一次完成的导出留下两条审计轨迹,各归事实发生处的属主。
+`ExportService.Export` 把每个参与者的数据收进一份清单,经 ObjectStore 模块落盘,再经 `SharingCreator`——通常是真实的 `go/sharing.Service`——铸成一份 **24 小时、单次浏览、无密码**的分享。直接 import `go/sharing` 是让依赖图规则显形的架构对照:compliance 坐在 sharing *之上*,import 边合法——约束 billing 与 ai-gateway 的同层无 import 规则在这两者之间不适用,`SharingCreator` 接口是为测试隔离而存在,不是为躲开 import。投递形状经过斟酌:一个租户的完整数据是沉重的包裹,窗口取小时级而非 sharing 通用性的 30 天;单次浏览的 256 位令牌本身已是凭据,密码——需要单独投递渠道给收件人——只添活动部件,不加安全。导出以 `Sensitive: true` 创建,sharing 自己的敏感资源审计动作因此与 compliance 的请求与投递记录并行触发:一次完成的导出留下两条审计轨迹,各归事实发生处的属主。
 
 ## 对外稳定面
 

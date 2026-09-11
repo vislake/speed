@@ -107,7 +107,7 @@ migrate` 是同一步骤由操作者手动执行的版本,适合想在第一次�
 生成的骨架上不可能成功:它没有成员存储,而 authn 契约在每次登录时都
 通过宿主注入的 `MembershipReader` 复核租户成员关系——reader 为 nil
 就失败关闭,所以无论密码对错,登录都只答 401
-`authn.invalid_credentials`。接上这个接缝就是生成代码点名的第一个任务。
+`authn.invalid_credentials`。接上这个模块就是生成代码点名的第一个任务。
 
 ## 在本仓库运行 Go 命令
 

@@ -103,7 +103,7 @@ mux.Handle("/api/v1/notes",
 
 ## 边界与注意
 
-- 别 import `authn` 或 `org` 去打听用户或节点的事实——接缝的存在正
+- 别 import `authn` 或 `org` 去打听用户或节点的事实——模块接口的存在正
   是为了让引擎能被任何认证方式不同的宿主复用。
 - 没有通配符语法、没有角色继承角色、角色创建后不可编辑;缓存 TTL
   是选项,刻意不是动态配置项。
@@ -113,5 +113,5 @@ mux.Handle("/api/v1/notes",
 
 ## Source
 
-- [go/rbac/AGENTS.md](https://github.com/vislake/speed/blob/main/go/rbac/AGENTS.md)——权威文档(决策面、缓存、接缝、规则)
+- [go/rbac/AGENTS.md](https://github.com/vislake/speed/blob/main/go/rbac/AGENTS.md)——权威文档(决策面、缓存、模块、规则)
 - 相关:域指南[身份与访问](/zh-cn/docs/user-guide/domains/identity-access/),以及本组页面[authn](/zh-cn/docs/user-guide/modules/identity/authn/)与[org](/zh-cn/docs/user-guide/modules/identity/org/)

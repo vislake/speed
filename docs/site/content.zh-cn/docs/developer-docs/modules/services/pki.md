@@ -1,7 +1,7 @@
 ---
 title: pki
 weight: 3
-description: "go/pki 的设计:需要生命周期的密钥材料——签名密钥与 X.509 证书——藏在 authn 经 KeySource 消费(无 import 边)的 Signer 缝之后,pending 经 retiring 到 revoked 的状态机,以及租户作用域的证书数据。"
+description: "go/pki 的设计:需要生命周期的密钥材料——签名密钥与 X.509 证书——藏在 authn 经 KeySource 消费(无 import 边)的 Signer 模块之后,pending 经 retiring 到 revoked 的状态机,以及租户作用域的证书数据。"
 ---
 
 # pki
@@ -25,15 +25,15 @@ OCSP 响应器(只有 CRL)、没有跨部署 CA 联邦、没有证书透明日�
 在依赖图底层,把模块放进去即成循环。像任何业务模块一样,它携带
 `Component` 描述符。
 
-内部是两层、一条边界:**密钥生命周期层**(`Signer` 缝、状态机、到期
+内部是两层、一条边界:**密钥生命周期层**(`Signer` 模块、状态机、到期
 扫描)与建在其上的 **X.509 层**(CA 签发、证书、CRL)——一张证书就
 是一把有生命周期的密钥外加一份由 CA 签名的身份声明。`authn` 消费
 第一层,且绝不能看到第二层:JWT 验签只需要公钥与 kid,证书解析与
 链校验对它是纯攻击面。
 
-## Signer 缝:签名操作,不是取出私钥
+## Signer 模块:签名操作,不是取出私钥
 
-缝的决定性决策是它的形状:`Signer` 暴露
+模块的决定性决策是它的形状:`Signer` 暴露
 `GenerateKey`/`Sign`/`Public`/`Destroy`——操作——没有任何把私钥
 读回来的途径。`Protect`/`Unprotect` 式设计会让明文密钥必经本进程
 内存,彻底毁掉 KMS 后端存在的意义。正是这个形状让"私钥永不离开
@@ -119,7 +119,7 @@ X.509 层补上自签平台所需的一切:固定 subject 幂等建链(重启永
 - **消费者声明的重叠期 vs 模块自有的轮转策略。** 轮转节奏是 pki
   自己的配置;retiring 重叠期是消费者的凭证寿命。拆开两者是唯一
   能把算术算对的途径,因为只有消费者同时握着两个数字。
-- **结构缝胜过 import。** `authn` 以纯标准库类型、零 pki import
+- **结构模块接口胜过 import。** `authn` 以纯标准库类型、零 pki import
   声明 `KeySource`;pki 的 `Service` 结构性满足它,由留在模块本身
   (而非测试文件)的编译期形状断言钉住。代价——未来签名变更会在
   恰好一处大声编译失败——正是目的。
@@ -137,7 +137,7 @@ X.509 层补上自签平台所需的一切:固定 subject 幂等建链(重启永
 - X.509 层:`CreateRootCA`/`CreateIntermediateCA`/`IssueCertificate`/
   `SignCertificate`/`VerifyCertificate`/`RevokeCertificate`/
   `GenerateCRL`。
-- `Signer` 缝:`signer.local`,以及 `vault`/`kmsaws` 子包的注册名,
+- `Signer` 模块:`signer.local`,以及 `vault`/`kmsaws` 子包的注册名,
   各含 envelope 与直签两变体与声明的能力。
 - HTTP:`/api/v1/pki` 下五个操作(吊销签名密钥、吊销证书、两个
   JWKS 导出、CRL 拉取)。签名密钥吊销以平台域权限门控,证书吊销
@@ -157,7 +157,7 @@ X.509 层补上自签平台所需的一切:固定 subject 幂等建链(重启永
   [notification](/zh-cn/docs/developer-docs/modules/services/notification/)、
   [integration](/zh-cn/docs/developer-docs/modules/services/integration/)、
   [metering](/zh-cn/docs/developer-docs/modules/services/metering/)
-- [总体架构](/zh-cn/docs/developer-docs/architecture/)——`KeySource` 缝、中间件链、模块图
+- [总体架构](/zh-cn/docs/developer-docs/architecture/)——`KeySource` 模块、中间件链、模块图
 - 使用:[用户指南的
   pki](/zh-cn/docs/user-guide/modules/services/pki/)、
   [身份与访问域页](/zh-cn/docs/user-guide/domains/identity-access/)(参考应用如何把

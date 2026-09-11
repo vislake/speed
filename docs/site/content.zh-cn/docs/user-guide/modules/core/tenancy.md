@@ -55,9 +55,9 @@ Allowlist 是精确匹配:`WithAllowlist(method, paths...)` 只豁免该
 细节永不进入响应体。
 
 可选且默认关闭:`WithTenantStatusResolver` 接入 `TenantStatusResolver`
-接缝,让已解析租户的停用状态真正拒绝请求(`tenancy.tenant_suspended`);
+模块,让已解析租户的停用状态真正拒绝请求(`tenancy.tenant_suspended`);
 `Status` 调用本身失败则关闭拒绝(`tenancy.tenant_status_unavailable`)
-——够不到的状态源是故障,绝不是「没有消息就是好消息」。该接缝是
+——够不到的状态源是故障,绝不是「没有消息就是好消息」。该模块接口是
 结构化类型;`admin` 的租户台账是它的第一个真实实现。
 
 ## 带审计的逃生口

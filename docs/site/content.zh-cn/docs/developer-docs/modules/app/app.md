@@ -17,7 +17,7 @@ description: "go/app 的设计——唯一没有业务域的模块为何存在�
 
 - 归此处:装载器(配置装载与 composition 计划)、阶段驱动器、关停
   时序、引擎与其消费者共享的 HTTP 帮手(`AuthnAPIPath`、服务时
-  限、`PreAuthAllowlist`)、固定中间件链与缝桥接。
+  限、`PreAuthAllowlist`)、固定中间件链与桥接。
 - 归宿主:组装哪些组件、用什么取值、写哪些种子、宿主自己的配置
   target 声明哪些键、自己的路由与规则。这些全部经组件描述符、
   load spec、代码覆盖或 `chain.Config` 字段进入。

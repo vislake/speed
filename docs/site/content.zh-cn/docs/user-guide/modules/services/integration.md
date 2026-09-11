@@ -18,7 +18,7 @@ API key,保护平台、租户与单个 key 互不挤占的三层限流,以及把
 被拒绝而非钳制)。`Rotate` 签发替换并撤销前任;`Revoke` 打标;
 `Authenticate` 只凭哈希把出示的原始 key 解析到它的属主租户,以同
 一个对外无差别的 `ErrAuthenticationFailed` 拒绝。作用域在签发时冻
-结(经 `PermissionLister` 接缝对照创建者当前权限校验)且永不重推。
+结(经 `PermissionLister` 模块对照创建者当前权限校验)且永不重推。
 `LayeredLimiter` 组合全局/租户/key 限流层;`HTTPGuard` 把拒绝翻译
 成带 `Retry-After` 与 `X-RateLimit-*` 头的 429。`AuthMiddleware`
 在 HTTP 上运输 `Authenticate`:承载凭据走 `X-API-Key` 头(绝不走
@@ -63,7 +63,7 @@ m := integration.NewModule(db,
     integration.WithPermissionLister(func(ctx context.Context, tenantID, userID string) ([]string, error) {
         return az.ListPermissions(ctx, rbac.Subject{TenantID: pkgcore.TenantID(tenantID), UserID: userID})
     }),
-    // 更多可选接缝:WithMaxAPIKeyLifetime、WithSubjectResolver、WithMembershipChecker、WithAuthenticationGuard
+    // 更多可选选项:WithMaxAPIKeyLifetime、WithSubjectResolver、WithMembershipChecker、WithAuthenticationGuard
 )
 ```
 
@@ -98,7 +98,7 @@ HTTP 面——`/api/v1/integration` 下十个操作(apikey
   收磁盘)。
 - 发送侧不是恰好一次:传输接受后崩溃的窗口会重发;投递的 payload
   在扇出时只算一次,所以重试永远捡不到映射修复。
-- 两个覆写接缝(`WithWebhookURLValidator`、`WithWebhookHTTPClient`)
+- 两个覆写选项(`WithWebhookURLValidator`、`WithWebhookHTTPClient`)
   只供离线测试——生产宿主绝不能接,也绝不能只接一个。
 - 结构化错误码:见[错误码索引(English)](/docs/user-guide/error-codes/#integration)——
   `integration.authentication_failed`、`integration.rate_limited`、
@@ -107,5 +107,5 @@ HTTP 面——`/api/v1/integration` 下十个操作(apikey
 
 ### 出处
 
-- [go/integration/AGENTS.md](https://github.com/vislake/speed/blob/main/go/integration/AGENTS.md)——权威文档(key 生命周期、接缝、webhook 流水线、裁定、限制)
+- [go/integration/AGENTS.md](https://github.com/vislake/speed/blob/main/go/integration/AGENTS.md)——权威文档(key 生命周期、模块、webhook 流水线、裁定、限制)
 - 相关页面:[平台服务](../)、[pki](../pki/)、[notification](../notification/)

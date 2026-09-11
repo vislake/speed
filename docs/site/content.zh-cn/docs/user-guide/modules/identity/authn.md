@@ -8,7 +8,7 @@ description: "认证——调用者是谁,绝不是他能做什么:账号、密�
 
 authn 是 speed 的认证模块:它决定**调用者是谁——绝不是他能做什么**。
 账号、登录、会话、令牌与 MFA 都住在这里;一切「能不能」的问题属于
-`rbac`;authn 每次要重新核验的成员关系事实经宿主接缝而来,`org` 的
+`rbac`;authn 每次要重新核验的成员关系事实经宿主模块而来,`org` 的
 名册是它的规范实现。
 
 ## 它做什么
@@ -22,12 +22,12 @@ authn 拥有身份域的表——`users`、`sessions`、`refresh_tokens`、
 - **密码登录**——argon2id,成本参数随每次存储的哈希自带(PHC):
   提高成本只是一次配置变更,从来不是迁移。
 - **访问令牌**——Ed25519 EdDSA 签名,签发与验证密钥在每次
-  `Issue`/`Verify` 时经 `KeySource` 接缝解析,`*pki.Service` 结构化
-  满足该接缝,两边都没有 import 边。
+  `Issue`/`Verify` 时经 `KeySource` 模块解析,`*pki.Service` 结构化
+  满足该模块,两边都没有 import 边。
 - **刷新轮换**——单次使用的刷新令牌,只存哈希;重放一个已消费的令
   牌会撤销整个令牌族及其会话。
 - **手机号 + 短信码登录**——号码静态加密、盲索引,投递走 pkgcore
-  共享的 SMS 接缝。
+  共享的 SMS 模块。
 - **社交登录**——Google、GitHub、微信、钉钉、飞书,外加按租户的企
   业 OIDC。
 - **MFA**——纯标准库 TOTP(钉在 RFC 4226/6238 向量上)、恢复码、
@@ -116,6 +116,6 @@ principal 变成租户上下文。authn 自己的子树直接从
 
 ## Source
 
-- [go/authn/AGENTS.md](https://github.com/vislake/speed/blob/main/go/authn/AGENTS.md)——权威文档(规则、接缝、已知限制)
+- [go/authn/AGENTS.md](https://github.com/vislake/speed/blob/main/go/authn/AGENTS.md)——权威文档(规则、模块、已知限制)
 - HTTP 片段:[go/authn/api/openapi.yaml](https://github.com/vislake/speed/blob/main/go/authn/api/openapi.yaml)
 - 相关:域指南[身份与访问](/zh-cn/docs/user-guide/domains/identity-access/)、中间件的另一半[tenancy](/zh-cn/docs/user-guide/modules/core/tenancy/)、密钥源[pki](/zh-cn/docs/user-guide/modules/services/pki/),以及本组页面[rbac](/zh-cn/docs/user-guide/modules/identity/rbac/)与[org](/zh-cn/docs/user-guide/modules/identity/org/)

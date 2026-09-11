@@ -29,7 +29,7 @@ status 驱动的路由/内容门。两个组件都受控、都靠 props 驱动,�
   `deniedFallback` 或 ui-kit 的 `EmptyState variant="noPermission"`
   ——本包唯一一处具体的 ui-kit 耦合。三种状态按构造互斥——不会有
   一个单独的 loading 旗标跟 allowed 打架。`onDenied` 在每次*进入*
-  `'denied'` 时恰好触发一次——给宿主路由重定向或遥测用的接缝,与
+  `'denied'` 时恰好触发一次——给宿主路由重定向或遥测用的回调,与
   渲染解耦。
 
 不是路由器、不是认证门、不是导航系统。AppShell 不做任何路径匹配:

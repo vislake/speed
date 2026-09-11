@@ -55,7 +55,7 @@ reference app 自有的 notes、cases、smilesim fragment 刻意不是成
 (`api:gen:app`),并入应用自己的合并文档
 (`examples/reference-app/web/app-openapi.yaml`),生成应用 web 宿
 主 import 的应用自有 SDK——这正是交付型消费方项目管理自有 fragment
-的形态。两个 SDK(平台与自有)骑同一个绑定接缝与同一个 QueryClient。
+的形态。两个 SDK(平台与自有)骑同一个绑定与同一个 QueryClient。
 
 ## 编译就是那道门
 
@@ -67,7 +67,7 @@ fragment 的生成接口。往 spec 里加一个操作再生成:接口变大,没
 
 前端半边反方向同理。再生成 SDK 改变类型,类型检查失败随即枚举出契
 约变更触及的每个调用点。生成 SDK 本身不携带任何 HTTP:每次生成调用
-都经包内唯一手写接缝(`runtime.ts` 的 `bindRequestFn`)适配,宿主启
+都经包内唯一手写绑定(`runtime.ts` 的 `bindRequestFn`)适配,宿主启
 动时把它绑定到自己 `@speed/api-client` 实例上一次——last bind
 wins——生成代码因此继承客户端的认证、重试与错误处理而无需知道它
 们存在。生成包与手写运行时分开是覆盖边界决定:SDK 入口每次再生成
@@ -116,5 +116,5 @@ events 不是 OpenAPI 3.0 媒体类型,通知流端点因此手挂载、省略�
   平台合并文档。
 - [redocly.yaml](https://github.com/vislake/speed/blob/main/redocly.yaml)——
   合并与命名 lint 规则。
-- [api-sdk 运行时接缝](https://github.com/vislake/speed/blob/main/web/packages/api-sdk/src/runtime.ts)——
-  唯一手写绑定接缝。
+- [api-sdk 运行时绑定](https://github.com/vislake/speed/blob/main/web/packages/api-sdk/src/runtime.ts)——
+  唯一手写绑定。

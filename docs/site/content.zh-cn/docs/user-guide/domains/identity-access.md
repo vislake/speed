@@ -37,7 +37,7 @@ principal 变成每个租户级仓库都需要的租户上下文。你的路由�
    阶段应用;参考应用
    `examples/reference-app/internal/app/server.go` 的启动注释逐行演示
    了确切接线顺序。
-2. **给 authn 必选的接缝。** `authn.NewModule` 急切校验选项:`KeySource`
+2. **给 authn 必选的模块。** `authn.NewModule` 急切校验选项:`KeySource`
    (pki 的 `Service` 满足它)与盲索引密钥都是必填——两者都没有安全
    默认值;`MembershipReader` 在登录时回答「该用户是否是该租户成员」
    ——缺省即拒绝,绝不放行。
@@ -81,7 +81,7 @@ principal 变成每个租户级仓库都需要的租户上下文。你的路由�
 用密码登录:`authn` 在真实 `pki` 模块掌管的密钥上签发 Ed25519 访问
 令牌;notes 处理器挂在 `tenancy.Middleware` 与 `rbac` 权限门后面——
 持有 `note-reader` 角色的成员能列笔记,却写不了笔记。整个示例自足
-(内存 SQLite、进程内接缝),所用符号全部来自模块的真实 API(与它们
+(内存 SQLite、进程内组件),所用符号全部来自模块的真实 API(与它们
 各自示例套件运行的是同一形态的接线)。
 
 ```go
@@ -266,7 +266,7 @@ func main() {
 请求到不了权限门——`tenancy.Middleware` 因解析不出租户而失败关闭
 (`403`);校验不过的令牌由 `authn.Middleware` 自己回答 `401`,信封带
 `authn.token_invalid`。(组合部署还会先把装配自己的能力校验警告——
-内存接缝不跨重启存活的 `WARN` 行——打到 stderr;这个手工接线的程序
+内存组件不跨重启存活的 `WARN` 行——打到 stderr;这个手工接线的程序
 直接驱动声明窗口,stderr 上不写任何东西。)
 
 **在参考应用中看到它。** 参考应用正是这样门控自家 notes 路由的:

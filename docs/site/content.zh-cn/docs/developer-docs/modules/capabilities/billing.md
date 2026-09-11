@@ -1,7 +1,7 @@
 ---
 title: billing
 weight: 1
-description: "billing 为什么长成这样——商务领域模型、信用账本的预扣/确认/退还与单语句仲裁、把支付渠道挡在领域之外的网关接缝,以及模块刻意不交付什么。"
+description: "billing 为什么长成这样——商务领域模型、信用账本的预扣/确认/退还与单语句仲裁、把支付渠道挡在领域之外的网关模块,以及模块刻意不交付什么。"
 ---
 
 # billing
@@ -17,13 +17,13 @@ billing 决定*一个租户被允许做什么、欠什么*——它自己从不�
 
 ## 两种计费模式,同一套账本纪律
 
-设计始于一个市场现实:国内与国际支付渠道的能力不同。Stripe 支持原生周期扣款;支付宝与微信在本仓库所服务的层级没有可靠的周期扣款原语。答案不是两套领域模型——而是**一套渠道无关的 `Subscription`/`Invoice` 模型,其生命周期由纯 Go 调用驱动**,外加第二条并行模式:国内按用付费产品真正跑在它上面的信用账本。UI 永远看不到渠道。每个渠道适配器把自己的 webhook 词汇归一化成统一的 `NormalizedEvent` 形状,差异被关在接缝之内。
+设计始于一个市场现实:国内与国际支付渠道的能力不同。Stripe 支持原生周期扣款;支付宝与微信在本仓库所服务的层级没有可靠的周期扣款原语。答案不是两套领域模型——而是**一套渠道无关的 `Subscription`/`Invoice` 模型,其生命周期由纯 Go 调用驱动**,外加第二条并行模式:国内按用付费产品真正跑在它上面的信用账本。UI 永远看不到渠道。每个渠道适配器把自己的 webhook 词汇归一化成统一的 `NormalizedEvent` 形状,差异被关在模块之内。
 
 两条 webhook 真相塑造了支付半边。回调**不可信**:其内容只是"去主动查一次"的触发信号,金额与状态永远以主动查询渠道的结果为准。回调**不可靠**——每个渠道的重试都会重复投递,也可能永远不来。重复投递被一张以渠道自身事件 id 为键的"先插入去重"账本拒掉(处理逻辑保持可重入作为第二道防线);永不抵达的情况由一个主动轮询的 `jobs` 任务兜底,定时重查卡住的行。为什么用持久化的账本行而不是进程内已见集合?重启后的副本必须照样拒绝重复投递——"某事件已处理"的记忆是平台数据,不是进程状态。
 
-## 支付网关接缝:镜像 pki 的 SignerRegistry
+## 支付网关模块:镜像 pki 的 SignerRegistry
 
-`PaymentGateway` 与 `PaymentGatewayRegistry` 住在 billing 的**根包**,三个真实实现住在 `go/billing/gateway/{stripe,alipay,wechat}` 叶子子包——与 `go/pki` 的 `Signer`/`SignerRegistry` 拆分完全同形,理由也相同。单向规则是绝对的:网关子包可以 import billing 根包,反向永远不行。调用方只依赖接口与注册表,不 import 任何 provider;provider 从自己的 `init()` 注册,宿主空白导入自己想要的哪一家。只有 import 了 provider SDK 的那个叶子为此付依赖成本——隔离穿透 `go.mod`/`go.sum`(本仓库子包规则的计量成本纪律),depguard 再把每家 SDK 限制在各自的叶子,`stripe-go` 既进不了 `gateway/alipay`,也进不了根包。为什么接口放根包而不放子包?接缝若在 `gateway` 之下,billing 自己的领域代码为了指名它就得 import `gateway`——这正是让 `stripe.Subscription` 一类渠道类型随时间渗入领域模型的边。"渠道只是收款执行者"靠这个拆分强制执行,不是包装上的讲究。
+`PaymentGateway` 与 `PaymentGatewayRegistry` 住在 billing 的**根包**,三个真实实现住在 `go/billing/gateway/{stripe,alipay,wechat}` 叶子子包——与 `go/pki` 的 `Signer`/`SignerRegistry` 拆分完全同形,理由也相同。单向规则是绝对的:网关子包可以 import billing 根包,反向永远不行。调用方只依赖接口与注册表,不 import 任何 provider;provider 从自己的 `init()` 注册,宿主空白导入自己想要的哪一家。只有 import 了 provider SDK 的那个叶子为此付依赖成本——隔离穿透 `go.mod`/`go.sum`(本仓库子包规则的计量成本纪律),depguard 再把每家 SDK 限制在各自的叶子,`stripe-go` 既进不了 `gateway/alipay`,也进不了根包。为什么接口放根包而不放子包?模块接口若在 `gateway` 之下,billing 自己的领域代码为了指名它就得 import `gateway`——这正是让 `stripe.Subscription` 一类渠道类型随时间渗入领域模型的边。"渠道只是收款执行者"靠这个拆分强制执行,不是包装上的讲究。
 
 ## 信用账本:预扣、确认、退还
 
@@ -33,7 +33,7 @@ billing 决定*一个租户被允许做什么、欠什么*——它自己从不�
 
 ## Entitlements:唯一的判定入口
 
-`Entitlements.Check(ctx, featureKey, requested)` 是业务代码调用的唯一闸门——没有模块自己读订阅表或自行计算额度。Boolean 特性("该租户能不能用模型 X")与配额特性("本周期几次")共用同一机制,按模型访问闸门因此不需要第二套开关系统。配额判定读**实时计数器**,绝不读汇总表——聚合延迟会让超额请求漏过去。计数器经窄小的 `UsageReader` 接口抵达(billing 从不 import metering;两者同层,结构接缝是唯一合法的连接),配额检查没有接 reader 时以编码的配置错误失败关闭——绝不 panic,绝不猜测额度,否则超额租户会失败开放。一个存储形状值得单独说明:`Plan` 刻意不实现 `dbkit.TenantScoped`,因为一张表背着两张脸——平台级行(每个租户的查找都会回退到它)与租户定制行(只许一个租户看见)。没有任何单一数据域能力横跨两面;表格采纳 `go/config` 的现成答案(空串租户哨兵、由 store 自身签名强制隔离、以 `AssertNotTenantScoped` 为证),按 key 解析的读是 store 带护的两次查找。
+`Entitlements.Check(ctx, featureKey, requested)` 是业务代码调用的唯一闸门——没有模块自己读订阅表或自行计算额度。Boolean 特性("该租户能不能用模型 X")与配额特性("本周期几次")共用同一机制,按模型访问闸门因此不需要第二套开关系统。配额判定读**实时计数器**,绝不读汇总表——聚合延迟会让超额请求漏过去。计数器经窄小的 `UsageReader` 接口抵达(billing 从不 import metering;两者同层,结构模块接口是唯一合法的连接),配额检查没有接 reader 时以编码的配置错误失败关闭——绝不 panic,绝不猜测额度,否则超额租户会失败开放。一个存储形状值得单独说明:`Plan` 刻意不实现 `dbkit.TenantScoped`,因为一张表背着两张脸——平台级行(每个租户的查找都会回退到它)与租户定制行(只许一个租户看见)。没有任何单一数据域能力横跨两面;表格采纳 `go/config` 的现成答案(空串租户哨兵、由 store 自身签名强制隔离、以 `AssertNotTenantScoped` 为证),按 key 解析的读是 store 带护的两次查找。
 
 ```mermaid
 flowchart LR
@@ -58,7 +58,7 @@ flowchart LR
 
 ## 对外稳定面
 
-模块的公开 API 是领域类型、`Entitlements.Check`、`CreditService` 的 `Grant`/`PreDeduct`/`Confirm`/`Refund`/`Expire`/`Balance`/`Transactions`、`PaymentGateway` 接缝与注册表,以及只读 HTTP 片段——reference-app 与审计轨迹钉住的表面。不冻结的是还没有真实调用方的部分:支付网关生命周期与配额/`UsageReader` 判定路径仍是预发布形状,第一次真实生产集成可能还会重塑它们。
+模块的公开 API 是领域类型、`Entitlements.Check`、`CreditService` 的 `Grant`/`PreDeduct`/`Confirm`/`Refund`/`Expire`/`Balance`/`Transactions`、`PaymentGateway` 模块与注册表,以及只读 HTTP 片段——reference-app 与审计轨迹钉住的表面。不冻结的是还没有真实调用方的部分:支付网关生命周期与配额/`UsageReader` 判定路径仍是预发布形状,第一次真实生产集成可能还会重塑它们。
 
 ## Source
 
@@ -66,6 +66,6 @@ flowchart LR
 
 ## 相关
 
-- [能力模块组设计](/zh-cn/docs/developer-docs/modules/capabilities/)与[同层接缝纪律](/zh-cn/docs/developer-docs/modules/capabilities/ai-gateway/)的模块设计主线
+- [能力模块组设计](/zh-cn/docs/developer-docs/modules/capabilities/)与[同层模块纪律](/zh-cn/docs/developer-docs/modules/capabilities/ai-gateway/)的模块设计主线
 - 使用:[billing](/zh-cn/docs/user-guide/modules/capabilities/billing/)、[ai-gateway](/zh-cn/docs/user-guide/modules/capabilities/ai-gateway/)
 - 地基:[总体架构](/zh-cn/docs/developer-docs/architecture/)、[设计原则](/zh-cn/docs/developer-docs/design-principles/)

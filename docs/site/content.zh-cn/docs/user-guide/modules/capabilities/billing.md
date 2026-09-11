@@ -29,8 +29,8 @@ billing 是 speed 的商务模块:`Plan`/`Feature`/`Grant`/`Entitlements`
 去重的 `PaymentEvent` 账本,以及 `PollingService`——渠道 webhook 迟
 迟不来的主动轮询兜底。
 
-它**不是**什么:不是 metering——这里不做用量采集,配额判定经小接
-缝 `UsageReader` 读 `go/metering` 的实时计数器,从不读汇总表(汇总
+它**不是**什么:不是 metering——这里不做用量采集,配额判定经窄小的
+`UsageReader` 模块读 `go/metering` 的实时计数器,从不读汇总表(汇总
 有聚合延迟)。不挂接收 webhook 的入站 HTTP 端点,因此没有活的
 `PaymentEvent` 在驱动 `Subscription` 变迁。不交付定时积分过期——机
 制在,清扫本身是产品策略加 `jobs` 宿主的工作。它的 HTTP 片段按决

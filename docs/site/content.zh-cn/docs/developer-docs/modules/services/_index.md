@@ -38,7 +38,7 @@ core 组的模块——组装契约(`pkgcore`)、双方言数据库与仓储层
 
 ```mermaid
 graph BT
-    floor["core floor<br/>assembly contract and infrastructure seams<br/>(pkgcore, dbkit, tenancy, observability, config, jobs, ratelimit)"]
+    floor["core floor<br/>assembly contract and infrastructure modules<br/>(pkgcore, dbkit, tenancy, observability, config, jobs, ratelimit)"]
     storage["storage"]
     notification["notification"]
     pki["pki"]
@@ -54,10 +54,10 @@ graph BT
     pki --> floor
     integration --> floor
     metering --> floor
-    authn -.->|"KeySource seam, no import"| pki
+    authn -.->|"KeySource module, no import"| pki
     billing --> metering
-    ai -.->|"UsageRecorder seam"| metering
-    sharing -.->|"ResourceResolver seam"| storage
+    ai -.->|"UsageRecorder module"| metering
+    sharing -.->|"ResourceResolver module"| storage
 ```
 
 `storage`、`notification`、`pki` 坐在队列之上的同一层:各自用
@@ -65,23 +65,23 @@ graph BT
 轮转的到期扫描。`integration` 与 `metering` 的位置则各有原因:
 integration 在依赖图中居高位,因为它要把**别的**模块的领域事件
 变成 webhook 却不能 import 它们;metering 居低位,因为上层的
-`billing` 要经结构缝读取它的汇总来判定配额。
+`billing` 要经结构模块接口读取它的汇总来判定配额。
 
 五个模块互不 import。它们之间、以及它们与其它组模块的协作,一律
-由宿主接线或走免 import 的结构缝:
+由宿主接线或走免 import 的结构模块接口:
 
 - `authn` 永不 import `pki`;它自己声明 `KeySource` 接口,由 pki
   的 `Service` 结构性满足(见 [pki
   页](/zh-cn/docs/developer-docs/modules/services/pki/))。
 - `notification` 永不 import `authn`、`rbac` 或 `org`:用户的地址在
-  发送时刻经宿主提供的 `UserAddressResolver` 缝解析;业务模块也
+  发送时刻经宿主提供的 `UserAddressResolver` 模块解析;业务模块也
   永不 import `notification`——它们发布领域事件,由宿主决定哪些
   事件变成哪些通知。
 - `integration` 的 webhook 映射是构造期选项,由宿主填入变换函数,
   因为只有宿主能越过模块边界看到两侧;`go/integration` 本身既不
   import 发事件的模块,也不改动平台注册表。
 - `storage` 的队列由宿主接线;`metering` 进入 `ai-gateway` 的通道
-  是可选的 `UsageRecorder` 缝,不是 import。
+  是可选的 `UsageRecorder` 模块,不是 import。
 
 各页的正文展开这些边界为何存在——替代方案的代价正是理由,不是
 风格偏好。

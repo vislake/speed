@@ -1,6 +1,6 @@
 ---
 title: pki
-description: "有生命周期的密钥材料:Ed25519 签名密钥与内部 X.509 CA——生成、轮换、撤销与 CRL,背后是一个永不暴露私钥的 Signer 接缝。"
+description: "有生命周期的密钥材料:Ed25519 签名密钥与内部 X.509 CA——生成、轮换、撤销与 CRL,背后是一个永不暴露私钥的 Signer 模块。"
 weight: 3
 ---
 
@@ -8,7 +8,7 @@ weight: 3
 
 pki 是 speed 的密钥材料模块:需要生命周期——生成、轮换、撤销——
 的签名密钥与 X.509 证书,由平台拥有,背后是一个永不暴露私钥的
-`Signer` 接缝。
+`Signer` 模块。
 
 ## 它做什么
 
@@ -23,7 +23,7 @@ pki 是 speed 的密钥材料模块:需要生命周期——生成、轮换、�
 `Signer` 暴露操作(`GenerateKey`、`Sign`、`Public`、`Destroy`),绝无
 把私钥读回来的途径;`LocalSigner` 是零依赖实现,
 `go/pki/signer/vault` 与 `go/pki/signer/kmsaws` 对 Vault Transit 与
-AWS KMS 实现同一接缝,各注册两个名字——信封模式(密钥外部加密、
+AWS KMS 实现同一模块接口,各注册两个名字——信封模式(密钥外部加密、
 本地解密后签名)与直签模式(密钥永不离开边界,经
 `pkgcore.KeyNeverLeavesBoundary` 声明)——宿主换提供商只改注册名。
 
@@ -45,7 +45,7 @@ RFC 5280 编号的 CRL 生成,以及两个只含公钥的 JWKS 导出。
 ## 何时选用
 
 你要用必须能轮换、可撤销的密钥签名——authn 经其结构化满足的
-`KeySource` 接缝消费密钥生命周期层,任何其它签名需求(内容证明、
+`KeySource` 模块消费密钥生命周期层,任何其它签名需求(内容证明、
 文档签名)同形。你需要内部 CA 签发出可对验证方证明其撤销的证书。
 你的威胁模型要求密钥材料永不进入你的进程(`vault`/`kmsaws` 直签模
 式)。需要*传输*安全或面向公众的证书时,这不是本模块。
@@ -112,5 +112,5 @@ err := ca.CreateRootCA(ctx, pki.CAParams{ /* subject、有效期 */ })
 
 ### 出处
 
-- [go/pki/AGENTS.md](https://github.com/vislake/speed/blob/main/go/pki/AGENTS.md)——权威文档(Signer 接缝、生命周期、X.509 层、残余面、限制)
+- [go/pki/AGENTS.md](https://github.com/vislake/speed/blob/main/go/pki/AGENTS.md)——权威文档(Signer 模块、生命周期、X.509 层、残余面、限制)
 - 相关页面:[平台服务](../)、[storage](../storage/)

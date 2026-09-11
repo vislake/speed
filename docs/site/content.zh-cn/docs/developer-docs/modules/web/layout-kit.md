@@ -26,7 +26,7 @@ AppShell 是固定 `AppBar`、导航 `Drawer` 与 `main` 地标。响应式拆�
 
 ## 设计:RouteGuard——裁决是值,不是回调
 
-`RouteGuard` 以宿主算好的 `status: 'allowed' | 'denied' | 'pending'` 值闸 children。两条理由让值的形态承重。其一,包不可能知道授权来源——真权限取数、角色清单、测试里的 stub——所以它必须收*结果*,绝不调用来源。其二,一个来源的一个值让三态按构造互斥:不存在可能与 "allowed" 打架的独立布尔 loading 标志,那是值形状态表达不了的失败模式。每态默认渲染:children、带标签的 spinner(`pendingFallback` 可覆盖)、或 ui-kit 的 `EmptyState variant="noPermission"`——默认以 `h1` 渲染,因为闸替换了它所守的页面内容;`headingLevel` 延续标题先于闸的页面的标题序而不跳级。`onDenied` 每次*进入* `denied` 恰触发一次——以 status 为键的 `useEffect` 加守卫,重渲染而 status 停在 `denied` 不会重触发——这是给宿主重定向或遥测的接缝,与渲染完全解耦。
+`RouteGuard` 以宿主算好的 `status: 'allowed' | 'denied' | 'pending'` 值闸 children。两条理由让值的形态承重。其一,包不可能知道授权来源——真权限取数、角色清单、测试里的 stub——所以它必须收*结果*,绝不调用来源。其二,一个来源的一个值让三态按构造互斥:不存在可能与 "allowed" 打架的独立布尔 loading 标志,那是值形状态表达不了的失败模式。每态默认渲染:children、带标签的 spinner(`pendingFallback` 可覆盖)、或 ui-kit 的 `EmptyState variant="noPermission"`——默认以 `h1` 渲染,因为闸替换了它所守的页面内容;`headingLevel` 延续标题先于闸的页面的标题序而不跳级。`onDenied` 每次*进入* `denied` 恰触发一次——以 status 为键的 `useEffect` 加守卫,重渲染而 status 停在 `denied` 不会重触发——这是给宿主重定向或遥测的回调,与渲染完全解耦。
 
 消费者证明值入契约:参考应用从服务端应答的笔记查询推导闸状态——被拒的读(403)把闸 fail-closed 到 `denied`——product-shell 的套件以替身宿主附着的角色清单驱动同一形态。状态永远经宿主组装抵达,绝不来自包代码。
 
@@ -37,7 +37,7 @@ flowchart LR
     G -->|allowed| Ch["children"]
     G -->|pending| P["pendingFallback<br/>或带标签 spinner"]
     G -->|denied| D["deniedFallback<br/>或 ui-kit EmptyState noPermission<br/>按宿主的 headingLevel"]
-    G -.->|"每次进入 denied 恰一次"| O["onDenied<br/>重定向 / 遥测接缝"]
+    G -.->|"每次进入 denied 恰一次"| O["onDenied<br/>重定向 / 遥测回调"]
 ```
 
 ## 对外的稳定面

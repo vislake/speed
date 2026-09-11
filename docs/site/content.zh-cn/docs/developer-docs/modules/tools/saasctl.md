@@ -59,9 +59,9 @@ checkout 做一次真实 materialise、`go mod tidy`、`go build`,再把路
 
 这棵树镜像参考应用的 `cmd/server` 形态,减去一切 demo 专属件——
 没有 notes 模块,没有 demo 租户、授权、成员存储或种子数据。照抄参
-考应用会让项目继承它的玩具身份层,所以主机接缝(authn 的
+考应用会让项目继承它的玩具身份层,所以主机模块(authn 的
 `MembershipReader`、org 的 `SubjectResolver`、config resolver)保持
-未接线、按各自模块的契约 fail closed,doc 注释把每个接缝点名为主机
+未接线、按各自模块的契约 fail closed,doc 注释把每个模块点名为主机
 的第一项任务。诚实的后果被讲出来而非粉饰:没有成员存储,正确密码
 与错误密码的回答一模一样,都是 401 `authn.invalid_credentials`。
 
@@ -110,7 +110,7 @@ replace 在构建期胜出;exclude 目标版本等于宣告它不可用),否则�
 原因:运维需要在任何进程运行前让 schema 就位——首次启动的准备、
 供应、CI。拒绝都点名理由:没有 speed requires 说明多半不是生成项
 目;已有数据库却没有 `schema_migrations` 账本,则连同修复指引一起
-拒绝。两种部署模式都被接受——分布式模式改变的是哪些接缝组装真实
+拒绝。两种部署模式都被接受——分布式模式改变的是哪些组件组装真实
 实现,绝不是项目数据库讲哪种方言。共享 SQLite 文件的危险用使用契
 约回答而非锁:启动任何副本前先把 `migrate` 跑完。
 

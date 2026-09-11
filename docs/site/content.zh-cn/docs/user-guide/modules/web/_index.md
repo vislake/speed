@@ -26,7 +26,7 @@ bookCollapseSection: true
   宿:可注入的 `fetch`、只存内存的令牌库、静默单飞 401 刷新、保守的
   瞬时重试,一切失败归一成携带 API 封套 code 的 `ApiError`。
   `@speed/api-sdk` 是合并 API 文档的生成式类型面,经唯一的
-  `bindRequestFn` 接缝走同一个客户端。两者都不带 i18n 资源,也没有
+  `bindRequestFn` 绑定点走同一个客户端。两者都不带 i18n 资源,也没有
   任何租户头——租户上下文住在访问令牌里。
 - **会话与身份层**——`@speed/auth-core` 是无头会话状态机;
   `@speed/auth-ui` 渲染登录组件族;`@speed/account-ui` 渲染登录后
@@ -41,7 +41,7 @@ bookCollapseSection: true
 ## 每个包都守的两条纪律
 
 - **HTTP 只发生在一处。**`api-client` 是唯一自己发 HTTP 的包;生成
-  的 SDK 经它的 `RequestFn` 接缝转发,组件包完全不碰网络——一切交
+  的 SDK 经它的 `RequestFn` 接口转发,组件包完全不碰网络——一切交
   互要么经回调上报,要么是会话操作。workspace 的
   `speed/no-direct-http` ESLint 规则把这条钉死:任何其它包 `src`
   里的裸 `fetch`/`XMLHttpRequest`/`axios` 调用都是错误。
