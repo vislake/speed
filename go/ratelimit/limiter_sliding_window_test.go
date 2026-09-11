@@ -870,8 +870,8 @@ func TestAllow_KVStoreErrors_PropagatedToCaller(t *testing.T) {
 
 	t.Run("IncrByFloatWithTTL", func(t *testing.T) {
 		// The one write call left on Allow's fixed path: every hit, first or
-		// not, goes through it -- there is no longer a separate
-		// TTL-attachment step to fail independently.
+		// not, goes through it -- there is no separate TTL-attachment step
+		// to fail independently.
 		fake := &erroringKVStore{KVStore: pkgcore.NewMemoryKVStore(), failMethod: "IncrByFloatWithTTL", err: wantErr}
 		dec, err := New(fake).Allow(ctx, "k1", limit)
 		if !errors.Is(err, wantErr) {
@@ -904,10 +904,11 @@ func TestAllow_KVStoreErrors_PropagatedToCaller(t *testing.T) {
 // truncates as before, and -- the case this test exists to guard -- a value
 // int cannot represent clamps to math.MaxInt instead of being converted
 // directly. See clampRemaining's own doc comment for why that last case is a
-// real, confirmed bug (an architecture-dependent conversion result) rather
+// real portability bug (an architecture-dependent conversion result) rather
 // than defensive-programming caution.
 //
-// This table pins the fix deterministically on every architecture, unlike
+// This table pins clampRemaining's contract deterministically on every
+// architecture, unlike
 // TestAllow_RateNearMaxInt_RemainingClampedConsistently below: it asserts
 // clampRemaining's contract directly, rather than relying on a bare
 // int(remaining) actually misbehaving on whatever machine happens to run
@@ -936,24 +937,20 @@ func TestClampRemaining(t *testing.T) {
 	}
 }
 
-// TestAllow_RateNearMaxInt_RemainingClampedConsistently exercises the fix
-// through the public Allow API for the scenario the bug report was about: a
-// caller using a very large Limit.Rate (math.MaxInt is a real convention for
-// "effectively unlimited", used instead of skipping the Allow call
-// altogether) must never see an internally inconsistent Decision -- Allowed
-// true alongside a deeply negative Remaining.
+// TestAllow_RateNearMaxInt_RemainingClampedConsistently drives the scenario
+// through the public Allow API: a very large Limit.Rate (math.MaxInt is the
+// convention for "effectively unlimited", used instead of skipping the Allow
+// call altogether) must never see an internally inconsistent Decision --
+// Allowed true alongside a deeply negative Remaining.
 //
-// Before the fix, this exact scenario -- Rate: math.MaxInt, one hit -- could
-// only be observed to fail on this package's own darwin/arm64 development
-// host by cross-compiling to amd64 and running the binary under Rosetta:
-// arm64's own float64->int conversion happens to saturate correctly for
-// this input (see clampRemaining's doc comment), so a bare int(remaining)
-// conversion passes this assertion anyway on an arm64 machine, and only an
-// amd64 run (the architecture most production and CI environments run on)
-// demonstrates the failure. TestClampRemaining above pins clampRemaining's
-// own contract independent of which architecture `go test` happens to run
-// on; this test additionally proves the clamping is actually wired into
-// Allow's own return path, not just implemented and unused.
+// No architecture makes that input safe to convert bare: arm64's
+// float64->int conversion happens to saturate correctly for this input, but
+// amd64 (the architecture most production and CI environments run on)
+// converts it to math.MinInt64 instead (see clampRemaining's doc comment).
+// TestClampRemaining above pins clampRemaining's own contract independent
+// of which architecture `go test` happens to run on; this test additionally
+// proves the clamping is actually wired into Allow's own return path, not
+// just implemented and unused.
 func TestAllow_RateNearMaxInt_RemainingClampedConsistently(t *testing.T) {
 	limit := Limit{Rate: math.MaxInt, Per: time.Minute}
 	lim := New(pkgcore.NewMemoryKVStore())
@@ -1038,17 +1035,14 @@ func TestWindowKey_DistinctPairsNeverCollide(t *testing.T) {
 }
 
 // TestAllow_EveryWindowRollover_MintsFreshKey pins down, deterministically
-// and with no concurrency involved, a structural fact the former
-// "TTL-attachment race" doc comment relied on to explain why that race
-// recurred rather than being a one-time event: windowKey mints a
+// and with no concurrency involved, a structural fact: windowKey mints a
 // brand-new, never-before-used storage key every single Per interval, for
-// as long as a caller's key keeps being hit. That recurrence is what used
-// to matter for the race (now closed -- see slidingWindowLimiter's doc
-// comment, "The TTL-attachment race, closed") and still matters on its own
-// structural merits: "the first hit in this window" is not a rare,
-// once-per-caller-key event, it recurs on every window boundary, forever,
-// for any continuously-hit key, which is worth pinning down independent of
-// any race it once exposed.
+// as long as a caller's key keeps being hit. "The first hit in this
+// window" is therefore not a rare, once-per-caller-key event -- it recurs
+// on every window boundary, forever, for any continuously-hit key. That is
+// worth pinning down on its own structural merits, and it is also what
+// makes the TTL-attachment hazard in slidingWindowLimiter's doc comment
+// ("The TTL-attachment race") more than a one-time concern.
 //
 // This test proves exactly that against the store: across several
 // consecutive real windows, the storage key Allow is about to use has never

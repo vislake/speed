@@ -275,10 +275,10 @@ func (l *slidingWindowLimiter) Allow(ctx context.Context, key string, limit Limi
 // math.MaxInt.
 //
 // That top clamp is reachable with entirely legitimate input, and skipping
-// it is a real, confirmed portability bug, not defensive-programming
-// caution. Limit.validate requires only Rate > 0 -- it has no upper bound,
-// and a large sentinel such as math.MaxInt is a real convention some callers
-// use for "effectively unlimited" instead of skipping the Allow call
+// it is a real portability bug, not defensive-programming caution.
+// Limit.validate requires only Rate > 0 -- it has no upper bound, and a
+// large sentinel such as math.MaxInt is a real convention some callers use
+// for "effectively unlimited" instead of skipping the Allow call
 // altogether. float64 can only represent integers exactly up to 2^53, so
 // float64(limit.Rate) for a Rate that large has already rounded up past
 // int64's own maximum by the time this function is ever called: math.MaxInt
@@ -286,18 +286,15 @@ func (l *slidingWindowLimiter) Allow(ctx context.Context, key string, limit Limi
 // float64, 2^63 -- one past what int64 can hold. The Go spec (Conversions)
 // is explicit about what happens next: "if the result type cannot represent
 // the value the conversion succeeds but the result value is
-// implementation-defined". That is not theoretical here. Verified
-// empirically, both ways, on the very same machine: int(2^63) on this
-// package's darwin/arm64 development host saturates to math.MaxInt64
-// (arm64's FCVTZS instruction saturates on overflow), but the identical Go
-// source cross-compiled to amd64 and executed under Rosetta on that same
-// host produces math.MinInt64 instead (amd64's CVTTSD2SI leaves the x86
-// "integer indefinite" bit pattern on overflow, which happens to equal
-// MinInt64). Left unclamped, a real production amd64 deployment would
-// observe Decision{Allowed: true, Remaining: math.MinInt64} for input that
-// looks entirely correct in local arm64 development -- a badly wrong signal
-// for anything that inspects Remaining, such as a quota header or a
-// "Remaining <= 0" fallback check. Clamping first guarantees the int(...)
+// implementation-defined" -- and the two supported architectures differ
+// exactly as the spec allows: arm64's FCVTZS saturates on overflow and
+// yields math.MaxInt64, while amd64's CVTTSD2SI leaves the x86 "integer
+// indefinite" bit pattern, which equals math.MinInt64. Left unclamped, an
+// amd64 deployment would observe Decision{Allowed: true, Remaining:
+// math.MinInt64} for input that looks entirely correct in local arm64
+// development -- a badly wrong signal for anything that inspects Remaining,
+// such as a quota header or a "Remaining <= 0" fallback check. Clamping
+// first guarantees the int(...)
 // conversion below only ever runs on a value already inside int's range,
 // which the spec guarantees converts identically on every platform, so
 // Remaining for this input stays the same large, positive value everywhere
