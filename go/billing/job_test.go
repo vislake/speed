@@ -15,6 +15,7 @@ import (
 	"github.com/vislake/speed/go/jobs"
 	"github.com/vislake/speed/go/observability"
 	"github.com/vislake/speed/go/pkgcore"
+	"github.com/vislake/speed/go/pkgcore/testkit"
 )
 
 // fakeGateway is a minimal billing.PaymentGateway double for job_test.go's
@@ -529,20 +530,6 @@ func firstPollJobID(t *testing.T, db *gorm.DB) jobs.JobID {
 	return jobs.JobID(ids[0])
 }
 
-// waitForPollRun waits until a poll handler run lands on runs and returns
-// its job id, failing the test after timeout. runs must be a buffered
-// channel the handler fills once per Handle call.
-func waitForPollRun(t *testing.T, runs chan jobs.JobID, what string) jobs.JobID {
-	t.Helper()
-	select {
-	case id := <-runs:
-		return id
-	case <-time.After(20 * time.Second):
-		t.Fatalf("%s: no poll run within 20s", what)
-		return ""
-	}
-}
-
 // TestEnqueuePoll_SameWindowEnqueuesCollapseIntoOneJob pins the
 // same-window collapse: the concurrency protection the poll key exists
 // for must survive the windowing -- two enqueues for one tenant inside
@@ -575,7 +562,7 @@ func TestEnqueuePoll_SameWindowEnqueuesCollapseIntoOneJob(t *testing.T) {
 	if n := pollRowCount(t, db); n != 1 {
 		t.Fatalf("poll rows = %d, want 1 -- a same-window duplicate enqueue must resolve the first job, never insert a second row", n)
 	}
-	first := waitForPollRun(t, runs, "the collapsed poll")
+	first := testkit.WaitForRun(t, runs, "the collapsed poll")
 	if first != firstPollJobID(t, db) {
 		t.Errorf("poll run job id = %s, want the row's id %s", first, firstPollJobID(t, db))
 	}
@@ -613,7 +600,7 @@ func TestEnqueuePoll_LaterWindowEnqueuesNewJobAndRunsAgain(t *testing.T) {
 	if err := svc.EnqueuePoll(ctx); err != nil {
 		t.Fatalf("first EnqueuePoll: %v", err)
 	}
-	first := waitForPollRun(t, runs, "window A's poll")
+	first := testkit.WaitForRun(t, runs, "window A's poll")
 
 	// The scheduler's tick one window later: pollWindowB.
 	svc.now = func() time.Time { return pollWindowB }
@@ -624,7 +611,7 @@ func TestEnqueuePoll_LaterWindowEnqueuesNewJobAndRunsAgain(t *testing.T) {
 	if n := pollRowCount(t, db); n != 2 {
 		t.Fatalf("poll rows = %d, want 2 -- the later window's enqueue must create a NEW job (fails on the tenant-only key, which resolves the first row forever)", n)
 	}
-	second := waitForPollRun(t, runs, "window B's poll")
+	second := testkit.WaitForRun(t, runs, "window B's poll")
 	if second == first {
 		t.Errorf("window B's run job id = %s, the same as window A's -- the later-window enqueue must run its own poll", second)
 	}
@@ -697,7 +684,7 @@ func TestEnqueuePoll_DeadLetteredWindowDoesNotPoisonLaterOnes(t *testing.T) {
 	if n := pollRowCount(t, db); n != 2 {
 		t.Fatalf("poll rows = %d, want 2 -- the dead-lettered window's key must not keep resolving for later windows (fails on the tenant-only key)", n)
 	}
-	second := waitForPollRun(t, runs, "window B's poll after window A dead-lettered")
+	second := testkit.WaitForRun(t, runs, "window B's poll after window A dead-lettered")
 	if second == first {
 		t.Errorf("window B's run job id = %s, the same as window A's dead-lettered job -- a dead-lettered window must not poison the tenant's later windows", second)
 	}

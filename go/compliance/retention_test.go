@@ -15,6 +15,7 @@ import (
 	"github.com/vislake/speed/go/pkgcore"
 	"github.com/vislake/speed/go/pkgcore/apperr"
 	"github.com/vislake/speed/go/pkgcore/componenttest"
+	"github.com/vislake/speed/go/pkgcore/testkit"
 	"github.com/vislake/speed/go/tenancy"
 
 	"github.com/vislake/speed/go/compliance/internal/testutil"
@@ -862,20 +863,6 @@ func firstRetentionSweepJobID(t *testing.T, db *gorm.DB) jobs.JobID {
 	return jobs.JobID(ids[0])
 }
 
-// waitForRetentionRun waits until a sweep handler run lands on runs and
-// returns its job id, failing the test after timeout. runs must be a
-// buffered channel the handler fills once per Handle call.
-func waitForRetentionRun(t *testing.T, runs chan jobs.JobID, what string) jobs.JobID {
-	t.Helper()
-	select {
-	case id := <-runs:
-		return id
-	case <-time.After(20 * time.Second):
-		t.Fatalf("%s: no sweep run within 20s", what)
-		return ""
-	}
-}
-
 // TestEnqueueRetentionSweep_SameWindowEnqueuesCollapseIntoOneJob pins
 // regression (a): the concurrency protection the sweep key exists for must
 // survive the windowing -- two enqueues for one tenant inside the same
@@ -909,7 +896,7 @@ func TestEnqueueRetentionSweep_SameWindowEnqueuesCollapseIntoOneJob(t *testing.T
 	if n := retentionSweepRowCount(t, db); n != 1 {
 		t.Fatalf("retention-sweep rows = %d, want 1 -- a same-window duplicate enqueue must resolve the first job, never insert a second row", n)
 	}
-	first := waitForRetentionRun(t, runs, "the collapsed sweep")
+	first := testkit.WaitForRun(t, runs, "the collapsed sweep")
 	if first != firstRetentionSweepJobID(t, db) {
 		t.Errorf("sweep run job id = %s, want the row's id %s", first, firstRetentionSweepJobID(t, db))
 	}
@@ -944,7 +931,7 @@ func TestEnqueueRetentionSweep_LaterWindowEnqueuesNewJobAndSweepsAgain(t *testin
 	if err := svc.EnqueueRetentionSweep(ctx); err != nil {
 		t.Fatalf("first EnqueueRetentionSweep: %v", err)
 	}
-	first := waitForRetentionRun(t, runs, "window A's sweep")
+	first := testkit.WaitForRun(t, runs, "window A's sweep")
 
 	// The scheduler's tick an hour later: retentionWindowB, a different
 	// window.
@@ -956,7 +943,7 @@ func TestEnqueueRetentionSweep_LaterWindowEnqueuesNewJobAndSweepsAgain(t *testin
 	if n := retentionSweepRowCount(t, db); n != 2 {
 		t.Fatalf("retention-sweep rows = %d, want 2 -- the later window's enqueue must create a NEW job (fails on the tenant-only key, which resolves the first row forever)", n)
 	}
-	second := waitForRetentionRun(t, runs, "window B's sweep")
+	second := testkit.WaitForRun(t, runs, "window B's sweep")
 	if second == first {
 		t.Errorf("window B's run job id = %s, the same as window A's -- the later-window enqueue must run its own sweep", second)
 	}
@@ -1027,7 +1014,7 @@ func TestEnqueueRetentionSweep_DeadLetteredWindowDoesNotPoisonLaterOnes(t *testi
 	if n := retentionSweepRowCount(t, db); n != 2 {
 		t.Fatalf("retention-sweep rows = %d, want 2 -- the dead-lettered window's key must not keep resolving for later windows (fails on the tenant-only key)", n)
 	}
-	second := waitForRetentionRun(t, runs, "window B's sweep after window A dead-lettered")
+	second := testkit.WaitForRun(t, runs, "window B's sweep after window A dead-lettered")
 	if second == first {
 		t.Errorf("window B's run job id = %s, the same as window A's dead-lettered job -- a dead-lettered window must not poison the tenant's later windows", second)
 	}

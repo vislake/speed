@@ -9,6 +9,7 @@ import (
 
 	"github.com/vislake/speed/go/jobs"
 	"github.com/vislake/speed/go/pkgcore"
+	"github.com/vislake/speed/go/pkgcore/testkit"
 )
 
 // This file pins the window semantics of the two platform-wide periodic
@@ -115,20 +116,6 @@ func firstWindowJobID(t *testing.T, db *gorm.DB, taskType string) jobs.JobID {
 	return jobs.JobID(ids[0])
 }
 
-// waitForWindowRun waits until a handler run lands on runs and returns its
-// job id, failing the test after timeout. runs must be a buffered channel
-// the handler fills once per Handle call.
-func waitForWindowRun(t *testing.T, runs chan jobs.JobID, what string) jobs.JobID {
-	t.Helper()
-	select {
-	case id := <-runs:
-		return id
-	case <-time.After(20 * time.Second):
-		t.Fatalf("%s: no run within 20s", what)
-		return ""
-	}
-}
-
 // --- Expiry scan (job.go) ------------------------------------------------
 
 // TestEnqueueExpiryScan_SameWindowEnqueuesCollapseIntoOneJob pins the
@@ -166,7 +153,7 @@ func TestEnqueueExpiryScan_SameWindowEnqueuesCollapseIntoOneJob(t *testing.T) {
 	if n := windowRowCount(t, db, taskTypeExpiryScan); n != 1 {
 		t.Fatalf("expiry-scan rows = %d, want 1 -- a same-window duplicate enqueue must resolve the first job, never insert a second row (fails on the keyless pre-fix enqueue, which created two independent jobs)", n)
 	}
-	first := waitForWindowRun(t, runs, "the collapsed scan")
+	first := testkit.WaitForRun(t, runs, "the collapsed scan")
 	if first != firstWindowJobID(t, db, taskTypeExpiryScan) {
 		t.Errorf("scan run job id = %s, want the row's id %s", first, firstWindowJobID(t, db, taskTypeExpiryScan))
 	}
@@ -204,7 +191,7 @@ func TestEnqueueExpiryScan_LaterWindowEnqueuesNewJobAndScansAgain(t *testing.T) 
 	if err := svc.EnqueueExpiryScan(ctx); err != nil {
 		t.Fatalf("first EnqueueExpiryScan: %v", err)
 	}
-	first := waitForWindowRun(t, runs, "window A's scan")
+	first := testkit.WaitForRun(t, runs, "window A's scan")
 
 	// A tick one DefaultExpiryScanWindow later: windowB, a different window.
 	svc.now = func() time.Time { return windowB }
@@ -215,7 +202,7 @@ func TestEnqueueExpiryScan_LaterWindowEnqueuesNewJobAndScansAgain(t *testing.T) 
 	if n := windowRowCount(t, db, taskTypeExpiryScan); n != 2 {
 		t.Fatalf("expiry-scan rows = %d, want 2 -- the later window's enqueue must create a NEW job", n)
 	}
-	second := waitForWindowRun(t, runs, "window B's scan")
+	second := testkit.WaitForRun(t, runs, "window B's scan")
 	if second == first {
 		t.Errorf("window B's run job id = %s, the same as window A's -- the later-window enqueue must run its own scan", second)
 	}
@@ -304,7 +291,7 @@ func TestEnqueueCRLRegenerate_SameWindowEnqueuesCollapseIntoOneJob(t *testing.T)
 	if n := windowRowCount(t, db, taskTypeCRLRegenerate); n != 1 {
 		t.Fatalf("CRL-regenerate rows = %d, want 1 -- a same-window duplicate enqueue must resolve the first job, never insert a second row (fails on the keyless pre-fix enqueue, which created two independent jobs)", n)
 	}
-	first := waitForWindowRun(t, runs, "the collapsed regeneration")
+	first := testkit.WaitForRun(t, runs, "the collapsed regeneration")
 	if first != firstWindowJobID(t, db, taskTypeCRLRegenerate) {
 		t.Errorf("regeneration run job id = %s, want the row's id %s", first, firstWindowJobID(t, db, taskTypeCRLRegenerate))
 	}
@@ -341,7 +328,7 @@ func TestEnqueueCRLRegenerate_LaterWindowEnqueuesNewJobAndRegeneratesAgain(t *te
 	if err := ca.EnqueueCRLRegenerate(ctx); err != nil {
 		t.Fatalf("first EnqueueCRLRegenerate: %v", err)
 	}
-	first := waitForWindowRun(t, runs, "window A's regeneration")
+	first := testkit.WaitForRun(t, runs, "window A's regeneration")
 
 	// A tick one DefaultCRLRegenerateWindow later: windowB, a different
 	// window.
@@ -353,7 +340,7 @@ func TestEnqueueCRLRegenerate_LaterWindowEnqueuesNewJobAndRegeneratesAgain(t *te
 	if n := windowRowCount(t, db, taskTypeCRLRegenerate); n != 2 {
 		t.Fatalf("CRL-regenerate rows = %d, want 2 -- the later window's enqueue must create a NEW job", n)
 	}
-	second := waitForWindowRun(t, runs, "window B's regeneration")
+	second := testkit.WaitForRun(t, runs, "window B's regeneration")
 	if second == first {
 		t.Errorf("window B's run job id = %s, the same as window A's -- the later-window enqueue must run its own regeneration", second)
 	}
