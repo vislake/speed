@@ -49,6 +49,16 @@ func TestWellFormedAcceptsAValidDescriptor(t *testing.T) {
 	if err := WellFormed(free); err != nil {
 		t.Errorf("WellFormed(%q) = %v, want nil", free.Name, err)
 	}
+
+	// A hyphenated module name is expressible, so a component of such a
+	// module can carry the module's own name ("ai-gateway" is the repo's
+	// own hyphenated one).
+	hyphenated := validComponent()
+	hyphenated.Name = "ai-gateway"
+	hyphenated.Module = "ai-gateway"
+	if err := WellFormed(hyphenated); err != nil {
+		t.Errorf("WellFormed(%q) = %v, want nil", hyphenated.Name, err)
+	}
 }
 
 func TestWellFormedRejects(t *testing.T) {

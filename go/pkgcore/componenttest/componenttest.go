@@ -19,9 +19,11 @@ import (
 )
 
 // componentNamePattern is the naming convention a component name follows:
-// lowercase dot-separated segments of letters, digits and underscores, such
-// as "authn" or "mailer.smtp".
-var componentNamePattern = regexp.MustCompile(`^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)*$`)
+// lowercase dot-separated segments of letters, digits, underscores and
+// hyphens, such as "authn", "mailer.smtp" or "ai-gateway". Hyphens are legal
+// so a component of a hyphenated module can carry the module's own name, as
+// a single-implementation module's component does.
+var componentNamePattern = regexp.MustCompile(`^[a-z][a-z0-9_-]*(\.[a-z][a-z0-9_-]*)*$`)
 
 // WellFormed reports why c does not satisfy the component descriptor
 // contract, or nil when it does. It checks the conventions the assembly's
@@ -48,7 +50,7 @@ func WellFormed(c pkgcore.Component) error {
 	case c.Name == "":
 		problems = append(problems, "the component has no name; a name is the selection key a composition configuration addresses the component by")
 	case !componentNamePattern.MatchString(c.Name):
-		problems = append(problems, fmt.Sprintf("the name %q does not follow the component naming convention: lowercase dot-separated segments of letters, digits and underscores (\"authn\", \"mailer.smtp\")", c.Name))
+		problems = append(problems, fmt.Sprintf("the name %q does not follow the component naming convention: lowercase dot-separated segments of letters, digits, underscores and hyphens (\"authn\", \"mailer.smtp\", \"ai-gateway\")", c.Name))
 	case c.Module != "" && c.Name != c.Module && !strings.HasPrefix(c.Name, c.Module+"."):
 		problems = append(problems, fmt.Sprintf("the name %q does not reflect the module %q it implements; a component of a module is named after it (\"authn\" for module \"authn\") or extends it with a dot segment (\"mailer.smtp\" for module \"mailer\")", c.Name, c.Module))
 	}
