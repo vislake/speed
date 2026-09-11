@@ -1,14 +1,6 @@
 /**
- * vitest setup for tenancy-ui tests: jest-dom matchers and RTL auto-cleanup.
- *
- * Cleanup is registered explicitly (not through vitest globals, which the
- * workspace does not enable) so a rendered tree never leaks into the next
- * test.
+ * vitest setup for tenancy-ui tests: the workspace's shared setup side
+ * effect (see @speed/test-utils/setup) -- jest-dom matchers plus the
+ * explicit RTL cleanup between tests.
  */
-import '@testing-library/jest-dom/vitest'
-import { cleanup } from '@testing-library/react'
-import { afterEach } from 'vitest'
-
-afterEach(() => {
-  cleanup()
-})
+import '@speed/test-utils/setup'

@@ -144,7 +144,7 @@ another package's `dist/`. Three helper layers:
   namespaces registered; `I18nextProvider` around `AppThemeProvider`).
   Bilingual assertions import the shipped locale files, never inline a
   language literal.
-- `test-utils/session-harness.ts` — `makeHarness`, the scripted fake
+- `@speed/test-utils/session-harness` — `makeHarness`, the scripted fake
   `RequestFn` bound through `bindRequestFn`, for tests that must script
   raw `ApiError`s or inspect request bodies.
 - `test-utils/real-client.ts` + `test-utils/session-gate.tsx` — the

@@ -24,7 +24,7 @@ import {
   expectNoAxeViolations,
   runHeadingOrderCheck,
 } from '../../test-utils/axe.js'
-import { emittedStyleText } from '../../test-utils/emitted-css.js'
+import { emittedStyleText } from '@speed/test-utils/emitted-css'
 import { DataTable } from './DataTable.js'
 import type { DataTableColumn, DataTableProps } from './DataTable.js'
 

@@ -67,7 +67,7 @@ import {
   jsonResponse,
   makeRealClientRig,
 } from '../test-utils/real-client.js'
-import { makePair } from '../test-utils/session-harness.js'
+import { makePair } from '@speed/test-utils/session-harness'
 import { TENANCY_UI_NAMESPACE, tenancyUiResources } from './resources.js'
 import { TenantSwitcher } from './TenantSwitcher.js'
 import type { TenantOption } from './TenantSwitcher.js'

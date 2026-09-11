@@ -35,13 +35,11 @@ import {
   layoutKitResources,
 } from '@speed/layout-kit'
 import { UI_KIT_NAMESPACE, uiKitResources } from '@speed/ui-kit'
+import { TEST_LANGUAGES } from '@speed/test-utils/render'
 import authUiZhCN from '../../../auth-ui/src/locales/zh-CN.json' with { type: 'json' }
 import layoutKitZhCN from '../../../layout-kit/src/locales/zh-CN.json' with { type: 'json' }
 import productShellZhCN from '../locales/zh-CN.json' with { type: 'json' }
-import {
-  renderWithProviders,
-  TEST_LANGUAGES,
-} from '../../test-utils/render.js'
+import { renderWithProviders } from '../../test-utils/render.js'
 import { expectNoAxeViolations } from '../../test-utils/axe.js'
 import {
   jsonResponse,

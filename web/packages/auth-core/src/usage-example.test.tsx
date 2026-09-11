@@ -6,7 +6,7 @@
  * @speed/api-client transport (createClient + bindRequestFn). A unit
  * suite cannot run that composition -- no network -- so this file
  * drives the identical session API through the scripted request seam
- * the package's own tests use (test-utils/session-harness.ts, bound
+ * the package's own tests use (@speed/test-utils/session-harness, bound
  * through the same bindRequestFn seam a host's real client binds), and
  * a probe component renders the README's hook reads -- useAuthState,
  * useCurrentTenant, usePermission -- with login and logout called from
@@ -45,7 +45,7 @@ import {
   snapshotLog,
   SOCIAL_AUTHORIZE,
   SOCIAL_CALLBACK,
-} from '../test-utils/session-harness'
+} from '@speed/test-utils/session-harness'
 
 afterEach(() => {
   cleanup()

@@ -25,7 +25,7 @@ import enUS from './locales/en-US.json' with { type: 'json' }
 import uiKitZhCN from '../../ui-kit/src/locales/zh-CN.json' with { type: 'json' }
 import { renderWithProviders } from '../test-utils/render.js'
 import { expectNoAxeViolations } from '../test-utils/axe.js'
-import { mockMatchMedia } from '../test-utils/matchMedia.js'
+import { mockMatchMedia } from '@speed/test-utils/matchMedia'
 import { AppShell } from './components/AppShell.js'
 import { RouteGuard, type RouteGuardStatus } from './components/RouteGuard.js'
 

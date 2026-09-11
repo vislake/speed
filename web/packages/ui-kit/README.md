@@ -838,7 +838,7 @@ From `web/packages/ui-kit`: `pnpm lint`, `pnpm typecheck`, `pnpm test`,
 (`vitest.config.ts`); shared helpers live in `test-utils/`
 (`renderWithProviders` builds the host tree -- fresh i18n instance per
 call, namespace registered -- `expectNoAxeViolations` runs axe -- and
-`emitted-css.ts`'s `emittedStyleText()` reads the CSS text emotion has
+`@speed/test-utils/emitted-css`'s `emittedStyleText()` reads the CSS text emotion has
 injected into the document, used by the breakpoint-keyed sx
 assertions the responsive tests need: jsdom evaluates neither real
 layout nor `@media` conditions, so those tests are property/snapshot

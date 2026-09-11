@@ -23,50 +23,25 @@
  * denied-transition firing), so the scaffold has to keep the tree shape
  * stable across rerenders.
  *
- * The i18n instance is created per call with a deterministic
- * configuration (no storage, no URL, no navigator) and both namespaces
- * registered -- a fresh instance per call keeps registerNamespace's
- * double-registration guard from firing across tests.
+ * The i18n instance is created per call through the shared
+ * createTestI18n (see @speed/test-utils/render's header), with both
+ * namespaces registered.
  */
 
 import { render } from '@testing-library/react'
-import type { RenderResult } from '@testing-library/react'
 import type { ReactElement, ReactNode } from 'react'
-import {
-  createI18n,
-  I18nextProvider,
-  registerNamespace,
-  type I18nInstance,
-} from '@speed/i18n'
+import { I18nextProvider, registerNamespace } from '@speed/i18n'
+import type { I18nInstance } from '@speed/i18n'
 import { AppThemeProvider, UI_KIT_NAMESPACE, uiKitResources } from '@speed/ui-kit'
+import { createTestI18n } from '@speed/test-utils/render'
+import type { RenderWithProvidersOptions } from '@speed/test-utils/render'
+import type { RenderWithProvidersResult } from '@speed/test-utils/render'
 import { LAYOUT_KIT_NAMESPACE, layoutKitResources } from '../src/resources.js'
 
-export interface RenderWithProvidersOptions {
-  /** Start language of the fresh instance; defaults to zh-CN. */
-  readonly language?: string
-  /**
-   * Reuse an existing instance instead of creating one -- the caller
-   * owns its creation AND namespace registration (a second registration
-   * on the same instance throws by design).
-   */
-  readonly i18n?: I18nInstance
-}
-
-export interface RenderWithProvidersResult extends RenderResult {
-  /** The instance the tree renders with; language-switch tests act on it. */
-  readonly i18n: I18nInstance
-}
-
-export const TEST_LANGUAGES = ['zh-CN', 'en-US'] as const
+export type { RenderWithProvidersOptions, RenderWithProvidersResult }
 
 export function createLayoutKitI18n(language: string = 'zh-CN'): I18nInstance {
-  const instance = createI18n({
-    supportedLanguages: TEST_LANGUAGES,
-    defaultLanguage: language,
-    storage: null,
-    urlParameterName: null,
-    navigatorLanguages: [],
-  })
+  const instance = createTestI18n(language)
   registerNamespace(instance, LAYOUT_KIT_NAMESPACE, layoutKitResources)
   registerNamespace(instance, UI_KIT_NAMESPACE, uiKitResources)
   return instance

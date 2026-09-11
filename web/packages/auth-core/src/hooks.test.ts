@@ -5,7 +5,7 @@
  * is attached, the tenant and permission values over a scripted
  * session, the re-renders on set changes, domain separation and the
  * last-bind-wins attach semantics. Everything flows through the real
- * session driven by the shared test-utils/session-harness.ts -- no
+ * session driven by the shared @speed/test-utils/session-harness -- no
  * mocks of hooks.ts internals.
  *
  * The hooks' module-level attach state is pristine only until this
@@ -31,7 +31,7 @@ import {
   principal,
   REFRESH,
   SWITCH_TENANT,
-} from '../test-utils/session-harness'
+} from '@speed/test-utils/session-harness'
 import {
   attachSession,
   useAuthState,

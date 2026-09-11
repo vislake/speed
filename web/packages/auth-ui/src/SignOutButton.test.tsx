@@ -26,7 +26,7 @@ import {
   makeHarness,
   makePair,
   type Harness,
-} from '../test-utils/session-harness.js'
+} from '@speed/test-utils/session-harness'
 import { expectNoAxeViolations } from '../test-utils/axe.js'
 import zhCN from './locales/zh-CN.json' with { type: 'json' }
 import enUS from './locales/en-US.json' with { type: 'json' }

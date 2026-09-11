@@ -4,40 +4,38 @@
  * (ProductShell.test.tsx).
  *
  * Those journeys drive the assembled shell over the wiring the package
- * README's quick start documents -- a real @speed/api-client createClient
- * over a fetch stand-in answering with genuine Response objects, the
- * memory access-token store, and the session's own refreshAccessToken:
- * () => session.refresh() -- bound into the api-sdk runtime seam
- * (bindRequestFn, the same seam every generated call uses). Because the
- * transport is real api-client machinery, whatever the responder scripts
- * (including the 401-refresh leg, which api-client exercises itself) is
- * handled by the client rather than scripted around.
+ * README's quick start documents -- a real @speed/api-client
+ * createClient over a fetch stand-in answering with genuine Response
+ * objects, the memory access-token store, and the session's own
+ * refreshAccessToken: () => session.refresh() -- bound into the api-sdk
+ * runtime seam (see @speed/test-utils/real-client's header for the
+ * shared rig's contract). Because the transport is real api-client
+ * machinery, whatever the responder scripts (including the 401-refresh
+ * leg, which api-client exercises itself) is handled by the client
+ * rather than scripted around.
  *
- * The rig mirrors the real-client legs of @speed/auth-ui's own
- * test-utils/real-client.ts and of @speed/tenancy-ui's copy (same fetcher
- * shape, same jsonResponse over genuine Response objects); it is the
- * product-shell half of that evidence, since this package has no session
- * logic of its own to test. Bodies are recorded the way tenancy-ui's
- * copy records them: the gated-journey suite pins what a tenant switch
- * sent, and a journey test must be able to assert the request it just
- * made.
- * makePair rides along here (auth-ui keeps it in its session-harness):
+ * The projection below is this package's recorded call shape: the
+ * request leg plus the serialized body -- the gated-journey suite pins
+ * what a tenant switch sent, and a journey test must be able to assert
+ * the request it just made. makePair is re-exported here rather than
+ * living with the session harness (auth-ui's home for it): the
  * product-shell journeys drive only the happy paths -- a token-issuing
  * login and a 204 logout -- so the pair is the only answer shape the
- * suite scripts, and one rig file keeps them together. Like every
- * cross-package test-utility copy, this file stays in lockstep with its
- * auth-ui original by hand.
+ * suite scripts, and one rig file keeps them together.
  */
 
-import {
-  createClient,
-  createMemoryAccessTokenStore,
-} from '@speed/api-client'
 import type { AccessTokenStore } from '@speed/api-client'
-import { bindRequestFn } from '@speed/api-sdk/runtime'
-import type { AuthnTokenPair } from '@speed/api-sdk'
-import { createAuthSession } from '@speed/auth-core'
 import type { AuthSession } from '@speed/auth-core'
+import {
+  makeRealClientRig as makeRig,
+} from '@speed/test-utils/real-client'
+import type { ObservedRequest } from '@speed/test-utils/real-client'
+
+export {
+  errorResponse,
+  jsonResponse,
+  makePair,
+} from '@speed/test-utils/real-client'
 
 /** A request as the fetch stand-in observed it. */
 export interface RealCall {
@@ -69,69 +67,21 @@ export interface RealClientRig {
   readonly calls: RealCall[]
 }
 
+function projectCall(request: ObservedRequest): RealCall {
+  return {
+    method: request.method,
+    path: request.path,
+    authorization: request.authorization,
+    body: request.rawBody,
+  }
+}
+
 /**
  * Binds a real client whose fetch stand-in answers from the script and
  * returns the session over the same store. Each call binds anew: the
  * runtime seam is last-bind-wins by contract.
  */
 export function makeRealClientRig(respond: RealResponder): RealClientRig {
-  const store = createMemoryAccessTokenStore()
-  const session = createAuthSession(store)
-  const calls: RealCall[] = []
-  // The fetch stand-in of the README quick start, narrowed to a script:
-  // it records the request leg and answers from the responder, never
-  // touching the network (nothing here invokes fetch). Response objects
-  // are genuine, so api-client's envelope parsing runs for real.
-  const fetcher: typeof fetch = async (input, init) => {
-    const url = new URL(String(input))
-    const method = init?.method ?? 'GET'
-    const authorization = new Headers(init?.headers).get('authorization')
-    const body = typeof init?.body === 'string' ? init.body : null
-    const call: RealCall = { method, path: url.pathname, authorization, body }
-    calls.push(call)
-    return respond(call)
-  }
-  const client = createClient({
-    baseUrl: 'https://api.test',
-    fetch: fetcher,
-    accessTokenStore: store,
-    refreshAccessToken: () => session.refresh(),
-  })
-  bindRequestFn(client)
+  const { session, store, calls } = makeRig(respond, projectCall)
   return { session, store, calls }
-}
-
-/**
- * A token-issuing login answer in the shape the session parser reads
- * (snake_case body fields, the principal inline). The session lifecycle
- * needs nothing else on its happy paths.
- */
-export function makePair(overrides: Partial<AuthnTokenPair> = {}): AuthnTokenPair {
-  return {
-    access_token: 'access-1',
-    refresh_token: 'refresh-1',
-    principal: {
-      user_id: 'user-1',
-      tenant_id: 'tenant-1',
-      session_id: 'session-1',
-    },
-    ...overrides,
-  }
-}
-
-/** A JSON answer in the API's envelope shape, like the real server. */
-export function jsonResponse(status: number, body: unknown): Response {
-  return new Response(JSON.stringify(body), {
-    status,
-    headers: { 'content-type': 'application/json' },
-  })
-}
-
-/** A 401-style error envelope answering in the API's error shape. */
-export function errorResponse(
-  status: number,
-  code: string,
-  traceId = 'trace-1',
-): Response {
-  return jsonResponse(status, { code, traceId, message: code })
 }

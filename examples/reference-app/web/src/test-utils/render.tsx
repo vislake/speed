@@ -13,20 +13,15 @@
  * react-query default retries, and a mutation must not outlive its
  * test.
  *
- * The i18n instance is created per call with a deterministic
- * configuration (no storage, no URL, no navigator) and every namespace
- * a rendered unit can read is registered: the six namespace-shipping
- * package families the app composes -- ui-kit (whose built-in strings
- * components compose without saying so), layout-kit, auth-ui,
- * tenancy-ui, account-ui and product-shell (whose one string, the
- * polite announcement of its session-ended flip, renders only where
- * the namespace is registered) -- plus the app's own reference-app
- * namespace. A fresh instance per call keeps registerNamespace's
- * double-registration guard from firing across tests. This harness is
- * the app layer's own copy of the account-ui package's harness --
- * layer-local by design, the standing same-layer pattern across the
- * workspace (extracting a shared harness package is recorded
- * DEFERRED).
+ * The i18n instance is created per call through the shared
+ * createTestI18n (see @speed/test-utils/render's header), with every
+ * namespace a rendered unit can read registered: the six
+ * namespace-shipping package families the app composes -- ui-kit
+ * (whose built-in strings components compose without saying so),
+ * layout-kit, auth-ui, tenancy-ui, account-ui and product-shell (whose
+ * one string, the polite announcement of its session-ended flip,
+ * renders only where the namespace is registered) -- plus the app's own
+ * reference-app namespace.
  *
  * Tests that exercise a language switch keep the returned instance and
  * act on it (await switchLanguage(i18n, 'en-US')); the provider's
@@ -34,16 +29,11 @@
  */
 
 import { render } from '@testing-library/react'
-import type { RenderResult } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import type { ReactElement } from 'react'
 import { attachSession } from '@speed/auth-core'
-import {
-  createI18n,
-  I18nextProvider,
-  registerNamespace,
-  type I18nInstance,
-} from '@speed/i18n'
+import { I18nextProvider, registerNamespace } from '@speed/i18n'
+import type { I18nInstance } from '@speed/i18n'
 import { AppThemeProvider } from '@speed/ui-kit'
 import { UI_KIT_NAMESPACE, uiKitResources } from '@speed/ui-kit'
 import { LAYOUT_KIT_NAMESPACE, layoutKitResources } from '@speed/layout-kit'
@@ -54,6 +44,11 @@ import {
   PRODUCT_SHELL_NAMESPACE,
   productShellResources,
 } from '@speed/product-shell'
+import {
+  createTestI18n,
+  createTestQueryClient,
+} from '@speed/test-utils/render'
+import type { RenderWithProvidersResult as BaseResult } from '@speed/test-utils/render'
 import { AppServicesProvider } from '../app-services.js'
 import type { AppServices } from '../app-services.js'
 import {
@@ -79,9 +74,7 @@ export interface RenderWithProvidersOptions {
   readonly queryClient?: QueryClient
 }
 
-export interface RenderWithProvidersResult extends RenderResult {
-  /** The instance the tree renders with; language-switch tests act on it. */
-  readonly i18n: I18nInstance
+export interface RenderWithProvidersResult extends BaseResult {
   /**
    * The query client the tree renders with. Tests whose operations
    * invalidate or seed react-query state act on it.
@@ -89,17 +82,9 @@ export interface RenderWithProvidersResult extends RenderResult {
   readonly queryClient: QueryClient
 }
 
-export const TEST_LANGUAGES = ['zh-CN', 'en-US'] as const
-
 /** Fresh bilingual instance with all seven namespaces registered. */
 export function createAppI18n(language: string = 'zh-CN'): I18nInstance {
-  const instance = createI18n({
-    supportedLanguages: TEST_LANGUAGES,
-    defaultLanguage: language,
-    storage: null,
-    urlParameterName: null,
-    navigatorLanguages: [],
-  })
+  const instance = createTestI18n(language)
   registerNamespace(instance, UI_KIT_NAMESPACE, uiKitResources)
   registerNamespace(instance, LAYOUT_KIT_NAMESPACE, layoutKitResources)
   registerNamespace(instance, AUTH_UI_NAMESPACE, authUiResources)
@@ -110,15 +95,7 @@ export function createAppI18n(language: string = 'zh-CN'): I18nInstance {
   return instance
 }
 
-/** Fresh client that never retries: see the header. */
-export function createTestQueryClient(): QueryClient {
-  return new QueryClient({
-    defaultOptions: {
-      queries: { retry: false },
-      mutations: { retry: false },
-    },
-  })
-}
+export { createTestQueryClient }
 
 export function renderWithProviders(
   ui: ReactElement,

@@ -167,7 +167,7 @@ Toolbar and `headerActions` group) computes fine through jsdom's
 The mobile drawer's `width: min(sidebarWidth, 85vw)` is not
 breakpoint-gated either, but a CSS math function jsdom's simplified
 style engine may not evaluate reliably, so that one instead asserts
-against `test-utils/emitted-css.ts`'s `emittedStyleText()` — the actual
+against `@speed/test-utils/emitted-css`'s `emittedStyleText()` — the actual
 generated CSS text, read across every `<style>` tag in the document.
 Both forms are property/snapshot proofs that the intended declaration
 was wired into the render; neither proves the layout looks correct at

@@ -5,31 +5,39 @@
  * @speed/api-client createClient over a fetch stand-in answering with
  * genuine Response objects, the memory access-token store, and the
  * session's own refreshAccessToken: () => session.refresh() -- bound
- * into the api-sdk runtime seam (bindRequestFn, the same seam the app's
- * own bootstrap binds). Because the transport is real api-client
- * machinery, a request answered 401 would drive the client's own
- * single-flight refresh and one retry rather than a scripted leg --
+ * into the api-sdk runtime seam, see @speed/test-utils/real-client's
+ * header for the shared rig's contract). Because the transport is real
+ * api-client machinery, a request answered 401 would drive the client's
+ * own single-flight refresh and one retry rather than a scripted leg --
  * but no journey at this tier scripts one today: the demo-server
  * answers no 401, so the refresh leg stays dormant here, its in-form
  * exercise living in the packages' own usage-example suites, where a
  * scripted responder answers 401.
  *
- * This is the app layer's own copy of the same rig the account-ui
- * package's suite ships (same fetcher shape, same jsonResponse over
- * genuine Response objects). The rig is layer-local by design -- each
- * layer holds its own copy rather than same-layer packages importing
- * one another, the standing pattern across the workspace; extracting a
- * shared rig package is recorded DEFERRED.
+ * The projection below is this package's recorded call shape: the
+ * request leg plus the raw serialized body, '' when the request sent
+ * none. Responders whose answer depends on the payload (the
+ * demo-server's tenant-switch answer reads the requested tenant_id from
+ * here) parse it themselves, and suites that must pin a write's payload
+ * assert on the same string. The rig also exposes the bound client
+ * as the RequestFn a host slots into its services layer, so app-services
+ * units consume the rig exactly as the app bootstrap's composition does.
  */
 
-import {
-  createClient,
-  createMemoryAccessTokenStore,
-} from '@speed/api-client'
 import type { AccessTokenStore, RequestFn } from '@speed/api-client'
-import { bindRequestFn } from '@speed/api-sdk/runtime'
-import { createAuthSession } from '@speed/auth-core'
 import type { AuthSession } from '@speed/auth-core'
+import {
+  makeRealClientRig as makeRig,
+} from '@speed/test-utils/real-client'
+import type { ObservedRequest } from '@speed/test-utils/real-client'
+
+export {
+  errorResponse,
+  jsonResponse,
+  makePair,
+  signInWithPassword,
+} from '@speed/test-utils/real-client'
+export type { AuthnTokenPair } from '@speed/api-sdk'
 
 /** A request as the fetch stand-in observed it. */
 export interface RealCall {
@@ -73,105 +81,22 @@ export interface RealClientRig {
   readonly calls: RealCall[]
 }
 
+function projectCall(request: ObservedRequest): RealCall {
+  return {
+    method: request.method,
+    path: request.path,
+    query: request.query,
+    authorization: request.authorization,
+    body: request.rawBody ?? '',
+  }
+}
+
 /**
  * Binds a real client whose fetch stand-in answers from the script and
  * returns the session over the same store. Each call binds anew: the
  * runtime seam is last-bind-wins by contract.
  */
 export function makeRealClientRig(respond: RealResponder): RealClientRig {
-  const store = createMemoryAccessTokenStore()
-  const session = createAuthSession(store)
-  const calls: RealCall[] = []
-  // The fetch stand-in of a real host, narrowed to a script: it records
-  // the request leg and answers from the responder, never touching the
-  // network (nothing here invokes fetch). Response objects are genuine,
-  // so api-client's envelope parsing runs for real.
-  const fetcher: typeof fetch = async (input, init) => {
-    const url = new URL(String(input))
-    const method = init?.method ?? 'GET'
-    const authorization = new Headers(init?.headers).get('authorization')
-    const call: RealCall = {
-      method,
-      path: url.pathname,
-      query: url.search,
-      authorization,
-      body: String(init?.body ?? ''),
-    }
-    calls.push(call)
-    return respond(call)
-  }
-  const client = createClient({
-    baseUrl: 'https://api.test',
-    fetch: fetcher,
-    accessTokenStore: store,
-    refreshAccessToken: () => session.refresh(),
-  })
-  bindRequestFn(client)
-  return { session, store, api: client, calls }
-}
-
-/** A JSON answer in the API's envelope shape, like the real server. */
-export function jsonResponse(status: number, body: unknown): Response {
-  return new Response(JSON.stringify(body), {
-    status,
-    headers: { 'content-type': 'application/json' },
-  })
-}
-
-/** A 401-style error envelope answering in the API's error shape. */
-export function errorResponse(
-  status: number,
-  code: string,
-  traceId = 'trace-1',
-): Response {
-  return jsonResponse(status, { code, traceId, message: code })
-}
-
-/**
- * The token-issuing answer of a sign-in endpoint, in the shape auth-core
- * parses (access_token + refresh_token plus a principal carrying the
- * identity claims the access token represents -- user_id, tenant_id and
- * session_id, the last the token the session list will mark current).
- */
-export interface AuthnTokenPair {
-  readonly access_token: string
-  readonly refresh_token: string
-  readonly principal: {
-    readonly user_id: string
-    readonly tenant_id: string
-    readonly session_id: string
-  }
-}
-
-/** A token pair for a scripted sign-in; overrides replace a top-level
- * field or the whole principal wholesale. */
-export function makePair(
-  overrides: Partial<AuthnTokenPair> = {},
-): AuthnTokenPair {
-  return {
-    access_token: 'access-1',
-    refresh_token: 'refresh-1',
-    principal: {
-      user_id: 'user-1',
-      tenant_id: 'tenant-1',
-      session_id: 'session-1',
-    },
-    ...overrides,
-  }
-}
-
-/**
- * The shared first leg of a signed-in journey: the responder must answer
- * POST /api/v1/authn/login/password with jsonResponse(200, makePair()).
- * The rig's session has no seed path by contract -- a reload starts
- * anonymous -- so a journey signs in through the real session operation,
- * which is also what plants the access token in the shared store.
- */
-export async function signInWithPassword(
-  rig: RealClientRig,
-): Promise<void> {
-  await rig.session.loginWithPassword({
-    identifier: 'owner@example.test',
-    password: 'correct-horse-battery-staple',
-  })
+  const { session, store, api, calls } = makeRig(respond, projectCall)
+  return { session, store, api, calls }
 }

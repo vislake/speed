@@ -268,7 +268,7 @@ namespaces registered -- `expectNoAxeViolations` runs axe;
 `AppShell`'s desktop/mobile split, its returned handle's
 `changeMatches` flipping a mounted shell across the breakpoint --
 `resize-observer.ts`'s `stubResizeObserver` stubs the header-height
-measurement -- and `emitted-css.ts`'s
+measurement -- and `@speed/test-utils/emitted-css`'s
 `emittedStyleText()` reads the CSS text emotion has injected into the
 document, used by the mobile-drawer-width-cap test: jsdom evaluates no
 real layout, so that assertion is a property/snapshot proof the CSS

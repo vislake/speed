@@ -524,7 +524,7 @@ package's `dist/`. Three layers of helpers, mirroring `@speed/auth-core`'s:
   Bilingual assertions import the shipped bundles
   (`../locales/zh-CN.json`, `en-US.json`), never inline a language
   literal.
-- `session-harness.ts` -- `makeHarness` drives component tests'
+- `@speed/test-utils/session-harness` -- `makeHarness` drives component tests'
   sessions: a scripted fake `RequestFn` bound through the same
   `bindRequestFn` seam a host's real client binds, a real session over
   a fresh memory store, and assertions on observable state only (store

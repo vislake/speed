@@ -1,20 +1,16 @@
 /**
- * vitest setup for product-shell tests: jest-dom matchers, RTL
- * auto-cleanup, and a desktop-default window.matchMedia stub (see
- * matchMedia.ts) so AppShell's useMediaQuery call has something to call
- * in jsdom. Cleanup is registered explicitly (not through vitest
- * globals, which the workspace does not enable) so a rendered tree never
- * leaks into the next test.
+ * vitest setup for product-shell tests: the workspace's shared setup
+ * side effect (see @speed/test-utils/setup) plus a desktop-true
+ * window.matchMedia default before each test, so AppShell's
+ * useMediaQuery call has something to call in jsdom and suites that do
+ * not care about the split need not stub it themselves (see
+ * @speed/test-utils/matchMedia; a suite that must pin the mobile branch
+ * calls mockMatchMedia before rendering).
  */
-import '@testing-library/jest-dom/vitest'
-import { cleanup } from '@testing-library/react'
-import { afterEach, beforeEach } from 'vitest'
-import { mockMatchMedia } from './matchMedia.js'
+import '@speed/test-utils/setup'
+import { mockMatchMedia } from '@speed/test-utils/matchMedia'
+import { beforeEach } from 'vitest'
 
 beforeEach(() => {
   mockMatchMedia(true)
-})
-
-afterEach(() => {
-  cleanup()
 })

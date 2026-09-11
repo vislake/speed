@@ -18,7 +18,7 @@ import zhCN from '../locales/zh-CN.json' with { type: 'json' }
 import enUS from '../locales/en-US.json' with { type: 'json' }
 import { renderWithProviders } from '../../test-utils/render.js'
 import { expectNoAxeViolations } from '../../test-utils/axe.js'
-import { emittedStyleText } from '../../test-utils/emitted-css.js'
+import { emittedStyleText } from '@speed/test-utils/emitted-css'
 import { TextFieldSlot } from '../../test-utils/text-field-slot.js'
 import { FormLayout } from './FormLayout.js'
 import { FormField } from './FormField.js'

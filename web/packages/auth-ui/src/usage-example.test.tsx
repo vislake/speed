@@ -56,7 +56,7 @@ import {
   jsonResponse,
   makeRealClientRig,
 } from '../test-utils/real-client.js'
-import { makePair } from '../test-utils/session-harness.js'
+import { makePair } from '@speed/test-utils/session-harness'
 import { AUTH_UI_NAMESPACE, authUiResources } from './resources.js'
 import { SignInScreen } from './SignInScreen.js'
 import zhCN from './locales/zh-CN.json' with { type: 'json' }

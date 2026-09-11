@@ -24,7 +24,7 @@ import { renderWithProviders } from '../../test-utils/render.js'
 import type { RenderWithProvidersResult } from '../../test-utils/render.js'
 import { expectNoAxeViolations } from '../../test-utils/axe.js'
 import { dropFiles, selectFiles } from '../../test-utils/file-input.js'
-import { emittedStyleText } from '../../test-utils/emitted-css.js'
+import { emittedStyleText } from '@speed/test-utils/emitted-css'
 
 function makeFile(name: string): File {
   return new File(['x-ray bytes'], name, { type: 'application/octet-stream' })

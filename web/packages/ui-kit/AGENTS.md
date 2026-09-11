@@ -146,7 +146,7 @@ groups, `PageHeader`'s title/actions row). A breakpoint-keyed sx value
 (`FormLayout`'s `gridTemplateColumns` under `columns={2}`) compiles to
 a base rule plus an `@media` rule that jsdom cannot evaluate — there is
 no real viewport for either side to be "active" at — so those assert
-against `test-utils/emitted-css.ts`'s `emittedStyleText()` instead: the
+against `@speed/test-utils/emitted-css`'s `emittedStyleText()` instead: the
 actual generated CSS text, read across every `<style>` tag in the
 document. Both forms are property/snapshot proofs that the intended
 declaration was wired into the render; neither proves a layout looks

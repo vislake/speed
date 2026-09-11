@@ -146,7 +146,7 @@ stays unexported until a consumer proves it needs to be public.
   through the same scripted harness (the real createClient composition
   is proven in session.test.ts), so the documented usage cannot drift
   from the API. All of them drive sessions through the shared scripted
-  harness in `test-utils/session-harness.ts` — tests never touch a
+  harness in `@speed/test-utils/session-harness` — tests never touch a
   real server and never mock package internals; they drive the
   exported API and assert observable state (store contents,
   snapshots, notification order, request bodies).

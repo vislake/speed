@@ -34,8 +34,8 @@ import { switchLanguage } from '@speed/i18n'
 import enUS from '../locales/en-US.json' with { type: 'json' }
 import zhCN from '../locales/zh-CN.json' with { type: 'json' }
 import { expectNoAxeViolations } from '../../test-utils/axe.js'
-import { emittedStyleText } from '../../test-utils/emitted-css.js'
-import { mockMatchMedia } from '../../test-utils/matchMedia.js'
+import { emittedStyleText } from '@speed/test-utils/emitted-css'
+import { mockMatchMedia } from '@speed/test-utils/matchMedia'
 import { renderWithProviders } from '../../test-utils/render.js'
 import { stubResizeObserver } from '../../test-utils/resize-observer.js'
 import { AppShell, type AppShellNavItem } from './AppShell.js'

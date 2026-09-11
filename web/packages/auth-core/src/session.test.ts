@@ -10,7 +10,7 @@
  * Behaviour is asserted through the observable surface only: the
  * store's token, getSnapshot, subscriber notifications, the request
  * script's bodies and the raw ApiErrors a failed operation rejects.
- * The scripted harness itself lives in test-utils/session-harness.ts,
+ * The scripted harness itself lives in @speed/test-utils/session-harness,
  * shared with src/hooks.test.ts.
  */
 
@@ -40,8 +40,8 @@ import {
   SOCIAL_CALLBACK,
   STEP_UP,
   SWITCH_TENANT,
-} from '../test-utils/session-harness'
-import type { Harness } from '../test-utils/session-harness'
+} from '@speed/test-utils/session-harness'
+import type { Harness } from '@speed/test-utils/session-harness'
 import {
   createAuthSession,
   isOperationSuperseded,

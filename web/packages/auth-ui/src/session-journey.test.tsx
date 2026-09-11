@@ -28,7 +28,7 @@ import {
   makeRealClientRig,
 } from '../test-utils/real-client.js'
 import { renderWithProviders } from '../test-utils/render.js'
-import { makePair } from '../test-utils/session-harness.js'
+import { makePair } from '@speed/test-utils/session-harness'
 import { SignInScreen } from './SignInScreen.js'
 import { SignOutButton } from './SignOutButton.js'
 import { SocialCallbackHandler } from './SocialCallbackHandler.js'
