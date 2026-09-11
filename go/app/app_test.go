@@ -208,8 +208,7 @@ func TestNew_RollsBackALateStageFailure(t *testing.T) {
 // that maps onto no field of either configuration target fails the boot,
 // naming the key.
 func TestVerifyBinding_RefusesAnUnboundDeclaredKey(t *testing.T) {
-	var host testHostConfig
-	host = testHostConfig{PlatformConfig: testPlatformConfig()}
+	host := testHostConfig{PlatformConfig: testPlatformConfig()}
 
 	reg := pkgcore.NewRegistry(pkgcore.NewMemoryEventBus(), pkgcore.NewMemoryKVStore(), pkgcore.NewConsoleMailer())
 	if err := reg.Bootstrap.Add(pkgcore.BootstrapKey{Key: "probe.token", Format: "string"}); err != nil {
