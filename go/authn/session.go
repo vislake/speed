@@ -535,8 +535,8 @@ func (m *SessionManager) Revoke(ctx context.Context, sessionID, reason string) e
 	return m.revokeSession(ctx, session, reason)
 }
 
-// revokeSession is Revoke's body once the session row is in hand, split out
-// so handleReplay can reuse it without loading the session twice.
+// revokeSession is Revoke's body once the session row is in hand; handleReplay
+// calls it directly so the session is not loaded twice.
 func (m *SessionManager) revokeSession(ctx context.Context, session *Session, reason string) error {
 	now := m.now()
 	sessionID := session.ID

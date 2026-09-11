@@ -654,9 +654,8 @@ func (s *Service) VerifyStepUp(ctx context.Context, principal Principal, code, i
 	return pair, err
 }
 
-// verifyStepUp is VerifyStepUp's actual implementation, split out for the
-// identical shadow-avoidance reason service.go's Login doc comment
-// explains.
+// verifyStepUp implements VerifyStepUp as its own unexported method for the
+// shadow-avoidance reason documented on Login's doc comment.
 func (s *Service) verifyStepUp(ctx context.Context, principal Principal, code, ip string) (*TokenPair, error) {
 	if principal.UserID == "" || principal.SessionID == "" {
 		return nil, ErrAuthenticationRequired

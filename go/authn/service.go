@@ -719,14 +719,13 @@ func (s *Service) channelEnabled(ctx context.Context, key string) error {
 	return nil
 }
 
-// login is Login's actual implementation, split out into its own unexported
-// method purely so Login's own body can wrap it in the two lines that
-// record authOpLogin's count/duration without introducing a NAMED return
-// value into a function this long -- every one of its existing "if err :=
-// ...; err != nil" blocks would otherwise shadow that named return and trip
-// govet's shadow analyzer (enabled via this repo's .golangci.yml govet
-// enable-all setting), which is why Refresh and VerifyStepUp use the
-// identical split rather than a named return of their own.
+// login implements Login. It is its own unexported method so Login's body
+// can wrap it in the two lines that record authOpLogin's count/duration
+// without introducing a NAMED return value into a function this long --
+// every one of its existing "if err := ...; err != nil" blocks would
+// otherwise shadow that named return and trip govet's shadow analyzer
+// (enabled via this repo's .golangci.yml govet enable-all setting), the
+// same constraint that gives Refresh and VerifyStepUp this shape.
 func (s *Service) login(ctx context.Context, in LoginInput) (*TokenPair, error) {
 	// The channel gate runs before anything else -- before the identifier
 	// is even normalized -- so a disabled channel costs an attacker
@@ -932,8 +931,8 @@ func (s *Service) Refresh(ctx context.Context, presented string) (*TokenPair, er
 	return pair, err
 }
 
-// refresh is Refresh's actual implementation, split out for the identical
-// shadow-avoidance reason Login's own doc comment explains.
+// refresh implements Refresh as its own unexported method for the
+// shadow-avoidance reason documented on Login's doc comment.
 func (s *Service) refresh(ctx context.Context, presented string) (*TokenPair, error) {
 	record, session, err := s.sessions.resolveRotation(ctx, presented)
 	if err != nil {

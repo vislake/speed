@@ -113,7 +113,7 @@ func loginLockoutKeys(account string) (failuresKey, deadlineKey string) {
 // earned: loginLockoutBase for the first failure, doubling per failure
 // after it and saturating at loginLockoutMax, which is what turns "growing
 // delay" into an effective lockout. It is the pure arithmetic the recorded
-// state derives from, split out so the saturation curve is testable
+// state derives from, its own function so the saturation curve is testable
 // directly.
 func loginLockoutDelay(failures int) time.Duration {
 	delay := loginLockoutBase

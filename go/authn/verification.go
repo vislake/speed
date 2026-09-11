@@ -315,9 +315,9 @@ func (s *Service) RequestSMSCode(ctx context.Context, in RequestSMSCodeInput) er
 	return err
 }
 
-// deliverSMSCode is RequestSMSCode's actual known/unknown-number branch,
-// split out purely so RequestSMSCode's own body can pad its total duration
-// -- see RequestSMSCode's own doc comment.
+// deliverSMSCode implements RequestSMSCode's known/unknown-number branch as
+// its own method so RequestSMSCode's body can pad its total duration -- see
+// RequestSMSCode's own doc comment.
 func (s *Service) deliverSMSCode(ctx context.Context, in RequestSMSCodeInput, index string) error {
 	user, err := s.users.FindByPhone(ctx, in.Phone)
 	if err != nil {
@@ -431,9 +431,8 @@ func (s *Service) LoginWithSMSCode(ctx context.Context, in SMSLoginInput) (*Toke
 	return pair, err
 }
 
-// loginWithSMSCode is LoginWithSMSCode's actual implementation, split out
-// for the identical shadow-avoidance reason service.go's Login doc comment
-// explains.
+// loginWithSMSCode implements LoginWithSMSCode as its own unexported method,
+// the same shadow-avoidance shape service.go's Login doc comment explains.
 func (s *Service) loginWithSMSCode(ctx context.Context, in SMSLoginInput) (*TokenPair, error) {
 	// The channel gate, mirroring login()'s own: with the flag off, a code
 	// -- even a genuinely correct one -- must not start a session.
