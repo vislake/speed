@@ -23,8 +23,10 @@ rules' living proof, in the same shape as the sibling checker suites:
     entries;
   * bootstrap.go's derivation is read from both declaration forms: the
     env pin (the ``,derive`` option included) and the WithRootKeyEnv
-    literal, while a comment that merely names a variable declares
-    nothing;
+    call, whose argument is the name as a string literal or as an
+    identifier resolved through a same-file const (an identifier with
+    nothing to resolve to declares nothing), while a comment that
+    merely names a variable declares nothing;
   * a missing side of the comparison (bootstrap.go or the example)
     fires with the missing path named;
   * a final case runs the gate against this repository, so the real
@@ -94,6 +96,25 @@ APP_ROOT_KEY=REPLACE_WITH_64_HEX_CHARS
 APP_CONFIG_KEY=
 '''
 
+# The root-key read spelled through a same-file constant -- the shape
+# examples/reference-app/internal/app/bootstrap.go wires -- with the
+# rest of the declaration surface BOOTSTRAP's.
+BOOTSTRAP_CONST_ROOT_KEY = BOOTSTRAP.replace(
+    'config.WithRootKeyEnv("APP_ROOT_KEY"),',
+    "config.WithRootKeyEnv(rootKeyEnv),",
+).replace(
+    "// hostConfig is the loader target.",
+    "// rootKeyEnv names the root-key variable.\n"
+    'const rootKeyEnv = "APP_ROOT_KEY"\n\n'
+    "// hostConfig is the loader target.",
+)
+
+# The same identifier argument with no same-file constant to resolve.
+BOOTSTRAP_UNRESOLVED_ROOT_KEY = BOOTSTRAP.replace(
+    'config.WithRootKeyEnv("APP_ROOT_KEY"),',
+    "config.WithRootKeyEnv(rootKeyEnv),",
+)
+
 
 def make_tree(files: dict[str, str]) -> pathlib.Path:
     root = pathlib.Path(
@@ -131,13 +152,20 @@ class KeySetComparison(unittest.TestCase):
     def test_root_key_missing_from_the_example_fires(self):
         # APP_ROOT_KEY is no struct field; only the WithRootKeyEnv
         # literal declares it, and its absence from the example must
-        # fire like any pinned variable's.
+        # fire like any pinned variable's, the finding naming the call
+        # line the literal is spelled on.
         example = EXAMPLE.replace(
             "APP_ROOT_KEY=REPLACE_WITH_64_HEX_CHARS\n", ""
         )
         findings = m.scan(make_tree(base_files(example=example)))
         self.assertEqual(len(findings), 1)
         self.assertIn("pins APP_ROOT_KEY", findings[0])
+        call_line = next(
+            line_no
+            for line_no, line in enumerate(BOOTSTRAP.splitlines(), start=1)
+            if 'config.WithRootKeyEnv("APP_ROOT_KEY"),' in line
+        )
+        self.assertIn(f"{m.BOOTSTRAP_REL_PATH}:{call_line}:", findings[0])
 
     def test_unknown_example_key_fires(self):
         example = EXAMPLE + "\nAPP_NOT_A_HOST_VARIABLE=1\n"
@@ -160,6 +188,53 @@ class KeySetComparison(unittest.TestCase):
         findings = m.scan(make_tree(files))
         self.assertEqual(len(findings), 1)
         self.assertIn(m.ENV_EXAMPLE_REL_PATH, findings[0])
+
+
+class RootKeyDeclarationForms(unittest.TestCase):
+    def test_constant_form_resolves_the_declared_variable(self):
+        # The call's argument is an identifier a same-file const binds:
+        # the variable the constant names is declared, so an example
+        # documenting it keeps the gate silent.
+        self.assertEqual(
+            m.scan(
+                make_tree(base_files(bootstrap=BOOTSTRAP_CONST_ROOT_KEY))
+            ),
+            [],
+        )
+
+    def test_constant_form_reports_the_constant_line(self):
+        # The finding's line is the constant's declaration line, where
+        # the variable's name is spelled.
+        example = EXAMPLE.replace(
+            "APP_ROOT_KEY=REPLACE_WITH_64_HEX_CHARS\n", ""
+        )
+        findings = m.scan(
+            make_tree(
+                base_files(
+                    bootstrap=BOOTSTRAP_CONST_ROOT_KEY, example=example
+                )
+            )
+        )
+        self.assertEqual(len(findings), 1)
+        self.assertIn("pins APP_ROOT_KEY", findings[0])
+        const_line = next(
+            line_no
+            for line_no, line in enumerate(
+                BOOTSTRAP_CONST_ROOT_KEY.splitlines(), start=1
+            )
+            if 'const rootKeyEnv = "APP_ROOT_KEY"' in line
+        )
+        self.assertIn(f"{m.BOOTSTRAP_REL_PATH}:{const_line}:", findings[0])
+
+    def test_unresolvable_identifier_declares_nothing(self):
+        # An identifier no same-file constant resolves is not a
+        # declaration: the example's entry for it fires as unknown.
+        findings = m.scan(
+            make_tree(base_files(bootstrap=BOOTSTRAP_UNRESOLVED_ROOT_KEY))
+        )
+        self.assertEqual(len(findings), 1)
+        self.assertIn("documents APP_ROOT_KEY", findings[0])
+        self.assertIn("never declares", findings[0])
 
 
 class ReadingRules(unittest.TestCase):

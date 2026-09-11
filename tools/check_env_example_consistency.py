@@ -16,11 +16,13 @@ examples/reference-app/internal/app/bootstrap.go:
     variable's declaration site;
   * APP_ROOT_KEY -- the one variable that is not a struct field at all:
     the loader reads it through the WithRootKeyEnv option loadHostConfig
-    wires, spelled there as a string literal.
+    wires. The call's argument names the variable either as a string
+    literal or as an identifier a same-file const declaration binds to
+    one; an identifier with no such constant declares nothing.
 
 Nothing else in the app's executable code reads the environment (the
 app's own unit suite pins that surface, unittest/
-bootstrap_direct_reads_test.go), so the pins plus that literal are the
+bootstrap_direct_reads_test.go), so the pins plus that call are the
 host's whole declared set.
 
 The example side is read line by line in both spellings the file
@@ -71,10 +73,20 @@ ENV_EXAMPLE_REL_PATH = "examples/reference-app/.env.example"
 # options (",derive") after the name.
 CONFIG_TAG = re.compile(r'config:"([^"]*)"')
 
-# The root-key read: WithRootKeyEnv("NAME"), the name as a string
-# literal.
+# The root-key read: WithRootKeyEnv(NAME), the name spelled either as
+# a string literal (group 1) or as an identifier (group 2) the file's
+# own const declaration binds to the name's literal.
 ROOT_KEY_ENV = re.compile(
-    r'WithRootKeyEnv\(\s*"([A-Za-z_][A-Za-z0-9_]*)"\s*\)'
+    r'WithRootKeyEnv\(\s*'
+    r'(?:"([A-Za-z_][A-Za-z0-9_]*)"|([A-Za-z_][A-Za-z0-9_]*))'
+    r'\s*\)'
+)
+
+# One same-file const binding the root-key call may name through its
+# argument: const NAME = "STRING", the value an environment variable
+# name.
+ROOT_KEY_CONST = re.compile(
+    r'\bconst\s+([A-Za-z_][A-Za-z0-9_]*)\s*=\s*"([A-Za-z_][A-Za-z0-9_]*)"'
 )
 
 # A documented key: NAME= at the head of a line's content (the value
@@ -89,12 +101,26 @@ def declared_host_keys(text: str) -> dict[str, int]:
 
     Two declaration forms are read: a struct tag's env pin
     (config:"env=NAME"; any loader options after the comma-separated
-    name are not part of the variable) and the WithRootKeyEnv literal.
-    Full-line ``//`` comments are skipped -- a comment may state a
-    variable's name, but only the pins and the call site declare one,
-    and the line numbers reported for the findings point at code."""
+    name are not part of the variable) and the WithRootKeyEnv call,
+    whose argument is the name as a string literal or an identifier
+    the file's own const declaration binds to one. An identifier with
+    no such constant in the file declares nothing, and the line
+    reported for the resolved identifier form is the constant's
+    declaration line. Full-line ``//`` comments are skipped -- a
+    comment may state a variable's name, but only the pins and the
+    call site declare one, and the line numbers reported for the
+    findings point at code."""
+    lines = text.splitlines()
+    consts: dict[str, tuple[str, int]] = {}
+    for line_no, line in enumerate(lines, start=1):
+        if line.strip().startswith("//"):
+            continue
+        match = ROOT_KEY_CONST.search(line)
+        if match and match.group(1) not in consts:
+            consts[match.group(1)] = (match.group(2), line_no)
+
     keys: dict[str, int] = {}
-    for line_no, line in enumerate(text.splitlines(), start=1):
+    for line_no, line in enumerate(lines, start=1):
         if line.strip().startswith("//"):
             continue
         for tag in CONFIG_TAG.finditer(line):
@@ -104,8 +130,16 @@ def declared_host_keys(text: str) -> dict[str, int]:
                     if name and name not in keys:
                         keys[name] = line_no
         match = ROOT_KEY_ENV.search(line)
-        if match and match.group(1) not in keys:
-            keys[match.group(1)] = line_no
+        if not match:
+            continue
+        if match.group(1) is not None:
+            name, decl_line = match.group(1), line_no
+        elif match.group(2) in consts:
+            name, decl_line = consts[match.group(2)]
+        else:
+            continue
+        if name not in keys:
+            keys[name] = decl_line
     return keys
 
 
