@@ -9,7 +9,7 @@ package compliance_test
 // one public API here with no real business-module consumer yet.
 //
 // exampleNotesModule plays the part of a real business module: it
-// implements pkgcore.Module and, in its own Register call, registers one
+// implements the module contract and, in its own Register call, registers one
 // pkgcore.RetentionParticipant over its own tiny SoftDeletable model --
 // the whole mechanism this package exists to orchestrate, shown from the
 // registering module's side rather than compliance's own internal
@@ -48,7 +48,7 @@ func (exampleNote) TableName() string               { return "compliance_example
 func (n exampleNote) GetTenantID() pkgcore.TenantID { return pkgcore.TenantID(n.TenantID) }
 func (n exampleNote) GetDeletedAt() *time.Time      { return n.DeletedAt }
 
-// exampleNotesModule is the minimal pkgcore.Module a real business module
+// exampleNotesModule is the minimal module a real business module
 // implements to opt into compliance's retention-sweep orchestration: it
 // registers one pkgcore.RetentionParticipant during Register, and its
 // Sweep callback calls its own dbkit.Repository[exampleNote].HardDelete --

@@ -20,8 +20,8 @@ const ProviderOpenAICompatible = "chat.openai-compatible"
 // fails with an error wrapping pkgcore.ErrUnknownImplementation naming it,
 // the same "unknown driver" cost database/sql's own drivers accept.
 //
-// Unlike pkgcore's own EventBusRegistry/KVStoreRegistry/MailerRegistry/
-// ObjectStoreRegistry, resolving a ChatProvider is not a one-shot,
+// Unlike pkgcore's own seam values, resolved once per assembly, resolving
+// a ChatProvider is not a one-shot,
 // process-lifetime construction: Gateway.Chat/ChatStream call Build fresh
 // on every request, passing the credential CredentialService.Resolve just
 // looked up (base_url, api_key) as the Config -- a tenant's own BYOK
@@ -42,7 +42,7 @@ func init() {
 		// OpenAICompatibleProvider holds no connection and no process-local
 		// state of its own -- every call is an independent HTTP request --
 		// so it genuinely satisfies all three capability bits, though
-		// nothing validates them the way Kernel.Bootstrap validates the
+		// nothing validates them the way the assembly validates the
 		// four kernel seams: this registry is ai-gateway's own private
 		// mechanism, not one of pkgcore's four deployment-mode-validated
 		// seams.

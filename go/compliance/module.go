@@ -13,7 +13,7 @@ import (
 	"github.com/vislake/speed/go/compliance/locales"
 )
 
-// moduleName is compliance's pkgcore.Module.Name().
+// moduleName is compliance's the module contract's Name().
 const moduleName = "compliance"
 
 // ConfigDefaultRetentionWindow is the dotted configuration key for the
@@ -69,13 +69,13 @@ var configItemDecls = []pkgcore.ConfigItem{
 	},
 }
 
-// Module implements pkgcore.Module for go/compliance: the governance
+// Module implements the module contract for go/compliance: the governance
 // layer over retention-window sweeping, right-to-erasure orchestration,
 // data-export gathering and read-only audit querying, all built on top of
 // primitives that already ship lower in the module graph -- see doc.go's
 // own package comment for the full framing.
 //
-// A host constructs one with NewModule and hands it to Kernel.Bootstrap.
+// A host constructs one with NewModule and hands it to the assembly.
 // Constructing a Module performs no I/O: db (audit's own connection) is
 // opened and migrated by the host before Register is ever called, exactly
 // like every other module in this codebase.
@@ -144,7 +144,7 @@ func WithSharing(s SharingCreator) Option {
 // why this is a construction-time Option accepting a small interface
 // rather than a *config.Service field the way WithConfigService gives
 // RetentionService: config.Module.Attach's *config.Service is only
-// produced strictly after Kernel.Bootstrap returns, by which point
+// produced strictly after the assembly's declaration turn returns, by which point
 // NewModule has already run.
 func WithExportConfigReader(r ExportDeliveryExpiryReader) Option {
 	return func(m *Module) { m.export.cfg = r }
@@ -181,27 +181,27 @@ func (m *Module) Export() *ExportService { return m.export }
 // AuditQuery returns the module's read-only AuditQuery.
 func (m *Module) AuditQuery() *AuditQuery { return m.auditQuery }
 
-// Name implements pkgcore.Module.
+// Name implements the module contract.
 func (m *Module) Name() string { return moduleName }
 
-// DependsOn implements pkgcore.Module: nothing. compliance sits above
+// DependsOn implements the module contract: nothing. compliance sits above
 // every business module in the module dependency graph (just below
 // admin), and every one of its dependencies on a *business module's*
 // participation -- notes, storage's objects, or any other
 // pkgcore.RetentionParticipant -- arrives through the host-populated
-// pkgcore.Registry.Retention registrar at call time, never through a
+// pkgcore.ComponentRegistry.Retention registrar at call time, never through a
 // construction-time requirement DependsOn would express. go/sharing is
 // different: it is a lower-level platform module (below compliance in the
 // graph), imported directly for its Go API the same sanctioned way
 // go/billing imports go/metering (SharingCreator's own doc comment) --
-// but that is a compile-time package import, not a pkgcore.Module the
+// but that is a compile-time package import, not a module the
 // bootstrap set must contain in a particular order, so it still does not
 // belong in DependsOn (which is reserved for "this module's Register call
 // requires another module to have registered first" -- compliance's own
 // Register never reads anything go/sharing's Register declares).
 func (m *Module) DependsOn() []string { return nil }
 
-// Migrations implements pkgcore.Module. compliance owns no table of its
+// Migrations implements the module contract. compliance owns no table of its
 // own: the retention sweep, right-to-erasure and export gathering are
 // pure orchestration over each participant's own table (already
 // dual-dialect migrated by that participant's own module) plus
@@ -212,16 +212,16 @@ func (m *Module) DependsOn() []string { return nil }
 // zero migrations for it, not as an error."
 func (m *Module) Migrations() embed.FS { return embed.FS{} }
 
-// Locales implements pkgcore.Module: the descriptions of compliance's
+// Locales implements the module contract: the descriptions of compliance's
 // error codes, in both supported languages with identical id sets.
 func (m *Module) Locales() embed.FS { return locales.FS }
 
-// OpenAPISpec implements pkgcore.Module. compliance has no HTTP surface,
+// OpenAPISpec implements the module contract. compliance has no HTTP surface,
 // so this returns nil -- the same answer go/metering's and go/rbac's
 // Module give.
 func (m *Module) OpenAPISpec() []byte { return nil }
 
-// Register implements pkgcore.Module. Per the interface's own contract it
+// Register implements the module contract. Per the interface's own contract it
 // only declares and wires -- no database call, no outbound call, nothing
 // that touches m.auditQuery's underlying connection.
 //
@@ -239,7 +239,7 @@ func (m *Module) OpenAPISpec() []byte { return nil }
 // inside the module's own registration turn.
 // It refuses to proceed without a queue (ErrQueueRequired) -- see
 // WithQueue's doc comment. ExportService's SharingCreator is not part of this: it is not
-// a pkgcore.Registry seam, so WithSharing wires it directly at Module
+// a pkgcore.ComponentRegistry seam, so WithSharing wires it directly at Module
 // construction time (NewModule's own Option application), and its absence
 // is never a reason to refuse Register -- see WithSharing's own doc
 // comment for why that check is Export's own, call-time responsibility.

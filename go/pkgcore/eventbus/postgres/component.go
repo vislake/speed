@@ -4,7 +4,7 @@ package postgres
 // global component registration: the descriptor a composition configuration
 // selects as the "eventbus" module's implementation. It lives beside the
 // implementation it adapts, the same file-locality the package's own init
-// registration (register.go) keeps, and carries the package's own outbox
+// component registration (component.go) keeps, and carries the package's own outbox
 // migration set so a database component applies it from the component
 // itself (pkgcore's Assets) instead of a host calling a schema helper by
 // hand.
@@ -28,7 +28,7 @@ type eventBusPostgresConfig struct {
 // "eventbus.postgres": the outbox-backed bus over a pool built from the
 // component's own configuration, declaring the same exported Capabilities
 // the seam registration declares. Its New funnels through newPoolAndReplica,
-// the shared construction register.go's flat adapter also uses -- passing
+// the shared construction its New also uses -- passing
 // the component's own context down to pgxpool.New instead of the adapter's
 // background one -- so both channels resolve the same pool-and-replicaID
 // pair from their two spellings of the same settings. The pool is built

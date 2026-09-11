@@ -18,7 +18,7 @@ import (
 // below and the Registration factory a host wraps a self-built Config in
 // both declare this one exported value, so the declaration a host reads off
 // this package and the one assembly validates cannot drift apart. A host
-// injecting a hand-built store with pkgcore.WithObjectStore passes it as the
+// injecting a hand-built store through the by-type context passes it as the
 // injection's capability argument.
 const Capabilities pkgcore.Capability = pkgcore.MultiReplicaSafe | pkgcore.SurvivesRestart
 

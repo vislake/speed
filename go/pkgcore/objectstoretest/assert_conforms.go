@@ -5,7 +5,7 @@
 // and go/pkgcore/eventbustest.AssertConforms plays for EventBus: one suite
 // every implementation — built-in (pkgcore.NewLocalObjectStore, the
 // objectstore/s3 subpackage's NewObjectStore) or host-supplied through
-// pkgcore.WithObjectStore — must pass, so drift between implementations is
+// the objectstore value's configuration block — must pass, so drift between implementations is
 // caught here once instead of pairwise.
 package objectstoretest
 

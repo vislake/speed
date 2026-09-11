@@ -1,7 +1,7 @@
 // Package notes is examples/reference-app's tenant-scoped business
 // module: a minimal "Note" resource (id, tenant_id, text, created_at)
 // demonstrating real, end-to-end usage of the whole speed module stack --
-// pkgcore.Module wiring (routes, permissions, events, audit actions),
+// module wiring (routes, permissions, events, audit actions),
 // dbkit.Repository[T] tenant isolation, and tenancy.Middleware -- with no
 // dental/business-specific content of any kind. It is the reference
 // app's demonstrable content surface: other app surfaces and modules

@@ -58,7 +58,7 @@ func registerTestPKISerializer() {
 
 // applyPKIMigrations applies pki's sqlite/*.sql files to db from zero
 // through dbkit.MigrationRegistry (dbtest.Migrate) -- the same files
-// Kernel.Bootstrap applies at the app's every boot, so the tables these
+// the assembly applies at the app's every boot, so the tables these
 // tests read and write are the real ones. The real pki module cannot carry
 // its own files here: this test binary cannot bootstrap it, which is the
 // case dbtest.Migration exists for.

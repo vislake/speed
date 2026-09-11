@@ -32,7 +32,7 @@ import (
 // The host (internal/app's BuildServer) constructs this participant with a
 // Repository over the very dbkit.Open *gorm.DB the notes Module already
 // uses -- share the connection, never a second pool -- and registers it on
-// the kernel's pkgcore.Registry.Retention seat during Bootstrap.
+// the kernel's pkgcore.ComponentRegistry.Retention seat during Bootstrap.
 //
 // Both destructive callbacks below tolerate a HardDelete that answers
 // record-not-found by counting the row as removed-elsewhere rather than

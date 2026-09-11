@@ -96,7 +96,7 @@ var _ jobs.Queue = (*recordingImageQueue)(nil)
 
 // newTestStorageObjectService returns a real, fully bootstrapped
 // *storage.ObjectService over a fresh, per-test SQLite database -- a real
-// local ObjectStore included (via pkgcore.NewKernel().Bootstrap), so the
+// local ObjectStore included (via the caller's declared assembly), so the
 // job handler's readImageObject/writeImageObject actually exercise real
 // storage I/O rather than a fake. The storage module's own queue is a
 // no-op: this package's tests only care about the thumbnail-derive task

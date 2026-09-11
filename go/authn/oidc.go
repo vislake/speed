@@ -351,7 +351,7 @@ type SSOService struct {
 	// auditActions is the registrar SSOService's own audit.Emit calls
 	// (emitConfigSavedAudit) validate their action string against. It is
 	// nil until module.go's Register wires it from the host's
-	// pkgcore.Registry -- the registrar lives on the registry, which is
+	// pkgcore.ComponentRegistry -- the registrar lives on the registry, which is
 	// why SaveConfig, a service-layer write, cannot reach it through
 	// NewService -- so a Service assembled directly through NewService
 	// (every unit test in this package) records no audit rows, exactly

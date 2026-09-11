@@ -13,14 +13,14 @@
 // cost is recorded in its package documentation.
 //
 // Importing this package registers "kv.postgres" on pkgcore's shared
-// KVStoreRegistry as a side effect (see register.go) -- the same
+// component as a side effect (see component.go) -- the same
 // database/sql-style driver-registration pattern kv/redis follows, applied
 // a second time for a second implementation of the same seam. It is not
-// named by pkgcore.PresetDistributed, which still points "kv" at
+// the "kv" component the built-in composition names, which still points "kv" at
 // "kv.redis"; a host that wants this implementation instead builds its own
 // Preset (a plain map literal, see Preset's own doc comment) or bypasses the
 // preset layer entirely by constructing NewKVStore and wiring it with
-// pkgcore.WithKVStore, exactly as a host choosing kv/redis explicitly does.
+// the kv value's configuration block, exactly as a host choosing kv/redis explicitly does.
 //
 // # Sharing an existing connection pool
 //
@@ -332,7 +332,7 @@ func WithClock(now func() time.Time) Option {
 // pool, the distributed deployment mode's PostgreSQL-backed implementation
 // of the seam pkgcore.NewMemoryKVStore covers in standalone mode. *Store
 // implements pkgcore.KVStore, so it is assignable anywhere that interface is
-// expected (pkgcore.WithKVStore, a struct field, a test double slot) exactly
+// expected (the by-type context, a struct field, a test double slot) exactly
 // like kv/redis.NewKVStore's return value; NewKVStore returns the concrete
 // type instead of the bare interface only so that a caller who does want
 // Sweep can reach it without a type assertion, the same shape

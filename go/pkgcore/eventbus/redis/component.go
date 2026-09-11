@@ -4,7 +4,7 @@ package redis
 // global component registration: the descriptor a composition configuration
 // selects as the "eventbus" module's implementation. It lives beside the
 // implementation it adapts, the same file-locality the package's own init
-// registration (register.go) keeps.
+// component registration (component.go) keeps.
 
 import (
 	"context"

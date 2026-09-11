@@ -127,7 +127,7 @@ const exportDeliveryMaxViews = 1
 // directly elsewhere (RetentionService.cfg, a plain *config.Service field):
 // a construction-time Module Option cannot capture config.Module.Attach's
 // *config.Service, which per its own doc comment is only produced strictly
-// after Kernel.Bootstrap returns -- by which point every module's own
+// after the assembly's declaration turn returns -- by which point every module's own
 // NewModule call, this one included, has already run. This interface
 // exists so a host can wire a lazy adapter -- NewConfigReader, over
 // config's lazy Handle, is the sanctioned one -- not to avoid an import

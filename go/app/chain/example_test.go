@@ -46,9 +46,9 @@ func (exampleKeySource) VerificationKeys(context.Context, string) ([]struct {
 	return nil, nil
 }
 
-// exampleModule is a pkgcore.Module mounting one route, so the example can
+// exampleModule is a module mounting one route, so the example can
 // bootstrap a registry without any business module; a real host's registry
-// comes from Kernel.Bootstrap over its own module set.
+// comes from the assembly over its own module set.
 type exampleModule struct{}
 
 func (exampleModule) Name() string         { return "example" }

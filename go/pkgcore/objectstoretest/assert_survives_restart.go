@@ -16,7 +16,7 @@ import (
 // property the SurvivesRestart capability bit declares about an
 // implementation when it registers (see pkgcore.Capability's doc comment).
 // It is the contract-suite form of the capability check, the ObjectStore
-// twin of kvstoretest.AssertSurvivesRestart: Kernel.Bootstrap compares
+// twin of kvstoretest.AssertSurvivesRestart: the assembly compares
 // declarations against the deployment mode's requirements and never looks
 // at behaviour, so an implementation that declares SurvivesRestart over a
 // backing store that does not actually survive a restart sails through

@@ -2,7 +2,7 @@
 // channel-agnostic Subscription/Invoice model, and a credits ledger with the
 // reserve -> confirm/refund pattern every "pay-per-use that might fail"
 // business needs. It sits above authn/rbac/org/metering in the module
-// dependency graph and implements pkgcore.Module like every other business
+// dependency graph and implements the module contract like every other business
 // module.
 //
 // # Entitlements.Check is the one judgment entry point

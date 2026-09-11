@@ -97,7 +97,7 @@ func UsageRecorder(recorder metering.Recorder) aigateway.UsageRecorderFunc {
 //
 //	org.WithFeatureGate(app.OrgFeatureGate(configModule.Handle()))
 //
-// Both modules must be part of the single Kernel.Bootstrap call -- so
+// Both modules must be part of the single the assembly call -- so
 // their permissions, audit actions, events and routes are declared there
 // -- while the *config.Service is only produced by configModule.Attach,
 // strictly after Bootstrap returns. The handle resolves the Service per

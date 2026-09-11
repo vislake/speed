@@ -22,7 +22,7 @@ import (
 var openAPISpecYAML []byte
 
 const (
-	// moduleName is authn's pkgcore.Module.Name(). It is also the key
+	// moduleName is authn's the module contract's Name(). It is also the key
 	// dbkit.MigrationRegistry uses in its dependency graph and the prefix
 	// of every message id, error code, event type and audit action this
 	// module owns.
@@ -787,7 +787,7 @@ func parseTrustedProxy(entry string) (netip.Prefix, error) {
 	return netip.Prefix{}, fmt.Errorf("authn: trusted proxy %q is not an IP address or CIDR prefix", entry)
 }
 
-// Module implements pkgcore.Module for authn.
+// Module implements the module contract for authn.
 type Module struct {
 	db      *gorm.DB
 	opts    []Option
@@ -812,10 +812,10 @@ func NewModule(db *gorm.DB, opts ...Option) (*Module, error) {
 	return &Module{db: db, opts: opts}, nil
 }
 
-// Name implements pkgcore.Module.
+// Name implements the module contract.
 func (m *Module) Name() string { return moduleName }
 
-// DependsOn implements pkgcore.Module. authn depends on infrastructure
+// DependsOn implements the module contract. authn depends on infrastructure
 // (dbkit, tenancy, observability) rather than on another business module, and
 // infrastructure is not part of the bootstrap set, so this is genuinely
 // empty. In particular it does NOT depend on org: the membership question is
@@ -823,13 +823,13 @@ func (m *Module) Name() string { return moduleName }
 // dependency does not exist.
 func (m *Module) DependsOn() []string { return nil }
 
-// Migrations implements pkgcore.Module.
+// Migrations implements the module contract.
 func (m *Module) Migrations() embed.FS { return migrations.FS }
 
-// Locales implements pkgcore.Module.
+// Locales implements the module contract.
 func (m *Module) Locales() embed.FS { return locales.FS }
 
-// OpenAPISpec implements pkgcore.Module: it returns the module's own
+// OpenAPISpec implements the module contract: it returns the module's own
 // OpenAPI fragment, embedded from api/openapi.yaml. That fragment is the
 // single source of this module's API surface -- the api package's
 // generated types and ServerInterface (api/authn-server.gen.go,
@@ -842,7 +842,7 @@ func (m *Module) OpenAPISpec() []byte { return openAPISpecYAML }
 // carries.
 func (m *Module) Service() *Service { return m.svc }
 
-// Register implements pkgcore.Module.
+// Register implements the module contract.
 //
 // It performs no I/O, as the interface requires. Building the service wires
 // already-constructed in-memory values together and reads two fields off the

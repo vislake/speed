@@ -96,7 +96,7 @@ func expirySweepIdempotencyKey(tenant pkgcore.TenantID, windowStart time.Time) s
 }
 
 // expirySweepSchedule is the module's declaration of the expiry sweep on
-// the pkgcore.Registry.Schedules seat: a per-tenant task at the sweep's
+// the pkgcore.ComponentRegistry.Schedules seat: a per-tenant task at the sweep's
 // own window, keyed with the same prefix and window function the manual
 // EnqueueExpirySweep path uses, so a scheduler tick and a manual enqueue
 // landing in one window resolve one key and dedupe onto one job.

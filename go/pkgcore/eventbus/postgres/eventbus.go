@@ -14,14 +14,14 @@
 // dependency cost is recorded in its package documentation.
 //
 // Importing this package registers "eventbus.postgres" on pkgcore's shared
-// EventBusRegistry as a side effect (see register.go) -- the same
+// component as a side effect (see component.go) -- the same
 // database/sql-style driver-registration pattern eventbus/redis follows,
 // applied a second time for a second implementation of the same seam. It
-// is not named by pkgcore.PresetDistributed, which still points
+// is not the "eventbus" component the built-in composition names, which still points
 // "eventbus" at "eventbus.redis"; a host that wants this implementation
 // instead builds its own Preset (a plain map literal, see Preset's own doc
 // comment) or bypasses the preset layer entirely by constructing NewEventBus
-// and wiring it with pkgcore.WithEventBus, exactly as a host choosing
+// and providing it through the by-type context, exactly as a host choosing
 // eventbus/redis explicitly does.
 package postgres
 

@@ -11,7 +11,7 @@ import (
 // The reference app's periodic-task scheduling.
 //
 // The periodic tasks this app runs are the ones its modules declared: each
-// module puts its own schedule on the pkgcore.Registry.Schedules seat in
+// module puts its own schedule on the pkgcore.ComponentRegistry.Schedules seat in
 // its Register call, exactly where it registers the task's handler --
 // storage's per-tenant expiry sweep, compliance's per-tenant retention
 // sweep, pki's two platform-wide tasks (the signing-key expiry scan and

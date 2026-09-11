@@ -108,7 +108,7 @@ var (
 	// The four wiring errors below are boot-time failures Module.Register
 	// returns when a mandatory host seam was never injected through the
 	// matching With* option. They are never returned from an HTTP handler;
-	// they fail Kernel.Bootstrap itself, naming exactly which option the
+	// they fail the assembly itself, naming exactly which option the
 	// host forgot.
 
 	// ErrAuthnServiceRequired is returned when no *authn.Service was

@@ -7,15 +7,16 @@
 // that also carries one implementation hands every importer that
 // implementation's whole dependency closure.
 //
-// Importing this package registers "kv.redis" on pkgcore's shared
-// KVStoreRegistry as a side effect (see register.go), the name
-// pkgcore.PresetDistributed already names for the "kv" seam -- the same
-// database/sql-style driver-registration pattern pkgcore's other built-in
-// implementations use, now applied across a package boundary. A
-// distributed-mode host that wants it either blank-imports this package
-// (`import _ ".../pkgcore/kv/redis"`) so WithPreset(PresetDistributed)
-// resolves it, or calls NewKVStore directly and wires it with
-// pkgcore.WithKVStore.
+// Importing this package makes the "kv.redis" component available to a
+// composition: component.go self-registers its descriptor with pkgcore's
+// global component registration, so a composition configuration that names
+// "kv.redis" under the "kv" module resolves this implementation -- the
+// same database/sql-style driver-registration pattern pkgcore's other
+// built-in implementations use, now applied across a package boundary. A
+// host that wants it either selects the component in its composition
+// configuration (a blank import of this package carries the side effect),
+// or calls NewKVStore directly and puts the value into the assembly's
+// by-type context.
 package redis
 
 import (

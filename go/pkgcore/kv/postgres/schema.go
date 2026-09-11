@@ -35,7 +35,7 @@ import (
 // A host wanting its schema changes to flow through its own
 // dbkit.MigrationRegistry instead may do so directly: dbkit is free to
 // import pkgcore (only the reverse is forbidden), so a host can point a
-// dbkit.MigrationRegistry-compatible pkgcore.Module's Migrations() at this
+// dbkit.MigrationRegistry-compatible the module contract's Migrations() at this
 // package's migrations.FS itself rather than calling EnsureSchema.
 // EnsureSchema exists for the host that does not want to do that wiring
 // just for this one seam.

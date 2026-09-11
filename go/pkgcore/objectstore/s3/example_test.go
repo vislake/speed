@@ -49,7 +49,7 @@ func ExampleNewObjectStore() {
 
 // ExampleFromConfig shows the bare-injection path's one-step constructor:
 // the same store ExampleNewObjectStore builds, plus the capability
-// declaration pkgcore.WithObjectStore takes, in one call -- and a
+// declaration the objectstore value's configuration block takes, in one call -- and a
 // configuration with a field missing or an endpoint minio-go rejects comes
 // back as an error here, where NewObjectStore panics, so a host assembling
 // Kernel options can still abandon them. Nothing is dialed, and there is
@@ -68,7 +68,7 @@ func ExampleFromConfig() {
 		return
 	}
 
-	// The pair a host passes to pkgcore.WithObjectStore.
+	// The pair a host passes to the objectstore value's configuration block.
 	fmt.Println(store != nil, caps)
 	// Output:
 	// true MultiReplicaSafe|SurvivesRestart

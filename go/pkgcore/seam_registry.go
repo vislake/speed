@@ -25,9 +25,9 @@ var ErrUnknownImplementation = errors.New("pkgcore: unknown seam implementation"
 // reads environment or files itself).
 type Config map[string]string
 
-// Registration is one named implementation of a seam: the name assembly
-// resolves through a Preset, the Capability it declares about itself, and the
-// constructor that builds it from a Config.
+// Registration is one named implementation of a seam: the name a resolving
+// caller asks for, the Capability the implementation declares about itself,
+// and the constructor that builds it from a Config.
 //
 // # Resource ownership and the Close contract
 //
@@ -37,28 +37,21 @@ type Config map[string]string
 // Close() error on the value it returns, whatever its concrete type. The
 // value is returned to the caller as the seam interface (EventBus, KVStore,
 // ...), so the Close method lives on the concrete type and is reached by an
-// interface assertion, never by the seam interface itself; Kernel.Bootstrap
-// closes every preset-resolved implementation whose value satisfies
-// `interface{ Close() error }` -- on failure, before the Bootstrap error is
-// returned; on success, when the host calls Kernel.Shutdown. A
-// Registration whose New creates no owned resources simply does not
-// implement Close, and Bootstrap has nothing to record. A host that builds
-// the implementation itself and injects it with WithEventBus or one of its
-// siblings keeps owning its lifecycle, exactly as it always did -- and so
-// does a host that registers a self-built object through a distributed
-// implementation package's Registration factory, whose New returns the
-// bare implementation with no closer: the host closes its own object, and
-// Kernel.Shutdown never touches it.
+// interface assertion, never by the seam interface itself; whoever resolves
+// an implementation through Build owns closing it, exactly as a caller that
+// built the implementation itself does. A Registration whose New creates no
+// owned resources simply does not implement Close, and the caller has
+// nothing to record.
 type Registration[T any] struct {
 	// Name identifies the implementation within its seam, for example
-	// "eventbus.memory" or "eventbus.redis". It is what a Preset's per-seam
-	// value names, and what ErrUnknownImplementation and
+	// "eventbus.memory" or "eventbus.redis". It is what
+	// ErrUnknownImplementation and
 	// ErrCapabilityUnsatisfied echo back in their error text.
 	Name string
 
 	// Capabilities is what this implementation declares about itself. See
-	// Capability's own doc comment for what each bit means and how
-	// Kernel.Bootstrap uses the declaration.
+	// Capability's own doc comment for what each bit means and how the
+	// declaration is read.
 	Capabilities Capability
 
 	// New builds one instance of the implementation from cfg. It is called
@@ -69,33 +62,24 @@ type Registration[T any] struct {
 	New func(cfg Config) (T, error)
 }
 
-// SeamRegistry is a name-to-constructor registry for one infrastructure seam,
-// mirroring the database/sql driver-registration pattern: every built-in and
-// host-supplied implementation of a seam registers itself under a name, and
-// assembly picks one by name -- through a Preset -- rather than switching on
-// a fixed, closed set of types. pkgcore pre-populates one SeamRegistry per
-// seam (EventBusRegistry, KVStoreRegistry, MailerRegistry,
-// ObjectStoreRegistry) with its built-in implementations in the seam
-// registration files (eventbus_memory.go, kv_memory.go, mailer_registry.go,
-// objectstore_registry.go, with the shared mustRegister glue and
-// ErrMissingSeamConfig in registries.go); a host registers its own
-// implementation the same way, by calling Register on the matching
-// package-level registry before it bootstraps a Kernel that names it in a
-// Preset.
+// SeamRegistry is a name-to-constructor registry for one directory of
+// interchangeable implementations, mirroring the database/sql
+// driver-registration pattern: each implementation registers itself under a
+// name, and the resolving caller picks one by name rather than switching on
+// a fixed, closed set of types. It is the machinery a module's own
+// implementation directory builds on -- go/pki's SignerRegistry and the
+// provider registries go/ai-gateway resolves a chat or image provider
+// through, whose built-in implementations register themselves from their own
+// packages' init.
 //
-// For pkgcore's own distributed implementations (the eight Redis-,
-// PostgreSQL-, NATS-, Memcached- and S3-backed packages), the package
-// carrying the implementation also exports a Registration factory that
-// wraps a host-built client, connection, pool or typed Config --
-// eventbus/redis.Registration, kv/postgres.Registration and so on -- and
-// that is the recommended form of host registration for a typed
-// configuration the flat Config cannot express: the host builds the
-// object, wraps it, registers the result under a name of its own (the
-// built-in name is already taken) and names that name in a Preset entry,
-// so flipping between deployments stays a configuration change. The
-// factory preserves the host's ownership: its New returns the bare
-// implementation over the host's object and ignores the entry's Config,
-// as each factory's own doc comment states.
+// It is deliberately not the kernel's seam machinery: which EventBus,
+// KVStore, Mailer or ObjectStore value an assembly runs is the composition
+// configuration's decision, made by selecting a component and configuring
+// it, and the resolved values are published into (and read from) the
+// by-type context. A module-internal registry resolves a typed object at
+// call time instead -- a signer chosen per key, a chat provider chosen per
+// route -- which is why the Config it hands New is the flat map a
+// configuration entry can express.
 //
 // A SeamRegistry is safe for concurrent Register and Build calls.
 type SeamRegistry[T any] struct {
@@ -126,7 +110,7 @@ func (s *SeamRegistry[T]) Register(r Registration[T]) error {
 // It returns an error wrapping ErrUnknownImplementation, naming name, when
 // nothing is registered under it. Otherwise it returns whatever
 // Registration.New(cfg) returns, alongside the Capability the implementation
-// declared at registration -- the pairing Kernel.Bootstrap's capability
+// declared at registration -- the pairing the assembly's capability
 // validation needs, so a caller resolving a seam through a SeamRegistry never
 // has to look the declaration up separately from the value.
 func (s *SeamRegistry[T]) Build(name string, cfg Config) (T, Capability, error) {

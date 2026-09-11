@@ -136,7 +136,7 @@ func TestSeamRegistry_Build_PropagatesConstructorError(t *testing.T) {
 // concurrent Register and Build calls" contract SeamRegistry's own doc
 // comment makes: the seam registration files build every package-level
 // registry once at init time, but a host is free to Register its own
-// implementation at any point afterwards, concurrently with Kernel.Bootstrap
+// implementation at any point afterwards, concurrently with the assembly
 // calls already resolving other names on the same registry.
 func TestSeamRegistry_ConcurrentRegisterAndBuild_IsRaceFree(t *testing.T) {
 	r := NewSeamRegistry[seamRegistryTestSeam]()

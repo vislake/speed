@@ -21,7 +21,7 @@ import (
 // Module.Register runs. rbac cannot be wired the same way: the
 // *rbac.Service this wrapper needs to call does not exist until the HOST
 // calls rbacModule.Attach(reg) -- which, by rbac's own documented
-// contract, must run strictly AFTER pkgcore.Kernel.Bootstrap returns,
+// contract, must run strictly AFTER pkgcore.the assembly returns,
 // because Attach freezes the snapshot of every permission every module
 // declared. admin's own Module.Register runs DURING Bootstrap (before
 // every module has necessarily finished registering), so it can never

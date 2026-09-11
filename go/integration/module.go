@@ -33,7 +33,7 @@ var openAPISpecYAML []byte
 // apiPath constants do for their own routes.
 const apiPath = "/api/v1/integration"
 
-// moduleName is integration's pkgcore.Module.Name(). It is also the module
+// moduleName is integration's the module contract's Name(). It is also the module
 // name dbkit.MigrationRegistry.Register keys its dependency graph on.
 const moduleName = "integration"
 
@@ -132,12 +132,12 @@ var auditActionDecls = []string{
 // ErrAlreadyAttached reports a second Attach call on one Module.
 var ErrAlreadyAttached = apperr.Internal("integration.already_attached")
 
-// Module implements pkgcore.Module for go/integration.
+// Module implements the module contract for go/integration.
 //
 // It declares its own permissions and audit actions during Register, and
 // builds the runtime Service during Attach, mirroring the two-phase shape
 // go/rbac and go/config both use: Register only declares (per
-// pkgcore.Module's own contract, "must not perform I/O"), and Attach is
+// the module contract's own contract, "must not perform I/O"), and Attach is
 // where the seams a host wired through the New Module options actually get
 // used.
 type Module struct {
@@ -186,7 +186,7 @@ type Module struct {
 	// WithEventMapping, WithWebhookQueue and their doc comments for what
 	// each is, and eventmapping.go's EventMapping doc comment for why
 	// eventMappings is a NewModule-time Option rather than a
-	// pkgcore.Registry field.
+	// pkgcore.ComponentRegistry field.
 	eventMappings []EventMapping
 	mappingIndex  eventMappingIndex
 	queue         jobs.Queue
@@ -298,7 +298,7 @@ func WithMaxAPIKeyLifetime(lifetime time.Duration) Option {
 // WithEventMapping declares one or more business modules' internal-to-
 // public event schema mappings. See eventmapping.go's EventMapping doc
 // comment for the full design rationale (why this is a Module Option
-// rather than a pkgcore.Registry field or a business-module import) and for
+// rather than a pkgcore.ComponentRegistry field or a business-module import) and for
 // the exact contract each EventMapping must satisfy.
 //
 // Every WithEventMapping call is additive (later calls append rather than
@@ -427,29 +427,29 @@ func NewModule(db *gorm.DB, opts ...Option) *Module {
 	return m
 }
 
-// Name implements pkgcore.Module.
+// Name implements the module contract.
 func (m *Module) Name() string { return moduleName }
 
-// DependsOn implements pkgcore.Module.
+// DependsOn implements the module contract.
 //
 // The empty list is deliberate, not an oversight: this module reaches
 // permission listing and membership checking through the structurally-typed
 // seams in seams.go, never through an import of go/rbac, go/authn or
 // go/org, so none of them belongs in this list -- DependsOn names compile-
-// time module dependencies for Kernel.Bootstrap's topological ordering, and
+// time module dependencies for the assembly's topological ordering, and
 // this module has none among the business modules.
 func (m *Module) DependsOn() []string { return nil }
 
-// Migrations implements pkgcore.Module.
+// Migrations implements the module contract.
 func (m *Module) Migrations() embed.FS { return migrations.FS }
 
-// Locales implements pkgcore.Module: one message per error code in
+// Locales implements the module contract: one message per error code in
 // errors.go, in both zh-CN and en-US with identical id sets (the parity
-// pkgcore/i18n's Builder.AddModule enforces while Kernel.Bootstrap merges
+// pkgcore/i18n's Builder.AddModule enforces while the assembly merges
 // the catalog).
 func (m *Module) Locales() embed.FS { return locales.FS }
 
-// OpenAPISpec implements pkgcore.Module: this module's OpenAPI fragment,
+// OpenAPISpec implements the module contract: this module's OpenAPI fragment,
 // embedded from api/openapi.yaml, covering the API-key surface
 // (Create/List/Rotate/Revoke) and the webhook-subscription management
 // surface (Create/List/Update/Delete/Restore plus the recent-deliveries
@@ -461,7 +461,7 @@ func (m *Module) Locales() embed.FS { return locales.FS }
 // compile.
 func (m *Module) OpenAPISpec() []byte { return openAPISpecYAML }
 
-// Register implements pkgcore.Module. Per the interface's own contract
+// Register implements the module contract. Per the interface's own contract
 // ("It must not perform I/O; it only declares"), it declares this module's
 // permission vocabulary and its audit actions, builds the event-mapping
 // index the WithEventMapping declarations feed, subscribes to every
@@ -579,7 +579,7 @@ var (
 )
 
 // Attach builds and returns the runtime Service. It must be called exactly
-// once, after Kernel.Bootstrap has returned, with the registry Bootstrap
+// once, after the assembly's declaration turn has finished, with the registry Bootstrap
 // produced -- the same convention go/rbac's Attach documents, for the same
 // reason: only after Bootstrap has every module registered is
 // reg.Events.Bus() and reg.AuditActions wired to the real, final set every

@@ -19,7 +19,7 @@ func TestModule_Identity(t *testing.T) {
 		t.Errorf("Name() = %q, want %q", got, moduleName)
 	}
 	if got := m.DependsOn(); got != nil {
-		t.Errorf("DependsOn() = %v, want nil -- sharing depends on no other pkgcore.Module in the bootstrap set", got)
+		t.Errorf("DependsOn() = %v, want nil -- sharing depends on no other module in the bootstrap set", got)
 	}
 	spec := m.OpenAPISpec()
 	if len(spec) == 0 {
@@ -199,7 +199,7 @@ func TestModule_Register_CoexistsWithAnotherModule(t *testing.T) {
 }
 
 // TestModule_Register_PerformsNoIO calls Register with a nil database,
-// which is what pkgcore.Module's "it only declares" contract requires to be
+// which is what the module contract's "it only declares" contract requires to be
 // safe: any database call inside Register would panic here.
 func TestModule_Register_PerformsNoIO(t *testing.T) {
 	m := NewModule(nil)
@@ -252,7 +252,7 @@ func assertContainsAll(t *testing.T, got []string, want []string) {
 	}
 }
 
-// neighbourModule is a minimal second pkgcore.Module, used only to prove
+// neighbourModule is a minimal second module, used only to prove
 // sharing bootstraps correctly alongside another module's own declarations.
 type neighbourModule struct{}
 

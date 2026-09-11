@@ -6,7 +6,7 @@
 //
 // # What these files are NOT
 //
-// Nothing in a running application reads this bundle. Kernel.Bootstrap
+// Nothing in a running application reads this bundle. the assembly
 // feeds the merged message catalog exclusively from the REGISTERED modules'
 // Locales() embed.FS (registry.go: "each module's locale resources are
 // validated and merged before the module itself registers"), and pkgcore is
@@ -16,7 +16,7 @@
 // are ever missing from a catalog, the cause is not Bootstrap's feeding
 // loop (which feeds every registered module correctly) but this directory
 // having no wiring into any module's Locales() -- do not look in
-// Kernel.Bootstrap for it.
+// the assembly for it.
 //
 // # What these files are FOR
 //

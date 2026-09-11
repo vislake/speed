@@ -20,7 +20,7 @@ import (
 // the adapter lives here, on the composition layer that may import both.
 //
 // The handle exists precisely for this ordering: sharing.Module is
-// constructed before Kernel.Bootstrap, config's *Service only exists
+// constructed before the declaration turn, config's *Service only exists
 // after configModule.Attach returns, and the reader must already be
 // wired by construction time. Reading through the handle defers the
 // resolution to read time (a real request, long after assembly), and a

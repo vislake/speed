@@ -1,7 +1,7 @@
 // Package metering provides usage metering: a single Recorder interface
 // business modules call to report usage, decoupled entirely from which
 // backend actually stores and aggregates it. It sits above authn/rbac/org
-// in the module dependency graph and implements pkgcore.Module like every
+// in the module dependency graph and implements the module contract like every
 // other business module.
 //
 // # Two reliability tiers, not two variants of one thing

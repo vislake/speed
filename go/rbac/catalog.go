@@ -10,7 +10,7 @@ import "sort"
 // in bootstrap order, so a read taken while registration is still running
 // would see a partial set, and a read taken per request would let the
 // answer to "is this a real permission" change under a running system.
-// Kernel.Bootstrap returns once every module has registered; Attach reads
+// the assembly returns once every module has registered; Attach reads
 // the registrar exactly then, exactly once, and the result never changes
 // again for the life of the process.
 //

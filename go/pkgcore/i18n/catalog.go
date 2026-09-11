@@ -312,7 +312,7 @@ func (b *Builder) Build() *Catalog {
 //
 // A Catalog is immutable after Build -- it has no mutating methods -- and
 // is therefore safe for concurrent use without a lock; the concurrency
-// smoke test exercises exactly that. Only Kernel.Bootstrap produces one,
+// smoke test exercises exactly that. Only the loader produces one,
 // which is why Registry.Locales() returns nil on a hand-built Registry,
 // mirroring Registry.ObjectStore().
 type Catalog struct {

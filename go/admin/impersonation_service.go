@@ -158,7 +158,7 @@ func newImpersonationService(repo *ImpersonationRepository) *ImpersonationServic
 	return &ImpersonationService{repo: repo, now: time.Now}
 }
 
-// attach gives the service its host seams, read from the *pkgcore.Registry
+// attach gives the service its host seams, read from the *pkgcore.ComponentRegistry
 // (and, for authnSvc, from Module.authnModule.Service()) during
 // Module.Register. It is the one moment the attached flag above flips:
 // until it has run, Start refuses with ErrImpersonationNotWired.

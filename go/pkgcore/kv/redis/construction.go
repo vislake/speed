@@ -18,7 +18,7 @@ import (
 // factory a host wraps a self-built client in both declare this one exported
 // value, so the declaration a host reads off this package and the one
 // assembly validates cannot drift apart. A host injecting a hand-built store
-// with pkgcore.WithKVStore passes it as the injection's capability argument.
+// through the by-type context passes it as the value's capability declaration.
 const Capabilities pkgcore.Capability = pkgcore.MultiReplicaSafe | pkgcore.SurvivesRestart
 
 // closableKVStore is the value "kv.redis"'s registration returns: the store

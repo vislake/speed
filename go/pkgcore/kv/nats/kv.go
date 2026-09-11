@@ -8,13 +8,13 @@
 // implementation's whole dependency closure.
 //
 // Importing this package registers "kv.nats" on pkgcore's shared
-// KVStoreRegistry as a side effect (see register.go), the same database/sql-
+// component as a side effect (see component.go), the same database/sql-
 // style driver-registration pattern kv/redis uses, now with a second name
-// under the "kv" seam. pkgcore.PresetDistributed still names "kv.redis" by
+// under the "kv" module. The built-in composition still names "kv.redis" by
 // default -- adding this implementation does not change what any existing
 // Preset resolves -- so a host that wants NATS instead either builds its own
 // Preset naming "kv.nats" or calls NewKVStore directly and wires it with
-// pkgcore.WithKVStore.
+// the kv value's configuration block.
 //
 // # Why a JetStream KV bucket needs its own envelope
 //
@@ -145,7 +145,7 @@ const (
 // package hands back cannot honour: adopting such a bucket would make a
 // declaration the package registers silently false, or overthrow a contract
 // pkgcore.KVStore pins for every implementation, while startup -- including
-// the deployment-mode capability checks Kernel.Bootstrap runs over the
+// the deployment-mode capability checks the assembly runs over the
 // resolved "kv.nats" implementation -- would go on believing the declaration.
 // The wrapped error names the bucket, the offending configuration and the
 // declaration or contract it contradicts, so an operator who pre-provisioned
@@ -200,7 +200,7 @@ type kvStore struct {
 // surface the package's declarations and contracts cover: adopting a bucket
 // must never make a registered declaration silently false, or overthrow a
 // contract pkgcore.KVStore pins for every implementation, while the
-// deployment-mode capability checks Kernel.Bootstrap runs over the resolved
+// deployment-mode capability checks the assembly runs over the resolved
 // "kv.nats" implementation go on believing the declaration. Two
 // configuration facts are therefore verified before a pre-provisioned
 // bucket is adopted (adoptionRefusal):

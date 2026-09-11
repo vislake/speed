@@ -82,7 +82,7 @@ func main() {
 		// pkgcore.ConfigItem{Key: ...} -> pkgcore.validateConfigItem, whose
 		// own doc comment guarantees it names only the Key, never a
 		// Sensitive item's value, in any error it returns -> up through
-		// Module.Register/Kernel.Bootstrap/the engine's assembly to here.
+		// Module.Register/the assembly/the engine's assembly to here.
 		// CodeQL's heuristic matched the identifier "secretKey" as if it
 		// held a secret; it holds a schema key name. Separately,
 		// obs.FromContext's logger passes every attribute through

@@ -1,5 +1,5 @@
 // Package locales holds the org module's message bundle: one <language>.toml
-// file per language the catalog serves, embedded for Kernel.Bootstrap to
+// file per language the catalog serves, embedded for the assembly to
 // feed to i18n.Builder.AddModule alongside every other module's Locales()
 // embed.FS.
 //

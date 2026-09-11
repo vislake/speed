@@ -62,14 +62,14 @@ func (m DeploymentMode) Valid() bool {
 // small-customer production, not a misuse), RequiredCapabilities simply does
 // not demand one.
 //
-// The mode contributes only a capability requirement, and Bootstrap compares
-// it against whatever a Preset or a KernelOption resolved; with several
-// implementations per seam there is no "missing distributed implementation"
-// failure to special-case.
+// The mode contributes only a capability requirement, and the assembly
+// compares it against every selected component's declared capabilities; with
+// several implementations per seam there is no "missing distributed
+// implementation" failure to special-case.
 //
 // An invalid DeploymentMode (not DeploymentModeStandalone or
 // DeploymentModeDistributed) is not this method's concern to reject --
-// Kernel.Bootstrap validates m.Valid() itself before ever asking for its
+// the assembly validates m.Valid() itself before ever asking for its
 // required capabilities -- so RequiredCapabilities falls back to the
 // standalone requirement, 0, for any value that is not
 // DeploymentModeDistributed.

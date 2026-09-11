@@ -16,7 +16,7 @@ import (
 // registration below and the Registration factory a host wraps a self-built
 // client in both declare this one exported value, so the declaration a host
 // reads off this package and the one assembly validates cannot drift apart.
-// A host injecting a hand-built bus with pkgcore.WithEventBus passes it as
+// A host injecting a hand-built bus does so through the by-type context, passing it as
 // the injection's capability argument.
 const Capabilities pkgcore.Capability = pkgcore.MultiReplicaSafe | pkgcore.SurvivesRestart
 

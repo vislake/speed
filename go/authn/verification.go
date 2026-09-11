@@ -677,7 +677,7 @@ var (
 // and delivered synchronously, inside the request that asked for the code,
 // from a bundle whose files (and their key parity) this module already
 // owns and already tests in errors_test.go's sibling assertions. Reaching
-// for the shared Registry here would mean threading a *pkgcore.Registry
+// for the shared Registry here would mean threading a *pkgcore.ComponentRegistry
 // reference into Service for the sole benefit of one message, when the
 // files this function reads are already right here.
 //

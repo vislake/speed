@@ -944,10 +944,10 @@ func (s *CreditService) readBalanceForAudit(ctx context.Context, session *gorm.D
 // s.events is nil for a bare CreditService built directly through
 // NewCreditService (every unit test in this package) and non-nil only
 // once module.go's Register has wired it from the host's
-// pkgcore.Registry -- exactly mirroring notes' own Handler.bus == nil
+// pkgcore.ComponentRegistry -- exactly mirroring notes' own Handler.bus == nil
 // short-circuit, so emitCreditAudit is a no-op for every pre-existing
 // call site and test that constructs a CreditService without going
-// through a full Kernel.Bootstrap.
+// through a full the assembly.
 func (s *CreditService) emitCreditAudit(ctx context.Context, action string, tenant pkgcore.TenantID, txID string, amount int64, reason string, resultingBalance *CreditBalance) {
 	if s.events == nil {
 		return

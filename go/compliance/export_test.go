@@ -593,7 +593,7 @@ func (sharingModuleStub) Register(*pkgcore.ComponentRegistry) error { return nil
 // from zero through the real dbkit.MigrationRegistry -- the identical
 // construction newTestAuditDB (module_test.go) uses for dbkit/audit --
 // then sharing.NewModule(db).Register attached against a real
-// pkgcore.ComponentRegistry, exactly as Kernel.Bootstrap would attach it for a real
+// pkgcore.ComponentRegistry, exactly as the assembly would attach it for a real
 // host. Going through Register (rather than calling sharing.NewService
 // directly) is deliberate: it exercises sharing's actual Create/Access
 // implementation fully attached, so this test's event-publish and

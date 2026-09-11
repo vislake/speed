@@ -14,7 +14,7 @@ import (
 //
 // This constant is a COORDINATION POINT with the authn module, and this is
 // the only place in org the string appears. authn owns the event: it
-// declares it through pkgcore.Registry.Events.Publishes and org must NOT,
+// declares it through pkgcore.ComponentRegistry.Events.Publishes and org must NOT,
 // or a host running both modules fails to bootstrap with
 // ErrDuplicateEventType. org only subscribes.
 //
@@ -202,17 +202,17 @@ var memberEventDecls = []pkgcore.EventDecl{
 	},
 }
 
-// hostSeams is the read-only view of the host's *pkgcore.Registry that org's
+// hostSeams is the read-only view of the host's *pkgcore.ComponentRegistry that org's
 // runtime reads AT CALL TIME rather than capturing during Register.
 //
 // The distinction is not stylistic. Registry.Locales() is documented to be
-// nil while modules are registering -- Kernel.Bootstrap installs the merged
+// nil while modules are registering -- the assembly installs the merged
 // catalog only after every module's Register has returned -- so a service
 // that captured the catalog in Register would capture nil and fail on its
 // first rendered message. Holding the registry itself and asking it for each
 // seam when the seam is used makes that mistake unrepresentable.
 //
-// *pkgcore.Registry satisfies this interface structurally; org declares it
+// *pkgcore.ComponentRegistry satisfies this interface structurally; org declares it
 // rather than taking the concrete type so that a test can substitute a host
 // without building a kernel.
 type hostSeams interface {

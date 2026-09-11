@@ -58,7 +58,7 @@ func Example() {
 
 	// Start begins AnalyticsRecorder's background flush loop and
 	// Dispatcher's poll loop; a real host calls it once, after
-	// Kernel.Bootstrap has returned.
+	// the assembly's declaration turn has finished.
 	m.Start(ctx)
 	defer m.Stop()
 

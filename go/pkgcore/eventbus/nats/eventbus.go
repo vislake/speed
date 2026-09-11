@@ -7,14 +7,16 @@
 // package, so a consumer that never wires a NATS-backed bus does not inherit
 // nats.go in its dependency graph (see the "Dependency cost" section below).
 //
-// Importing this package registers "eventbus.nats" on pkgcore's shared
-// EventBusRegistry as a side effect (see register.go) -- the same
-// database/sql-style driver-registration pattern eventbus/redis's own
-// register.go uses, one seam backed by two registered names, only one of
-// which ("eventbus.redis") is what PresetDistributed points the "eventbus"
-// seam at. A host that wants this implementation
-// instead calls NewEventBus directly and wires it with pkgcore.WithEventBus,
-// or builds it by name through pkgcore.EventBusRegistry.Build("eventbus.nats", cfg).
+// Importing this package makes the "eventbus.nats" component available to
+// a composition: component.go self-registers its descriptor with
+// pkgcore's global component registration -- the same database/sql-style
+// driver-registration pattern eventbus/redis's own component.go uses, one
+// seam backed by two registered names, only one of which
+// ("eventbus.redis") is what the built-in composition names for the
+// "eventbus" module at. A host that wants this implementation instead
+// selects the component by name in its composition configuration, or calls
+// NewEventBus directly and puts the value into the assembly's by-type
+// context.
 //
 // # Delivery semantics: fan-out, not load-balanced
 //
@@ -335,17 +337,17 @@ type panicRetryRecord struct {
 // of every one of them. pkgcore's in-memory bus covers the standalone
 // deployment mode; eventbus/redis and this package are its two distributed
 // counterparts, and a distributed-mode host wires whichever it wants with
-// pkgcore.WithEventBus.
+// the eventbus value's configuration block.
 //
 // Unlike eventbus/redis.NewEventBus, which accepts a lazily-dialling
 // *redis.Client, nc must already be connected: nats.go's own client model
 // dials synchronously inside nats.Connect, so there is no lazy equivalent to
-// hand this constructor. register.go's own built-in "eventbus.nats"
+// hand this constructor. The "eventbus.nats" component's own
 // constructor calls nats.Connect with nats.RetryOnFailedConnect(true) for
-// exactly this reason -- so that building the seam through
-// pkgcore.EventBusRegistry never blocks or fails just because NATS is not
-// reachable yet at that moment, the same "never fails at build time"
-// property eventbus/redis's lazy client gets for free.
+// exactly this reason -- so that building the component never blocks or
+// fails just because NATS is not reachable yet at that moment, the same
+// "never fails at build time" property eventbus/redis's lazy client gets
+// for free.
 //
 // The returned bus starts no reader goroutine and creates no stream or
 // consumer until the first Subscribe of a given event type (Publish creates

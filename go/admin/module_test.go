@@ -494,7 +494,7 @@ func TestModule_Register_TwiceOnOneRegistry_FailsClosed(t *testing.T) {
 // Migrations() ships a non-empty migration tree; and OpenAPISpec()
 // carries the module's own fragment -- the three surfaces the
 // migration-registry, locale-merge and api-contract toolchains read from
-// the pkgcore.Module interface.
+// the module interface.
 func TestModule_SelfDescription_UsageMigrationsAndSpecArePresent(t *testing.T) {
 	env := buildTestAdminModule(t)
 

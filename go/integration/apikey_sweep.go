@@ -11,7 +11,7 @@ import (
 )
 
 // This file is the API-key expiry sweep: the jobs task the module declares
-// on the pkgcore.Registry.Schedules seat and enqueues per tenant, which
+// on the pkgcore.ComponentRegistry.Schedules seat and enqueues per tenant, which
 // physically removes the APIKey rows (and their apiKeyHashIndex
 // companions) whose ExpiresAt has passed. A host that runs a jobs.Scheduler
 // over the finished registry sweeps every tenant without writing a schedule
@@ -92,7 +92,7 @@ func apiKeyExpirySweepIdempotencyKey(tenant pkgcore.TenantID, windowStart time.T
 }
 
 // apiKeyExpirySweepSchedule is the module's declaration of the API-key
-// expiry sweep on the pkgcore.Registry.Schedules seat: a per-tenant task
+// expiry sweep on the pkgcore.ComponentRegistry.Schedules seat: a per-tenant task
 // at the sweep's own window, keyed with the same prefix and window
 // function the manual EnqueueAPIKeyExpirySweep path uses, so a scheduler
 // tick and a manual enqueue landing in one window resolve one key and
@@ -106,7 +106,7 @@ var apiKeyExpirySweepSchedule = pkgcore.PeriodicTask{
 
 // EnqueueAPIKeyExpirySweep enqueues the expiry-sweep task for the tenant ctx
 // carries -- the manual entry point. The sweep's default schedule is the
-// module's own: Register declares it on the pkgcore.Registry.Schedules seat
+// module's own: Register declares it on the pkgcore.ComponentRegistry.Schedules seat
 // (apiKeyExpirySweepSchedule, a per-tenant task at the sweep's own window),
 // so a host that runs a jobs.Scheduler sweeps every tenant without writing
 // a schedule point of its own. The task's window-scoped idempotency key

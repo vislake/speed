@@ -66,7 +66,7 @@ func attachAfterDeclare(t *testing.T, reg *pkgcore.ComponentRegistry, m *Module)
 	return svc
 }
 
-// declaringModule is a minimal pkgcore.Module standing in for a business
+// declaringModule is a minimal module standing in for a business
 // module that declares permissions of its own. It is what makes the
 // "Attach snapshots EVERY module's permissions, not just rbac's" assertion
 // meaningful.
@@ -152,7 +152,7 @@ func TestModule_Register_MountsNoRoutes(t *testing.T) {
 }
 
 func TestModule_Register_PerformsNoIO(t *testing.T) {
-	// pkgcore.Module's contract: Register declares, it never performs I/O.
+	// the module contract: Register declares, it never performs I/O.
 	// A nil database is the sharpest possible proof -- any query would
 	// panic rather than merely fail.
 	if err := componenttest.DeclareInto(newPlainRegistry(), NewModule(nil)); err != nil {
@@ -289,7 +289,7 @@ func TestModule_Migrations_ApplyFromZeroToHeadOnSQLite(t *testing.T) {
 }
 
 func TestModule_Locales_ParityAndCoverage(t *testing.T) {
-	// The parity rule enforced through the very mechanism Kernel.Bootstrap
+	// The parity rule enforced through the very mechanism the assembly
 	// uses: AddModule fails with ErrParityMismatch when the two language
 	// files' id sets differ, and with ErrUnsupportedShape on a grouping
 	// section or an id missing the module prefix.

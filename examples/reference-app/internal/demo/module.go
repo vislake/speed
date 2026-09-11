@@ -10,7 +10,7 @@
 // smilesim_flow_test suites).
 //
 // The package exists because both types' template copy must live inside
-// the app's Bootstrap module set: Kernel.Bootstrap assembles the merged
+// the app's Bootstrap module set: the assembly assembles the merged
 // message catalog from the Locales() of the modules it is given, freezing it
 // once before the registry is returned, and the notification module renders
 // every dispatch from that frozen catalog. A notification type whose copy
@@ -35,7 +35,7 @@ import (
 )
 
 const (
-	// moduleName is demo's pkgcore.Module.Name(). It appears in no
+	// moduleName is demo's the module contract's Name(). It appears in no
 	// migration registry (the module ships no migrations) and in no CI
 	// matrix (the module's only build leg is the reference app's own); its
 	// one real purpose is the Locales() key the merged catalog prefixes
@@ -73,7 +73,7 @@ const (
 	// Locales() bundle, and pkgcore/i18n's per-module id-namespace rule
 	// requires every id this module ships to start with "demo." (this
 	// module's own Name()), never "smilesim." (smilesim declares no
-	// pkgcore.Module at all -- see its own package comment). render.go
+	// module at all -- see its own package comment). render.go
 	// builds a template's message id directly from the Dispatch's TypeKey,
 	// so the Key here MUST be the "demo."-prefixed string the copy below
 	// actually lives under; the event type and the notification type key
@@ -116,7 +116,7 @@ var simulationReadyNotificationType = pkgcore.NotificationType{
 	Unsubscribable:  true,
 }
 
-// Module implements pkgcore.Module for demo: the reference app's notification
+// Module implements the module contract for demo: the reference app's notification
 // type carrier. It is stateless -- no repository, no handler, no seams -- and
 // its Register call is a single declaration.
 type Module struct{}
@@ -126,31 +126,31 @@ type Module struct{}
 // it.
 func NewModule() *Module { return &Module{} }
 
-// Name implements pkgcore.Module.
+// Name implements the module contract.
 func (m *Module) Name() string { return moduleName }
 
-// DependsOn implements pkgcore.Module. demo depends on nothing: its
+// DependsOn implements the module contract. demo depends on nothing: its
 // declaration is self-contained, and the notification module that renders it
 // is not a dependency of the type's declaration but a consumer of the
 // catalog both of them ride in.
 func (m *Module) DependsOn() []string { return nil }
 
-// Migrations implements pkgcore.Module. demo owns no tables, so it returns
+// Migrations implements the module contract. demo owns no tables, so it returns
 // an empty FS rather than shipping an empty migrations directory; internal/app
 // therefore never registers demo on its dbkit.MigrationRegistry (see the
 // wiring comment in internal/app/server.go).
 func (m *Module) Migrations() embed.FS { return embed.FS{} }
 
-// Locales implements pkgcore.Module.
+// Locales implements the module contract.
 func (m *Module) Locales() embed.FS { return locales.FS }
 
-// OpenAPISpec implements pkgcore.Module. demo mounts no HTTP surface of its
+// OpenAPISpec implements the module contract. demo mounts no HTTP surface of its
 // own -- the demo patient-message route is a hand-written internal/app route
 // outside the OpenAPI machinery (see internal/app/demo/demo_notification.go) -- so
 // there is no fragment to return.
 func (m *Module) OpenAPISpec() []byte { return nil }
 
-// Register implements pkgcore.Module: it declares the patient-reminder
+// Register implements the module contract: it declares the patient-reminder
 // notification type, making it visible to the preference matrix of whatever
 // notification module the host boots. No I/O happens here; declaring the type
 // is all this module does.

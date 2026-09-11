@@ -4,7 +4,7 @@
 // go/tenancy/tenancytest.AssertIsolated plays for dbkit.Repository[T] and
 // go/pkgcore/eventbustest.AssertConforms plays for EventBus: one suite every
 // implementation — built-in (pkgcore.NewConsoleMailer, pkgcore.NewSMTPMailer)
-// or host-supplied through pkgcore.WithMailer — must pass, so drift between
+// or host-supplied through the mailer value's configuration block — must pass, so drift between
 // implementations is caught here once instead of pairwise.
 package mailertest
 

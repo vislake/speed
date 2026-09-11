@@ -51,7 +51,7 @@ const MaxAttestedBytes = 20 << 20
 // Service is usable only after its two boot steps have run, in order:
 // EnsureSchema (the app table) and EnsureAuthorityChain (the app's CA
 // chain in pki_authorities, once per database); cmd/server runs both at
-// every boot, right after Kernel.Bootstrap applied pki's migrations.
+// every boot, right after the assembly's declaration turn applied pki's migrations.
 type Service struct {
 	db *gorm.DB
 

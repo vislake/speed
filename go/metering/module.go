@@ -13,7 +13,7 @@ import (
 	"github.com/vislake/speed/go/metering/migrations"
 )
 
-// moduleName is metering's pkgcore.Module.Name(), and the key
+// moduleName is metering's the module contract's Name(), and the key
 // dbkit.MigrationRegistry.Register builds its dependency graph on.
 const moduleName = "metering"
 
@@ -56,11 +56,11 @@ var configItemDecls = []pkgcore.ConfigItem{
 	},
 }
 
-// Module implements pkgcore.Module for go/metering.
+// Module implements the module contract for go/metering.
 //
 // # Wiring
 //
-// A host constructs one with NewModule and hands it to Kernel.Bootstrap.
+// A host constructs one with NewModule and hands it to the assembly.
 // Constructing a Module performs no I/O: db is opened and migrated by the
 // host before Register is ever called, exactly like every other module in
 // this codebase. Register wires the pkgcore.EventBus onto the Aggregator
@@ -228,30 +228,30 @@ func (m *Module) Stop() {
 	m.dispatcher.Stop()
 }
 
-// Name implements pkgcore.Module.
+// Name implements the module contract.
 func (m *Module) Name() string { return moduleName }
 
-// DependsOn implements pkgcore.Module: nothing. metering wires no
+// DependsOn implements the module contract: nothing. metering wires no
 // cross-module event subscription and no consumer of any other module's
 // declarations, so DependsOn -- which enumerates only modules in the
 // bootstrap set metering itself requires -- returns nil, the same answer
 // go/pki's identical-shaped Module gives for the same reason.
 func (m *Module) DependsOn() []string { return nil }
 
-// Migrations implements pkgcore.Module.
+// Migrations implements the module contract.
 func (m *Module) Migrations() embed.FS { return migrations.FS }
 
-// Locales implements pkgcore.Module: the descriptions of metering's error
+// Locales implements the module contract: the descriptions of metering's error
 // codes, in both supported languages with identical id sets.
 func (m *Module) Locales() embed.FS { return locales.FS }
 
-// OpenAPISpec implements pkgcore.Module. metering has no HTTP surface --
+// OpenAPISpec implements the module contract. metering has no HTTP surface --
 // it is a Go-level Recorder/Enqueue API business modules call in-process,
 // not a service other code reaches over HTTP -- so this returns nil, the
 // same answer go/compliance's and go/rbac's Module give.
 func (m *Module) OpenAPISpec() []byte { return nil }
 
-// Register implements pkgcore.Module. Per the interface's own contract it
+// Register implements the module contract. Per the interface's own contract it
 // only declares and wires -- no database call, no outbound call, nothing
 // that touches m.db. It declares metering's configuration schema and its
 // one published event, and attaches the registry's EventBus onto

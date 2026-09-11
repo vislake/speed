@@ -14,7 +14,7 @@ import (
 	"github.com/vislake/speed/go/rbac/migrations"
 )
 
-// moduleName is rbac's pkgcore.Module.Name(). It is also the module name
+// moduleName is rbac's module name. It is also the module name
 // dbkit.MigrationRegistry.Register keys its dependency graph on.
 const moduleName = "rbac"
 
@@ -44,7 +44,7 @@ const (
 	PermissionManage = "rbac:manage"
 )
 
-// Module implements pkgcore.Module for go/rbac: the role-based access
+// Module implements the module contract for go/rbac: the role-based access
 // control engine.
 //
 // It declares its own permissions, events and audit actions during
@@ -126,7 +126,7 @@ func WithQueue(queue jobs.Queue) Option {
 // Module performs no I/O -- opening and migrating db is the caller's
 // responsibility, done once at startup before Bootstrap ever calls
 // Register. db must not be nil by the time Attach runs; Register itself
-// never touches it, per pkgcore.Module's "declares, never performs I/O"
+// never touches it, per the module contract's "declares, never performs I/O"
 // contract.
 func NewModule(db *gorm.DB, opts ...Option) *Module {
 	m := &Module{db: db, cacheTTL: DefaultCacheTTL}
@@ -136,10 +136,10 @@ func NewModule(db *gorm.DB, opts ...Option) *Module {
 	return m
 }
 
-// Name implements pkgcore.Module.
+// Name implements the module contract.
 func (m *Module) Name() string { return moduleName }
 
-// DependsOn implements pkgcore.Module. rbac depends on infrastructure
+// DependsOn implements the module contract. rbac depends on infrastructure
 // (pkgcore, dbkit, tenancy) only.
 //
 // The empty list is the module's defining property, not an oversight, and
@@ -149,16 +149,16 @@ func (m *Module) Name() string { return moduleName }
 // an import, or in a test -- inverts the whole design.
 func (m *Module) DependsOn() []string { return nil }
 
-// Migrations implements pkgcore.Module.
+// Migrations implements the module contract.
 func (m *Module) Migrations() embed.FS { return migrations.FS }
 
-// Locales implements pkgcore.Module: one message per error code in
+// Locales implements the module contract: one message per error code in
 // errors.go, in both zh-CN and en-US with identical id sets (the parity
-// pkgcore/i18n's Builder.AddModule enforces while Kernel.Bootstrap merges
+// pkgcore/i18n's Builder.AddModule enforces while the assembly merges
 // the catalog).
 func (m *Module) Locales() embed.FS { return locales.FS }
 
-// OpenAPISpec implements pkgcore.Module: nil.
+// OpenAPISpec implements the module contract: nil.
 //
 // rbac mounts no HTTP endpoints of its own, on purpose. Role management is
 // an admin-console surface, and the flat permission list a signed-in user
@@ -168,7 +168,7 @@ func (m *Module) Locales() embed.FS { return locales.FS }
 // (authn.Middleware, then rbac's permission gate), not a route.
 func (m *Module) OpenAPISpec() []byte { return nil }
 
-// Register implements pkgcore.Module. Per the interface's own contract
+// Register implements the module contract. Per the interface's own contract
 // ("It must not perform I/O; it only declares"), it declares this module's
 // own permission vocabulary, its domain events and its audit actions, and
 // touches neither the database nor the network.
@@ -188,7 +188,7 @@ func (m *Module) Register(reg *pkgcore.ComponentRegistry) error {
 
 // Attach freezes the permission catalog and hands the caller the runtime
 // Service. It must be called exactly once, with the registry the modules
-// declared into: the host calls it after Kernel.Bootstrap has returned
+// declared into: the host calls it after the assembly's declaration turn has finished
 // (only then has every module registered, so reg.Permissions.Permissions()
 // is the complete declaration the catalog snapshots), and the component
 // descriptor calls it from its Init callback, which publishes the returned

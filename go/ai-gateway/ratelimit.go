@@ -65,10 +65,10 @@ const (
 // apperr.Invalid, since neither status fits a rate-limit refusal.
 var ErrRateLimited = &apperr.Error{Code: "aigateway.rate_limited", Status: http.StatusTooManyRequests}
 
-// hostSeams is the slice of *pkgcore.Registry Gateway reads at call time,
+// hostSeams is the slice of *pkgcore.ComponentRegistry Gateway reads at call time,
 // mirroring go/sharing's and go/org's identically-named, identically-
 // shaped interface for the same reason: declaring it as its own interface,
-// rather than holding a *pkgcore.Registry directly, keeps Gateway testable
+// rather than holding a *pkgcore.ComponentRegistry directly, keeps Gateway testable
 // against a fake and honest about the one thing it actually needs from the
 // host for rate limiting -- a KVStore to build a go/ratelimit.Limiter over.
 type hostSeams interface {

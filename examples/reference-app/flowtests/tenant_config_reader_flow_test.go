@@ -7,8 +7,8 @@ package flowtests
 // both over the config module's lazy Handle. It drives them against a
 // real go/config Service, a real go/sharing Service and a real
 // go/compliance.ExportService, all composed through the same
-// pkgcore.NewKernel().Bootstrap + Module.Attach sequence BuildServer
-// itself uses. The tenant-configured default expiry applies when the
+// assembly declaration turn + Module.Attach sequence BuildServer itself
+// uses. The tenant-configured default expiry applies when the
 // tenant has configured one; a tenant that has not still gets the
 // module's own fixed default when no tenant row overrides it.
 //
@@ -57,11 +57,10 @@ type tenantConfigReaderHarness struct {
 // compliance.NewModule (wired with
 // compliance.WithSharing over that same sharing.Service, and with
 // compliance.NewConfigReader over the same handle)
-// registered through one real
-// pkgcore.NewKernel().Bootstrap call, then config.Module.Attach -- the
-// exact ordering BuildServer itself uses (config's own *config.Service is
-// only produced strictly after Bootstrap returns), just trimmed to the
-// three modules the host adapters touch.
+// registered through one real declaration turn, then config.Module.Attach
+// -- the exact ordering BuildServer itself uses (config's own
+// *config.Service is only produced strictly after the turn), just trimmed
+// to the three modules the host adapters touch.
 func newTenantConfigReaderHarness(t *testing.T) tenantConfigReaderHarness {
 	t.Helper()
 	ctx := context.Background()

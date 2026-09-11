@@ -122,7 +122,3 @@ func TestModule_Register_DeclaresBothNotificationTypes(t *testing.T) {
 		t.Errorf("%q Unsubscribable = false, want true -- an ordinary user notification may be silenced", TypeKeySimulationReady)
 	}
 }
-
-// compile-time check that *Module satisfies pkgcore.Module -- redundant
-// with module.go's own assertion, kept here too as a visible part of this
-// file's own test surface.

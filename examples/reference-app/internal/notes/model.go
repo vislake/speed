@@ -137,7 +137,7 @@ func (n Note) GetDeletedAt() *time.Time { return n.DeletedAt }
 //
 // This app's own shared connection is a wired one: internal/app's
 // BuildServer sets dbkit.Options.AuditBus on its dbkit.Open call (the
-// same bus instance Kernel.Bootstrap later receives through
+// same bus instance the assembly later receives through
 // WithEventBus), and that call's Options.AuditModels scope lists org's
 // three models and deliberately nothing else. Note stays off that list by
 // design -- one host-side list line -- because this module records its

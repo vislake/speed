@@ -1,7 +1,7 @@
 //go:build integration
 
 // This file is the reference app's distributed-mode integration tier: the
-// positive and negative halves of a real Kernel.Bootstrap under the
+// positive and negative halves of a real the assembly under the
 // distributed deployment mode. It
 // lives in package referenceapp_test alongside
 // redis_eventbus_composition_test.go (same build tag, same
@@ -146,7 +146,7 @@
 // synchronously touch "objectstore" or "mailer" during either replica's
 // BOOT (no boot-time seeding step reads or writes an object or sends a
 // mail), so in principle a fake, never-dialed S3 endpoint and SMTP relay
-// would let Kernel.Bootstrap's capability validation pass just as well,
+// would let the assembly's capability validation pass just as well,
 // since that validation checks only the DECLARED capability bits of a
 // resolved implementation, never its reachability
 // (objectstore/s3.NewObjectStore and pkgcore.NewSMTPMailer both dial
@@ -704,7 +704,7 @@ func openInboxStream(t *testing.T, baseURL, accessToken, userIDHeader string) *s
 // real Redis, the SAME real RustFS bucket and the SAME real SMTP catcher --
 // the composition internal/app/server.go builds,
 // declaring MultiReplicaSafe|SurvivesRestart on every one of the four
-// stateful seams Kernel.Bootstrap validates. Replica B additionally boots
+// stateful seams the assembly validates. Replica B additionally boots
 // with APP_DISABLE_QUEUE_WORKER=true, so it can never itself execute the
 // delivery job the note-created event triggers -- see this file's own
 // package doc comment for why that is what turns the assertions below into

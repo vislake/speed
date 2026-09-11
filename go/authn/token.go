@@ -122,7 +122,7 @@ type KeySource interface {
 	// with a retiring overlap period that must eventually cover
 	// maxCredentialLifetime. Signer calls it lazily, on the first Issue,
 	// under one mutex that serializes concurrent callers -- not from
-	// Module.Register, which per pkgcore.Module's own contract may perform
+	// Module.Register, which per the module contract's own contract may perform
 	// no I/O, and this call necessarily does (it may create a signing key
 	// on first boot). Success is remembered permanently: every later Issue
 	// skips straight to ActiveSigner. A failed call is not cached for the

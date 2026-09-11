@@ -7,7 +7,7 @@ import (
 	i18n "github.com/vislake/speed/go/pkgcore/i18n"
 )
 
-// ExampleBuilder walks the lifecycle Kernel.Bootstrap drives: every module's
+// ExampleBuilder walks the lifecycle the assembly drives: every module's
 // Locales() embed.FS is added to one Builder (here a module "notes" serving
 // a pair of in-memory files standing in for its embed.FS), then Build freezes
 // the merged catalog for lookup. Real locale files follow the same shape as

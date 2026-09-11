@@ -28,7 +28,7 @@ const (
 // errNoCatalog reports that the host seam produced no message catalog. It is
 // wrapped as the cause of an ErrInternal, never returned bare.
 //
-// In practice it means the runtime was used before Kernel.Bootstrap finished:
+// In practice it means the runtime was used before the declaration turn finished:
 // Registry.Locales() is documented to be nil while modules are registering,
 // which is precisely why every render reads the catalog through the host seam
 // at call time instead of capturing it in Register.

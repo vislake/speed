@@ -7,15 +7,16 @@
 // that also carries one implementation hands every importer that
 // implementation's whole dependency closure.
 //
-// Importing this package registers "eventbus.redis" on pkgcore's shared
-// EventBusRegistry as a side effect (see register.go), the name
-// pkgcore.PresetDistributed already names for the "eventbus" seam -- the
-// same database/sql-style driver-registration pattern pkgcore's other
-// built-in implementations use, now applied across a package boundary. A
-// distributed-mode host that wants it either blank-imports this package
-// (`import _ ".../pkgcore/eventbus/redis"`) so WithPreset(PresetDistributed)
-// resolves it, or calls NewEventBus directly and wires it with
-// pkgcore.WithEventBus.
+// Importing this package makes the "eventbus.redis" component available
+// to a composition: component.go self-registers its descriptor with
+// pkgcore's global component registration, so a composition configuration
+// that names "eventbus.redis" under the "eventbus" module resolves this
+// implementation -- the same database/sql-style driver-registration
+// pattern pkgcore's other built-in implementations use, now applied across
+// a package boundary. A host that wants it either selects the component in
+// its composition configuration (a blank import of this package carries
+// the side effect), or calls NewEventBus directly and puts the value into
+// the assembly's by-type context.
 package redis
 
 import (
@@ -208,7 +209,7 @@ type EventBus struct {
 // client reach the subscribers of every one of them. pkgcore's in-memory bus
 // covers the standalone deployment mode; this is its distributed
 // counterpart, and a distributed-mode host wires it in with
-// pkgcore.WithEventBus.
+// the eventbus value's configuration block.
 //
 // The returned bus starts no goroutine and touches no network until the
 // first Subscribe, and its readers stop at Close. A nil client panics: it is

@@ -422,7 +422,7 @@ type SubjectRef struct {
 // dbkit.Repository[T].HardDelete (already tenant-bound and
 // system-context-gated), rather than compliance reaching into another
 // module's table directly. This is why the registrar lives on
-// pkgcore.Registry rather than as a method compliance calls on some other
+// pkgcore.ComponentRegistry rather than as a method compliance calls on some other
 // module's exported type: every business module above compliance in the
 // dependency graph can register a participant without compliance ever
 // importing it, and compliance never needs to import a business module's

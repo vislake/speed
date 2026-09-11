@@ -54,7 +54,7 @@
 //     does. The database connection is the host's own component's to open
 //     (dbkit.Open), the dialect package imported by the host's binary.
 //   - No business domain: no tables, no routes, no permissions, no events,
-//     no pkgcore.Module implementation. A host's own modules never depend on
+//     no module implementation. A host's own modules never depend on
 //     this one; docs/internal/01-architecture.md records the module as the
 //     module discipline's explicit exception on those terms.
 //

@@ -2,7 +2,7 @@
 // simulation platform example that exercises the delivered modules end to
 // end the way an external consumer would. internal/notes is a small,
 // complete, tenant-scoped business module exercising the full
-// pkgcore.Module contract -- routes, permissions, events, audit actions,
+// module contract -- routes, permissions, events, audit actions,
 // migrations, locales, and an OpenAPI fragment -- and the assembly in
 // internal/app (built by this package's cmd/server/main.go, the thin
 // process shell) wires it, together with the org, authn, rbac, storage,

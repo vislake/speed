@@ -712,7 +712,7 @@ const (
 // KeySource, over a real SQLite file) and composes the HTTP chain exactly
 // as the generated server.go does under the requested shape. The authn
 // handler is reached the way the generated code reaches it: through
-// reg.Routes after Kernel.Bootstrap registered the module.
+// reg.Routes after the assembly's declaration turn registered the module.
 func buildComposedHandler(t *testing.T, shape composedShape) http.Handler {
 	t.Helper()
 	ctx := context.Background()

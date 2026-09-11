@@ -12,7 +12,7 @@
 // # Orchestration, not ownership
 //
 // compliance never imports a business module's repository or model type.
-// Instead, pkgcore.Registry.Retention (pkgcore.RetentionRegistrar) is the
+// Instead, pkgcore.ComponentRegistry.Retention (pkgcore.RetentionRegistrar) is the
 // seam a business module registers a pkgcore.RetentionParticipant on
 // during its own Register call: a Name plus three callbacks -- Sweep
 // (retention-window cleanup for one tenant), Erase (immediate

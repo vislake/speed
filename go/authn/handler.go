@@ -86,7 +86,7 @@ type Handler struct {
 // non-nil, for the same reason notes.NewHandler's own doc comment gives
 // (Emit needs a real AuditActionRegistrar to validate each action
 // against). module.go's Register is the one real caller, sourcing both
-// from the same *pkgcore.Registry.
+// from the same *pkgcore.ComponentRegistry.
 func NewHandler(svc *Service, bus pkgcore.EventBus, auditActions pkgcore.AuditActionRegistrar) *Handler {
 	h := &Handler{svc: svc, bus: bus, auditActions: auditActions}
 	h.mux = http.NewServeMux()

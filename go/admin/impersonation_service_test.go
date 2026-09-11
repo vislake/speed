@@ -90,7 +90,7 @@ func newTestImpersonationService(t *testing.T, notifier Notifier) (*Impersonatio
 
 // newAttachedRBAC returns a real, Attach()-ed *rbac.Service over db --
 // the minimal construction go/rbac permits (its own migrations applied
-// from zero, a fresh Kernel.Bootstrap, and Module.Attach), the same shape
+// from zero, a fresh the assembly, and Module.Attach), the same shape
 // buildTestAdminModule's env.RBAC goes through for the full-graph tests.
 // The lightweight service tests need a non-nil rbacSvc only because
 // Start's own gate demands one; nothing here ever invokes the service's

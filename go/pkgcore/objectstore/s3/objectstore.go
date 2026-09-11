@@ -7,15 +7,16 @@
 // and an interface package that also carries one implementation hands
 // every importer that implementation's whole dependency closure.
 //
-// Importing this package registers "objectstore.s3" on pkgcore's shared
-// ObjectStoreRegistry as a side effect (see register.go), the name
-// pkgcore.PresetDistributed already names for the "objectstore" seam -- the
-// same database/sql-style driver-registration pattern pkgcore's other
-// built-in implementations use, now applied across a package boundary. A
-// distributed-mode host that wants it either blank-imports this package
-// (`import _ ".../pkgcore/objectstore/s3"`) so
-// WithPreset(PresetDistributed) resolves it, or calls NewObjectStore
-// directly and wires it with pkgcore.WithObjectStore.
+// Importing this package makes the "objectstore.s3" component available
+// to a composition: component.go self-registers its descriptor with
+// pkgcore's global component registration, so a composition configuration
+// that names "objectstore.s3" under the "objectstore" module resolves this
+// implementation -- the same database/sql-style driver-registration
+// pattern pkgcore's other built-in implementations use, now applied across
+// a package boundary. A host that wants it either selects the component in
+// its composition configuration (a blank import of this package carries
+// the side effect), or calls NewObjectStore directly and puts the value
+// into the assembly's by-type context.
 package s3
 
 import (

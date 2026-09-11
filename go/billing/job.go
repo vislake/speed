@@ -91,7 +91,7 @@ func pollIdempotencyKey(tenant pkgcore.TenantID, windowStart time.Time) string {
 }
 
 // pollSchedule is the module's declaration of the payment-poll fallback on
-// the pkgcore.Registry.Schedules seat: a per-tenant task at the poll's own
+// the pkgcore.ComponentRegistry.Schedules seat: a per-tenant task at the poll's own
 // window, keyed with the same prefix and window function the manual
 // EnqueuePoll path uses, so a scheduler tick and a manual enqueue landing
 // in one window resolve one key and dedupe onto one job.
@@ -246,7 +246,7 @@ func (s *PollingService) Poll(ctx context.Context) error {
 // manual entry point, matching go/storage's EnqueueExpirySweep and
 // go/pki's EnqueueExpiryScan. The poll's default schedule is the module's
 // own: a queue-wired Register declares it on the
-// pkgcore.Registry.Schedules seat (pollSchedule, a per-tenant task at the
+// pkgcore.ComponentRegistry.Schedules seat (pollSchedule, a per-tenant task at the
 // poll's own window), so a host that runs a jobs.Scheduler polls every
 // tenant without writing a schedule point of its own. The task's
 // window-scoped idempotency key (pollIdempotencyKey) collapses the

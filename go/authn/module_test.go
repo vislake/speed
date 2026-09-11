@@ -283,7 +283,7 @@ func TestModule_RegisterTwiceReportsTheCollision(t *testing.T) {
 	}
 }
 
-// TestModule_RegisterDoesNoIO is the pkgcore.Module contract ("It must not
+// TestModule_RegisterDoesNoIO is the module contract ("It must not
 // perform I/O; it only declares"). It is checked by handing Register a
 // database whose connection is already closed: any query at all would fail,
 // and Register must not notice.

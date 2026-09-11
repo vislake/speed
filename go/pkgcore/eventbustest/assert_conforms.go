@@ -2,7 +2,7 @@
 // upholds the contract EventBus's own doc comment describes, independent of
 // which backend implements it. It exists so that every EventBus — built-in
 // (pkgcore.NewMemoryEventBus, the eventbus/redis subpackage's NewEventBus)
-// or host-supplied through pkgcore.WithEventBus — is checked against the
+// or host-supplied through the by-type context — is checked against the
 // same suite, the
 // same role go/tenancy/tenancytest.AssertIsolated plays for
 // dbkit.Repository[T]: with several implementations per seam, drift
@@ -62,7 +62,7 @@
 // (its two-instance pair is the verification — every integration leg whose
 // implementation declares the bit runs them against a real pair; an
 // implementation that cannot satisfy the claim fails here, the same way
-// Kernel.Bootstrap fails an assembly whose resolved implementation cannot
+// the assembly drive fails a composition whose resolved implementation cannot
 // satisfy the deployment mode's requirements (ErrCapabilityUnsatisfied),
 // but at the level of the implementation's actual behaviour rather than its
 // declaration).

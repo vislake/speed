@@ -27,7 +27,7 @@ var errFakeParticipant = errors.New("testutil: fake participant refuses")
 // newRetentionHarness returns a RetentionService wired directly over a
 // hand-built pkgcore.ComponentRegistry (Retention and AuditActions are both
 // available on a Registry built with NewRegistry -- unlike ObjectStore,
-// they do not require Kernel.Bootstrap, see pkgcore/registry.go) plus one
+// they do not require the assembly, see pkgcore/registry.go) plus one
 // registered testutil.FakeNote participant and its own migrated SQLite
 // database, ready for seeding rows directly. Every test in this file uses
 // the real defaultRetentionWindow (30 days) rather than overriding it, so

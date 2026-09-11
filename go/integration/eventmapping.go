@@ -34,13 +34,13 @@ type EventTransform func(ctx context.Context, evt pkgcore.Event) (json.RawMessag
 // schema mapping: "this internal event type maps to this public schema
 // version, via this transform function".
 //
-// # Why a Module option, not a pkgcore.Registry field or a business-module
+// # Why a Module option, not a pkgcore.ComponentRegistry field or a business-module
 // # import
 //
 // The design doc's rule that an internal domain event must never be
 // forwarded outbound as-is needs a mapping layer somewhere, and three
 // shapes were available: (1) a new field on
-// pkgcore.Registry every business module writes to during its own Register
+// pkgcore.ComponentRegistry every business module writes to during its own Register
 // call, (2) go/integration importing every business module to read its
 // events directly, or (3) a host-supplied declaration this module's own
 // Module exposes.
@@ -48,7 +48,7 @@ type EventTransform func(ctx context.Context, evt pkgcore.Event) (json.RawMessag
 // (2) is a straightforward violation of the module-boundary rule and is
 // not considered further. (1) was the suggested shape, and IS how a
 // mapping conceptually belongs to the module that owns the internal event
-// -- but implementing it means changing pkgcore.Registry, the dependency
+// -- but implementing it means changing pkgcore.ComponentRegistry, the dependency
 // floor every other module sits on; widening its Registry contract is a
 // change every module in the codebase would need to react to, not a
 // decision one module can make unilaterally. (3) is what this file
@@ -56,7 +56,7 @@ type EventTransform func(ctx context.Context, evt pkgcore.Event) (json.RawMessag
 // composition time -- exactly the shape WithPermissionLister and
 // WithMembershipChecker already established (seams.go), and exactly the
 // shape every other cross-module seam
-// in this codebase not carried on pkgcore.Registry uses (org.FeatureGate,
+// in this codebase not carried on pkgcore.ComponentRegistry uses (org.FeatureGate,
 // rbac.SubtreeResolver, notification.UserAddressResolver). The host already
 // imports every business module it boots plus go/integration, so it is the
 // one place in the whole program allowed to see across every module
@@ -79,7 +79,7 @@ type EventTransform func(ctx context.Context, evt pkgcore.Event) (json.RawMessag
 //
 // # Registered at Module construction time, not at Register time
 //
-// WithEventMapping runs inside NewModule, before Kernel.Bootstrap ever
+// WithEventMapping runs inside NewModule, before the declaration turn ever
 // calls this module's own Register -- unlike WithPermissionLister, whose
 // seam Service.Create merely reads at call time, this module's Register
 // must know every declared mapping's InternalType up front, so it can

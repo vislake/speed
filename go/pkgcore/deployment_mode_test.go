@@ -89,7 +89,7 @@ func TestDeploymentMode_RequiredCapabilities(t *testing.T) {
 		{name: "standalone requires nothing extra", mode: DeploymentModeStandalone, want: 0},
 		{
 			// RequiredCapabilities is not the place an invalid mode is
-			// rejected -- Kernel.Bootstrap checks Valid() itself before ever
+			// rejected -- the assembly checks Valid() itself before ever
 			// asking for the requirement -- so an invalid value falls back to
 			// the standalone requirement rather than panicking or erroring.
 			name: "an invalid mode falls back to the standalone requirement",

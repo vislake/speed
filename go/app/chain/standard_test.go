@@ -14,7 +14,7 @@ import (
 	"github.com/vislake/speed/go/tenancy"
 )
 
-// routesModule is a pkgcore.Module that mounts exactly the routes a test
+// routesModule is a module that mounts exactly the routes a test
 // hands it, so a Standard test composes a real registry without any business
 // module.
 type routesModule struct {

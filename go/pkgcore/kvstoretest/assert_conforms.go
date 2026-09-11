@@ -3,7 +3,7 @@
 // backend implements it. It plays the same role for KVStore that
 // go/tenancy/tenancytest.AssertIsolated plays for dbkit.Repository[T] and
 // go/pkgcore/eventbustest.AssertConforms plays for EventBus: one suite every
-// implementation — built-in or host-supplied through pkgcore.WithKVStore —
+// implementation — built-in or host-supplied through the by-type context —
 // must pass, so drift between implementations is caught here once instead
 // of pairwise.
 //
@@ -25,7 +25,7 @@
 // what the first one wrote, and these assertions check that claim against
 // the pair the factory builds. Every integration leg whose implementation
 // declares the bit runs this suite against a real pair; an implementation
-// that cannot satisfy the claim fails here, the same way Kernel.Bootstrap
+// that cannot satisfy the claim fails here, the same way the assembly
 // fails an assembly whose resolved implementation cannot satisfy the
 // deployment mode's requirements (ErrCapabilityUnsatisfied), but at the
 // level of the implementation's actual behaviour rather than its

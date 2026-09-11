@@ -45,7 +45,7 @@ func NewTenantService(repo *TenantRepository) *TenantService {
 // event: the bus to publish on, the registry's frozen-by-use-time audit
 // action catalog, and the *authn.Service whose users table recordAudit
 // reads the acting operator's display name from (resolveActorName's own
-// doc comment), all read from the host's *pkgcore.Registry (and authn
+// doc comment), all read from the host's *pkgcore.ComponentRegistry (and authn
 // module) during Module.Register.
 func (s *TenantService) attachAudit(bus pkgcore.EventBus, actions pkgcore.AuditActionRegistrar, authnSvc *authn.Service) {
 	s.bus = bus

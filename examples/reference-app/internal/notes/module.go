@@ -15,7 +15,7 @@ import (
 var openAPISpecYAML []byte
 
 const (
-	// moduleName is notes' pkgcore.Module.Name(). It is also the module
+	// moduleName is notes' the module contract's Name(). It is also the module
 	// name dbkit.MigrationRegistry.Register keys its dependency graph on.
 	moduleName = "notes"
 
@@ -156,7 +156,7 @@ type NoteCreatedPayload struct {
 	CreatorUserID string
 }
 
-// Module implements pkgcore.Module for notes, examples/reference-app's
+// Module implements the module contract for notes, examples/reference-app's
 // placeholder tenant-scoped business resource (see this package's doc.go).
 // It is deliberately generic, non-dental business content.
 type Module struct {
@@ -224,21 +224,21 @@ func NewModule(db *gorm.DB, opts ...Option) *Module {
 	return &Module{repo: NewRepository(db), subject: o.subject}
 }
 
-// Name implements pkgcore.Module.
+// Name implements the module contract.
 func (m *Module) Name() string { return moduleName }
 
-// DependsOn implements pkgcore.Module. notes depends on infrastructure
+// DependsOn implements the module contract. notes depends on infrastructure
 // (dbkit, tenancy) only, never on another business module -- so this is
 // genuinely empty, not an aspirational placeholder.
 func (m *Module) DependsOn() []string { return nil }
 
-// Migrations implements pkgcore.Module.
+// Migrations implements the module contract.
 func (m *Module) Migrations() embed.FS { return migrations.FS }
 
-// Locales implements pkgcore.Module.
+// Locales implements the module contract.
 func (m *Module) Locales() embed.FS { return locales.FS }
 
-// OpenAPISpec implements pkgcore.Module: it returns the module's own
+// OpenAPISpec implements the module contract: it returns the module's own
 // OpenAPI fragment, embedded from api/openapi.yaml. That fragment is the
 // single source of this module's API surface -- the api package's
 // generated types and ServerInterface (api/notes-server.gen.go, regenerated
@@ -246,7 +246,7 @@ func (m *Module) Locales() embed.FS { return locales.FS }
 // (see handler.go) -- the spec-first decision.
 func (m *Module) OpenAPISpec() []byte { return openAPISpecYAML }
 
-// Register implements pkgcore.Module. Per the interface's own doc comment
+// Register implements the module contract. Per the interface's own doc comment
 // ("It must not perform I/O; it only declares"), this method never touches
 // the database or the network: constructing m.handler wires together
 // already-built, in-memory values (m.repo, m.subject -- wired by NewModule's

@@ -21,7 +21,7 @@ import (
 	"github.com/vislake/speed/go/pkgcore/componenttest"
 )
 
-// adminMigrationModule is the minimal pkgcore.Module the example below
+// adminMigrationModule is the minimal module the example below
 // feeds to dbkit.MigrationRegistry, carrying admin's real migration files.
 // The package's test files apply admin's set through dbtest.Migrate
 // instead; a godoc example has no *testing.T to hand it, so this example

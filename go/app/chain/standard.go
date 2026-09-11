@@ -13,7 +13,7 @@ import (
 
 // RouteSource is what Standard derives its route partition from: the
 // mounted route set of a bootstrapped registry. Both registry shapes answer
-// it -- the module Registry (*pkgcore.Registry) and the component assembly's
+// it -- the module Registry (*pkgcore.ComponentRegistry) and the component assembly's
 // ComponentRegistry -- so a host passes whichever one its assembly produced
 // without the chain knowing which.
 type RouteSource interface {

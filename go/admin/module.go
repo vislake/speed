@@ -22,7 +22,7 @@ import (
 //go:embed api/openapi.yaml
 var openAPISpecYAML []byte
 
-// moduleName is admin's pkgcore.Module.Name(), and the key
+// moduleName is admin's the module contract's Name(), and the key
 // dbkit.MigrationRegistry.Register builds its dependency graph on.
 const moduleName = "admin"
 
@@ -133,7 +133,7 @@ const NotificationTypeImpersonationStarted = "admin.impersonation_started"
 // Unsubscribable field, false here (see Register's Add call).
 const notificationGroupSecurity = "security"
 
-// Module implements pkgcore.Module for go/admin, the operations-console
+// Module implements the module contract for go/admin, the operations-console
 // backend: the tenant ledger, the impersonation pipeline, cross-tenant
 // user search, the audit-query HTTP surface with its asynchronous export
 // leg, role management, the usage/billing dashboard and notification
@@ -295,7 +295,7 @@ func (m *Module) Export() *ExportService { return m.exportSvc }
 // whose catalog snapshot is already frozen: the host calls it right after
 // its own rbacModule.Attach(registry) succeeds -- a call that, by rbac's
 // own documented contract, must run strictly after
-// pkgcore.Kernel.Bootstrap returns, because Attach freezes the snapshot of
+// pkgcore.the assembly returns, because Attach freezes the snapshot of
 // every permission every module declared -- and the component descriptor
 // (component.go) calls it from the assembly's Init stage, where the
 // *rbac.Service sits in the by-type context after rbac's own Init turn
@@ -333,10 +333,10 @@ func (m *Module) AttachRBAC(svc *rbac.Service) {
 	m.impersonation.attachRBAC(svc)
 }
 
-// Name implements pkgcore.Module.
+// Name implements the module contract.
 func (m *Module) Name() string { return moduleName }
 
-// DependsOn implements pkgcore.Module: "authn", and only "authn".
+// DependsOn implements the module contract: "authn", and only "authn".
 //
 // Every other runtime read Register performs -- m.orgModule.Members(),
 // m.complianceModule.AuditQuery(), m.notificationModule.Deliveries() -- is
@@ -346,32 +346,32 @@ func (m *Module) Name() string { return moduleName }
 // authn.Module.Service() is documented nil until authn's OWN Register has
 // built it (see WithAuthn's doc comment), so admin's Register must run
 // strictly after authn's -- this is exactly what DependsOn exists to
-// express, and Kernel.Bootstrap's own dependency sort (sortModulesByDependency)
+// express, and the assembly's own dependency sort (sortModulesByDependency)
 // honors it regardless of the order modules were passed to Bootstrap in.
 // The component descriptor states the same edge as a Requirement token on
 // (*authn.Module)(nil), which is what orders admin's declaration stage
 // after authn's in the assembly.
 func (m *Module) DependsOn() []string { return []string{authnModuleName} }
 
-// authnModuleName is authn's pkgcore.Module.Name() -- "authn" -- spelled
+// authnModuleName is authn's the module contract's Name() -- "authn" -- spelled
 // as its own constant rather than a bare string literal at the DependsOn
 // call site, so a reader (and a future refactor) sees it is a coordination
 // point with another module's own identity, not an arbitrary label.
 const authnModuleName = "authn"
 
-// Migrations implements pkgcore.Module.
+// Migrations implements the module contract.
 func (m *Module) Migrations() embed.FS { return migrations.FS }
 
-// Locales implements pkgcore.Module: admin's own error-code descriptions
+// Locales implements the module contract: admin's own error-code descriptions
 // and the impersonation-started notification's bilingual templates, in
 // both supported languages with identical id sets.
 func (m *Module) Locales() embed.FS { return locales.FS }
 
-// OpenAPISpec implements pkgcore.Module: admin's own OpenAPI fragment
+// OpenAPISpec implements the module contract: admin's own OpenAPI fragment
 // (api/openapi.yaml).
 func (m *Module) OpenAPISpec() []byte { return openAPISpecYAML }
 
-// Register implements pkgcore.Module. Per the interface's contract it only
+// Register implements the module contract. Per the interface's contract it only
 // declares and wires -- no database call, no outbound call, nothing that
 // touches m.db.
 //

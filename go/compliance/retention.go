@@ -105,7 +105,7 @@ func retentionSweepIdempotencyKey(tenant pkgcore.TenantID, windowStart time.Time
 }
 
 // retentionSweepSchedule is the module's declaration of the retention
-// sweep on the pkgcore.Registry.Schedules seat: a per-tenant task at the
+// sweep on the pkgcore.ComponentRegistry.Schedules seat: a per-tenant task at the
 // sweep's own window, keyed with the same prefix and window function the
 // manual EnqueueRetentionSweep path uses, so a scheduler tick and a
 // manual enqueue landing in one window resolve one key and dedupe onto
@@ -179,14 +179,14 @@ func (r SweepResult) HasErrors() bool { return len(r.Errors) > 0 }
 // RetentionService runs the retention-window sweep: for one tenant, at a
 // cutoff derived from the tenant's configured retention window, it calls
 // every pkgcore.RetentionParticipant registered on the host's
-// pkgcore.Registry.Retention and asks each one to hard-delete its own
+// pkgcore.ComponentRegistry.Retention and asks each one to hard-delete its own
 // model's soft-deleted rows older than the cutoff. It never touches a
 // participant's table directly -- see this module's own doc comment for
 // why that is the whole point of the design.
 //
 // The zero value is not ready to use; construct one with
 // newRetentionService (Module.NewModule's constructor calls it) and wire
-// it into a live pkgcore.Registry through Module.Register.
+// it into a live pkgcore.ComponentRegistry through Module.Register.
 type RetentionService struct {
 	retention pkgcore.RetentionRegistrar
 	bus       pkgcore.EventBus
@@ -449,7 +449,7 @@ func (s *RetentionService) SweepAllTenants(ctx context.Context) (map[pkgcore.Ten
 // EnqueueRetentionSweep enqueues the retention-sweep task for the tenant
 // ctx carries, mirroring go/storage's EnqueueExpirySweep -- the manual
 // entry point. The sweep's default schedule is the module's own: Register
-// declares it on the pkgcore.Registry.Schedules seat
+// declares it on the pkgcore.ComponentRegistry.Schedules seat
 // (retentionSweepSchedule, a per-tenant task at the sweep's own window),
 // so a host that runs a jobs.Scheduler sweeps every tenant without writing
 // a schedule point of its own. The enqueue relies on the task's

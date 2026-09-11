@@ -31,7 +31,7 @@ var ErrInvalidBootstrapKeyPath = errors.New("pkgcore: invalid bootstrap key path
 // stable contracts -- dbkit.DeriveKey(rootKey, purpose) with the purpose
 // this function returns. A pure function of the path, rather than a signer
 // that takes the booted registry's declared keys, is what the call sites
-// require: a host derives these materials before Kernel.Bootstrap can run
+// require: a host derives these materials before the declaration turn can run
 // (dbkit serializer registration precedes dbkit.Open, which precedes
 // Bootstrap), so the registry is not yet in hand where the derivation
 // happens. Whether a path is a declared key at all is the host's binding

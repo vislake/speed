@@ -123,7 +123,7 @@ type SessionManager struct {
 	// auditActions is the registrar the replay-response audit record
 	// (emitReplayAudit) validates its action string against. It is nil
 	// until module.go's Register wires it from the host's
-	// pkgcore.Registry, right after reg.AuditActions.Add has declared the
+	// pkgcore.ComponentRegistry, right after reg.AuditActions.Add has declared the
 	// actions -- the same post-Add wiring SSOService's own service-layer
 	// emit receives -- so a manager assembled directly through
 	// NewSessionManager (every unit test in this package) records no audit

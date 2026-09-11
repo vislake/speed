@@ -117,7 +117,7 @@ func NewExportService(export *compliance.ExportService, queue jobs.Queue) *Expor
 // needs to record admin.audit_export -- plus the *authn.Service whose
 // users table Handle reads the requesting operator's display name from
 // (resolveActorName's own doc comment) -- all read from the host's
-// *pkgcore.Registry (and authn module) during Module.Register.
+// *pkgcore.ComponentRegistry (and authn module) during Module.Register.
 func (s *ExportService) attachAudit(bus pkgcore.EventBus, actions pkgcore.AuditActionRegistrar, authnSvc *authn.Service) {
 	s.bus = bus
 	s.auditActions = actions

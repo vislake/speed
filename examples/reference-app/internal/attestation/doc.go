@@ -74,7 +74,7 @@
 //
 // The app's CA chain (a root and one issuing intermediate authority, both
 // platform rows in pki_authorities) is created once per database by
-// EnsureAuthorityChain, called at every boot after Kernel.Bootstrap has
+// EnsureAuthorityChain, called at every boot after the assembly's declaration turn has
 // applied pki's migrations; the chain is found by its fixed subject names
 // on later boots, so a restart never mints a second chain. Concurrent
 // first boots (two replicas of a distributed deployment sharing one

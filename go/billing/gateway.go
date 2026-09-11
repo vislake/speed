@@ -299,8 +299,8 @@ type PaymentGateway interface {
 // every host resolves a named channel implementation through, mirroring
 // go/pki's SignerRegistry (see this file's own header comment) and, through
 // it, the database/sql driver-registration pattern pkgcore's own
-// EventBusRegistry/KVStoreRegistry/MailerRegistry/ObjectStoreRegistry
-// already follow. go/billing/gateway/stripe, .../alipay and .../wechat each
+// module-internal registries already follow. go/billing/gateway/stripe,
+// .../alipay and .../wechat each
 // register themselves here from their own init() under "gateway.stripe",
 // "gateway.alipay" and "gateway.wechat" -- a host that never imports a
 // provider subpackage never resolves that name, and PaymentGatewayRegistry
@@ -312,7 +312,7 @@ type PaymentGateway interface {
 // gateway packaging rules state precisely.
 //
 // No built-in implementation is pre-registered here the way pkgcore's own
-// EventBusRegistry ships "eventbus.memory" -- unlike an infrastructure seam,
+// kv MemoryKVStore ships as a default -- unlike an infrastructure seam,
 // every PaymentGateway implementation genuinely needs a provider SDK or a
 // hand-rolled channel client, so there is no zero-dependency default the way
 // LocalSigner is for SignerRegistry (see that file's own doc comment on why

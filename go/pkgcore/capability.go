@@ -6,11 +6,12 @@ import (
 )
 
 // Capability is a bitmask of properties a seam implementation declares about
-// itself when it registers with a SeamRegistry, or when a host injects it
-// through a KernelOption such as WithEventBus. Deployment mode and
-// implementation composition are two orthogonal axes: the deployment mode never selects an
-// implementation, it only states which capabilities the composition it runs
-// must have, and Kernel.Bootstrap compares the two.
+// itself on the component descriptor that provides it, or that a
+// SeamRegistry registration carries for a name-resolved implementation.
+// Deployment mode and implementation composition are two orthogonal axes:
+// the deployment mode never selects an implementation, it only states which
+// capabilities the composition it runs must have, and the assembly compares
+// the two.
 //
 // The set is deliberately small -- MultiReplicaSafe, SurvivesRestart and
 // Stateless, plus the signer-specific bit below -- and it grows by adding a
@@ -50,7 +51,7 @@ const (
 	// their state is the process itself. Unlike MultiReplicaSafe, no
 	// deployment mode requires this capability -- losing state across a
 	// restart is a legitimate, deliberate choice for development or a
-	// throwaway composition -- so Kernel.Bootstrap never fails an assembly
+	// throwaway composition -- so the assembly never fails an assembly
 	// over its absence; it logs a startup warning instead, naming the seam
 	// and the implementation, so the choice is visible rather than silent.
 	SurvivesRestart
@@ -62,7 +63,7 @@ const (
 	// to its writer and returns, leaving no queue, buffer or connection
 	// behind. The bit exists so assembly can tell an implementation with
 	// nothing to lose from one that holds state but does not declare
-	// SurvivesRestart: Kernel.Bootstrap warns about the latter at startup
+	// SurvivesRestart: the assembly warns about the latter at startup
 	// and stays silent about the former, whose warning would name no loss at
 	// all (see warnIfNotDurable).
 	Stateless
@@ -83,11 +84,11 @@ const (
 	// capability the way DeploymentModeDistributed requires MultiReplicaSafe.
 	//
 	// Unlike the three bits above, this one is NOT enforced by
-	// Kernel.Bootstrap: Bootstrap's resolveKernelSeam/validateSeamCapability
-	// machinery only ever runs over the four fixed built-in seams (EventBus,
-	// KVStore, Mailer, ObjectStore); it has no knowledge of pki.SignerRegistry
-	// or pki.Signer, and go/pki calls no equivalent check of its own --
-	// pki.Module.WithSigner takes no Capability/requirement parameter, and
+	// the assembly: the assembly compares capabilities only on the
+	// descriptors of the components a composition selects, and pki's signers
+	// are reached through go/pki's own package-level SeamRegistry[Signer]
+	// rather than a pkgcore seam; go/pki calls no equivalent check of its own
+	// -- pki.Module.WithSigner takes no Capability/requirement parameter, and
 	// SignerRegistry.Build merely returns the Capability a registration
 	// declared without comparing it to anything. A host that wires go/pki
 	// with an implementation lacking this bit where it intended to require it
