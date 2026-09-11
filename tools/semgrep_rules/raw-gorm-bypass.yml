@@ -32,32 +32,38 @@
 #     the count tenant-scoped rather than a bypass of the guard. The
 #     method's doc comment records the choice; nothing else in the file
 #     (or module) uses the three bypass entry points.
-#   * go/authn/internal/testutil/testutil.go -- a test-fixture helper,
-#     the same category the wholesale "**/*_test.go" exclude already
-#     covers, but it cannot be named "*_test.go" itself: authn's own
-#     external test files (package authn_test) import this package, and
-#     a "_test.go"-suffixed file is only ever compiled into its own
-#     package's test binary, never importable by another package's tests.
-#     Its one flagged call (ExpireSession) reaches the raw "sessions"
-#     table on purpose, to force a decayed-session state no production
-#     path ever writes, precisely so a real test can prove the read-time
-#     check catches it -- the same reason test files are excluded
-#     wholesale rather than enumerated (see header below).
-#   * go/pki/internal/testutil/migration_dedupe.go -- a test-fixture
-#     helper, the same category the wholesale "**/*_test.go" exclude
-#     already covers, but it cannot be named "*_test.go" itself: the
-#     migration-0008 duplicate-ledger regression's SQLite unit legs
-#     (migration_dedupe_test.go) and its real-PostgreSQL leg
-#     (go/pki/integration_test/postgres_migration_dedupe_test.go, a
-#     separate package) both import these helpers, and a "_test.go"-
-#     suffixed file is only ever compiled into its own package's test
-#     binary. Its flagged calls probe state no dbkit.Repository serves
-#     -- revocation-ledger row counts and ids, each dialect's index
-#     catalog (sqlite_master / pg_indexes), and the schema_migrations
-#     ledger -- registry/platform rows, never tenant-owned data,
-#     observed to rewind a deployment stranded at migration 0008 and
-#     assert the remediated end state (go/pki/AGENTS.md's Testing
-#     section records the round).
+#   * **/internal/testutil/** and **/internal/apptest/** -- Go
+#     test-support packages: test-only helper packages whose files carry
+#     no "_test.go" suffix -- internal/testutil is the home root
+#     CLAUDE.md's Testing rule mandates for shared test helpers, and
+#     internal/apptest is the reference app's package of the same kind.
+#     They are the same testing surface the wholesale "**/*_test.go"
+#     exclude covers, in a different file shape: the suffix is
+#     unavailable to them because a "_test.go" file compiles only into
+#     its own package's test binary, never importable by another
+#     package's tests -- which is what these helpers exist to be -- so
+#     the exclusion keys on the package, not the file name. What they
+#     reach through the raw *gorm.DB surface is the throwaway state the
+#     test-file exclusion already covers:
+#     go/authn/internal/testutil/testutil.go's ExpireSession forces a
+#     decayed-session state no production path writes;
+#     go/pki/internal/testutil/migration_dedupe.go probes the revocation
+#     ledger, each dialect's index catalog (sqlite_master / pg_indexes)
+#     and the schema_migrations ledger -- registry/platform rows no
+#     dbkit.Repository serves -- to rewind a database to the state a
+#     deployment stranded at migration 0008 is left in and assert the
+#     deduped end state; examples/reference-app/internal/testutil/
+#     selfservice.go polls, through a second connection, the test's own
+#     throwaway SQLite file (the one the test started its server
+#     against) for the membership row a retried provisioning attempt
+#     writes, applying the same cross-tenant filter go/org's own query
+#     applies. The exemption's premise -- these packages serve the
+#     tree's tests and nothing else -- holds for every importer in the
+#     tree (each import of either package is a *_test.go file or another
+#     test-support package, e.g. pkgcore/redistest), and the premise is
+#     enforced in the other direction for the host trees' two packages
+#     by tools/check_host_composition.py, which reports an import of one
+#     from production code.
 #   * go/authn/identity.go   -- identity-domain rows (users,
 #     user_identities) that dbkit.Repository[T] cannot serve: the generic
 #     constraint requires TenantScoped, which identity data deliberately
@@ -80,7 +86,8 @@
 # written SQL) is not caught here (Exec is separately shape-controlled by
 # the WHERE-tenant_id rule's review net and dbkit's own discipline), and
 # tests deliberately write banned patterns to prove the guards, which is
-# why test files are excluded wholesale rather than enumerated.
+# why test files -- and the test-support packages allowlisted above --
+# are excluded wholesale rather than enumerated.
 rules:
   - id: raw-gorm-bypass
     message: >-
@@ -88,7 +95,8 @@ rules:
       Tenant-owned data must be reached through dbkit.Repository[T],
       whose tenant filter is injected by the plugin; a raw call bypasses
       the guard. Legitimate sites are allowlisted in the rule header
-      (go/dbkit internals, go/jobs/store.go platform-data queries).
+      (go/dbkit internals, go/jobs/store.go platform-data queries,
+      test-support packages excluded wholesale like test files).
     languages:
       - go
     severity: WARNING
@@ -105,6 +113,6 @@ rules:
         - "**/go/dbkit/**"
         - "**/go/jobs/store.go"
         - "**/go/notification/repository.go"
-        - "**/go/authn/internal/testutil/testutil.go"
-        - "**/go/pki/internal/testutil/migration_dedupe.go"
+        - "**/internal/testutil/**"
+        - "**/internal/apptest/**"
         - "**/go/authn/identity.go"
