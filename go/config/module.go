@@ -319,4 +319,3 @@ func (m *Module) Attach(reg *pkgcore.ComponentRegistry) (*Service, error) {
 	m.service = svc
 	return svc, nil
 }
-

@@ -35,7 +35,6 @@ type fakeHostModule struct {
 	flags []pkgcore.FeatureFlag
 }
 
-
 func (f *fakeHostModule) Name() string        { return f.name }
 func (f *fakeHostModule) DependsOn() []string { return nil }
 func (f *fakeHostModule) Migrations() embed.FS {

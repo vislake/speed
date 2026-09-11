@@ -17,8 +17,8 @@ import (
 	"github.com/vislake/speed/go/dbkit"
 	obs "github.com/vislake/speed/go/observability"
 	"github.com/vislake/speed/go/pkgcore"
-	"github.com/vislake/speed/go/pkgcore/componenttest"
 	"github.com/vislake/speed/go/pkgcore/apperr"
+	"github.com/vislake/speed/go/pkgcore/componenttest"
 )
 
 // service_test.go exercises the Service's public surface -- Get/GetTyped's

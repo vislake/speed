@@ -18,8 +18,8 @@ import (
 	// file in this directory into a single binary.
 	_ "github.com/vislake/speed/go/dbkit/dialect/sqlite"
 	"github.com/vislake/speed/go/pkgcore"
-	"github.com/vislake/speed/go/pkgcore/componenttest"
 	"github.com/vislake/speed/go/pkgcore/apperr"
+	"github.com/vislake/speed/go/pkgcore/componenttest"
 )
 
 // brandModule is a business module in the shape every speed module takes:
@@ -28,7 +28,6 @@ import (
 // config module folds these declarations, together with every other
 // module's, into the one schema it serves.
 type brandModule struct{}
-
 
 func (*brandModule) Name() string         { return "brand" }
 func (*brandModule) DependsOn() []string  { return nil }
@@ -180,7 +179,6 @@ func ExampleService_Describe() {
 // tenant-configurable duration seam (a share link's expiry default, an
 // export's delivery window) reads through Service.TenantDuration.
 type shareExpiryModule struct{}
-
 
 func (*shareExpiryModule) Name() string         { return "share-expiry" }
 func (*shareExpiryModule) DependsOn() []string  { return nil }
