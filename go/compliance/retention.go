@@ -52,8 +52,8 @@ const taskTypeRetentionSweep = "compliance.retention_sweep"
 // retentionSweepWindowSize is the period one retention-sweep idempotency
 // key covers: a sweep is enqueued under the key of the
 // retentionSweepWindowSize window (retentionSweepWindowStart) its enqueue
-// falls in, so the same-window duplicates the original key existed to
-// collapse -- a scheduler with two replicas, a manual re-run -- still
+// falls in, so the same-window duplicates that key exists to collapse
+// -- a scheduler with two replicas, a manual re-run -- still
 // merge into one job, while an enqueue
 // in a later window becomes a NEW job and the sweep runs again. The window
 // is what makes the sweep periodic at all: jobs' idempotency is
