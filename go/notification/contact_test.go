@@ -679,8 +679,8 @@ func TestContact_VerifyCode_WrongCodeRefusedThenCorrectWorks(t *testing.T) {
 // RETURNED contact reflects the transition it performed: the caller that
 // trusts the returned snapshot must see a verified contact with both
 // consent timestamps set, never the pending face the row wore when the
-// compare-and-swap moved it. (Regression: VerifyCode returned the stale
-// pre-CAS snapshot, its Status still pending.)
+// compare-and-swap moved it. (Regression: the stale pre-CAS snapshot, its
+// Status still pending.)
 func TestContact_VerifyCode_ReturnsVerifiedSnapshot(t *testing.T) {
 	env := newContactEnv(t)
 	ctx := tenantCtx("tenant-acme")

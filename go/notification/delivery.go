@@ -1316,7 +1316,7 @@ func smsParams(params map[string]any) (map[string]string, error) {
 // knows which class the failure is; a skipped record carries the short
 // reason of the deliberate non-send; a succeeded record carries the
 // empty-string sentinel. Both vocabularies are closed and module-authored,
-// so the column -- and every read of it, the D10 operator search first
+// so the column -- and every read of it, the operator search first
 // among them -- can never carry plaintext PII.
 //
 // The skip reasons: a skip is a deliberate non-send -- no address on file,

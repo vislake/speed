@@ -99,8 +99,8 @@ func (s *PreferenceService) lookupType(typeKey string) (pkgcore.NotificationType
 
 // Set stores the recipient's channel selection for one notification type as
 // their preference, replacing whatever they had stored before. It is the
-// matrix's only write path: an HTTP handler of a later block, a settings
-// screen's submit, all land here.
+// matrix's only write path: every write lands here, an HTTP handler's or a
+// settings screen's submit alike.
 //
 // The call is validated in a fixed order, and each refusal is a distinct
 // error so a client can tell them apart:

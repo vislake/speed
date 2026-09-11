@@ -59,9 +59,9 @@ const tableInAppMessages = "in_app_messages"
 // inbox's group filter needs no join. The column name "group" is taken
 // verbatim from the design's table shape; GROUP is a reserved word on
 // PostgreSQL, so the migration quotes the column name and any hand-written
-// SQL in later blocks must quote it too ("group" is unambiguous on SQLite
-// as well). GORM-generated SQL always quotes identifiers, so code that
-// goes through the Repository never needs to think about it.
+// SQL must quote it too ("group" is unambiguous on SQLite as well).
+// GORM-generated SQL always quotes identifiers, so code that goes through
+// the Repository never needs to think about it.
 //
 // Link is the optional deep link the message points at; empty means the
 // message has no destination. ExpiryAt, when set, is the moment the

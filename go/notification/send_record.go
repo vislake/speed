@@ -146,7 +146,7 @@ type SendRecord struct {
 	// recognize. The class is decided where the code knows it, at the
 	// settle site, and the error that reaches the record reads as the
 	// class while still Unwrapping to its original cause for errors.Is/As.
-	// Every read of the column -- the D10 operator search first among them
+	// Every read of the column -- the operator search first among them
 	// -- sees only these bounded vocabularies, never transport or seam
 	// text. Rows written before this shape shipped may still hold
 	// diagnostic text; operators treat those as untrusted.
@@ -369,8 +369,8 @@ type SendRecordFilter struct {
 // silently read the tenant's whole record set, gorm treating Limit(0) as
 // "no limit").
 //
-// This is a single-tenant read, matching D2's established mechanism for
-// every other cross-tenant admin read in this codebase: a caller needing
+// This is a single-tenant read, matching the mechanism every other
+// cross-tenant admin read in this codebase uses: a caller needing
 // every tenant's records (go/admin's own HTTP handler) loops this method
 // once per tenant under tenancy.WithSystemContext, rather than
 // notification growing a ListAcrossTenants bypass of its own.
