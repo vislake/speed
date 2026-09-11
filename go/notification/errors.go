@@ -291,11 +291,11 @@ var (
 	ErrInvalidRequestBody = apperr.Invalid("notification.invalid_request_body")
 
 	// ErrSubjectUnresolved reports a request whose caller identity the host's
-	// subject seam could not resolve: the seam is unwired, or it failed. The
-	// handler fails closed (handler.go's resolveSubject): an anonymous caller
-	// gets this refusal rather than a default user or an empty identity, the
-	// same refusal org's handler returns when its own subject seam is
-	// unwired or failing (org.subject_unresolved).
+	// SubjectResolver module could not resolve: the module is unwired, or it
+	// failed. The handler fails closed (handler.go's resolveSubject): an
+	// anonymous caller gets this refusal rather than a default user or an
+	// empty identity, the same refusal org's handler returns when its own
+	// subject module is unwired or failing (org.subject_unresolved).
 	ErrSubjectUnresolved = apperr.Unauthorized("notification.subject_unresolved")
 
 	// ErrInvalidListParams reports a list request whose limit or offset
@@ -353,7 +353,7 @@ var (
 
 	// ErrUserAddressResolverRequired reports a Register whose Module has
 	// no user-address resolver. A user delivery's email and SMS channels
-	// resolve the recipient's addresses through this seam (see
+	// resolve the recipient's addresses through this module interface (see
 	// UserAddressResolver); without it the module cannot deliver to a
 	// user on any outbound channel.
 	ErrUserAddressResolverRequired = apperr.Internal("notification.user_address_resolver_required")

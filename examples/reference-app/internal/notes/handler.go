@@ -90,7 +90,7 @@ var errInternal = apperr.Internal("notes.internal_error")
 // user id to carry in the note-created event it publishes (see
 // NoteCreatedPayload.CreatorUserID), so an unattributable request is
 // refused with a 401 before any note is created -- never served an empty
-// or invented creator -- mirroring the rule org's own SubjectResolver seam
+// or invented creator -- mirroring the rule org's own SubjectResolver module
 // documents ("a resolver that returns ok=false -- or is not wired at all
 // -- fails every endpoint closed"; see the SubjectResolver declaration at
 // the bottom of this file). Its localized text lives in this module's

@@ -114,7 +114,7 @@ var (
 	// needs the creator's user id for the case row's recorded
 	// CreatorUserID, so an unattributable request is refused with a 401
 	// before any case is created -- never served an empty or invented
-	// creator -- mirroring the identical rule notes' SubjectResolver seam
+	// creator -- mirroring the identical rule notes' SubjectResolver module
 	// documents. Only the create route resolves a subject: the list,
 	// detail, upload and photo-content routes need no creator and read
 	// no resolver. internal/app's wireCasesRoutes is the only caller that

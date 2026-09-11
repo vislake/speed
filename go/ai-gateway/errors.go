@@ -182,7 +182,7 @@ var (
 
 	// ErrImageGenerationUnavailable reports Gateway.GenerateImage called on
 	// a Gateway never given WithImageGeneration -- a Gateway built for
-	// chat-only use has no queue or storage seam to run the async-only
+	// chat-only use has no queue or storage module to run the async-only
 	// image pipeline on.
 	ErrImageGenerationUnavailable = apperr.Internal("aigateway.image_generation_unavailable")
 

@@ -147,7 +147,7 @@ var (
 	// ErrStoreUnavailable reports an object-store access refused before
 	// any operation was attempted -- the host wired no ObjectStore at
 	// all, or the one it wired reports itself unavailable. It is the
-	// module's fail-closed answer to a missing seam: an object whose
+	// module's fail-closed answer to a missing component: an object whose
 	// bytes cannot be stored is not pretended into existence.
 	ErrStoreUnavailable = apperr.Internal("storage.store_unavailable")
 

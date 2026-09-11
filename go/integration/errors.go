@@ -185,7 +185,7 @@ var (
 	// SubjectResolver's own doc comment (seams.go): this module fails closed
 	// here rather than inventing a default creator, the identical rule
 	// org.ErrSubjectUnresolved and notification.ErrSubjectUnresolved already
-	// enforce for their own structurally-identical seam.
+	// enforce for their own structurally-identical module.
 	ErrSubjectUnresolved = apperr.Unauthorized("integration.subject_unresolved")
 
 	// The API-key authentication error index: Service.Authenticate

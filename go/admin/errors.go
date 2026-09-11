@@ -230,7 +230,7 @@ var (
 	// existence and locale resolution, tenant-membership validation, and
 	// the security notification), so Start refuses outright rather than
 	// writing a grant no one has validated or notified; attach always
-	// runs during Register with the full mandatory seam set, so a
+	// runs during Register with the full mandatory module set, so a
 	// correctly wired host never sees this.
 	ErrImpersonationNotWired = apperr.Internal("admin.impersonation_not_wired")
 

@@ -116,7 +116,7 @@ var (
 	// carries no Signature field with it directly. apperr.Internal, not
 	// apperr.NotFound or apperr.Invalid: the caller did nothing wrong, the
 	// signing backend did not answer, matching storage.ErrStoreUnavailable's
-	// identical "the infrastructure seam failed" shape.
+	// identical "the infrastructure component failed" shape.
 	ErrSignerUnavailable = apperr.Internal("pki.signer_unavailable")
 
 	// ErrPropagationWindowNotElapsed reports that Service.PromoteNow was

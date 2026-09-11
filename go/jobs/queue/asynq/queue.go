@@ -202,7 +202,7 @@ type Option func(*Queue)
 // Config.Concurrency that way, which is also this field's construction
 // default. An EXPLICIT value below 1 is refused at option time with the
 // same coded panic jobs.worker_count_zero StandaloneQueue's WithWorkerCount
-// refuses with -- the same invalid concept on the same seam: asynqlib.
+// refuses with -- the same invalid concept on the same module: asynqlib.
 // NewServer silently replaces a non-positive Concurrency with NumCPU, so
 // an explicit zero or negative could never be honoured literally -- it
 // would silently mean "however many CPUs this machine happens to have", a
@@ -374,7 +374,7 @@ func WithRetryDelayFunc(fn asynqlib.RetryDelayFunc) Option {
 // (jobs.event_bus_nil), the same refusal jobs.WithEventBus makes and for
 // the same reason: omitting the option already means "publish nothing", so
 // an explicit nil can only be a caller belief that a bus is wired when none
-// is. The two implementations of the jobs.Queue seam validate alike by
+// is. The two implementations of the jobs.Queue module validate alike by
 // declaration, per this Option type's own rule.
 func WithEventBus(bus pkgcore.EventBus) Option {
 	if bus == nil {
