@@ -670,10 +670,11 @@ func (s *CreditService) keyedInsertOrFetch(
 		return nil, false, nil, err
 	}
 	if inserted {
-		if err := s.ensureBalance(session, tenant); err != nil {
+		if err = s.ensureBalance(session, tenant); err != nil {
 			return nil, false, nil, err
 		}
-		ok, err := applyBalanceDelta(session, string(tenant), availableDelta, reservedDelta, s.now())
+		var ok bool
+		ok, err = applyBalanceDelta(session, string(tenant), availableDelta, reservedDelta, s.now())
 		if err != nil {
 			return nil, false, nil, err
 		}
