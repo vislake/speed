@@ -118,8 +118,11 @@ directory is no longer a hand-written HTML skeleton: it is a real
   checker compare against the committed page, exactly as before.
 - **Still deferred to M4** (docs/internal/13-documentation-standards.md):
   per-version release directories (the site is versioned like the code
-  it documents) and the rest of the complete M4 documentation set (a
-  generated configuration reference, ADRs surfaced on the site).
+  it documents). The generated configuration reference
+  (`docs/user-guide/configuration/`, produced by `tools/configrefgen`
+  and `--check`-gated in the docs-check pipeline) and the ADRs surfaced
+  as the `docs/developer-docs/design-decisions/` page (`docs/adr/0001`–`0003`)
+  have since landed.
 
 ## Language
 
@@ -145,19 +148,30 @@ docs/site/
     _index.md             Home / landing page (site map)
     docs/
       _index.md           Documentation section hub (both main sections)
-      user-guide/          User guides: build your SaaS on speed
-        _index.md
-        error-codes.md     GENERATED -- do not hand-edit (see below)
-        ...                domain fast starts and per-module pages land
-                           with the content batches
-      developer-docs/      Developer docs: develop speed itself
-        _index.md
-        ...                architecture / design principles / per-module
-                           design pages land with the content batches
-      quickstart.md        (migrated; served from user-guide/)
-      modules.md           (migrated; served from user-guide/ modules)
       ai-agents.md
       about.md
+      user-guide/         User guides: build your SaaS on speed
+        _index.md
+        quickstart.md
+        api-reference.md
+        configuration.md   GENERATED -- do not hand-edit (tools/configrefgen)
+        error-codes.md     GENERATED -- do not hand-edit (see below)
+        operating.md
+        walkthrough-reference-app.md
+        domains/          Eight domain fast-start pages (+ _index.md)
+        modules/          One page per Go module and npm package, in seven
+                          dependency-layer groups (core, services, identity,
+                          capabilities, app, tools, web), each with _index.md
+      developer-docs/     Developer docs: develop speed itself
+        _index.md
+        architecture.md
+        design-principles.md
+        design-decisions.md    The ADR record, surfaced (docs/adr/0001-0003)
+        api-contract.md
+        repo-and-release.md
+        frontend-architecture.md
+        contributing.md
+        modules/          The per-module design section, same seven groups
   content.zh-cn/          Chinese content, identical structure, real translations
   i18n/
     zh-cn.yaml            Project-level override for the theme's own UI strings
@@ -165,6 +179,9 @@ docs/site/
                            key "zh", not "zh-cn" -- see the file's own header)
   static/
     llms.txt              Copied verbatim to the built site's root
+    CNAME                 The custom domain, copied verbatim to the site root
+    apidocs/              Redoc bundle + merged speed.yaml, served to the
+                           interactive API reference page
   themes/hugo-book/        Pinned git submodule (see .gitmodules)
   public/                 Hugo build output -- gitignored, never committed
 ```
@@ -227,7 +244,7 @@ Hugo's output directory (`docs/site/public`), not `docs/site/` itself.
   internal documents.
 - `docs/developer-docs/modules/` — the per-module design section, one
   page per Go module and npm package under group directories
-  (`core/`, `services/`, `identity/`, `capabilities/`, `tools/`,
+  (`core/`, `services/`, `identity/`, `capabilities/`, `app/`, `tools/`,
   `web/`), each with responsibility/boundary, design rationale,
   mechanisms, and a Source section back to the module's `AGENTS.md`.
 - `docs/ai-agents.md` — an explicit AI-agent orientation: what to read
@@ -236,10 +253,5 @@ Hugo's output directory (`docs/site/public`), not `docs/site/` itself.
   distributed.
 - `static/llms.txt` — the llms.txt convention's entry point for
   crawlers and AI agents fetching this site directly, copied verbatim
-  to the built site's root; hand-maintained to mirror the current
-  page set, with real `speed.vislake.com` URLs.
-- `static/llms.txt` — the llms.txt convention's entry point for
-  crawlers and AI agents fetching this site directly, copied verbatim
   to the built site's root; hand-maintained to mirror the current page
-  set, with real `speed.vislake.com` URLs (not the old
-  `vislake.github.io/speed` ones).
+  set, with real `speed.vislake.com` URLs.
