@@ -9,6 +9,38 @@ import (
 	"github.com/vislake/speed/go/pkgcore"
 )
 
+// TestNewRegistryPutsTheStandaloneValues pins both registry constructors'
+// value census: NewRegistry carries the in-process event bus, KV store and
+// console mailer -- and deliberately no object store -- while
+// NewRegistryWithBus carries the caller's own bus as its one EventBus value
+// alongside the same KV store and mailer, so a declaration body that reads
+// the bus back resolves exactly the caller's.
+func TestNewRegistryPutsTheStandaloneValues(t *testing.T) {
+	reg := NewRegistry()
+	if _, err := pkgcore.Get[pkgcore.EventBus](reg); err != nil {
+		t.Fatalf("NewRegistry() carries no EventBus: %v", err)
+	}
+	if _, err := pkgcore.Get[pkgcore.KVStore](reg); err != nil {
+		t.Fatalf("NewRegistry() carries no KVStore: %v", err)
+	}
+	if _, err := pkgcore.Get[pkgcore.Mailer](reg); err != nil {
+		t.Fatalf("NewRegistry() carries no Mailer: %v", err)
+	}
+	if _, err := pkgcore.Get[pkgcore.ObjectStore](reg); err == nil {
+		t.Fatal("NewRegistry() carries an ObjectStore, want the object store deliberately absent")
+	}
+
+	own := pkgcore.NewMemoryEventBus()
+	withBus := NewRegistryWithBus(own)
+	bus, err := pkgcore.Get[pkgcore.EventBus](withBus)
+	if err != nil {
+		t.Fatalf("NewRegistryWithBus() carries no EventBus: %v", err)
+	}
+	if bus != pkgcore.EventBus(own) {
+		t.Fatal("NewRegistryWithBus() did not carry the caller's own bus as its one EventBus value")
+	}
+}
+
 // TestDuringInitOpensTheSeatsForTheDeclaration pins the helper's contract:
 // the declaration runs inside a real Init stage, so its writes land, and the
 // seats are closed again once it returns -- a later write is refused exactly
