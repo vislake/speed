@@ -299,10 +299,12 @@ does.
 See it in the reference app:
 
 - [examples/reference-app/internal/app/server.go](https://github.com/vislake/speed/blob/main/examples/reference-app/internal/app/server.go)
-  — after the assembly, one `jobs.Wire` call hands its standalone queue
-  every handler the modules declared on `reg.Jobs`, and then it starts
-  the queue; every module's handlers (storage derivation, notification
-  delivery, this pattern's shape) ride the same queue.
+  — the app's composition selects the `queue.standalone` component, and
+  in the assembly's `Start` stage that component runs its one
+  `jobs.Wire` call — handing the queue every handler the modules
+  declared on `reg.Jobs` — and starts it; every module's handlers
+  (storage derivation, notification delivery, this pattern's shape)
+  ride the same queue.
 - [examples/reference-app/internal/app/demo/demo_notification.go](https://github.com/vislake/speed/blob/main/examples/reference-app/internal/app/demo/demo_notification.go)
   — the note-created event turned into a real `Deliveries().Dispatch`
   call, and [examples/reference-app/flowtests/notification_flow_test.go](https://github.com/vislake/speed/blob/main/examples/reference-app/flowtests/notification_flow_test.go)

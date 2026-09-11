@@ -87,8 +87,9 @@ The HTTP surface — ten operations under `/api/v1/integration`
 (apikey create/list/rotate/revoke; webhook
 list/create/update/delete/restore plus the deliveries log) — is a thin
 translation of the `Service` methods above. Timing: `Register`
-subscribes the mappings and claims the delivery handler; the `Service`
-is built later, in `Attach`, after the assembly returns.
+subscribes the mappings and claims the delivery handler; `Attach`
+builds the `Service` right after it — both run inside the component's
+`Init` callback, and `Attach` installs no declarations of its own.
 
 ## Core concepts and API surface
 

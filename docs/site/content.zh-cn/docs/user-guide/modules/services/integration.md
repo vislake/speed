@@ -70,8 +70,8 @@ m := integration.NewModule(db,
 HTTP 面——`/api/v1/integration` 下十个操作(apikey
 创建/列表/轮换/撤销;webhook 列表/创建/更新/删除/恢复加投递日
 志)——是对上面 `Service` 方法的薄翻译。时序:`Register` 订阅映射
-并认领投递 handler;`Service` 稍后在装配返回后的 `Attach`
-里构建。
+并认领投递 handler;`Attach` 紧接着构建出 `Service`——两者都在
+组件的 `Init` 回调里运行,`Attach` 自己不安装任何声明。
 
 ## 核心概念与 API 面
 

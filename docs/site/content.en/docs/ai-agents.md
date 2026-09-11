@@ -103,8 +103,9 @@ The deployment mode does not select an implementation — it only
 constrains one. Each implementation declares capabilities
 (`MultiReplicaSafe`, `SurvivesRestart`, `Stateless`); each deployment
 mode declares what it requires; assembly fails at startup, naming the
-seam and the implementation, when the composition cannot satisfy the
-declared mode. A single-process deployment talking to real PostgreSQL,
+component, the missing capability bits and the mode, when the
+composition cannot satisfy the declared mode. A single-process
+deployment talking to real PostgreSQL,
 real Stripe and real SMTP is the ordinary shape of a small-customer
 production install, not a misuse — the constraint runs one direction
 only. Business code must never branch on the mode

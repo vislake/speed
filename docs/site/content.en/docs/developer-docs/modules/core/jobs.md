@@ -40,9 +40,12 @@ never knows which implementation it runs under.
   caller passes one from `dbkit.Open`, and the module never calls
   `dbkit.Open` or imports `dbkit.Repository[T]`.
 - **The queue has no declaration seat** — nothing declares into it;
-  it is an ordinary component (`queue.standalone`, or the distributed
-  `queue.asynq`) the composition selects like any other, which is
-  exactly why the packaging decision below matters.
+  it is an ordinary component (`queue.standalone`) the composition
+  selects like any other, while the distributed implementation
+  (`queue/asynq`) carries no component registration — a host running
+  it constructs the queue directly. Either way the implementation is
+  chosen, not declared, which is exactly why the packaging decision
+  below matters.
 - **No asynqmon, no requeue-from-dead-letter API** — recorded
   limitations, not silent gaps.
 

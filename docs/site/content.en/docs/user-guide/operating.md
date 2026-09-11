@@ -32,7 +32,7 @@ generated project runs in; the default is `standalone`.
 
 The mode constrains, it never selects: with none of those variables
 set, `APP_DEPLOYMENT_MODE=distributed` fails startup with
-`ErrCapabilityUnsatisfied`, naming the seam still on an in-process
+`ErrCapabilityUnsatisfied`, naming the component still on an in-process
 implementation. The project's own database speaks SQLite in both
 modes.
 

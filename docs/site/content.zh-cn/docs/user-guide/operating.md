@@ -28,7 +28,7 @@ description: saasctl 生成项目的日常维护——它可以运行的两种�
 
 形态只做约束,从不替你做选择:这些变量一个都不设时,
 `APP_DEPLOYMENT_MODE=distributed` 会让启动以 `ErrCapabilityUnsatisfied`
-失败,点名仍落在进程内实现上的那条接缝。项目自己的数据库在两种形态下
+失败,点名仍落在进程内实现上的那个组件。项目自己的数据库在两种形态下
 都是 SQLite。
 
 ## `db migrate`——在启动前备好 schema
