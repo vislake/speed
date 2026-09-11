@@ -131,6 +131,16 @@ from dataclasses import dataclass, field
 # Directories never entered regardless of content.
 PRUNED_DIR_NAMES = frozenset({".git", "node_modules", "vendor"})
 
+# Directories never descended into that must be matched by exact
+# repo-relative path rather than basename: .claude/worktrees/ holds this
+# repository's git worktrees -- complete checkouts, each carrying its own
+# go/<module>/go.mod tree whose repositories are that checkout's corpus,
+# never this one's (gitignored local machine state that never exists in
+# CI). Matched exactly, so a directory merely named worktrees/ is walked
+# and .claude/skills/** stays walked like any other directory (it holds no
+# go.mod, so it contributes nothing to this module scan).
+NON_SCANNED_DIR_PATHS = frozenset({".claude/worktrees"})
+
 # Test files (and whole integration_test/ trees) are never candidates: the
 # discipline covers shipped repository implementations, not test doubles or
 # Example code (go/dbkit/example_test.go embeds dbkit.Repository purely to
@@ -724,9 +734,15 @@ def module_roots(root: str) -> list[str]:
     """
     found: list[str] = []
     for dirpath, dirnames, filenames in os.walk(root):
-        dirnames[:] = sorted(d for d in dirnames if d not in PRUNED_DIR_NAMES)
+        rel = os.path.relpath(dirpath, root)
+        dirnames[:] = sorted(
+            d for d in dirnames
+            if d not in PRUNED_DIR_NAMES
+            and os.path.normpath(os.path.join(rel, d))
+            not in NON_SCANNED_DIR_PATHS
+        )
         if "go.mod" in filenames:
-            found.append(os.path.relpath(dirpath, root))
+            found.append(rel)
             dirnames[:] = []
     return sorted(found)
 

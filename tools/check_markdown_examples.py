@@ -138,6 +138,16 @@ from pathlib import Path
 
 _EXCLUDED_DIR_NAMES = {".git", "node_modules", "vendor"}
 
+# Directories never descended into that must be matched by exact
+# repo-relative path rather than basename: .claude/worktrees/ holds this
+# repository's git worktrees -- complete checkouts that carry their own
+# AGENTS.md/README trees, gitignored local machine state that never
+# exists in CI. Matched exactly, so a directory merely named worktrees/
+# is walked and .claude/skills/** stays walked like any other source
+# tree (a skill's own SKILL.md is not part of this corpus; an AGENTS.md
+# anywhere is, by the scope rule above).
+NON_SCANNED_DIR_PATHS = frozenset({".claude/worktrees"})
+
 _SKIP_MARKER = "<!-- markdown-example: no-parse-check -->"
 
 _FENCE_OPEN = re.compile(r"^```go\s*$")
@@ -170,7 +180,12 @@ def discover_markdown_files(root: Path) -> list[str]:
     """Return in-scope markdown file paths, relative to root, posix-style."""
     found = []
     for dirpath, dirnames, filenames in os.walk(root):
-        dirnames[:] = [d for d in dirnames if d not in _EXCLUDED_DIR_NAMES]
+        rel_dir = Path(dirpath).relative_to(root)
+        dirnames[:] = [
+            d for d in dirnames
+            if d not in _EXCLUDED_DIR_NAMES
+            and (rel_dir / d).as_posix() not in NON_SCANNED_DIR_PATHS
+        ]
         for fn in filenames:
             if not fn.endswith(".md"):
                 continue

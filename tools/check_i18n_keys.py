@@ -98,6 +98,15 @@ JSON_PAIR = ("zh-CN.json", "en-US.json")
 ALL_PAIR_FILES = TOML_PAIR + JSON_PAIR
 PRUNED_DIR_NAMES = frozenset({".git", "node_modules", "vendor", "dist"})
 
+# Directories never descended into that must be matched by exact
+# repo-relative path rather than basename: .claude/worktrees/ holds this
+# repository's git worktrees -- complete checkouts that carry their own
+# locale trees, gitignored local machine state that never exists in CI.
+# Matched exactly, so a directory merely named worktrees/ is walked and
+# .claude/skills/** stays walked like any other source tree (it holds no
+# locale pair, so it contributes nothing to this checker's corpus).
+NON_SCANNED_DIR_PATHS = frozenset({".claude/worktrees"})
+
 # The message keys go-i18n reserves on a plural message table, lower-cased
 # to match case-insensitively: the CLDR plural categories zero/one/two/few/
 # many/other, the v1 "translation" synonym for other, and the metadata keys
@@ -347,15 +356,21 @@ def discover_locale_dirs(root: str) -> list[str]:
 
     --root itself is a candidate; everything below it is walked for
     directories containing a zh-CN or en-US file in either format,
-    skipping VCS, vendored dependency, node_modules and dist trees.
+    skipping VCS, vendored dependency, node_modules and dist trees, and
+    the exact .claude/worktrees/ path (nested git checkouts: their
+    locale trees are another checkout's corpus, never this one's).
     """
     found: list[str] = []
     for dir_path, dirnames, filenames in os.walk(root):
+        rel = os.path.relpath(dir_path, root)
         dirnames[:] = sorted(
-            d for d in dirnames if d not in PRUNED_DIR_NAMES
+            d for d in dirnames
+            if d not in PRUNED_DIR_NAMES
+            and os.path.normpath(os.path.join(rel, d))
+            not in NON_SCANNED_DIR_PATHS
         )
         if any(fn in ALL_PAIR_FILES for fn in filenames):
-            found.append(os.path.relpath(dir_path, root))
+            found.append(rel)
     return sorted(found)
 
 

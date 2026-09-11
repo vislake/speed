@@ -24,6 +24,10 @@ equivalent-suite rule:
   * A genuinely uncovered repository still fails the check -- the rule
     must never go soft on the shape it guards
     (test_uncovered_repository_still_fails).
+
+Corpus coverage: NestedCheckoutTests pins that the module walk does not
+descend into .claude/worktrees/ (nested git checkouts, each carrying its
+own go/<module>/go.mod tree that is another checkout's corpus).
 """
 
 from __future__ import annotations
@@ -265,6 +269,29 @@ func TestSimulationStore_Isolation(t *testing.T) {{
             "alpha/simulation_store_test.go": suite_go,
         }))
         self.assertEqual(m.run(root), 1)
+
+
+class NestedCheckoutTests(unittest.TestCase):
+    def test_module_under_a_nested_worktree_is_not_discovered(self):
+        # .claude/worktrees/ holds this repository's git worktrees --
+        # complete checkouts, each carrying its own go/<module>/go.mod
+        # tree. They are never modules of this checkout (the same
+        # exact-path prune tools/scan_cjk.py documents), so the module
+        # scan must not descend into them.
+        with tempfile.TemporaryDirectory() as td:
+            root = pathlib.Path(td)
+            (root / "go" / "alpha").mkdir(parents=True)
+            (root / "go" / "alpha" / "go.mod").write_text(
+                "module github.com/vislake/speed/go/alpha\n\ngo 1.26.0\n",
+                encoding="utf-8",
+            )
+            wt = root / ".claude" / "worktrees" / "wt" / "go" / "alpha"
+            wt.mkdir(parents=True)
+            (wt / "go.mod").write_text(
+                "module github.com/vislake/speed/go/alpha\n\ngo 1.26.0\n",
+                encoding="utf-8",
+            )
+            self.assertEqual(m.module_roots(str(root)), ["go/alpha"])
 
 
 if __name__ == "__main__":

@@ -42,6 +42,15 @@ documents for Go):
     one. Column-level REFERENCES, table-level FOREIGN KEY ... REFERENCES
     and REFERENCES inside CREATE TABLE all match the same clause.
 
+Corpus: the walk starts at --root and skips .git/, node_modules/ and
+vendor/ by basename, plus the exact repo-relative path .claude/worktrees/
+-- this repository's git worktrees, complete checkouts whose own
+migration trees are another checkout's corpus, never this one's
+(gitignored local machine state that never exists in CI; the path is
+matched exactly, so a directory merely named worktrees/ is walked).
+Before that prune a worktree migration file reached this scan and made
+owning_module refuse the path, crashing the whole check.
+
 Usage:
     python3 tools/check_migration_cross_module_fks.py [--root DIR]
 
@@ -52,9 +61,18 @@ Standard library only, Python >= 3.11.
 from __future__ import annotations
 
 import argparse
+import os
 import pathlib
 import re
 import sys
+
+# Directories never descended into, matched by basename.
+PRUNED_DIR_NAMES = frozenset({".git", "node_modules", "vendor", "__pycache__"})
+
+# Directories never descended into that must be matched by exact
+# repo-relative path rather than basename: see the module docstring's
+# Corpus paragraph.
+NON_SCANNED_DIR_PATHS = frozenset({".claude/worktrees"})
 
 CREATE_TABLE = re.compile(
     r"\bCREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?"
@@ -99,18 +117,31 @@ def scan_tree(root: pathlib.Path) -> list[tuple[str, str, str]]:
     (rel_path, line_hint, message)."""
     tables: dict[str, set[str]] = {}
     references: list[tuple[str, str, int]] = []  # (rel_path, table, line_no)
-    for candidate in sorted(root.rglob("*.sql")):
-        rel = candidate.relative_to(root).as_posix()
-        if "/migrations/" not in rel:
-            continue
-        module = owning_module(rel)
-        text = strip_sql_comments(candidate.read_text(encoding="utf-8"))
-        for line_no, line in enumerate(text.splitlines(), start=1):
-            for match in CREATE_TABLE.finditer(line):
-                table = match.group(1).lower()
-                tables.setdefault(table, set()).add(module)
-            for match in REFERENCES.finditer(line):
-                references.append((rel, match.group(1).lower(), line_no))
+    for dirpath, dirnames, filenames in os.walk(root):
+        rel_dir = os.path.relpath(dirpath, root)
+        dirnames[:] = sorted(
+            d for d in dirnames
+            if d not in PRUNED_DIR_NAMES
+            and os.path.normpath(os.path.join(rel_dir, d))
+            not in NON_SCANNED_DIR_PATHS
+        )
+        for filename in sorted(filenames):
+            if not filename.endswith(".sql"):
+                continue
+            candidate = pathlib.Path(dirpath) / filename
+            rel = candidate.relative_to(root).as_posix()
+            if "/migrations/" not in rel:
+                continue
+            module = owning_module(rel)
+            text = strip_sql_comments(candidate.read_text(encoding="utf-8"))
+            for line_no, line in enumerate(text.splitlines(), start=1):
+                for match in CREATE_TABLE.finditer(line):
+                    table = match.group(1).lower()
+                    tables.setdefault(table, set()).add(module)
+                for match in REFERENCES.finditer(line):
+                    references.append(
+                        (rel, match.group(1).lower(), line_no)
+                    )
 
     findings: list[tuple[str, str, str]] = []
     for (rel, target, line_no) in references:

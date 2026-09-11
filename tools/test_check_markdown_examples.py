@@ -21,6 +21,10 @@ violation under every wrapping strategy -- the shape reproduced by
 test_ellipsis_placeholder_in_statement_position_is_a_violation and
 test_ellipsis_placeholder_in_call_position_is_a_violation, so a
 regression of the same shape fails the suite.
+
+Corpus coverage: NestedCheckoutTests pins that the discovery walk does
+not descend into .claude/worktrees/ (nested git checkouts whose own
+AGENTS.md/README trees are another checkout's corpus).
 """
 
 from __future__ import annotations
@@ -68,6 +72,25 @@ class InScopeTests(unittest.TestCase):
 
     def test_unrelated_markdown_is_out_of_scope(self):
         self.assertFalse(m._in_scope("go/dbkit/CHANGELOG.md"))
+
+
+class NestedCheckoutTests(unittest.TestCase):
+    def test_nested_worktree_corpus_is_not_discovered(self):
+        # .claude/worktrees/ holds this repository's git worktrees --
+        # complete checkouts whose own AGENTS.md/README/ADR files are never
+        # part of this checkout's corpus (the same exact-path prune
+        # tools/scan_cjk.py documents). Discovery must see only the
+        # in-tree file.
+        with tempfile.TemporaryDirectory() as td:
+            root = pathlib.Path(td)
+            (root / "AGENTS.md").write_text("# root\n", encoding="utf-8")
+            wt = root / ".claude" / "worktrees" / "wt"
+            wt.mkdir(parents=True)
+            (wt / "AGENTS.md").write_text("# nested checkout\n", encoding="utf-8")
+            (wt / "go").mkdir()
+            (wt / "go" / "README.md").write_text("# nested readme\n", encoding="utf-8")
+            found = m.discover_markdown_files(root)
+            self.assertEqual(found, ["AGENTS.md"])
 
 
 class ExtractGoBlocksTests(unittest.TestCase):

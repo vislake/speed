@@ -22,6 +22,11 @@ planted-fixture suites below are the rules' only living proof:
   * Subpackage migrations own to their module (audit tables are go/
     dbkit's, so a dbkit file referencing them is in-module;
     test_subpackage_ownership).
+
+Corpus coverage: NestedCheckoutTests pins that the walk does not descend
+into .claude/worktrees/ (nested git checkouts). Before the prune a
+worktree migration file's path made owning_module refuse the path, so a
+checkout carrying worktrees crashed the whole scan.
 """
 
 from __future__ import annotations
@@ -152,6 +157,31 @@ class FixtureRules(unittest.TestCase):
             }
         )
         self.assertEqual(len(m.scan_tree(root)), 1)
+
+
+class NestedCheckoutTests(unittest.TestCase):
+    def test_nested_worktree_migrations_do_not_reach_the_scan(self):
+        # .claude/worktrees/ holds this repository's git worktrees --
+        # complete checkouts whose own migration trees are never part of
+        # this checkout's corpus (the same exact-path prune
+        # tools/scan_cjk.py documents). Before the prune, a worktree
+        # migration file's path made owning_module raise (its first path
+        # segment is .claude, not go/ or examples/): the scan crashed on
+        # any checkout carrying worktrees.
+        root = make_tree(
+            {
+                "go/dbkit/audit/migrations/sqlite/0001.sql": CREATE_AUDIT,
+                ".claude/worktrees/wt/go/org/migrations/sqlite/0001.sql": (
+                    "CREATE TABLE org_nodes (\n"
+                    "    id TEXT PRIMARY KEY,\n"
+                    "    audit_event_id TEXT REFERENCES audit_events(id)\n"
+                    ");\n"
+                ),
+            }
+        )
+        # The in-tree audit table still scans; the worktree file is not
+        # corpus at all -- no finding either way.
+        self.assertEqual(m.scan_tree(root), [])
 
 
 class CommentStripping(unittest.TestCase):

@@ -18,6 +18,12 @@ judged matching and passed. test_duplicate_leaf_under_two_sections_is_
 refused fails before the fix (exit 0, judged matching) and passes after
 (exit 1); test_unique_leaves_across_sections_still_match pins that honest
 grouping keeps passing.
+
+Corpus coverage: NestedCheckoutTests pins that a locale pair inside
+.claude/worktrees/ (a nested git checkout) is not part of this checkout's
+corpus -- before the exact-path prune the worktree's locale trees were
+discovered and compared, so a drifted pair in any local worktree failed
+the gate from outside the repository's own sources.
 """
 
 from __future__ import annotations
@@ -92,6 +98,32 @@ class DuplicateLeafIdTests(unittest.TestCase):
         zh = '[a]\nx = "\u4e00"\n\n[b]\ny = "\u4e8c"\n'
         en = '[a]\nx = "one"\n'
         self.assertEqual(self._run_on(zh, en), 1)
+
+
+class NestedCheckoutTests(unittest.TestCase):
+    def test_locale_pair_under_a_nested_worktree_is_not_scanned(self):
+        # .claude/worktrees/ holds this repository's git worktrees --
+        # complete checkouts whose own locale trees are never part of this
+        # checkout's corpus (the same exact-path prune tools/scan_cjk.py
+        # documents). A worktree pair with drifted key sets must not make
+        # the gate red, and the reporter must not name the worktree path.
+        with tempfile.TemporaryDirectory() as td:
+            root = pathlib.Path(td)
+            locales = root / "go" / "mod" / "locales"
+            locales.mkdir(parents=True)
+            (locales / "zh-CN.toml").write_text('[a]\nx = "\u4e00"\n', encoding="utf-8")
+            (locales / "en-US.toml").write_text('[a]\nx = "one"\n', encoding="utf-8")
+            wt_locales = root / ".claude" / "worktrees" / "wt" / "go" / "mod" / "locales"
+            wt_locales.mkdir(parents=True)
+            (wt_locales / "zh-CN.toml").write_text('[a]\nx = "\u4e00"\n\n[b]\ny = "\u4e8c"\n', encoding="utf-8")
+            (wt_locales / "en-US.toml").write_text('[a]\nx = "one"\n', encoding="utf-8")
+            import io
+            import contextlib
+            buf = io.StringIO()
+            with contextlib.redirect_stdout(buf):
+                code = m.main(["--root", str(root)])
+            self.assertEqual(code, 0, buf.getvalue())
+            self.assertNotIn(".claude/worktrees", buf.getvalue())
 
 
 if __name__ == "__main__":
