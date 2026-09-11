@@ -1,24 +1,24 @@
-// smile_journey_flow_test.go drives the block-B acceptance journey at the
-// wire level through the real composed HTTP stack -- the authn+tenancy
-// middleware chain, a real temp-file SQLite database, a real
+// smile_journey_flow_test.go drives the smile-simulation acceptance
+// journey at the wire level through the real composed HTTP stack -- the
+// authn+tenancy middleware chain, a real temp-file SQLite database, a real
 // jobs.StandaloneQueue, the cases surface (internal/app/cases.go and
-// internal/app/cases_photos.go, whose upload/create/content operations block A
-// shipped) and the smile-simulation surface (internal/app/smilesim.go,
+// internal/app/cases_photos.go, whose upload/create/content operations
+// open the journey) and the smile-simulation surface (internal/app/smilesim.go,
 // whose simulate/job-status/enumeration/content operations the
 // comparison view calls) -- against fakeOpenAIImageServer's canned,
 // replayed provider answers, the same deterministic stand-in the
 // smilesim flow suite uses. No live provider, no live API key: the
 // OpenAI-compatible images-edits wire shape is fully answerable offline.
 //
-// The journey mirrors what the block-B gate makes a person do by
-// clicking: a clinic user opens a case that carries a patient photo
-// (block A), picks a smile option set from the documented vocabulary
+// The journey mirrors what the simulation gate makes a person do by
+// clicking: a clinic user opens a case that carries a patient photo,
+// picks a smile option set from the documented vocabulary
 // (smile style / tooth shade / strength), starts the generation, waits
 // out its honest asynchronous status, and then has the generated image
 // beside the original -- which the wire test can only prove by reading
 // the result's bytes back through the surface the comparison view
-// renders (the fragment's simulation-content operation, added by this
-// journey), distinct from the uploaded photo and served with the media
+// renders (the fragment's simulation-content operation the comparison
+// view reads), distinct from the uploaded photo and served with the media
 // type storage's probe assigned.
 package flowtests
 
@@ -33,7 +33,7 @@ import (
 )
 
 // TestSmileJourney_CasePhotoThroughSimulationToComparison is the
-// block-B journey in one pass over real HTTP: upload a patient photo,
+// simulation journey in one pass over real HTTP: upload a patient photo,
 // open the case carrying it, choose a non-default smile option set,
 // generate, poll to the succeeded status, see the photo's enumeration
 // list the generation with the options that produced it, and read the
@@ -44,7 +44,7 @@ func TestSmileJourney_CasePhotoThroughSimulationToComparison(t *testing.T) {
 	srv, cfg := buildSmileSimTestServer(t, imgServer)
 	token := registerAndAuthenticate(t, srv, cfg, "tenant-acme", "smile-journey")
 
-	// The case with the patient photo, exactly as block A's one-step
+	// The case with the patient photo, exactly as the one-step cases
 	// surface creates it: upload first (the photo travels base64 in
 	// JSON), then create the case naming the uploaded object.
 	photo := uploadPhotoAs(t, srv, token, base64.StdEncoding.EncodeToString(jpegWithExif(t)))

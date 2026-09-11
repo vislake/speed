@@ -84,7 +84,7 @@ func createClinicNote(t *testing.T, srv *httptest.Server, token, text string) st
 	return created.ID
 }
 
-// ledgerRowCount counts the D3 tenant-ledger rows (go/admin's
+// ledgerRowCount counts the admin tenant-ledger rows (go/admin's
 // admin_tenants table) naming tenant in the shared database file -- the
 // durable discovery record internal/app/periodic_scheduler.go's universe reads. The
 // count goes through admin's own model over the second connection, the
@@ -187,15 +187,15 @@ func observeClinicSweepEnd(t *testing.T, srv *httptest.Server, token string, exp
 // 45 days (past the 30-day default retention window). The ledger premise
 // is asserted in boot 1 itself: the clinic's org-root creation fired
 // org's org.node.created event, so go/admin's event-driven lazy
-// population (D3) recorded the clinic in the durable tenant ledger --
-// the discovery half of the scheduler's universe the fix iterates. Boot
+// population recorded the clinic in the durable tenant ledger --
+// the discovery half of the scheduler's universe. Boot
 // 1 closes with every row and byte present: expiry and age alone remove
 // nothing.
 //
 // Boot 2 starts the same server over the same files with the normal gate
 // and the injected periodicFlowTickInterval cadence. Its first tick
 // resolves the tenant universe -- the configured host tenants AND every
-// tenant the D3 ledger names, this clinic among them -- and enqueues the
+// tenant the admin ledger names, this clinic among them -- and enqueues the
 // clinic's first sweeps of fresh windows. The worker drains the clinic's
 // expiry sweep into the real LifecycleService sweep (removing the
 // expired object's row and bytes) and the clinic's retention sweep into
@@ -204,12 +204,10 @@ func observeClinicSweepEnd(t *testing.T, srv *httptest.Server, token string, exp
 // bounded, with no wall-clock race, exactly like the two legs above --
 // until every terminal property holds in one observation, then asserts
 // the strict post-conditions once more with the decode helpers. If the
-// scheduler's universe were still only cfg.HostTenants -- the wiring this
-// state the file header records -- boot 2's ticks would never enqueue
-// anything
-// for the clinic and the wait would fail: a self-registered tenant's
-// expired objects and soft-deleted notes past their retention windows
-// would stay unreclaimed forever.
+// scheduler's universe were only cfg.HostTenants, boot 2's ticks would
+// never enqueue anything for the clinic and the wait would fail: a
+// self-registered tenant's expired objects and soft-deleted notes past
+// their retention windows would stay unreclaimed forever.
 func TestBuildServer_PeriodicScheduler_ExpiryAndRetentionSweeps_ReachSelfRegisteredClinicTenant(t *testing.T) {
 	cfg := periodicSweepTestConfig(t)
 	jpegBytes := jpegWithExif(t)
@@ -244,12 +242,12 @@ func TestBuildServer_PeriodicScheduler_ExpiryAndRetentionSweeps_ReachSelfRegiste
 		t.Fatalf("sign-in landed the clinic owner in tenant %q, want the clinic %q", signedInTenant, clinic)
 	}
 
-	// The D3 premise the fix rests on: the provisioning's org-root
-	// creation fired org's real org.node.created event, and admin's
-	// event-driven lazy population (tenant_service.go's
+	// The ledger premise the scheduler's universe rests on: the
+	// provisioning's org-root creation fired org's real org.node.created
+	// event, and admin's event-driven lazy population (tenant_service.go's
 	// handleOrgNodeCreated) recorded the clinic in the durable tenant
-	// ledger. A clinic absent from the ledger would make the discovery
-	// half of the fixed universe itself broken, and this assertion would
+	// ledger. A clinic absent from the ledger would leave the discovery
+	// half of the universe itself broken, and this assertion would
 	// fail before the sweeps ever got the chance to prove it.
 	db := openSecondDB(t, cfg)
 	if got := ledgerRowCount(t, db, clinic); got != 1 {
@@ -328,7 +326,7 @@ func TestBuildServer_PeriodicScheduler_ExpiryAndRetentionSweeps_ReachSelfRegiste
 	// Boot 2: the restart. Same database file, same object-store
 	// directory, normal gate, the injected cadence. The scheduler's very
 	// first tick resolves the tenant universe -- the configured host
-	// tenants AND the D3 tenant ledger, whose durable row names this
+	// tenants AND the admin tenant ledger, whose durable row names this
 	// clinic -- and enqueues the clinic's first expiry and retention
 	// sweeps of fresh windows; the worker drains them into the wired
 	// mechanisms' real handlers, which find the rows boot 1 left expired.

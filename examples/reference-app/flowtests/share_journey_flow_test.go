@@ -1,7 +1,7 @@
-// share_journey_flow_test.go drives the block-C acceptance journey at the
+// share_journey_flow_test.go drives the share journey at the
 // wire level through the real composed HTTP stack -- the same stack and
 // the same canned provider smile_journey_flow_test.go uses for the
-// block-B journey: a clinic user with a completed smile simulation on a
+// simulation journey: a clinic user with a completed smile simulation on a
 // case photo mints a patient-facing share link for the before/after pair
 // (one share for the original photo, one for the simulation's result --
 // the shape the patient page renders side by side), an unauthenticated
@@ -20,7 +20,7 @@
 // journey assembles is the product surface -- the clinic's share action and
 // the patient's page -- which cannot be driven by a Go wire test alone;
 // the web host's own journeys (views/simulation-share-action.test.tsx,
-// views/share-view.test.tsx) and the block-C e2e gate
+// views/share-view.test.tsx) and the e2e gate over the core journey
 // (web/e2e/core-journey.pending.spec.ts) cover the browser shape. This
 // file pins the wire facts those surfaces rest on, end to end over a REAL
 // simulation result: each shared resource's bytes ARE what the sharing
@@ -48,8 +48,8 @@ import (
 	"github.com/vislake/speed/go/sharing"
 )
 
-// TestShareJourney_CompletedSimulationSharedToAnonymousVisitor is block
-// C's wire journey in one pass: photo upload, case creation, simulation
+// TestShareJourney_CompletedSimulationSharedToAnonymousVisitor is the
+// share journey in one pass: photo upload, case creation, simulation
 // to its succeeded status, the before/after pair of shares minted by the
 // practice (demo-owner, the same actor sharing_flow_test.go proves holds
 // sharing:create), and the unauthenticated visitor's reads of both
@@ -63,7 +63,7 @@ func TestShareJourney_CompletedSimulationSharedToAnonymousVisitor(t *testing.T) 
 	token := registerAndAuthenticate(t, srv, cfg, "tenant-acme", "share-journey")
 
 	// The case with the patient photo and the completed simulation,
-	// exactly as the block-B journey makes them: upload the before
+	// exactly as the smile journey makes them: upload the before
 	// photo, open the case, generate, poll to the succeeded status and
 	// read the output object id the comparison view renders.
 	jpeg := jpegWithExif(t)
@@ -236,7 +236,7 @@ func TestShareJourney_CompletedSimulationSharedToAnonymousVisitor(t *testing.T) 
 }
 
 // TestShareJourney_ExpiredShareRefusesHonestly proves the expiry half of
-// block C regression (b): a share whose lifetime genuinely ran out -- a
+// the share journey: a share whose lifetime genuinely ran out -- a
 // real row whose expires_at passed, not a revoked one -- refuses an
 // anonymous visitor with the same honest 404 sharing.not_accessible
 // envelope, which is exactly why the patient page renders one human

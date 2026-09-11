@@ -825,16 +825,15 @@ func bindAdminRole(t *testing.T, srv *httptest.Server, staffToken, roleKey, tena
 	}
 }
 
-// TestAdminFlow_..._ReachableForPlatformStaff reproduces the
-// coverage gap directly: adminPermissionFor (internal/app/demo/demo_admin.go) was
-// never named every mounted sub-path, so its switch fell through to the default
-// case for the role-management and send-records sub-paths, returning "" --
-// which rbac.RequirePermissionFunc's own doc comment says unconditionally
-// denies the request, even for the platform-staff account holding
-// rbac.BuiltinRoleOwner (every permission any module declared). Before
-// the fix, every request below answered 403; after it, each reaches
-// admin's own Handler (a non-403 status, whatever that handler itself
-// then answers).
+// Every admin sub-path below must reach admin's own Handler (a non-403
+// status, whatever that handler itself then answers). The gate that
+// makes the walk load-bearing: adminPermissionFor (internal/app/demo/
+// demo_admin.go) names every mounted sub-path, and a sub-path its switch
+// did not name would hit the default case, returning "" -- which
+// rbac.RequirePermissionFunc's own doc comment says it denies
+// unconditionally, even for the platform-staff account holding
+// rbac.BuiltinRoleOwner (every permission any module declared) -- the
+// request refused with 403 before the handler ever sees it.
 func TestAdminFlow_Round2Routes_ReachableForPlatformStaff(t *testing.T) {
 	srv, _, _ := buildAdminTestServer(t)
 	staffToken := platformStaffToken(t, srv)
@@ -880,18 +879,17 @@ func TestAdminFlow_Round2Routes_ReachableForPlatformStaff(t *testing.T) {
 	}
 }
 
-// TestAdminFlow_AuditExport_RequiresExportPermission reproduces the
-// second coverage gap directly: adminPermissionFor's switch
-// matched "/api/v1/admin/audit-events/export" against the existing
-// adminAuditEventsPath prefix case (both share that prefix), gating the
-// export leg on the weaker admin:audit_read instead of the
-// newly-declared, deliberately-stronger admin:audit_export
+// TestAdminFlow_AuditExport_RequiresExportPermission pins the export
+// gate: adminPermissionFor's switch orders the export sub-path ahead of
+// the adminAuditEventsPath prefix case the two share, gating the export
+// leg on admin:audit_export -- the deliberately-stronger permission
 // (module.go's own PermissionAuditExport doc comment: exporting a
 // tenant's complete audit trail is a materially stronger action than
-// merely reading it). Two probe accounts, each holding exactly one of
-// the two permissions under rbac.SystemDomain and nothing else, prove
-// both directions: audit_read alone must NOT reach the export route, and
-// audit_export alone must.
+// merely reading it) -- where the shared prefix case alone would gate it
+// on the weaker admin:audit_read. Two probe accounts, each holding
+// exactly one of the two permissions under rbac.SystemDomain and nothing
+// else, prove both directions: audit_read alone must NOT reach the
+// export route, and audit_export alone must.
 //
 // The probes' system-domain role scaffolding is seeded directly against
 // rbac.Service under a system-tenant context -- the out-of-band shape

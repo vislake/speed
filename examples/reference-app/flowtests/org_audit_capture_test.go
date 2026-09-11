@@ -14,18 +14,17 @@ import (
 )
 
 // TestOrgAuditCapture_ImpersonatedMemberRemovalAndNodeDelete_LeaveDualIdentityRows
-// is the regression: an administrator removing a member or deleting
+// pins the capture contract: an administrator removing a member or deleting
 // an org node through the real composed stack leaves an audit row carrying
 // the operator identity -- and, performed during an impersonation session,
 // the row carries BOTH identities, per the hard rule: Actor
-// (the impersonated user) and OnBehalfOf (the real administrator). Before
-// org's declared audit actions had zero
-// emission, no dbkit.Auditable opt-in and no wired capture, so these two
-// operations produced NO audit row at all -- the same class the rbac
-// zero-audit gap graded, the easiest accountability accident
-// in the ops console.
+// (the impersonated user) and OnBehalfOf (the real administrator). What
+// the pin guards against: a declared audit action with zero
+// emission, no dbkit.Auditable opt-in and no wired capture would leave
+// these two operations producing NO audit row at all -- the easiest
+// accountability accident in the ops console.
 //
-// The fix this test pins is doc 10's own "automatic first, declaration
+// The capture route this test pins is doc 10's own "automatic first, declaration
 // second" route, not hand-written audit.Emit at each write path: org's
 // OrgNode, Membership and Invitation models implement dbkit.Auditable,
 // BuildServer wires dbkit.Options.AuditBus (with Options.AuditModels set
@@ -276,7 +275,6 @@ func TestOrgAuditCapture_ImpersonatedMemberRemovalAndNodeDelete_LeaveDualIdentit
 // audit:"redact" capture opt-out, and the diff records the "[redacted]"
 // marker, never the digest; the plaintext address column is
 // serializer-redacted the same way and asserted here as the control.
-// Before this fix the create row carried the raw 64-hex index.
 func TestOrgAuditCapture_InvitationCreate_AuditRowCarriesNoAddressIndex(t *testing.T) {
 	srv, cfg, mailer := buildOrgTestServer(t)
 	inviterToken := registerAndAuthenticate(t, srv, cfg, "tenant-acme", "p1-invite-audit-owner")
@@ -307,7 +305,7 @@ func TestOrgAuditCapture_InvitationCreate_AuditRowCarriesNoAddressIndex(t *testi
 	}
 
 	// The composed trail holds exactly one org.invitation.create row for
-	// this invitation -- the F3 forward direction at the host: the model
+	// this invitation -- the forward direction at the host: the model
 	// is genuinely inside the capture scope, whatever org.AuditableModels()
 	// currently declares.
 	rows := auditRowsForTenant(t, cfg, "tenant-acme")
@@ -322,12 +320,11 @@ func TestOrgAuditCapture_InvitationCreate_AuditRowCarriesNoAddressIndex(t *testi
 			invitation.ID, creates, rows)
 	}
 
-	// The F1 assertion: the create row's diff carries no usable
+	// The assertion: the create row's diff carries no usable
 	// address-derived value. The email_index column is audit-redacted
 	// (go/org's Invitation model), so the key may appear only with the
-	// "[redacted]" marker -- before this fix the raw blind index was
-	// recorded under it, and the failing assertion below read the raw
-	// 64-hex digest out of the row.
+	// "[redacted]" marker -- a raw 64-hex blind index recorded under it
+	// would fail the assertion below.
 	after := afterDiff(t, creates[0].Changes)
 	if v, ok := after["email_index"]; ok && v != "[redacted]" {
 		t.Fatalf("org.invitation.create changes carry the invitee's blind index as %v: the index must never reach the audit trail", v)

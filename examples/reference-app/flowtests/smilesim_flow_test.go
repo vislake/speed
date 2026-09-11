@@ -294,9 +294,9 @@ func waitForSmileSimSucceeded(t *testing.T, srv *httptest.Server, token, jobID s
 // smileSimulateAndWait enqueues one /simulate job for the completed photo
 // and polls the job-status route until it reaches a terminal status,
 // requiring the enqueue itself to succeed (202 carrying a job_id). It is
-// the shared orchestration TestSmileSimulation_ImageToImage_EndToEnd
-// performed inline before this helper existed, and
-// ai_gateway_flow_test.go's credential-redirect leg needs again -- it does
+// the shared orchestration every simulation-driven leg needs
+// (TestSmileSimulation_ImageToImage_EndToEnd, ai_gateway_flow_test.go's
+// credential-redirect leg, entitlements_flow_test.go's own); it does
 // NOT require the terminal status to be "succeeded", since a caller
 // driving an unhappy path may legitimately land on dead_letter and wants
 // to assert that itself.
@@ -584,23 +584,23 @@ func TestSmileSimulation_CompletionNotifiesTheNamedRecipient(t *testing.T) {
 // TestSmileSimulation_TwoCompletionsForOneRecipient_BothDeliver pins the
 // two-occurrence case: TWO simulations completed for the SAME
 // recipient are two distinct occurrences, and each must deliver on its
-// own. Before the fix, internal/app/demo/demo_notification.go's simulation-completed
-// subscription dispatched with empty Params, so both dispatches derived
-// the identical delivery key (same tenant, same type, same recipient,
-// same channel, same params) and the notification module settled the
-// second delivery job as a duplicate of the first -- one SMS for two
+// own. The dispatch carries the completing job's own id in its Params --
+// the mirror of the note-created dispatch carrying note_id -- so the two
+// occurrences derive distinct delivery keys
+// (internal/app/demo/demo_notification.go's simulation-completed
+// subscription). Without the job id both dispatches would derive the
+// identical key (same tenant, same type, same recipient, same channel,
+// same params), and the notification module would settle the second
+// delivery job as a duplicate of the first -- one SMS for two
 // completed simulations, silently dropped while each simulate route had
-// answered 202. The dispatch must carry the completing job's own id in
-// its Params -- the mirror of the note-created dispatch carrying
-// note_id -- so the two occurrences derive distinct keys and both
-// deliver.
+// answered 202.
 //
-// The legs are sequenced so the failure is deterministic: simulation
-// one's delivery must be fully settled (its send record written) before
-// simulation two's event dispatches, which is why the test waits for the
-// first SMS before starting the second simulation -- otherwise the two
-// delivery jobs could race and the duplicate-settling order would decide
-// whether the bug showed.
+// The legs are sequenced so the duplicate-key failure mode is
+// deterministic: simulation one's delivery must be fully settled (its
+// send record written) before simulation two's event dispatches, which is
+// why the test waits for the first SMS before starting the second
+// simulation -- otherwise the two delivery jobs could race and their
+// settlement order would decide the observed count.
 func TestSmileSimulation_TwoCompletionsForOneRecipient_BothDeliver(t *testing.T) {
 	imgServer := newFakeOpenAIImageServer(t)
 
@@ -669,7 +669,8 @@ func TestSmileSimulation_TwoCompletionsForOneRecipient_BothDeliver(t *testing.T)
 
 	// Simulation two for the same recipient: a regenerate of the same
 	// photo is an explicit NEW generation with its own job id, exactly the
-	// "second occurrence" the bug collapsed into the first delivery.
+	// "second occurrence" a shared delivery key would collapse into the
+	// first delivery.
 	job2 := simulateForRecipient()
 	if job2 == job1 {
 		t.Fatalf("second simulate returned the same job id %q as the first -- each generation must be its own job", job1)
@@ -679,9 +680,9 @@ func TestSmileSimulation_TwoCompletionsForOneRecipient_BothDeliver(t *testing.T)
 		t.Fatalf("second job status = %v, want \"succeeded\"", final2["status"])
 	}
 
-	// Both occurrences must deliver: without the fix the second delivery was
-	// settled as a duplicate of the first and this wait timed out with the
-	// recipient stuck at one SMS.
+	// Both occurrences must deliver: a shared delivery key would settle the
+	// second as a duplicate of the first, and this wait would time out
+	// with the recipient stuck at one SMS.
 	eventually(t, 4*time.Second, "the second simulation-ready SMS", func() bool {
 		return len(smsLinesTo(sms, "+8613800138099")) == 2
 	})
@@ -973,9 +974,9 @@ func TestSmileSimulation_CrossTenantRecipient_RefusedBeforeAnyEnqueue(t *testing
 		t.Fatal("the demo recipient fixture carries no phone address -- the scenario needs one to demonstrate the harm")
 	}
 
-	// Bug-state evidence: an accepted request (202) runs the job to
-	// completion and puts the simulation-ready SMS on the CROSS-TENANT
-	// member's phone -- the delivery the refusal prevents. On the fixed
+	// The harm this gate prevents: an accepted request (202) would run the
+	// job to completion and put the simulation-ready SMS on the CROSS-TENANT
+	// member's phone -- the delivery the refusal prevents. On the current
 	// tree this branch is unreachable (the refusal comes first).
 	if resp.StatusCode == http.StatusAccepted && out.JobID != "" {
 		waitForSmileSimSucceeded(t, srv, token, out.JobID, time.Now().Add(5*time.Second))

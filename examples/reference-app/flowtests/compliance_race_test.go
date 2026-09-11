@@ -25,9 +25,7 @@ import (
 // list was already gathered, answer dbkit's record-not-found. That answer
 // must be treated as "the data is gone" (convergence), never surfaced as
 // compliance's ErrErasurePartialFailure or ErrSweepPartialFailure, which
-// is what a partial failure of a real operation means -- and what the
-// participant's callbacks reported before this fix, whenever the two
-// orchestrators raced.
+// is what a partial failure of a real operation means.
 //
 // The race is driven for real, in both directions, over real notes rows
 // and through the wired compliance module BuildServer returns. Each
@@ -46,8 +44,7 @@ import (
 // poll's observation and the bulk transaction's commit -- would need
 // hundreds of per-row SQLite commit transactions to complete inside the
 // poll interval's milliseconds, which the real database makes
-// effectively impossible; post-fix the assertions hold under every
-// interleaving, which is the property the fix actually ships.)
+// effectively impossible; the assertions hold under every interleaving.)
 func TestComplianceSweepVsErasure_ConcurrentRemovalOfTheSameRow_ConvergesClean(t *testing.T) {
 	srv, cfg, complianceModule := buildTestServer(t)
 
@@ -162,7 +159,7 @@ func TestComplianceSweepVsErasure_ConcurrentRemovalOfTheSameRow_ConvergesClean(t
 		}
 
 		// Re-running the same erasure converges with (0, nil): nothing the
-		// race left behind, and nothing the fix left half-done.
+		// race left behind, and nothing the erasure left half-done.
 		again, err := complianceModule.Erasure().Erase(ctx, pkgcore.SubjectRef{
 			TenantID:  "tenant-acme",
 			SubjectID: creator,

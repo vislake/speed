@@ -79,7 +79,7 @@ func photoContentAs(t *testing.T, srv *httptest.Server, token, caseID, photoObje
 }
 
 // TestCasesPhotos_UploadThenContentOnCase_Journey is the photo half of
-// the block-A acceptance journey through the real composed stack: a
+// the case-opening journey through the real composed stack: a
 // clinic user uploads a real EXIF-bearing JPEG through the new upload
 // op, creates a case naming the resulting object, and reads the photo
 // back through the content op -- with the served bytes byte-identical to

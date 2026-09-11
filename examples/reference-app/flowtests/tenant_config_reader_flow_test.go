@@ -176,8 +176,8 @@ func TestTenantConfigReader_Sharing_ConfiguredTenant_UsesConfiguredExpiry(t *tes
 
 // TestTenantConfigReader_Sharing_UnconfiguredTenant_FallsBackToDefault
 // proves the inverse: a tenant that never configured sharing.default_expiry
-// still gets the module's own fixed 30-day default, unchanged from before
-// the default shape -- ShareExpiryReader wired but reporting "unconfigured"
+// still gets the module's own fixed 30-day default --
+// ShareExpiryReader wired but reporting "unconfigured"
 // behaves exactly as if it were never wired at all.
 func TestTenantConfigReader_Sharing_UnconfiguredTenant_FallsBackToDefault(t *testing.T) {
 	h := newTenantConfigReaderHarness(t)

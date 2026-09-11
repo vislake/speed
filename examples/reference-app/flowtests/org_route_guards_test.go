@@ -223,8 +223,7 @@ func TestOrgRouteGuards_UnprivilegedCaller_CannotManageOrgTree(t *testing.T) {
 		},
 		{"list_members", http.MethodGet, "/api/v1/org/members?nodeId=" + root.ID, nil},
 		{"remove_member", http.MethodDelete, "/api/v1/org/members/some-other-user", nil},
-		// The scenario the audit named explicitly: a cascade delete of the
-		// whole subtree.
+		// The cascade-delete scenario: a delete of the whole subtree.
 		{"delete_node_cascade", http.MethodDelete, "/api/v1/org/nodes/" + root.ID + "?cascade=true", nil},
 	}
 

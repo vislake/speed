@@ -1,15 +1,15 @@
 package flowtests
 
-// usage_summary_flow_test.go is the product-directive-C1 proof that
-// admin's D9 usage/billing dashboard (go/admin/usage.go, docs/internal/
-// 23-admin.md) is genuinely wired into this app: GET
-// /api/v1/admin/usage-summary answers 200 with REAL go/metering data for
-// the system-domain operator. Before this round's wiring it answered 500
-// with the coded body admin.usage_modules_not_wired
-// (go/admin/errors.go's ErrUsageModulesNotWired) -- BuildServer passed
-// adminModule neither admin.WithMetering nor admin.WithBilling (that
-// refusal and its fail-before state are the subject of
-// TestAdminFlow_Round2Routes_ReachableForPlatformStaff's D9 leg).
+// usage_summary_flow_test.go proves admin's usage/billing dashboard
+// (go/admin/usage.go, docs/internal/23-admin.md) is genuinely wired into
+// this app: GET /api/v1/admin/usage-summary answers 200 with REAL
+// go/metering data for the system-domain operator. The dashboard is
+// reachable only through a composition that passed admin.WithMetering
+// and admin.WithBilling to the admin module; one that omits them leaves
+// the endpoint answering 500 with the coded body
+// admin.usage_modules_not_wired (go/admin/errors.go's
+// ErrUsageModulesNotWired), which the platform-staff walk in
+// admin_flow_test.go also refuses to accept.
 //
 // The usage the endpoint reads is recorded by the REAL recording path, not
 // a test-only injection: a genuine consultation-suggestion call (the
@@ -23,16 +23,17 @@ package flowtests
 // Aggregator.Ingest -- asynchronous by construction, so the test polls the
 // endpoint until the recorded row is visible rather than guessing a sleep,
 // and a wiring that never started the flush loop fails the poll honestly.
-// D9's dashboard then reads those rows back per tenant in admin's D3
-// ledger, under D2's tenancy.WithSystemContext mechanism.
+// The dashboard reads those rows back per tenant in admin's tenant
+// ledger, under tenancy.WithSystemContext -- the mechanism a cross-tenant
+// read of this shape needs.
 //
 // Billing is wired through admin.WithBilling too, so every row carries
 // creditBalance/activeSubscription as well. With both modules wired there
-// is no unwired dimension left for a composed run to show absent; that
-// half of D9's contract -- a wired module's dimension present on every
-// row, an unwired one's fields absent (nil), never a refusal -- stays
-// unit-pinned in go/admin/usage_test.go, which this file's assertions
-// deliberately do not duplicate.
+// is no unwired dimension left for a composed run to show absent; the
+// contract itself -- a wired module's dimension present on every row, an
+// unwired one's fields absent (nil), never a refusal -- stays unit-pinned
+// in go/admin/usage_test.go, which this file's assertions deliberately do
+// not duplicate.
 //
 // The system-domain operator driving the endpoint is the seeded
 // demo-platform-staff account (internal/app/demo/demo_admin.go), the one account this app
@@ -135,13 +136,13 @@ func waitForUsageSummaryRow(t *testing.T, srv *httptest.Server, staffToken, want
 	return adminUsageSummaryRow{}
 }
 
-// TestUsageSummary_D9Endpoint_RealRecordedUsage is the C1 acceptance
-// proof: a real AI-shaped call records real usage through the wired
+// TestUsageSummary_D9Endpoint_RealRecordedUsage proves the answer end to
+// end: a real AI-shaped call records real usage through the wired
 // gateway seam, and the system-domain operator's GET /api/v1/admin/
-// usage-summary answers 200 with that usage present -- the answer this
-// endpoint could not give before the wiring (500 ErrUsageModulesNotWired,
-// see the test file's doc comment). It also pins the dimensions the wiring
-// added: meteringSummaries present on every ledger row (empty for a tenant
+// usage-summary answers 200 with that usage present -- never the 500
+// ErrUsageModulesNotWired an unwired composition gives (see the test
+// file's doc comment). It also pins the dimensions the wiring added:
+// meteringSummaries present on every ledger row (empty for a tenant
 // with no recorded usage, never absent), and the billing dimensions
 // (creditBalance, activeSubscription) present because SeedDemoCredits and
 // SeedDemoEntitlements gave the demo tenants real rows.
@@ -169,7 +170,7 @@ func TestUsageSummary_D9Endpoint_RealRecordedUsage(t *testing.T) {
 		t.Fatal("fake OpenAI-compatible server never received the chat request")
 	}
 
-	// The D9 read: 200 (never 500 admin.usage_modules_not_wired), with the
+	// The dashboard read: 200 (never 500 admin.usage_modules_not_wired), with the
 	// recorded call's feature present on the recording tenant's row. The
 	// fake's wire usage reported total_tokens = 20, which is exactly what
 	// Gateway records under ai.chat_tokens -- matching quantity ties the

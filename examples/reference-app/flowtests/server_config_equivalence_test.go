@@ -1,16 +1,16 @@
 package flowtests
 
-// server_config_equivalence_test.go pins the bootstrap migration's behavioural
-// equivalence: for every documented shape of the process environment, the
-// resolution that used to read the environment directly (legacyConfigFromEnv
-// below, reproduced here as the oracle) and today's loader-driven
-// app.ConfigFromEnv must produce the same effective ServerConfig -- the same
-// dev-default path, the same APP_ROOT_KEY derivation, the same
-// individual-override precedence, and the same cross-variable refusals naming
-// the same variable.
+// server_config_equivalence_test.go pins the behavioural equivalence of the
+// two resolutions of this app's process environment: for every documented
+// shape of the environment, the direct-read reference implementation
+// (legacyConfigFromEnv below, kept in this file as the oracle) and the
+// loader-driven app.ConfigFromEnv must produce the same effective
+// ServerConfig -- the same dev-default path, the same APP_ROOT_KEY
+// derivation, the same individual-override precedence, and the same
+// cross-variable refusals naming the same variable.
 //
-// The one deliberate difference -- an explicitly emptied int/bool variable is
-// now a load refusal rather than a silent "unset" -- is not equivalence and is
+// The one deliberate divergence -- an explicitly emptied int/bool variable is
+// a load refusal rather than a silent "unset" -- is not equivalence and is
 // pinned separately, by
 // TestConfigFromEnv_EmptyTypedVariable_RefusesTheLoad at the bottom of this
 // file.
@@ -34,16 +34,16 @@ import (
 	"github.com/vislake/speed/go/pkgcore"
 )
 
-// legacyConfigFromEnv is the pre-loader resolution, kept verbatim: the direct
-// os.Getenv reads with the per-variable rules the bootstrap fields' doc
-// comments now carry (an empty string reads as unset for every string-valued
-// variable; the two bools and the two ints go through strconv, so an emptied
-// one is their zero value; the six key materials resolve through the same
-// three-tier precedence; the S3, SMTP, object-store and Fly-client-IP
-// combinations refuse the boot with the same rule). It exists only as this
-// file's oracle: production resolution is app.ConfigFromEnv for the host's
-// own keys, and the assembly's declared-key resolution for the six materials
-// the second return carries.
+// legacyConfigFromEnv is the direct-read reference implementation this
+// file's oracle is built on: the os.Getenv reads with the per-variable
+// rules the bootstrap fields' doc comments carry (an empty string reads as
+// unset for every string-valued variable; the two bools and the two ints go
+// through strconv, so an emptied one is their zero value; the six key
+// materials resolve through the same three-tier precedence; the S3, SMTP,
+// object-store and Fly-client-IP combinations refuse the boot with the same
+// rule). It exists only as this file's oracle: production resolution is
+// app.ConfigFromEnv for the host's own keys, and the assembly's
+// declared-key resolution for the six materials the second return carries.
 func legacyConfigFromEnv() (app.ServerConfig, map[string][]byte, error) {
 	deploymentModeStr := os.Getenv("APP_DEPLOYMENT_MODE")
 	if deploymentModeStr == "" {
@@ -526,13 +526,12 @@ func TestConfigFromEnv_MatchesThePreLoaderResolution(t *testing.T) {
 	}
 }
 
-// TestConfigFromEnv_EmptyTypedVariable_RefusesTheLoad pins the migration's one
-// deliberate behaviour change, which the case set above cannot express as an
-// equivalence: the four variables whose fields are an int or a bool are refused
-// when explicitly emptied, where the direct reads used to treat "" as unset.
-// The refusal is the loader's own -- a field with no representation for an
-// empty value -- and it is what keeps an unset shell variable behind an empty
-// value from silently booting on a zero.
+// TestConfigFromEnv_EmptyTypedVariable_RefusesTheLoad pins the one case the
+// equivalence set above cannot express: the four variables whose fields are
+// an int or a bool are refused when explicitly emptied, where the direct-read
+// oracle treats "" as unset. The refusal is the loader's own -- a field with
+// no representation for an empty value -- and it is what keeps an unset shell
+// variable behind an empty value from silently booting on a zero.
 func TestConfigFromEnv_EmptyTypedVariable_RefusesTheLoad(t *testing.T) {
 	for _, name := range []string{
 		"APP_S3_USE_SSL",
@@ -550,8 +549,8 @@ func TestConfigFromEnv_EmptyTypedVariable_RefusesTheLoad(t *testing.T) {
 				t.Errorf("refusal does not name %s: %v", name, err)
 			}
 
-			// The pre-loader direct read accepted the same injection and read
-			// it as unset -- the behaviour this pin deliberately retires.
+			// The direct-read oracle accepts the same injection and reads it
+			// as unset -- the divergence this pin records.
 			if _, _, err := legacyConfigFromEnv(); err != nil {
 				t.Fatalf("oracle no longer accepts the emptied %s, so this pin no longer records a behaviour change: %v", name, err)
 			}
