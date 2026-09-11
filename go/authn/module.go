@@ -846,22 +846,18 @@ func (m *Module) Service() *Service { return m.svc }
 // registry; nothing here opens a connection, sends a request or touches the
 // database. Note also that reg.Locales() is deliberately not consulted: the
 // merged catalog is installed only after every module has registered, so it
-// is nil at this point by design.
+// is nil at this point by design. The module's own system purpose -- the
+// sign-in tenant enumeration -- is descriptor data, not a declaration made
+// here: the component descriptor (component.go) carries it as
+// SystemPurposes, and the assembly registers it when its Init stage closes
+// (the transition bridge registers it inside the module's own registration
+// turn on the module path).
 func (m *Module) Register(reg pkgcore.Registrar) error {
 	svc, err := NewService(m.db, reg.EventBus(), reg.KVStore(), m.opts...)
 	if err != nil {
 		return err
 	}
 	m.svc = svc
-
-	// The one system context this module takes -- the sign-in tenant
-	// enumeration -- names this purpose, so it must be registered before
-	// the first no-tenant sign-in reaches resolveTenant. Registering it
-	// here, in the module's own registration, is the convention every
-	// module follows for its own purposes (pkgcore.RegisterSystemPurpose
-	// is idempotent); a Service built directly through NewService relies
-	// on its embedder doing the same.
-	pkgcore.RegisterSystemPurpose(SystemPurposeSignInTenantEnumeration)
 
 	if err := reg.AuditActionsSeat().Add(auditActions...); err != nil {
 		return err
@@ -953,6 +949,13 @@ func featureFlags() []pkgcore.FeatureFlag {
 	}
 }
 
+// The two declared key paths, named once so the declarations and every
+// material read (component.go) cannot drift apart.
+const (
+	piiCipherKeyPath  = "authn.pii_cipher_key"
+	blindIndexKeyPath = "authn.blind_index_key"
+)
+
 // bootstrapKeyDecls is the process-start key material this module consumes,
 // declared as the authn component's BootstrapKeys (component.go).
 //
@@ -967,7 +970,7 @@ func featureFlags() []pkgcore.FeatureFlag {
 // it from a durable secret store rather than one that regenerates it.
 var bootstrapKeyDecls = []pkgcore.BootstrapKey{
 	{
-		Key:         "authn.pii_cipher_key",
+		Key:         piiCipherKeyPath,
 		Format:      "hexkey",
 		Default:     "documented non-secret development default",
 		Sensitive:   true,
@@ -975,7 +978,7 @@ var bootstrapKeyDecls = []pkgcore.BootstrapKey{
 		Group:       moduleName,
 	},
 	{
-		Key:         "authn.blind_index_key",
+		Key:         blindIndexKeyPath,
 		Format:      "hexkey",
 		Default:     "documented non-secret development default",
 		Sensitive:   true,

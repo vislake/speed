@@ -1,50 +1,18 @@
 package authn
 
 import (
+	"bytes"
 	"context"
-	"errors"
 	"io"
+	"slices"
 	"strings"
 	"testing"
-
-	"gorm.io/gorm"
 
 	"github.com/vislake/speed/go/pkgcore"
 	"github.com/vislake/speed/go/pkgcore/componenttest"
 
 	"github.com/vislake/speed/go/authn/internal/testutil"
 )
-
-// testDBComponent is a stand-in for the database component a real assembly
-// selects: it declares the *gorm.DB product and constructs the test's
-// migrated handle, so the descriptor's declared database dependency resolves
-// exactly as it will against the real db component.
-func testDBComponent(db *gorm.DB) pkgcore.Component {
-	return pkgcore.Component{
-		Name:     "test.db",
-		Module:   "test",
-		Provides: []any{(*gorm.DB)(nil)},
-		New: func(context.Context, *pkgcore.ComponentRegistry, pkgcore.ComponentConfig) (any, error) {
-			return db, nil
-		},
-	}
-}
-
-// testKeySourceComponent is a stand-in for the signing-key lifecycle a real
-// assembly selects: the structural KeySource testutil's fake implements, so
-// the required token resolves without this package ever importing the module
-// that satisfies it in production.
-func testKeySourceComponent(t testing.TB) pkgcore.Component {
-	source := testutil.NewKeySource(t, "component-test")
-	return pkgcore.Component{
-		Name:     "test.keysource",
-		Module:   "test",
-		Provides: []any{(*KeySource)(nil)},
-		New: func(context.Context, *pkgcore.ComponentRegistry, pkgcore.ComponentConfig) (any, error) {
-			return source, nil
-		},
-	}
-}
 
 // TestComponentWellFormed pins the descriptor's contract: the naming
 // convention, the relation between the component name and the module it
@@ -54,42 +22,69 @@ func TestComponentWellFormed(t *testing.T) {
 	componenttest.AssertWellFormed(t, component())
 }
 
-// TestComponentConstructionAwaitsKeyMaterial pins the deliberate deferral:
-// every declared dependency resolves, the configuration decodes, and the
-// construction still fails naming the bootstrap key whose material nothing
-// in the assembly publishes yet -- the failure a host sees is the missing
-// piece, never a silently keyless module.
-func TestComponentConstructionAwaitsKeyMaterial(t *testing.T) {
-	ctx := context.Background()
+// TestComponent_InitDeclaresThroughTheGate drives the descriptor through a
+// real assembly: Prepare registers the PII serializer over the declared
+// cipher-key material, New reads the declared blind-index key, and Init --
+// the one stage whose seats accept writes -- runs the module's Register, so
+// every declaration lands in the assembly's own seats and the assembly's
+// Init-closing beat registers the module's system purpose.
+func TestComponent_InitDeclaresThroughTheGate(t *testing.T) {
+	db := testutil.NewDB(t)
 	reg := pkgcore.NewComponentRegistry()
-	if err := reg.Register(testDBComponent(testutil.NewDB(t))); err != nil {
-		t.Fatalf("registering the database stand-in: %v", err)
+	reg.Put(testBootstrapMaterial(t))
+	bus := pkgcore.NewMemoryEventBus()
+	kv := pkgcore.NewMemoryKVStore()
+	if err := componenttest.RunInit(t, reg, component(), db, testutil.NewKeySource(t, "component-test"), bus, kv); err != nil {
+		t.Fatalf("RunInit: %v", err)
 	}
-	if err := reg.Register(testKeySourceComponent(t)); err != nil {
-		t.Fatalf("registering the key-source stand-in: %v", err)
+	m, err := pkgcore.Get[*Module](reg)
+	if err != nil {
+		t.Fatalf("the assembly's product: %v", err)
 	}
-	reg.Put(pkgcore.NewComponentConfig(map[string]any{
-		"deployment": "standalone",
-		"components": map[string]any{
-			"authn":          map[string]any{},
-			"test.db":        nil,
-			"test.keysource": nil,
-		},
-	}))
+	if m.Service() == nil {
+		t.Fatal("Register did not build the module's service")
+	}
+	if !slices.Contains(reg.Permissions.Permissions(), PermissionSSOManage) {
+		t.Errorf("Permissions seat = %v, want the SSO permission", reg.Permissions.Permissions())
+	}
+	if actions := reg.AuditActions.Actions(); len(actions) == 0 {
+		t.Error("AuditActions seat is empty, want the module's audit vocabulary")
+	}
+	var keys []string
+	for _, item := range reg.Config.Items() {
+		keys = append(keys, item.Key)
+	}
+	if !slices.Contains(keys, ConfigKeyPasswordMinLength) || !slices.Contains(keys, ConfigKeyGoogleClientID) {
+		t.Errorf("Config seat = %v, want the module's configuration items", keys)
+	}
+	var flags []string
+	for _, flag := range reg.Features.Flags() {
+		flags = append(flags, flag.Key)
+	}
+	if !slices.Contains(flags, FeatureFlagPasswordLogin) {
+		t.Errorf("Features seat = %v, want the password-login flag", flags)
+	}
+	if routes := reg.Routes.Routes(); len(routes) != 1 || routes[0].Path != apiPath {
+		t.Fatalf("Init mounted %v, want exactly the %s mount", routes, apiPath)
+	}
 
-	if err := reg.Prepare(ctx); err != nil {
-		t.Fatalf("prepare: %v", err)
+	// The assembly's Init-closing beat registered the module's declared
+	// system purpose.
+	for _, purpose := range component().SystemPurposes {
+		if _, err := pkgcore.WithSystemContext(context.Background(), pkgcore.SystemReason{Actor: "test", Purpose: purpose}); err != nil {
+			t.Errorf("WithSystemContext(%q) = %v, want the purpose registered by the assembly", purpose, err)
+		}
 	}
-	err := reg.Construct(ctx)
-	if err == nil {
-		t.Fatal("construct succeeded, want the key-material deferral")
-	}
-	if !errors.Is(err, pkgcore.ErrComponentFailed) {
-		t.Fatalf("construct error %v does not carry ErrComponentFailed", err)
-	}
-	if !strings.Contains(err.Error(), "blind-index key") {
-		t.Fatalf("construct error %v does not name the missing key material", err)
-	}
+}
+
+// testBootstrapMaterial is the module's own declared key material, the
+// shape the loader resolves and publishes before anything is constructed.
+func testBootstrapMaterial(t *testing.T) *pkgcore.BootstrapMaterial {
+	t.Helper()
+	return pkgcore.NewBootstrapMaterial([]pkgcore.BootstrapMaterialEntry{
+		{KeyPath: piiCipherKeyPath, Value: bytes.Repeat([]byte{0x11}, 32)},
+		{KeyPath: blindIndexKeyPath, Value: bytes.Repeat([]byte{0x22}, 32)},
+	})
 }
 
 // TestComponentConstructionCoversTheOptionSurface drives New over the whole
@@ -117,22 +112,27 @@ func TestComponentConstructionCoversTheOptionSurface(t *testing.T) {
 		},
 	})
 
-	// wired returns a registry carrying the database and key-source values
-	// the construction reads, the shape the assembly's products provide.
+	// wired returns a registry carrying the database, key-source and
+	// key-material values the construction reads, the shape the assembly's
+	// products and the loader's material source provide.
 	wired := func(t *testing.T) *pkgcore.ComponentRegistry {
 		t.Helper()
 		reg := pkgcore.NewComponentRegistry()
 		reg.Put(testutil.NewDB(t))
 		reg.Put(testutil.NewKeySource(t, "component-test"))
+		reg.Put(testBootstrapMaterial(t))
 		return reg
 	}
 
-	t.Run("full configuration reaches the key-material deferral", func(t *testing.T) {
+	t.Run("full configuration constructs the module", func(t *testing.T) {
 		reg := wired(t)
 		reg.Put(pkgcore.NewConsoleSMSSender(io.Discard))
-		_, err := component().New(ctx, reg, full)
-		if err == nil || !strings.Contains(err.Error(), "blind-index key") {
-			t.Fatalf("construction error = %v, want the key-material deferral", err)
+		m, err := component().New(ctx, reg, full)
+		if err != nil {
+			t.Fatalf("construction error = %v, want a fully wired module", err)
+		}
+		if m.(*Module).Service() != nil {
+			t.Error("construction built the service; the service belongs to Register")
 		}
 	})
 
@@ -155,9 +155,31 @@ func TestComponentConstructionCoversTheOptionSurface(t *testing.T) {
 	t.Run("missing key source", func(t *testing.T) {
 		reg := pkgcore.NewComponentRegistry()
 		reg.Put(testutil.NewDB(t))
+		reg.Put(testBootstrapMaterial(t))
 		_, err := component().New(ctx, reg, pkgcore.NewComponentConfig(nil))
 		if err == nil {
 			t.Fatal("construction proceeded without a key source")
+		}
+	})
+
+	t.Run("no material source", func(t *testing.T) {
+		reg := pkgcore.NewComponentRegistry()
+		reg.Put(testutil.NewDB(t))
+		reg.Put(testutil.NewKeySource(t, "component-test"))
+		_, err := component().New(ctx, reg, pkgcore.NewComponentConfig(nil))
+		if err == nil || !strings.Contains(err.Error(), "bootstrap material") {
+			t.Fatalf("construction error = %v, want the missing-material-source refusal", err)
+		}
+	})
+
+	t.Run("material source without the declared key", func(t *testing.T) {
+		reg := pkgcore.NewComponentRegistry()
+		reg.Put(testutil.NewDB(t))
+		reg.Put(testutil.NewKeySource(t, "component-test"))
+		reg.Put(pkgcore.NewBootstrapMaterial(nil))
+		_, err := component().New(ctx, reg, pkgcore.NewComponentConfig(nil))
+		if err == nil || !strings.Contains(err.Error(), blindIndexKeyPath) {
+			t.Fatalf("construction error = %v, want the refusal naming %q", err, blindIndexKeyPath)
 		}
 	})
 

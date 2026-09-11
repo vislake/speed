@@ -2,22 +2,18 @@ package authn
 
 // component.go carries authn's descriptor for the config-driven component
 // assembly: the selection key a composition configuration names, the assets
-// the module brings, the contracts it consumes, and the callback that
-// constructs it. The descriptor is additive: pkgcore.Module.Register, driven
-// by the host's bootstrap, remains authn's declaration path, and the
-// descriptor states the same surface in the assembly's terms.
+// the module brings, the contracts it consumes, and the callbacks that
+// prepare, construct and declare it.
 //
-// The descriptor declares no Prepare callback, and New cannot complete. Both
-// are the same missing piece: the process-start key material authn declares
-// as this descriptor's BootstrapKeys (bootstrapKeyDecls). Prepare would build the PII
-// cipher from the authn.pii_cipher_key material and register the serializer;
-// New needs the blind-index key, which newOptions refuses to construct
-// without. The by-purpose material source that hands a component its own
-// declared material is not part of the assembly yet, and building either
-// value from anything else here would state a different contract than the
-// declaration does. The host wiring (authn.RegisterPIISerializer and
-// authn.WithBlindIndexKey over the material it resolves) is the path that
-// supplies both today.
+// Both process-start keys the module declares (bootstrapKeyDecls) come from
+// the assembly's own material source. Prepare builds the PII cipher from the
+// authn.pii_cipher_key material and registers the serializer there -- the
+// registration must precede the connection that parses the module's models,
+// which is why it is a Prepare callback and not part of New. New reads the
+// authn.blind_index_key material to build the blind indexers its service
+// refuses to run without. The module's one declaration entry point, Register,
+// runs as the descriptor's Init callback: inside the assembly's Init stage,
+// the one stage whose seats accept writes.
 
 import (
 	"context"
@@ -27,6 +23,7 @@ import (
 
 	"gorm.io/gorm"
 
+	"github.com/vislake/speed/go/dbkit"
 	"github.com/vislake/speed/go/pkgcore"
 
 	"github.com/vislake/speed/go/authn/locales"
@@ -67,7 +64,9 @@ type passwordParamsConfig struct {
 // component returns authn's component descriptor: the value init registers,
 // so a composition configuration can select the module and the assembly can
 // construct it from the database and signing-key products in the by-type
-// context.
+// context. Its Prepare registers the PII serializer over the declared cipher
+// key material, its New reads the declared blind-index key, and its Init
+// runs the module's one declaration entry point, Register.
 func component() pkgcore.Component {
 	return pkgcore.Component{
 		Name:   moduleName,
@@ -100,6 +99,28 @@ func component() pkgcore.Component {
 		Migrations:     migrations.FS,
 		Locales:        locales.FS,
 		OpenAPISpec:    openAPISpecYAML,
+		// Prepare builds and registers the PII serializer: GORM resolves a
+		// named serializer while it parses a model's schema, so the
+		// registration must land before the connection that parses this
+		// module's models opens -- which is the Construct stage, after every
+		// Prepare callback. The cipher is built from the material this
+		// descriptor declared (bootstrapKeyDecls), never from a second
+		// source.
+		Prepare: func(_ context.Context, reg *pkgcore.ComponentRegistry) error {
+			material, err := pkgcore.BootstrapMaterialOf(reg)
+			if err != nil {
+				return err
+			}
+			cipherKey, ok := material.Material(piiCipherKeyPath)
+			if !ok {
+				return fmt.Errorf("authn: the assembly resolved no material for the declared bootstrap key %q", piiCipherKeyPath)
+			}
+			cipher, err := dbkit.NewCipher(cipherKey)
+			if err != nil {
+				return fmt.Errorf("authn: build the PII cipher from %q: %w", piiCipherKeyPath, err)
+			}
+			return RegisterPIISerializer(cipher)
+		},
 		New: func(_ context.Context, reg *pkgcore.ComponentRegistry, cfg pkgcore.ComponentConfig) (any, error) {
 			var c componentConfig
 			if err := cfg.Decode(&c); err != nil {
@@ -114,6 +135,19 @@ func component() pkgcore.Component {
 				return nil, err
 			}
 			opts := []Option{WithKeySource(keySource)}
+			// The blind-index key is the module's other declared key
+			// material: newOptions refuses a keyless module, so the
+			// descriptor reads it from the assembly's material source --
+			// the same source its Prepare built the PII cipher from.
+			material, err := pkgcore.BootstrapMaterialOf(reg)
+			if err != nil {
+				return nil, err
+			}
+			blindIndexKey, ok := material.Material(blindIndexKeyPath)
+			if !ok {
+				return nil, fmt.Errorf("authn: the assembly resolved no material for the declared bootstrap key %q", blindIndexKeyPath)
+			}
+			opts = append(opts, WithBlindIndexKey(blindIndexKey))
 			switch c.RevocationMode {
 			case "":
 			case string(RevocationModeNatural):
@@ -159,15 +193,14 @@ func component() pkgcore.Component {
 			} else if !errors.Is(err, pkgcore.ErrMissingRequirement) {
 				return nil, err
 			}
-			// The blind-index key is the one construction input this
-			// descriptor cannot obtain: it is process-start key material
-			// (bootstrapKeyDecls), and nothing in the assembly publishes key
-			// material yet. The module's own construction refuses the
-			// keyless wiring (newOptions), so the refusal below is the
-			// deferral made loud rather than a silently keyless module; the
-			// host wiring (authn.WithBlindIndexKey over its own
-			// configuration) is the path that supplies the key today.
 			return NewModule(db, opts...)
+		},
+		Init: func(_ context.Context, reg *pkgcore.ComponentRegistry, instance any) error {
+			m, ok := instance.(*Module)
+			if !ok {
+				return fmt.Errorf("authn: component init got a %T instance, want *authn.Module", instance)
+			}
+			return m.Register(reg)
 		},
 	}
 }
