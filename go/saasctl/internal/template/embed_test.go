@@ -221,48 +221,74 @@ func TestSelectionGoModsCarryTokens(t *testing.T) {
 	}
 }
 
+// moduleRowNames is the set of module components a selection's composition
+// may select under a host override or copy. The composition's non-module
+// rows (the host's providers, the database and observability copies, the
+// assembly steps) share the hostComponentPrefix spelling and are filtered
+// out by name.
+var moduleRowNames = map[string]bool{
+	"pki": true, "signer.local": true, "authn": true,
+	"org": true, "config": true, "rbac": true,
+}
+
+// selectionRowPattern matches one `With(hostComponentPrefix+"<name>", nil)`
+// row of a selection's composition: the selection of a host component under
+// its host-specific name.
+var selectionRowPattern = regexp.MustCompile(`With\(hostComponentPrefix\+"([a-z0-9.\-]+)", nil\)`)
+
 // TestSelectionServerGoMatchesSelectionKey cross-checks each selection's
-// server.go against its own key: the module constructors it calls, the
-// middleware pieces it composes and the module list's order (the order the
-// engine applies migrations and bootstraps in) are the selection's whole
-// meaning (A5), so a template edit that lets the file and its directory
-// drift apart fails here even though the file itself -- build-ignored --
-// would never fail a compile.
+// server.go against its own key: the module components its composition
+// selects (in the order their rows are written, the plan's tie-break order,
+// which is also the order their migrations apply in), the module
+// constructors it calls and the middleware pieces it composes are the
+// selection's whole meaning (A5), so a template edit that lets the file and
+// its directory drift apart fails here even though the file itself --
+// build-ignored -- would never fail a compile.
 func TestSelectionServerGoMatchesSelectionKey(t *testing.T) {
 	expected := []struct {
 		key              string
-		modules          []string // the WithModules callback's return order
+		modules          []string // the module rows the composition selects, in order
 		contains, absent []string
 	}{
 		{
-			key:      "authn+org+rbac",
-			modules:  []string{"b.pkiModule", "b.authnModule", "b.orgModule", "b.configModule", "b.rbacModule"},
-			contains: []string{"authn.NewModule(", "org.NewModule(", "rbac.NewModule(", "pki.NewModule(", "speedchain.Standard(", "authnModule.Service().Verifier(),"},
+			key:     "authn+org+rbac",
+			modules: []string{"pki", "signer.local", "authn", "org", "config", "rbac"},
+			contains: []string{
+				"authn.NewModule(", "org.NewModule(", "pkgcore.NewComponentRegistry()",
+				"speedchain.Standard(", "authnModule.Service().Verifier(),",
+				"speedchain.WithAuthorization(b.rbacService, routeRules())",
+			},
 		},
 		{
-			key:      "authn+rbac",
-			modules:  []string{"b.pkiModule", "b.authnModule", "b.configModule", "b.rbacModule"},
-			contains: []string{"authn.NewModule(", "rbac.NewModule(", "pki.NewModule(", "speedchain.Standard(", "authnModule.Service().Verifier(),"},
-			absent:   []string{"org.NewModule("},
+			key:     "authn+rbac",
+			modules: []string{"pki", "signer.local", "authn", "config", "rbac"},
+			contains: []string{
+				"authn.NewModule(", "speedchain.Standard(", "authnModule.Service().Verifier(),",
+				"speedchain.WithAuthorization(b.rbacService, routeRules())",
+			},
+			absent: []string{"org.NewModule("},
 		},
 		{
 			key:      "authn+org",
-			modules:  []string{"b.pkiModule", "b.authnModule", "b.orgModule", "b.configModule"},
-			contains: []string{"authn.NewModule(", "org.NewModule(", "pki.NewModule(", "speedchain.Standard(", "authnModule.Service().Verifier(),"},
-			absent:   []string{"rbac.NewModule("},
+			modules:  []string{"pki", "signer.local", "authn", "org", "config"},
+			contains: []string{"authn.NewModule(", "org.NewModule(", "speedchain.Standard(", "authnModule.Service().Verifier(),"},
+			absent:   []string{"rbac.NewModule(", "rbac.GuardRoutes"},
 		},
 		{
 			key:      "authn",
-			modules:  []string{"b.pkiModule", "b.authnModule", "b.configModule"},
-			contains: []string{"authn.NewModule(", "pki.NewModule(", "speedchain.Standard(", "authnModule.Service().Verifier(),"},
+			modules:  []string{"pki", "signer.local", "authn", "config"},
+			contains: []string{"authn.NewModule(", "speedchain.Standard(", "authnModule.Service().Verifier(),"},
 			absent:   []string{"org.NewModule(", "rbac.NewModule("},
 		},
 		{
-			key:      "none",
-			modules:  []string{"b.configModule"},
-			contains: []string{"config.NewModule("},
+			key:     "none",
+			modules: []string{"config"},
+			contains: []string{
+				`With("config", false).`, `With(hostComponentPrefix+"config", nil).`,
+				"pkgcore.MountRoutes(",
+			},
 			absent: []string{
-				"authn.NewModule(", "org.NewModule(", "rbac.NewModule(",
+				"authn.NewModule(", "org.NewModule(", "rbac.NewModule(", "pki.NewModule(",
 				"authn.Middleware(", "tenancy.Middleware(", "authn.NewPrincipalResolver()",
 				"authnAPIPath", "authnPreAuthAllowlist", "RegisterPIISerializer", "devSigningKeySeed",
 				"speedchain.Chain(", "speedchain.Standard(",
@@ -277,14 +303,20 @@ func TestSelectionServerGoMatchesSelectionKey(t *testing.T) {
 			continue
 		}
 		server := string(content)
-		// The module set, in the order the WithModules callback returns it,
-		// is the composition's skeleton; assert the exact order as one line
-		// so a reordering that changes registration semantics cannot pass
-		// silently (the engine applies migrations and bootstraps in exactly
-		// that order).
-		migrationList := "[]pkgcore.Module{" + strings.Join(want.modules, ", ") + "}"
-		if !strings.Contains(server, migrationList) {
-			t.Errorf("%s: missing module list %q", path, migrationList)
+		// The module rows, in the order the composition writes them, are the
+		// composition's skeleton; assert the exact sequence so a reordering
+		// that changes registration semantics cannot pass silently (the plan
+		// breaks tied components by that order, which is also the order their
+		// migrations apply in).
+		var got []string
+		for _, m := range selectionRowPattern.FindAllStringSubmatch(server, -1) {
+			if moduleRowNames[m[1]] {
+				got = append(got, m[1])
+			}
+		}
+		if strings.Join(got, ",") != strings.Join(want.modules, ",") {
+			t.Errorf("%s: module selection rows are [%s], want [%s]",
+				path, strings.Join(got, ", "), strings.Join(want.modules, ", "))
 		}
 		for _, s := range want.contains {
 			if !strings.Contains(server, s) {
@@ -492,28 +524,31 @@ func firstLine(s string) string {
 	return s
 }
 
-// TestAuthnSelectionsConsumeTheThreeKeyMaterialsFromServerConfig pins the
-// server side of the key-material contract: every authn-wiring selection's
-// server.go must read the blind-index key, the PII cipher key and the pki
-// local-key cipher key from the assembly's published bootstrap material --
-// the declared paths the composed module components carry, resolved from
-// APP_AUTHN__BLIND_INDEX_KEY / APP_AUTHN__PII_CIPHER_KEY /
-// APP_PKI__LOCAL_KEY_CIPHER_KEY's derived spellings with the dev table as
-// the fallback -- never from bare dev constants used unconditionally: an
-// operator who sets all the APP_* key variables must not still be running
-// on committed public key bytes. No selection may carry the
-// harm-amplifying claim that such a constant is "the same documented
-// trade-off as config.go's devConfigKey" (false: devConfigKey is a
-// fallback behind an env override, a bare constant has no override at
-// all). The "none" selection wires no authn, so it must carry none of the
-// three usages. The config.go half of the contract (the env declarations,
-// the parse blocks and the dev table) is pinned by appconfig's own twin
-// tests, which re-read that file.
-func TestAuthnSelectionsConsumeTheThreeKeyMaterialsFromServerConfig(t *testing.T) {
+// TestAuthnSelectionsConsumeTheDeclaredKeyMaterials pins the server side of
+// the key-material contract: every authn-wiring selection's server.go must
+// read the material its own wiring needs -- the blind-index key (authn's
+// override) and the pki local-key cipher key (the crypto component's
+// Prepare) -- from the assembly's published bootstrap material, by the
+// declared key paths the composed module components carry (resolved from
+// the derived APP_AUTHN__BLIND_INDEX_KEY / APP_PKI__LOCAL_KEY_CIPHER_KEY
+// spellings with the dev table as the fallback), never from bare dev
+// constants used unconditionally: an operator who sets all the APP_* key
+// variables must not still be running on committed public key bytes.
+// authn's PII cipher key needs no read here: the module's own component
+// performs that registration in its own Prepare callback, from its own
+// declaration. No selection may carry the harm-amplifying claim that such a
+// constant is "the same documented trade-off as config.go's devConfigKey"
+// (false: devConfigKey is a fallback behind an env override, a bare
+// constant has no override at all). The "none" selection wires no authn, so
+// it must carry none of the usages. The config.go half of the contract (the
+// env declarations, the parse blocks and the dev table) is pinned by
+// appconfig's own twin tests, which re-read that file.
+func TestAuthnSelectionsConsumeTheDeclaredKeyMaterials(t *testing.T) {
 	authnKeys := []string{
-		`declaredKeyMaterial(deps.Material, "authn.pii_cipher_key")`,
-		`declaredKeyMaterial(deps.Material, "pki.local_key_cipher_key")`,
-		`declaredKeyMaterial(deps.Material, "authn.blind_index_key")`,
+		`authnBlindIndexKeyPath = "authn.blind_index_key"`,
+		`pkiLocalKeyCipherKeyPath = "pki.local_key_cipher_key"`,
+		"declaredMaterial(reg, authnBlindIndexKeyPath)",
+		"declaredMaterial(reg, pkiLocalKeyCipherKeyPath)",
 	}
 	banished := []string{
 		"dbkit.NewCipher(devPIICipherKey)",
@@ -538,7 +573,7 @@ func TestAuthnSelectionsConsumeTheThreeKeyMaterialsFromServerConfig(t *testing.T
 		}
 		for _, want := range authnKeys {
 			if !strings.Contains(src, want) {
-				t.Errorf("%s does not consume key material through %s; the skeleton must use the cfg-resolved key (env override with dev fallback), never a bare dev constant", key, want)
+				t.Errorf("%s does not consume key material through %s; the skeleton must use the assembly-resolved key (env override with dev fallback), never a bare dev constant", key, want)
 			}
 		}
 		for _, banned := range banished {
@@ -551,21 +586,23 @@ func TestAuthnSelectionsConsumeTheThreeKeyMaterialsFromServerConfig(t *testing.T
 
 // TestOrgSelectionsBuildTheInvitationIndexerOverEmailIndexColumn pins how
 // every org-wiring selection binds org's encrypted invitation column: the
-// serializer through org's own registrar and the indexer through org's own
-// constructor, so neither the GORM serializer name nor the index column
-// crosses the wiring as a hand-typed string (org's own doc comments give
-// the reason: dbkit refuses an EMPTY column name but has no guard for a
-// non-empty wrong one, so the exact SQL name must stay owned by the package
-// that pins it to the schema). The template source itself is what gets
-// pinned here: these build-ignored files never compile in this repository,
-// so a selection that drifted back to constructing the indexer by hand
-// would ship into every consumer project `saasctl new` materializes before
-// anything anywhere failed. The selections that wire no org module must
-// mention neither call.
+// serializer through org's own registrar, and the indexer -- built in the
+// host's org override from the declared material, the same construction the
+// module's own component performs -- through org's own constructor, so
+// neither the GORM serializer name nor the index column crosses the wiring
+// as a hand-typed string (org's own doc comments give the reason: dbkit
+// refuses an EMPTY column name but has no guard for a non-empty wrong one,
+// so the exact SQL name must stay owned by the package that pins it to the
+// schema). The template source itself is what gets pinned here: these
+// build-ignored files never compile in this repository, so a selection that
+// drifted back to constructing the indexer by hand would ship into every
+// consumer project `saasctl new` materializes before anything anywhere
+// failed. The selections that wire no org module must mention neither call.
 func TestOrgSelectionsBuildTheInvitationIndexerOverEmailIndexColumn(t *testing.T) {
-	const wantRegistrar = "org.RegisterEmailSerializer(deps.Cipher)"
-	const wantMaterialRead = `declaredKeyMaterial(deps.Material, "org.invitation_email_index_key")`
-	const wantConstructor = "org.NewEmailIndexer(orgIndexKey)"
+	const wantRegistrar = "org.RegisterEmailSerializer(cipher)"
+	const wantDeclaredPath = `orgInvitationIndexKeyPath = "org.invitation_email_index_key"`
+	const wantMaterialRead = "declaredMaterial(reg, orgInvitationIndexKeyPath)"
+	const wantConstructor = "org.NewEmailIndexer(indexKey)"
 	const stale = "dbkit.NewBlindIndexer("
 	for _, key := range validSelectionKeys {
 		path := ProjectRoot + "/selection/" + key + "/server.go"
@@ -576,7 +613,8 @@ func TestOrgSelectionsBuildTheInvitationIndexerOverEmailIndexColumn(t *testing.T
 		src := string(content)
 		switch key {
 		case "authn+org", "authn+org+rbac":
-			if !strings.Contains(src, wantRegistrar) || !strings.Contains(src, wantMaterialRead) || !strings.Contains(src, wantConstructor) {
+			if !strings.Contains(src, wantRegistrar) || !strings.Contains(src, wantDeclaredPath) ||
+				!strings.Contains(src, wantMaterialRead) || !strings.Contains(src, wantConstructor) {
 				t.Errorf("%s does not bind org's encrypted column through org's own registrar and indexer constructor over the declared material", key)
 			}
 			if strings.Contains(src, stale) {
