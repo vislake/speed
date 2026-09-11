@@ -1,15 +1,12 @@
 package app
 
 import (
-	"errors"
-	"fmt"
-
 	pkgconfig "github.com/vislake/speed/go/pkgcore/config"
 )
 
-// config.go carries the configuration stage's outward face: the spec naming
-// the host's own bootstrap target, the loader options the one load runs with,
-// and the named constructors for them.
+// config.go carries the configuration stage's outward face: the loader
+// options a load runs with, and the named constructors for them. The load
+// itself is the loader's (loader.go), driven by a host's LoadSpec.
 //
 // The bootstrap-key declarations of the composed modules need no counterpart
 // here. The engine's loader reads them off the registered components and
@@ -17,47 +14,10 @@ import (
 // component declares -- the platform key material included -- needs no field
 // on any host or engine struct: a declaration is resolved where it is made.
 
-// ConfigSpec names what the configuration stage loads: Host is the host's own
-// bootstrap target (any non-nil pointer to a struct), resolved through the
-// engine's own load orchestration -- the same options and the same sources
-// the declared bootstrap keys resolve on, so a host key and a declared key can
-// never resolve differently for one assembly.
-type ConfigSpec struct {
-	// Host is the host's bootstrap target: a non-nil pointer to the struct
-	// the loader fills with the host's own keys (its port, its database
-	// path, its switches). Required.
-	Host any
-}
-
 // ConfigOption customises the loader the configuration stage builds. It is an
 // alias of pkgcore/config's own Option, so a host may pass that package's
 // options directly as well as through the named constructors below.
 type ConfigOption = pkgconfig.Option
-
-// WithConfig declares the configuration the engine loads in stage 1 and the
-// loader options the load runs with, and is required: the host's own keys
-// resolve from it, and the declared bootstrap keys of the composed components
-// resolve on the same chain -- the same options, the same sources, one pass
-// each -- so the two halves cannot disagree.
-//
-// A host whose option values depend on the loaded configuration (the database
-// DSN, the listen address, the kernel's seam composition) resolves them with
-// its own loader pass before New and hands the same target over here: the load
-// this option drives re-resolves the identical sources into the same struct
-// and is idempotent, so the two passes cannot disagree, while the declared
-// keys' resolution and the published bootstrap material stay on the engine's
-// side.
-func WithConfig(spec ConfigSpec, opts ...ConfigOption) Option {
-	return func(c *engineConfig) {
-		s := spec
-		c.configSpec = &s
-		for _, opt := range opts {
-			if opt != nil {
-				c.configOptions = append(c.configOptions, opt)
-			}
-		}
-	}
-}
 
 // ConfigFile points the loader at a YAML (or JSON) configuration file. A
 // missing file is skipped silently; an unreadable or unparseable one fails
@@ -106,23 +66,4 @@ func ConfigKeyDerivation(fn func(rootKey []byte, keyPath string) ([]byte, error)
 // it.
 func ConfigDevDefaults(defaults map[string][]byte) ConfigOption {
 	return pkgconfig.WithDevDefaults(defaults)
-}
-
-// loadConfiguration is stage 1: the host's own bootstrap target, resolved
-// through one loader whose options the later passes reuse. The loader it
-// returns is the same chain the declared bootstrap keys resolve on -- the
-// assembly's own load and the transition prelude's both build it from the
-// same options -- so a host key and a declared key can never resolve
-// differently for one assembly.
-func loadConfiguration(cfg *engineConfig) (*pkgconfig.Loader, error) {
-	spec := cfg.configSpec
-	if spec.Host == nil {
-		return nil, errors.New("app: ConfigSpec.Host must be the host's non-nil configuration target")
-	}
-
-	loader := pkgconfig.New(cfg.configOptions...)
-	if err := loader.Load(spec.Host); err != nil {
-		return nil, fmt.Errorf("app: load the host configuration: %w", err)
-	}
-	return loader, nil
 }

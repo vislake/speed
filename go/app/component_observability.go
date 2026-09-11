@@ -28,9 +28,8 @@ func init() {
 	pkgcore.MustRegister(observabilityComponent())
 }
 
-// observabilityConfig is the component's configuration schema: the values
-// the engine's old ObservabilitySpec carried, resolved through the same
-// five-source chain as every other component's block.
+// observabilityConfig is the component's configuration schema, resolved
+// through the same five-source chain as every other component's block.
 type observabilityConfig struct {
 	// ServiceName becomes the service.name resource attribute. Empty leaves
 	// go/observability's own documented default.

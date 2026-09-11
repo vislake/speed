@@ -44,27 +44,3 @@ func TestPreAuthAllowlist_ExemptsBothMethodsOnEveryPlatformPath(t *testing.T) {
 		}
 	}
 }
-
-// staticRegistrar is a pkgcore.RouteRegistrar holding a fixed route set --
-// enough of one to drive RegisterMountedRoutes.
-type staticRegistrar struct{ routes []pkgcore.MountedRoute }
-
-func (s staticRegistrar) Mount(path string, handler http.Handler) {
-	_ = path
-	_ = handler
-}
-
-func (s staticRegistrar) Routes() []pkgcore.MountedRoute { return s.routes }
-
-// TestRegisterMountedRoutes_AcceptsARegistryWithMountedRoutes is a smoke
-// test of the seeding call's entry surface: it accepts a registry carrying
-// module routes without panicking. What the seed DOES -- reserving a
-// route-label slot consumed at obs.Middleware construction -- is pinned by
-// go/observability's own suite (TestMiddleware_RealRoutesSurviveGarbage_WhenSeeded),
-// which is the package that also owns the mechanism.
-func TestRegisterMountedRoutes_AcceptsARegistryWithMountedRoutes(t *testing.T) {
-	reg := &pkgcore.Registry{Routes: staticRegistrar{routes: []pkgcore.MountedRoute{
-		{Path: "/api/v1/notes", Handler: http.NewServeMux()},
-	}}}
-	RegisterMountedRoutes(reg)
-}

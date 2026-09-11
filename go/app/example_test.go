@@ -11,20 +11,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"net/http"
 	"net/http/httptest"
-	"os"
-	"path/filepath"
 
 	"github.com/vislake/speed/go/app"
-
-	// Blank-imported for its init side effect: registers dbkit.DialectSQLite,
-	// so this example's DatabaseSpec has a driver to build from. Which
-	// dialect packages a binary carries is the assembling application's
-	// decision, which is why the engine itself imports none.
-	"github.com/vislake/speed/go/dbkit"
-	_ "github.com/vislake/speed/go/dbkit/dialect/sqlite"
 	"github.com/vislake/speed/go/pkgcore"
 	"github.com/vislake/speed/go/tenancy"
 )
@@ -35,67 +25,6 @@ type exampleFailingResolver struct{}
 
 func (exampleFailingResolver) Resolve(*http.Request) (pkgcore.TenantID, error) {
 	return "", errors.New("example: no tenant resolvable")
-}
-
-// ExampleNew assembles a whole application from the engine's option list and
-// serves one request through the composed handler: the host's configuration
-// target, the database to open and migrate, and one hand-written route
-// mounted beside the module routes. A host that wants the engine to listen
-// and drain as well calls Run with the same options and a WithHTTP address.
-func ExampleNew() {
-	dir, err := os.MkdirTemp("", "app-example")
-	if err != nil {
-		fmt.Println("temp dir:", err)
-		return
-	}
-	defer func() { _ = os.RemoveAll(dir) }()
-
-	// The host's configuration target: the host's own keys, one field per
-	// variable. The bootstrap keys of the components this binary carries are
-	// declared on the components themselves -- a declaration needs no host
-	// field -- and resolve on the same loader chain.
-	type hostConfig struct {
-		Port string `config:"env=EXAMPLE_PORT"`
-	}
-	host := hostConfig{Port: "8080"}
-
-	a, err := app.New(context.Background(),
-		app.WithConfig(
-			app.ConfigSpec{Host: &host},
-			app.ConfigArgs([]string{}),
-			// The declared defaults table stands in for a component key no
-			// source supplies: here the config component's declared
-			// config.cipher_key, which the engine's infrastructure step
-			// builds its platform cipher from. A real deployment supplies it
-			// from its environment, a config file or the root-key derivation
-			// instead.
-			app.ConfigDevDefaults(map[string][]byte{
-				"config.cipher_key": make([]byte, 32),
-			}),
-		),
-		app.WithDatabase(app.DatabaseSpec{
-			Dialect: dbkit.DialectSQLite,
-			DSN:     filepath.Join(dir, "example.db"),
-		}),
-		app.WithHTTP(app.HTTPSpec{ExtraRoutes: []pkgcore.MountedRoute{{
-			Path: "/api/v1/version",
-			Handler: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-				_, _ = io.WriteString(w, "v1")
-			}),
-		}}}),
-	)
-	if err != nil {
-		fmt.Println("assemble:", err)
-		return
-	}
-	defer func() { _ = a.Close(context.Background()) }()
-
-	rec := httptest.NewRecorder()
-	a.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/v1/version", nil))
-	fmt.Printf("GET /api/v1/version: %d %s\n", rec.Code, rec.Body.String())
-
-	// Output:
-	// GET /api/v1/version: 200 v1
 }
 
 // ExampleAssemble drives one component assembly through the seven stages:

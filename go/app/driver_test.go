@@ -27,7 +27,7 @@ func stageRecorderComponent(name string, log *[]string) pkgcore.Component {
 		},
 		New: func(context.Context, *pkgcore.ComponentRegistry, pkgcore.ComponentConfig) (any, error) {
 			record("new")
-			return &transitionMarker{name: name}, nil
+			return &testMarker{name: name}, nil
 		},
 		Verify: func(context.Context, *pkgcore.ComponentRegistry, any) error {
 			record("verify")
@@ -207,6 +207,66 @@ func TestRunAssembly_WaitsForCancellationAndShutsDown(t *testing.T) {
 		}
 	case <-time.After(ShutdownTimeout + 10*time.Second):
 		t.Fatal("RunAssembly did not return after its context was cancelled")
+	}
+}
+
+// TestAssemble_PropagatesAFailureFromEveryStage pins the driver's failure
+// propagation for the stages between Construct and Init: each refusal comes
+// back as-is, after the registry's own rollback ran.
+func TestAssemble_PropagatesAFailureFromEveryStage(t *testing.T) {
+	for _, stage := range []string{"construct", "verify", "init"} {
+		t.Run(stage, func(t *testing.T) {
+			var host testHostConfig
+			spec := driverLoadSpec(t, &host)
+			var log []string
+			failing := stageRecorderComponent("failing", &log)
+			switch stage {
+			case "construct":
+				failing.New = func(context.Context, *pkgcore.ComponentRegistry, pkgcore.ComponentConfig) (any, error) {
+					return nil, errStageRefused
+				}
+			case "verify":
+				failing.Verify = func(context.Context, *pkgcore.ComponentRegistry, any) error { return errStageRefused }
+			case "init":
+				failing.Init = func(context.Context, *pkgcore.ComponentRegistry, any) error { return errStageRefused }
+			}
+
+			reg := pkgcore.NewComponentRegistry()
+			if err := reg.Register(failing); err != nil {
+				t.Fatalf("register: %v", err)
+			}
+			reg.Put(CompositionOverrides{Config: pkgcore.ComponentConfig{}.With("components",
+				pkgcore.ComponentConfig{}.With("failing", nil).With("observability", false))})
+
+			err := Assemble(context.Background(), reg, spec)
+			if err == nil || !strings.Contains(err.Error(), "the stage refused") {
+				t.Fatalf("Assemble() with a failing %s error = %v, want the stage's own refusal", stage, err)
+			}
+		})
+	}
+}
+
+// TestAssemble_PropagatesALoadRefusal pins the order the entry enforces: a
+// spec the loader refuses fails the assembly before any stage runs.
+func TestAssemble_PropagatesALoadRefusal(t *testing.T) {
+	err := Assemble(context.Background(), pkgcore.NewComponentRegistry(), LoadSpec{Options: testConfigOptions(), Args: []string{}})
+	if err == nil || !strings.Contains(err.Error(), "LoadSpec.Host") {
+		t.Fatalf("Assemble() with no host target error = %v, want the loader's refusal", err)
+	}
+}
+
+// TestRunAssembly_PropagatesItsEntryRefusals pins both failures the sugar
+// hands back before it ever waits: a malformed extra component at
+// registration, and a spec the assembly refuses.
+func TestRunAssembly_PropagatesItsEntryRefusals(t *testing.T) {
+	var host testHostConfig
+	if err := RunAssembly(context.Background(), driverLoadSpec(t, &host), pkgcore.Component{Name: ""}); err == nil {
+		t.Fatal("RunAssembly() with a nameless extra component error = nil, want the registration refusal")
+	}
+
+	err := RunAssembly(context.Background(), LoadSpec{Options: testConfigOptions(), Args: []string{}})
+	if err == nil || !strings.Contains(err.Error(), "LoadSpec.Host") {
+		t.Fatalf("RunAssembly() with no host target error = %v, want the assembly's refusal", err)
 	}
 }
 

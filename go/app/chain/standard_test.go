@@ -304,6 +304,22 @@ func TestStandard_ImpersonationDecoratorSitsBehindTheExemptBranches(t *testing.T
 	}
 }
 
+// TestWithTenantStatusResolver_InstallsTheResolver pins the option's wiring:
+// the resolver lands in the chain configuration the tenancy middleware is
+// built from. What a wired resolver then DOES -- consulted for every
+// successfully resolved request, failing closed on anything but active -- is
+// tenancy.Middleware's own contract (pinned by go/tenancy's suite), and this
+// fixture's no-key verifier resolves no tenant for any request, so the gate's
+// request-level calls stay unobservable here.
+func TestWithTenantStatusResolver_InstallsTheResolver(t *testing.T) {
+	resolver := &activeStatusResolver{}
+	var cfg standardConfig
+	WithTenantStatusResolver(resolver)(&cfg)
+	if cfg.tenantStatusResolver != resolver {
+		t.Fatal("WithTenantStatusResolver did not install the resolver into the chain configuration")
+	}
+}
+
 // TestStandard_RejectsMissingRequiredPieces pins the refusals: a nil
 // registry or protected mux, a half-declared authorization pair, an admin
 // prefix nothing mounts, and a registry with no authn route.

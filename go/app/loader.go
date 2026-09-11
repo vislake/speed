@@ -40,11 +40,10 @@ import (
 
 // LoadSpec names what the loader loads: the host's bootstrap configuration
 // target and the pkgcore/config options the load runs with. It is the
-// configuration half of an assembly that the engine, not the host's option
-// set, carries -- the new-world spelling of what ConfigSpec wires for the
-// transition adapters. The declared bootstrap keys are not named here: the
-// loader reads them off the registered components, and their values resolve
-// on the same chain into the published BootstrapMaterial.
+// configuration half of an assembly the engine carries. The declared
+// bootstrap keys are not named here: the loader reads them off the
+// registered components, and their values resolve on the same chain into
+// the published BootstrapMaterial.
 type LoadSpec struct {
 	// Host is the host's bootstrap configuration target: a non-nil pointer
 	// to the struct the loader fills with the host's own keys. Required.

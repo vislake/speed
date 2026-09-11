@@ -5,7 +5,6 @@ import (
 
 	"github.com/vislake/speed/go/config"
 	obs "github.com/vislake/speed/go/observability"
-	"github.com/vislake/speed/go/pkgcore"
 	"github.com/vislake/speed/go/tenancy"
 )
 
@@ -24,14 +23,13 @@ const (
 	// ReadHeaderTimeout bounds how long the server waits to receive a
 	// request's headers before aborting the connection -- protects
 	// against slow-header (Slowloris-style) connections that trickle
-	// bytes to hold a socket open indefinitely. The engine's HTTP face
+	// bytes to hold a socket open indefinitely. A host's HTTP face
 	// applies it to the http.Server it composes.
 	ReadHeaderTimeout = 5 * time.Second
 
 	// ShutdownTimeout bounds how long graceful shutdown waits for
-	// in-flight requests to finish before giving up, and bounds the
-	// background worker's own drain the same way; the engine's ordered
-	// shutdown applies it to both steps.
+	// in-flight requests to finish before giving up. Each host's serve
+	// lifecycle applies it to its own drain.
 	ShutdownTimeout = 10 * time.Second
 )
 
@@ -69,32 +67,4 @@ func PreAuthAllowlist() []tenancy.MiddlewareOption {
 			config.PathSystemFeatures,
 		),
 	}
-}
-
-// RegisterMountedRoutes hands every obs.Middleware this process later
-// constructs the host's real route table -- obs.HealthzPath and
-// obs.MetricsPath (which no module registers) plus every route reg's
-// modules mounted -- so the route-label limiter the middleware builds
-// (go/observability's cardinality bound on http.route:
-// obs.MaxRouteLabelValues distinct values, then a fixed overflow bucket)
-// reserves a slot for each real route BEFORE any request traffic arrives.
-// Without the reservation the budget is first-come-first-served: an
-// attacker sending enough distinct garbage paths right after startup fills
-// it, and every genuine route first requested afterwards is recorded under
-// obs.RouteLabelOverflowValue for the life of the process, per-route
-// metrics gone even though no bound was violated. A seeded route keeps
-// its slot whatever garbage arrives later (RegisterMountedRoutes' own
-// doc comment; the mechanism's behavioral proof is
-// go/observability/middleware_test.go's
-// TestMiddleware_RealRoutesSurviveGarbage_WhenSeeded).
-//
-// The call is a snapshot consumed at obs.Middleware CONSTRUCTION, so a
-// host must make it at assembly time, after every module registered its
-// routes and before the middleware that serves traffic is built -- not
-// after the server starts listening.
-func RegisterMountedRoutes(reg *pkgcore.Registry) {
-	obs.RegisterMountedRoutes(append([]pkgcore.MountedRoute{
-		{Path: obs.HealthzPath},
-		{Path: obs.MetricsPath},
-	}, reg.Routes.Routes()...))
 }

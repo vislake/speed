@@ -34,7 +34,7 @@ func probeComponent(name string, keys ...pkgcore.BootstrapKey) pkgcore.Component
 		Name:          name,
 		BootstrapKeys: keys,
 		New: func(context.Context, *pkgcore.ComponentRegistry, pkgcore.ComponentConfig) (any, error) {
-			return &transitionMarker{name: name}, nil
+			return &testMarker{name: name}, nil
 		},
 	}
 }
@@ -457,6 +457,178 @@ func TestObservabilityComponent_RunsItsWholeLifecycle(t *testing.T) {
 	}
 	if err := Shutdown(context.Background(), reg); err != nil {
 		t.Fatalf("Shutdown() error = %v, want the providers flushed cleanly", err)
+	}
+}
+
+// TestLoad_RequiresARegistry pins the entry guard: the load publishes into a
+// registry, so a nil one is refused before anything else runs.
+func TestLoad_RequiresARegistry(t *testing.T) {
+	var host testHostConfig
+	err := Load(context.Background(), nil, LoadSpec{Host: &host, Options: testConfigOptions(), Args: []string{}})
+	if err == nil || !strings.Contains(err.Error(), "component registry") {
+		t.Fatalf("Load() with no registry error = %v, want one naming the registry", err)
+	}
+}
+
+// TestLoad_RefusesACancelledContext pins the earliest refusal: an
+// already-cancelled context fails the load before any source is read.
+func TestLoad_RefusesACancelledContext(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	var host testHostConfig
+	err := Load(ctx, loaderTestRegistry(t), LoadSpec{Host: &host, Options: testConfigOptions(), Args: []string{}})
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("Load() with a cancelled context error = %v, want context.Canceled", err)
+	}
+}
+
+// TestLoad_RefusesAnUnparseableHostConfiguration pins the host load's own
+// failure surface: a project file that cannot be parsed fails the load,
+// naming the host configuration, before any composition or material
+// resolution runs.
+func TestLoad_RefusesAnUnparseableHostConfiguration(t *testing.T) {
+	filePath := filepath.Join(t.TempDir(), "app.yaml")
+	if err := os.WriteFile(filePath, []byte("port: [unclosed\n"), 0o600); err != nil {
+		t.Fatalf("write the unparseable file: %v", err)
+	}
+	var host testHostConfig
+	err := Load(context.Background(), loaderTestRegistry(t), LoadSpec{
+		Host:    &host,
+		Options: append(testConfigOptions(), ConfigFile(filePath)),
+		Args:    []string{},
+	})
+	if err == nil || !strings.Contains(err.Error(), "host configuration") {
+		t.Fatalf("Load() with an unparseable file error = %v, want one naming the host configuration", err)
+	}
+}
+
+// TestLoad_RefusesADeclaredValueItsFormatCannotRead pins the resolution
+// failure: a source-supplied value that does not fit its declared format
+// fails the load before anything is constructed, naming the key path.
+func TestLoad_RefusesADeclaredValueItsFormatCannotRead(t *testing.T) {
+	t.Setenv("TEST_PROBE__COUNT", "not-a-number")
+	reg := loaderTestRegistry(t, probeComponent("probe",
+		pkgcore.BootstrapKey{Key: "probe.count", Format: "int"},
+	))
+	var host testHostConfig
+	err := Load(context.Background(), reg, LoadSpec{Host: &host, Options: testConfigOptions(), Args: []string{}})
+	if err == nil || !strings.Contains(err.Error(), "probe.count") {
+		t.Fatalf("Load() with an unreadable declared value error = %v, want one naming the key path", err)
+	}
+}
+
+// testDerivation is the derivation function the root-key tests install: a
+// deterministic 32-byte function of the root key and the declared key path,
+// the shape dbkit.DeriveBootstrapKey fills in a deployment.
+func testDerivation(rootKey []byte, keyPath string) ([]byte, error) {
+	material := make([]byte, 32)
+	copy(material, keyPath)
+	copy(material[16:], rootKey)
+	return material, nil
+}
+
+// TestLoad_DerivesDeclaredMaterialFromTheRootKey pins the derivation leg of
+// the source chain: material no source supplies is derived from the root key
+// the options install, through the installed derivation function.
+func TestLoad_DerivesDeclaredMaterialFromTheRootKey(t *testing.T) {
+	const keyPath = "probe.blind_index_key"
+	rootKey := testKey(0x50)
+	reg := loaderTestRegistry(t, probeComponent("probe",
+		pkgcore.BootstrapKey{Key: keyPath, Format: "hexkey"},
+	))
+	var host testHostConfig
+	if err := Load(context.Background(), reg, LoadSpec{
+		Host:    &host,
+		Options: append(testConfigOptions(), ConfigRootKey(rootKey), ConfigKeyDerivation(testDerivation)),
+		Args:    []string{},
+	}); err != nil {
+		t.Fatalf("Load() with a root key error = %v", err)
+	}
+
+	material, err := pkgcore.BootstrapMaterialOf(reg)
+	if err != nil {
+		t.Fatalf("read the published material source: %v", err)
+	}
+	want, err := testDerivation(rootKey, keyPath)
+	if err != nil {
+		t.Fatalf("compose the expected material: %v", err)
+	}
+	if got, ok := material.Material(keyPath); !ok || !bytes.Equal(got, want) {
+		t.Fatalf("material %s = %x (present %v), want the root key's derivation %x", keyPath, got, ok, want)
+	}
+}
+
+// TestLoad_ReadsTheRootKeyFromItsNamedVariable pins the environment half of
+// the root-key source: the named variable's 64 hexadecimal characters are
+// read inside the same load and derive declared material exactly as an
+// explicitly passed key does.
+func TestLoad_ReadsTheRootKeyFromItsNamedVariable(t *testing.T) {
+	const keyPath = "probe.blind_index_key"
+	rootKey := testKey(0x60)
+	t.Setenv("TEST_ROOT_KEY", hex.EncodeToString(rootKey))
+	reg := loaderTestRegistry(t, probeComponent("probe",
+		pkgcore.BootstrapKey{Key: keyPath, Format: "hexkey"},
+	))
+	var host testHostConfig
+	if err := Load(context.Background(), reg, LoadSpec{
+		Host:    &host,
+		Options: append(testConfigOptions(), ConfigRootKeyEnv("TEST_ROOT_KEY"), ConfigKeyDerivation(testDerivation)),
+		Args:    []string{},
+	}); err != nil {
+		t.Fatalf("Load() with a root-key variable error = %v", err)
+	}
+
+	material, err := pkgcore.BootstrapMaterialOf(reg)
+	if err != nil {
+		t.Fatalf("read the published material source: %v", err)
+	}
+	want, err := testDerivation(rootKey, keyPath)
+	if err != nil {
+		t.Fatalf("compose the expected material: %v", err)
+	}
+	if got, ok := material.Material(keyPath); !ok || !bytes.Equal(got, want) {
+		t.Fatalf("material %s = %x (present %v), want the named variable's derivation %x", keyPath, got, ok, want)
+	}
+}
+
+// TestComponentConfigOf_ReportsEveryAbsence pins the component-block
+// reading's absences: no composition published at all is the load-order
+// error (a component's Prepare must run after the load), while a composition
+// without a components block, or without the name's block, is a legitimate
+// non-present report.
+func TestComponentConfigOf_ReportsEveryAbsence(t *testing.T) {
+	if _, present, err := componentConfigOf(pkgcore.NewComponentRegistry(), "observability"); err == nil || present {
+		t.Fatalf("componentConfigOf on an unloaded registry = (present %v, err %v), want the missing-composition error", present, err)
+	}
+
+	withoutBlock := pkgcore.NewComponentRegistry()
+	withoutBlock.Put(pkgcore.ComponentConfig{}.With("deployment", string(pkgcore.DeploymentModeStandalone)))
+	if _, present, err := componentConfigOf(withoutBlock, "observability"); err != nil || present {
+		t.Fatalf("componentConfigOf with no components block = (present %v, err %v), want a non-present report", present, err)
+	}
+
+	withoutName := pkgcore.NewComponentRegistry()
+	withoutName.Put(pkgcore.ComponentConfig{}.With("components", pkgcore.ComponentConfig{}.With("other", nil)))
+	if _, present, err := componentConfigOf(withoutName, "observability"); err != nil || present {
+		t.Fatalf("componentConfigOf without the name's block = (present %v, err %v), want a non-present report", present, err)
+	}
+}
+
+// TestDecodeComponentConfig_RefusesTheAbsenceAndTheUnknownKey pins the strict
+// decoding a component's Prepare runs: a missing composition fails the read,
+// and an unknown key fails the decode naming the key.
+func TestDecodeComponentConfig_RefusesTheAbsenceAndTheUnknownKey(t *testing.T) {
+	var cfg observabilityConfig
+	if err := decodeComponentConfig(pkgcore.NewComponentRegistry(), "observability", &cfg); err == nil {
+		t.Fatal("decodeComponentConfig without a published composition error = nil, want a refusal")
+	}
+
+	reg := pkgcore.NewComponentRegistry()
+	reg.Put(pkgcore.ComponentConfig{}.With("components", pkgcore.ComponentConfig{}.
+		With("observability", pkgcore.ComponentConfig{}.With("unknown_key", "x"))))
+	err := decodeComponentConfig(reg, "observability", &cfg)
+	if err == nil || !strings.Contains(err.Error(), "unknown_key") {
+		t.Fatalf("decodeComponentConfig with an unknown key error = %v, want one naming the key", err)
 	}
 }
 

@@ -63,16 +63,6 @@ func Shutdown(ctx context.Context, reg *pkgcore.ComponentRegistry) error {
 	return reg.Close(ctx)
 }
 
-// transitionMarker is the trivial product of a component that carries
-// behavior but no value -- a step component, a lifecycle owner.
-type transitionMarker struct{ name string }
-
-// newTransitionMarker returns a marker product carrying the component's own
-// name, for error text and debugging.
-func newTransitionMarker(_ context.Context, _ *pkgcore.ComponentRegistry, _ pkgcore.ComponentConfig) (any, error) {
-	return &transitionMarker{}, nil
-}
-
 // RunAssembly is the engine's Run sugar for a host with no HTTP face of its
 // own: it creates a ComponentRegistry from the global component
 // registration plus extra, runs the loader over spec, drives the assembly

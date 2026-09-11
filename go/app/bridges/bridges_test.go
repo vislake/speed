@@ -6,10 +6,19 @@ import (
 	"testing"
 
 	aigateway "github.com/vislake/speed/go/ai-gateway"
+	"github.com/vislake/speed/go/billing"
 	"github.com/vislake/speed/go/config"
 	"github.com/vislake/speed/go/metering"
 	"github.com/vislake/speed/go/pkgcore/apperr"
 )
+
+// stubEntitlements is a billing.Entitlements stub: it answers one fixed
+// error for every check.
+type stubEntitlements struct{ err error }
+
+func (s stubEntitlements) Check(context.Context, string, int64) (billing.Decision, error) {
+	return billing.Decision{}, s.err
+}
 
 // capturingRecorder is a metering.Recorder stand-in recording the events
 // the bridge hands it.
@@ -21,6 +30,16 @@ type capturingRecorder struct {
 func (r *capturingRecorder) Record(_ context.Context, event metering.UsageEvent) error {
 	r.events = append(r.events, event)
 	return r.err
+}
+
+// TestEntitlements_PropagatesTheCheckError pins the adapter's error half: a
+// check failure crosses the seam as itself, never as a synthesized decision.
+func TestEntitlements_PropagatesTheCheckError(t *testing.T) {
+	sentinel := errors.New("bridges test: the check refused")
+	check := Entitlements(stubEntitlements{err: sentinel})
+	if _, err := check(context.Background(), "model:smile", 1); !errors.Is(err, sentinel) {
+		t.Fatalf("Entitlements check error = %v, want the underlying refusal", err)
+	}
 }
 
 // TestUsageRecorder_MapsEveryFieldAcrossTheSeam pins the closure's whole

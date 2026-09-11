@@ -48,7 +48,6 @@ require (
 	github.com/vislake/speed/go/authn v0.0.1
 	github.com/vislake/speed/go/billing v0.0.1
 	github.com/vislake/speed/go/config v0.0.1
-	github.com/vislake/speed/go/dbkit v0.0.1
 	github.com/vislake/speed/go/metering v0.0.1
 	github.com/vislake/speed/go/observability v0.0.1
 	github.com/vislake/speed/go/org v0.0.1
@@ -56,7 +55,6 @@ require (
 	github.com/vislake/speed/go/rbac v0.0.0-00010101000000-000000000000
 	github.com/vislake/speed/go/sharing v0.0.1
 	github.com/vislake/speed/go/tenancy v0.0.1
-	gorm.io/gorm v1.31.2
 )
 
 require (
@@ -65,11 +63,8 @@ require (
 	github.com/apapsch/go-jsonmerge/v2 v2.0.0 // indirect
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
 	github.com/coreos/go-oidc/v3 v3.16.0 // indirect
-	github.com/dustin/go-humanize v1.0.1 // indirect
 	github.com/felixge/httpsnoop v1.1.0 // indirect
 	github.com/fsnotify/fsnotify v1.9.0 // indirect
-	github.com/glebarez/go-sqlite v1.21.2 // indirect
-	github.com/glebarez/sqlite v1.11.0 // indirect
 	github.com/go-jose/go-jose/v4 v4.1.4 // indirect
 	github.com/go-logr/logr v1.4.3 // indirect
 	github.com/go-logr/stdr v1.2.2 // indirect
@@ -83,12 +78,11 @@ require (
 	github.com/knadh/koanf/parsers/yaml v1.1.1 // indirect
 	github.com/knadh/koanf/providers/file v1.2.1 // indirect
 	github.com/knadh/koanf/v2 v2.3.6 // indirect
-	github.com/mattn/go-isatty v0.0.20 // indirect
 	github.com/mitchellh/copystructure v1.2.0 // indirect
 	github.com/mitchellh/reflectwalk v1.0.2 // indirect
 	github.com/nicksnyder/go-i18n/v2 v2.6.1 // indirect
 	github.com/oapi-codegen/runtime v1.7.0 // indirect
-	github.com/remyoudompheng/bigfft v0.0.0-20230129092748-24d4a6f8daec // indirect
+	github.com/vislake/speed/go/dbkit v0.0.1 // indirect
 	github.com/vislake/speed/go/jobs v0.0.1 // indirect
 	github.com/vislake/speed/go/ratelimit v0.0.1 // indirect
 	github.com/vislake/speed/go/storage v0.0.1 // indirect
@@ -108,8 +102,5 @@ require (
 	golang.org/x/text v0.41.0 // indirect
 	gorm.io/datatypes v1.2.7 // indirect
 	gorm.io/driver/mysql v1.5.6 // indirect
-	modernc.org/libc v1.22.5 // indirect
-	modernc.org/mathutil v1.5.0 // indirect
-	modernc.org/memory v1.5.0 // indirect
-	modernc.org/sqlite v1.23.1 // indirect
+	gorm.io/gorm v1.31.2 // indirect
 )

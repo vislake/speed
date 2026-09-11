@@ -366,7 +366,6 @@
       "used_by": [
         "go/admin",
         "go/ai-gateway",
-        "go/app",
         "go/authn",
         "go/billing",
         "go/compliance",
