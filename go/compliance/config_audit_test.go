@@ -233,13 +233,13 @@ func TestConfigItemChangedFromWire_RequiresScopeAndKeyStrings(t *testing.T) {
 // compliance's subscriber drops it too, by publishing the SAME payload on
 // ONE bus to BOTH modules and asserting both stay silent: config's
 // watcher on the changed key never fires (config's side decoded nothing)
-// and no audit row lands (compliance's side decoded nothing). Before the
-// fix this failed on the audit assertion: the Scope-less payload decoded
-// with Scope "" and was recorded as a config.item.set audit row for a
-// change config itself never processed. The positive leg then republishes
+// and no audit row lands (compliance's side decoded nothing). Were the
+// Scope-less payload decoded with Scope "" and recorded as a
+// config.item.set audit row, this assertion would fail -- an audit row for
+// a change config itself never processed. The positive leg then republishes
 // the identical payload WITH its Scope field, and both subscribers act:
-// the watcher fires and exactly one audit row lands -- pinning that the
-// fix dropped the malformed shape only, never the well-formed one.
+// the watcher fires and exactly one audit row lands -- pinning that only
+// the malformed shape is dropped, never the well-formed one.
 func TestModule_OnConfigItemChanged_ScopeMissingWireMap_MatchesConfigsOwnDrop(t *testing.T) {
 	db := newTestAuditDB(t)
 	auditRepo := audit.NewRepository(db)
