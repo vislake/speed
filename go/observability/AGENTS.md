@@ -10,7 +10,7 @@ which belongs to the modules that own those domains (`jobs`, `metering`,
 `notification`, `ai-gateway`), not to this package. Each of those
 modules instruments its own row via
 `otel.Meter` on its own package path, with this package supplying only
-the global MeterProvider wiring: `go/jobs` (`standalone_queue.go`'s
+the global MeterProvider wiring: `go/jobs` (`queue_standalone.go`'s
 queue-depth async gauge plus job-duration histogram, attempts and
 dead-letter counters on `worker.go`'s real execution path), the
 `queue/asynq` subpackage's queue-depth gauge, `go/notification`

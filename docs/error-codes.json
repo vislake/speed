@@ -2019,7 +2019,7 @@
     },
     {
       "code": "jobs.backoff_base_zero",
-      "file": "go/jobs/standalone_queue.go",
+      "file": "go/jobs/queue_standalone.go",
       "ident": "",
       "kind": "inline",
       "line": 184,
@@ -2028,7 +2028,7 @@
     },
     {
       "code": "jobs.backoff_max_zero",
-      "file": "go/jobs/standalone_queue.go",
+      "file": "go/jobs/queue_standalone.go",
       "ident": "",
       "kind": "inline",
       "line": 187,
@@ -2064,7 +2064,7 @@
     },
     {
       "code": "jobs.duplicate_handler_type",
-      "file": "go/jobs/standalone_queue.go",
+      "file": "go/jobs/queue_standalone.go",
       "ident": "ErrDuplicateHandlerType",
       "kind": "declared",
       "line": 82,
@@ -2118,7 +2118,7 @@
     },
     {
       "code": "jobs.poll_interval_zero",
-      "file": "go/jobs/standalone_queue.go",
+      "file": "go/jobs/queue_standalone.go",
       "ident": "",
       "kind": "inline",
       "line": 148,

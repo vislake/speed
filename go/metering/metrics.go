@@ -10,7 +10,7 @@ import (
 )
 
 // InstrumentationName identifies this package's own meter, mirroring
-// go/jobs/standalone_queue.go's, go/notification/delivery.go's and
+// go/jobs/queue_standalone.go's, go/notification/delivery.go's and
 // go/authn/service.go's identical use of their own package path.
 const InstrumentationName = "github.com/vislake/speed/go/metering"
 

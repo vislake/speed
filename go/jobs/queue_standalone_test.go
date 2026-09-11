@@ -704,7 +704,7 @@ func setupTestMeterProvider(t *testing.T) *sdkmetric.ManualReader {
 // collectMetric runs a fresh Collect and returns the single metric named
 // name, failing the test if it is missing -- name is always one of the
 // jobDurationMetricName/jobAttemptsMetricName/jobDeadLetterMetricName
-// literals standalone_queue.go defines.
+// literals queue_standalone.go defines.
 //
 // A Collect() error is FATAL: the queue-depth gauge lifecycle fix (see
 // TestStandaloneQueue_DepthGauge_StopsQueryingAfterClose and both
@@ -901,7 +901,7 @@ func TestRegisterJobMetrics_Smoke(t *testing.T) {
 
 // The option-validation regressions below pin one rule, applied uniformly
 // to all five With* construction options on StandaloneQueue
-// (standalone_queue.go): an invalid value is refused at option time with a
+// (queue_standalone.go): an invalid value is refused at option time with a
 // coded panic -- matching pkgcore's own constructor-time-refusal
 // convention (NewSMTPMailer, NewLocalObjectStore, ...) -- never accepted
 // and silently reinterpreted, and never left to fail after Start has
@@ -913,7 +913,7 @@ func TestRegisterJobMetrics_Smoke(t *testing.T) {
 // only AFTER Start had succeeded; a zero or negative timeout or backoff
 // cannot be honoured literally and would silently collapse onto the
 // default, or into an immediate retry burst). The completeness claim is
-// deliberate: every one of the five options in standalone_queue.go has a
+// deliberate: every one of the five options in queue_standalone.go has a
 // regression here, so the suite really does cover each option's
 // invalid-value behaviour, and a new constructor option cannot be added to
 // that file without landing its refusal test beside it. The per-Enqueue
@@ -923,7 +923,7 @@ func TestRegisterJobMetrics_Smoke(t *testing.T) {
 
 // assertOptionPanics asserts that fn panics with a coded *apperr.Error
 // carrying code -- the option-time refusal contract every With*
-// construction option in standalone_queue.go shares.
+// construction option in queue_standalone.go shares.
 func assertOptionPanics(t *testing.T, code string, fn func()) {
 	t.Helper()
 	defer func() {

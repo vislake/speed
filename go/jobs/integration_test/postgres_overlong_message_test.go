@@ -82,7 +82,7 @@ func TestStandaloneQueue_PostgresOverlongFailureMessage_ReachesTerminalState(t *
 	}
 	// closeQueue joins every goroutine the queue owns: Close stops the
 	// poller, wg.Wait()s the worker pool and stops the writer heartbeat
-	// (standalone_queue.go). It is idempotent (closeOnce) and safe to call
+	// (queue_standalone.go). It is idempotent (closeOnce) and safe to call
 	// more than once, so one helper serves both the in-function calls
 	// below -- every read of the capture buffer must follow it -- and this
 	// cleanup, which covers the early t.Fatalf paths.

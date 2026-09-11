@@ -11,7 +11,7 @@ import (
 
 // The four helpers below mirror package jobs' own test helpers
 // newTestQueue/startQueue/pollJob/waitTerminal (defined in the module
-// root's standalone_queue_test.go, which stays in the source package for
+// root's queue_standalone_test.go, which stays in the source package for
 // the in-package suites that use them). The black-box suites in this
 // directory cannot call those unexported helpers, and the helpers cannot
 // move to go/jobs/internal/testutil either: that package is imported by
@@ -85,7 +85,7 @@ func waitTerminal(t *testing.T, q *jobs.StandaloneQueue, ctx context.Context, id
 
 // signalWaitTimeout bounds waitSignal: how long a channel-ready event
 // may take under a slow scheduler before the test gives up. It mirrors
-// the in-package helper's own constant (standalone_queue_test.go), with
+// the in-package helper's own constant (queue_standalone_test.go), with
 // the same rationale: waitSignal is event-driven, so the cap is paid
 // only when the event never arrives, and the generous ceiling is what
 // keeps a starved scheduler from turning a delayed start into a test

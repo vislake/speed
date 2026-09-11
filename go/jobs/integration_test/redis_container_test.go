@@ -67,7 +67,7 @@ func startRedisContainer(t *testing.T, ctx context.Context) asynqlib.RedisConnOp
 // observe outcomes in tens of milliseconds rather than asynq's own
 // multi-second defaults (TaskCheckInterval defaults to 1s,
 // DelayedTaskCheckInterval to 5s) -- the same convention go/jobs's own
-// newTestQueue helper (standalone_queue_test.go, parent module) applies to
+// newTestQueue helper (queue_standalone_test.go, parent module) applies to
 // StandaloneQueue's WithPollInterval/WithBackoff. Extracted so a test that
 // must build its Queue from a container it started itself (to reach the
 // same Redis with a raw client, e.g. marker-sabotage tests) starts from
@@ -125,7 +125,7 @@ func startTestAsynqQueue(t *testing.T, ctx context.Context, opts ...asynq.Option
 
 // waitForTerminal polls Get until id's Job reaches a terminal Status or
 // deadline passes, failing the test on timeout -- the same shape as
-// go/jobs's own standalone_queue_test.go waitTerminal helper (parent package,
+// go/jobs's own queue_standalone_test.go waitTerminal helper (parent package,
 // unexported, not importable from here), redefined for this package since
 // go test helpers are never part of a package's importable API regardless
 // of which package they live in.

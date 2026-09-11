@@ -79,7 +79,7 @@ func TestJobContext_IgnoresAmbientTenant(t *testing.T) {
 // If a change to execute/runWorker ever stops routing through jobContext,
 // THIS is the test that must fail -- with this exact, well-labeled name --
 // rather than some unrelated Handler mysteriously erroring in production.
-// See standalone_queue_test.go's
+// See queue_standalone_test.go's
 // TestStandaloneQueue_RebuildsTenantContext_HandlerUsesOnlyJobTenant for
 // the same guarantee proved end to end through a real worker and a real
 // dbkit.Repository[T] call.
@@ -361,7 +361,7 @@ func TestExecute_FailureHookPanic_RecoversInsteadOfCrashingProcess(t *testing.T)
 // cancelledBeforeDeadLetterHandler always fails from Handle (so a Job with
 // MaxRetries == 0 exhausts retries on the first attempt) and records every
 // OnFailure call it receives on onFailureCh -- the execute-level counterpart
-// of standalone_queue_test.go's controlledFailureHandler, for tests that
+// of queue_standalone_test.go's controlledFailureHandler, for tests that
 // drive the dead-letter failure path directly instead of through a live
 // worker.
 type cancelledBeforeDeadLetterHandler struct {
@@ -396,7 +396,7 @@ var (
 // stay StatusCancelled; OnFailure running anyway fails the test. See
 // store_test.go's
 // TestCompleteDeadLetter_NoTransitionWhenAlreadyCancelled for the
-// store-level half of the same race, and standalone_queue_test.go's
+// store-level half of the same race, and queue_standalone_test.go's
 // TestStandaloneQueue_CancelBeatsFinalFailure_NoOnFailure_DeadLetterNeverPersisted
 // for the live-worker half.
 func TestExecute_FinalFailureAfterCancel_DoesNotRunOnFailure(t *testing.T) {

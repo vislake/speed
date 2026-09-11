@@ -23,7 +23,7 @@ import (
 )
 
 // InstrumentationName identifies this package's own tracer/meter, mirroring
-// go/jobs/standalone_queue.go's and go/notification/delivery.go's identical
+// go/jobs/queue_standalone.go's and go/notification/delivery.go's identical
 // use of their own package path for the same purpose.
 const InstrumentationName = "github.com/vislake/speed/go/authn"
 
@@ -109,7 +109,7 @@ func registerAuthMetrics() (metric.Int64Counter, metric.Float64Histogram) {
 // recordAuthMetric records one completed authentication operation onto
 // authCountMetricName/authDurationMetricName, labeled by op and outcome
 // only -- deliberately never tenant_id or user_id, for the identical
-// cardinality reason go/jobs/standalone_queue.go's registerJobMetrics doc
+// cardinality reason go/jobs/queue_standalone.go's registerJobMetrics doc
 // comment gives. err's nilness alone decides the outcome: every one of
 // Login/LoginWithSMSCode/Refresh/VerifyStepUp's early returns already
 // report a non-nil error on any refusal (bad credentials, wrong SMS code,

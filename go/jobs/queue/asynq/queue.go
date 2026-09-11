@@ -110,7 +110,7 @@ type Queue struct {
 	// "jobs.job.duration"/"jobs.job.attempts"/"jobs.job.dead_letter"
 	// instruments registerJobMetrics wires from Start -- the distributed
 	// deployment mode's mirror of StandaloneQueue's identically-named
-	// fields (jobs' own standalone_queue.go), so both implementations of
+	// fields (jobs' own queue_standalone.go), so both implementations of
 	// the jobs.Queue seam emit the same three metric names under the same
 	// jobs.InstrumentationName scope (see AGENTS.md's Observability
 	// section). Left at their zero value (nil) until then; worker.go's
@@ -1188,7 +1188,7 @@ func (q *Queue) registerQueueDepthGauge(meter metric.Meter) error {
 }
 
 // The three "jobs.job.*" instrument-name literals StandaloneQueue's own
-// registerJobMetrics uses (jobs' standalone_queue.go's
+// registerJobMetrics uses (jobs' queue_standalone.go's
 // jobDurationMetricName/jobAttemptsMetricName/jobDeadLetterMetricName
 // constants, which are package-private there) -- spelled out here rather
 // than exported from the root package: this subpackage is the one other
@@ -1206,7 +1206,7 @@ const (
 // "jobs.job.attempts"/"jobs.job.dead_letter" Counters
 // docs/internal/09-observability.md's must-instrument table requires for
 // the task-queue domain beyond queue backlog depth, mirroring
-// jobs.StandaloneQueue.registerJobMetrics (jobs' own standalone_queue.go)
+// jobs.StandaloneQueue.registerJobMetrics (jobs' own queue_standalone.go)
 // instrument for instrument: the same three names, the same units, the
 // same (job_type, status) label sets and the same fail-open registration
 // shape. This is the recorded fix for the Known-limitations gap that only

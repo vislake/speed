@@ -16,7 +16,7 @@ import (
 // widgetFixture is a minimal tenant-scoped fixture used only to prove
 // TestRedisQueue_RebuildsTenantContext against a real dbkit.Repository[T] --
 // the same "define a small fixture directly" precedent go/jobs's own
-// standalone_queue_test.go (parent package) and go/tenancy/tenancytest's sprocket
+// queue_standalone_test.go (parent package) and go/tenancy/tenancytest's sprocket
 // fixture both establish (dbkit's own tenant-scoped test fixture lives in
 // an unexported internal package this module cannot reach).
 type widgetFixture struct {
@@ -41,7 +41,7 @@ const createWidgetFixtureTableSQL = `CREATE TABLE widget_fixtures (
 // tenant-context-rebuild trap applies identically here: a worker consuming
 // from Redis must reconstruct pkgcore.WithTenant from the persisted task
 // payload before calling Handle" (this task's own instructions) -- the
-// distributed deployment mode's counterpart of standalone_queue_test.go's
+// distributed deployment mode's counterpart of queue_standalone_test.go's
 // TestStandaloneQueue_RebuildsTenantContext_HandlerUsesOnlyJobTenant, run here
 // against a REAL asynq.Server/worker goroutine dequeuing from REAL Redis,
 // not StandaloneQueue's in-process dispatcher.

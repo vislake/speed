@@ -21,7 +21,7 @@ import (
 // TestRedisQueue_RetryOnFailure, TestRedisQueue_DeadLetterAndFailureHook,
 // plus TestRedisQueue_Cancel_PendingJobNeverRuns's tenant-isolation-and-
 // idempotency assertions) that duplicated, assertion for assertion, what
-// go/jobs's own standalone_queue_test.go already proved for StandaloneQueue.
+// go/jobs's own queue_standalone_test.go already proved for StandaloneQueue.
 //
 // Every subtest spins up its own disposable Redis container via
 // newTestAsynqQueue (redis_container_test.go), matching every other test in

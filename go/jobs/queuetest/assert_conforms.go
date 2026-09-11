@@ -424,7 +424,7 @@ const conformSystemPurpose = pkgcore.SystemPurpose("jobs.queuetest_system_access
 
 // conformAlwaysFailsHandler always fails with a fixed error and records
 // every OnFailure call it receives on onFailureCh -- the dead-letter
-// subtest's Handler, mirroring both go/jobs's own standalone_queue_test.go
+// subtest's Handler, mirroring both go/jobs's own queue_standalone_test.go
 // countingFailureHandler and go/jobs/integration_test's identically-shaped
 // type (now redundant, converted to call this package instead).
 type conformAlwaysFailsHandler struct {

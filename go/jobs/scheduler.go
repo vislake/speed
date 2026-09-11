@@ -50,7 +50,7 @@ type TenantLister interface {
 // SchedulerOption configures a Scheduler before it starts.
 //
 // Every construction option in this module follows ONE rule, stated once
-// on Option's doc comment (standalone_queue.go): an invalid value -- one
+// on Option's doc comment (queue_standalone.go): an invalid value -- one
 // this scheduler cannot honour -- is refused at option time with a coded
 // panic (an *apperr.Error carrying the code each With* function's own doc
 // comment names), never accepted and silently reinterpreted. Each option

@@ -20,7 +20,7 @@ import (
 // from task.TenantID, never an explicit "tenant_id" kv layered on top of
 // whatever obs.FromContext(ctx) already auto-attaches from ctx's own
 // ambient tenant (the same rule StandaloneQueue's Enqueue follows; see
-// go/jobs's own standalone_queue_test.go
+// go/jobs's own queue_standalone_test.go
 // TestEnqueue_LogsSingleCorrectTenantID_EvenWhenCtxTenantDiffers, in the
 // parent package and so not importable from here). The "platform-level
 // scheduler enqueuing one cleanup Task per tenant in a loop" pattern makes

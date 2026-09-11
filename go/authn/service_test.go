@@ -1262,7 +1262,7 @@ func TestNewService_RejectsAnIncompleteWiring(t *testing.T) {
 // the duration of the test, a real SDK MeterProvider backed by a
 // ManualReader -- never a Prometheus/OTLP exporter, since this file only
 // needs to read back exactly what was recorded -- mirroring
-// go/jobs/standalone_queue_test.go's and go/notification/delivery_test.go's
+// go/jobs/queue_standalone_test.go's and go/notification/delivery_test.go's
 // own helper of the same shape. Deliberately NOT called from a t.Parallel()
 // test: it swaps the process-wide global otel MeterProvider, which is safe
 // only while no OTHER test's Service is concurrently recording into it (see
@@ -1428,7 +1428,7 @@ func TestService_AuthMetrics_RecordCountAndDurationByOperationAndOutcome(t *test
 }
 
 // TestRegisterAuthMetrics_Smoke is registerAuthMetrics's own equivalent of
-// go/jobs/standalone_queue_test.go's TestRegisterJobMetrics_Smoke:
+// go/jobs/queue_standalone_test.go's TestRegisterJobMetrics_Smoke:
 // registration alone (no operation ever attempted) must not error or panic.
 func TestRegisterAuthMetrics_Smoke(t *testing.T) {
 	count, duration := registerAuthMetrics()

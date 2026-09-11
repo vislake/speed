@@ -1,6 +1,6 @@
 package jobs
 
-// standalone_queue_bench_test.go holds the benchmark suite for the
+// queue_standalone_bench_test.go holds the benchmark suite for the
 // StandaloneQueue's hot paths, per docs/internal/20-quality-and-security.md's
 // "performance-benchmark regression detection" plan: benchmarks land with the
 // module that owns the hotspot, and the nightly pipeline's future regression

@@ -34,7 +34,7 @@ import (
 
 // TestQueue_JobMetrics_RegistrationWiresTheThreeJobInstruments is
 // registerJobMetrics's smoke proof, mirroring StandaloneQueue's own
-// job-metrics coverage (jobs' standalone_queue_test.go): after
+// job-metrics coverage (jobs' queue_standalone_test.go): after
 // registration and one record on each instrument, a Collect answers all
 // three by name -- the rows that simply did not exist on this Queue
 // before the fix. Each instrument records one data point first because an

@@ -99,7 +99,7 @@ func TestQueue_DepthGauge_StoppedQueueDoesNotQueryRedis(t *testing.T) {
 // convention pkgcore's constructors use) -- never accepted and left to
 // fail somewhere else. Every validated construction option in queue.go is
 // pinned below -- the same completeness claim go/jobs' own
-// standalone_queue_test.go construction-option tests make for
+// queue_standalone_test.go construction-option tests make for
 // StandaloneQueue's options -- so a construction option added to queue.go
 // without its refusal test here is immediately visible.
 

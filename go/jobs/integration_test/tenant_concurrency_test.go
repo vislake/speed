@@ -13,7 +13,7 @@ import (
 )
 
 // blockingHandler signals startedCh with its Job's id, then blocks until
-// the test sends on releaseCh -- mirrors standalone_queue_test.go's
+// the test sends on releaseCh -- mirrors queue_standalone_test.go's
 // identically-named type in the parent package.
 type blockingHandler struct {
 	jobType   string
@@ -30,7 +30,7 @@ func (h *blockingHandler) Handle(_ context.Context, job *jobs.Job, _ jobs.Progre
 }
 
 // TestRedisQueue_PerTenantConcurrencyLimiting is the distributed
-// deployment mode's counterpart of standalone_queue_test.go's TestPerTenantConcurrencyLimiting:
+// deployment mode's counterpart of queue_standalone_test.go's TestPerTenantConcurrencyLimiting:
 // proof that one tenant's backlog cannot starve another tenant's Jobs, and
 // that go/jobs/queue/asynq's Queue's own admission gate (its worker.go's
 // tryReserveTenantSlot, layered on top of asynq because asynq offers

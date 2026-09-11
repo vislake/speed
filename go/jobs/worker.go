@@ -436,7 +436,7 @@ func invokeOnFailure(ctx context.Context, hook FailureHook, job *Job, cause erro
 
 // recordJobMetrics records one completed Handle attempt on the
 // "jobs.job.duration" Histogram and "jobs.job.attempts" Counter
-// registerJobMetrics wires (standalone_queue.go), labeled by jobType and status
+// registerJobMetrics wires (queue_standalone.go), labeled by jobType and status
 // -- status is always one of StatusSucceeded/StatusRetrying/
 // StatusDeadLetter, the exact three outcomes whose attempt records exist:
 // an attempt whose outcome a concurrent Cancel already discarded (any of

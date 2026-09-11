@@ -33,7 +33,7 @@ import (
 const jobTypeDeliver = "notification.deliver"
 
 // InstrumentationName identifies this package's own tracer/meter, mirroring
-// go/jobs/standalone_queue.go's identical use of its own package path for the
+// go/jobs/queue_standalone.go's identical use of its own package path for the
 // same purpose (see that file's own doc comment on InstrumentationName).
 const InstrumentationName = "github.com/vislake/speed/go/notification"
 
@@ -413,7 +413,7 @@ func newDeliveryService(inbox *Repository, prefs *PreferenceService, contacts *C
 // two HTTP instruments once at construction and ignores the (in practice
 // unreachable, since the global otel API returns a working no-op instrument
 // alongside any error) registration error the same way -- unlike
-// go/jobs/standalone_queue.go's registerJobMetrics, which has a live ctx/
+// go/jobs/queue_standalone.go's registerJobMetrics, which has a live ctx/
 // logger available at its own call site (Start) to warn on failure and
 // deliberately does not have one here (newDeliveryService is a plain
 // constructor, called once per Module before any request context exists).
@@ -1642,7 +1642,7 @@ func (s *DeliveryService) settle(ctx context.Context, tenantID string, rec *Send
 // "notification.delivery.count" Counter and "notification.delivery.duration"
 // Histogram, labeled by notification type, channel and resulting status
 // only -- deliberately never tenant_id, for the identical cardinality reason
-// go/jobs/standalone_queue.go's registerJobMetrics doc comment gives (all
+// go/jobs/queue_standalone.go's registerJobMetrics doc comment gives (all
 // three label values are bounded, declared vocabularies: a type key from the
 // host's type registry, one of the three channel constants, one of the
 // three SendRecordStatus* values). Called from settle after each write it

@@ -89,7 +89,7 @@ index ships on the site while the machine-readable twin stays in the
 repository. One
 row per code: when the same code is constructed more than once (a rare
 deliberate re-export, one code built at several inline sites --
-go/jobs/standalone_queue.go and go/jobs/queue/asynq/queue.go both refuse
+go/jobs/queue_standalone.go and go/jobs/queue/asynq/queue.go both refuse
 with jobs.worker_count_zero -- or a code that has both a declaration and
 inline uses), the duplicate sites are collapsed and a named
 declaration's row wins over an inline site's.

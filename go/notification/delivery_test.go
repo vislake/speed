@@ -1840,7 +1840,7 @@ func TestDelivery_RunDeliveryRefusesAnUnknownRecipientClass(t *testing.T) {
 // duration of the test, a real SDK MeterProvider backed by a ManualReader --
 // never a Prometheus/OTLP exporter, since this file only needs to read back
 // exactly what was recorded -- mirroring
-// go/jobs/standalone_queue_test.go's own helper of the same name. Must be
+// go/jobs/queue_standalone_test.go's own helper of the same name. Must be
 // called BEFORE newDeliveryEnv(t) so registerDeliveryMetrics (run from
 // newDeliveryService) registers its instruments against this provider
 // rather than the process-global one another test may have already
@@ -1978,7 +1978,7 @@ func TestDelivery_MetricsRecordCountAndDurationByChannelAndStatus(t *testing.T) 
 }
 
 // TestRegisterDeliveryMetrics_Smoke is registerDeliveryMetrics's own
-// equivalent of go/jobs/standalone_queue_test.go's
+// equivalent of go/jobs/queue_standalone_test.go's
 // TestRegisterJobMetrics_Smoke: registration alone (no delivery ever
 // attempted) must not error or panic.
 func TestRegisterDeliveryMetrics_Smoke(t *testing.T) {
