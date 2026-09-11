@@ -236,7 +236,7 @@ func TestService_WriteAccessLog_WaitsBehindAHeldGuardedWriteOnSQLite(t *testing.
 // classifies as transient contention, using the same driver wording the
 // classifier matches (modernc.org/sqlite renders SQLITE_BUSY with the
 // result-code name parenthesized, exactly as the real error in
-// go/dbkit's retry_sqlite_test.go does).
+// go/dbkit's retry_test.go does).
 func retryableConflictErr() error {
 	return errors.New("database is locked (5) (SQLITE_BUSY)")
 }
