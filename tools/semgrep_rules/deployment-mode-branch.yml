@@ -32,10 +32,21 @@
 #     resolves APP_DEPLOYMENT_MODE there (ConfigFromEnv's loader-driven
 #     bootstrap: the loader target pins the variable, the transform parses
 #     the value) and defaults it to standalone
-#   * examples/reference-app/internal/app/server.go -- the assembly passes
-#     the resolved mode to Kernel.Bootstrap via WithDeploymentMode in
-#     BuildServer (kernel assembly is the consumer binary's job, not a
-#     library module's)
+#   * examples/reference-app/internal/app/server.go -- the assembly's
+#     BuildServer/Run entry: ServerConfig carries the resolved mode into
+#     the wiring, and the Kernel the engine bootstraps is what validates
+#     the composition against it (kernel assembly is the consumer
+#     binary's job, not a library module's). The kernel options
+#     themselves -- the WithDeploymentMode pass among them -- are
+#     kernel.go's kernelOptions, a call argument no pattern here matches,
+#     so kernel.go needs no exemption of its own
+#   * examples/reference-app/internal/app/modules.go -- the assembly's
+#     authn construction: the host-side "SMS sender" seam three-way (a
+#     configured gateway URL always wins; absent it, a non-distributed
+#     mode falls back to the console transport while the distributed
+#     mode is left deliberately UNWIRED), whose distributed branch
+#     go/authn/module.go's own newOptions check below refuses to let
+#     assemble silently
 #   * go/authn/module.go -- the newOptions check refusing a distributed
 #     composition that wired no explicit WithSMSSender
 #     (ErrMissingDistributedSMSSender) instead of silently defaulting to
@@ -59,12 +70,12 @@
 #     scan it; the in-tree copy is the template, not library code.
 #   * go/saasctl/internal/template/project/selection/{authn,authn+org,
 #     authn+rbac,authn+org+rbac}/server.go -- the saasctl-distributed-mode
-#     round's port of the reference-app server.go's own authn "SMS sender"
+#     round's port of the reference-app modules.go's own authn "SMS sender"
 #     seam three-way conditional injection (an unreachable-under-
 #     distributed-mode console fallback would leave a distributed replica
 #     pool silently unwarned) into each authn-containing selection's own
 #     command-entry wiring. Byte-for-byte the same wiring-time decision the
-#     reference-app server.go exemption and go/authn/module.go's own
+#     reference-app modules.go exemption and go/authn/module.go's own
 #     ErrMissingDistributedSMSSender check already cover, and the identical
 #     "template, not library code, materializes outside this tree" argument
 #     config.go's own entry above makes -- these four files just carry the
@@ -128,7 +139,7 @@ rules:
       wiring: the RequiredCapabilities() dispatch
       (go/pkgcore/deployment_mode.go) and consumer command entries
       reading APP_DEPLOYMENT_MODE (the reference app's internal/app
-      bootstrap + server wiring and the saasctl CLI's embedded
+      bootstrap + server + modules wiring and the saasctl CLI's embedded
       generated-app config.go and authn-containing server.go files) are
       the only allowlisted sites; business code receives
       already-resolved, capability-checked infrastructure and must never
@@ -193,6 +204,7 @@ rules:
         - "**/go/pkgcore/deployment_mode.go"
         - "**/examples/reference-app/internal/app/bootstrap.go"
         - "**/examples/reference-app/internal/app/server.go"
+        - "**/examples/reference-app/internal/app/modules.go"
         - "**/go/authn/module.go"
         # Consumer-command-entry sites (see header).
         - "**/go/saasctl/internal/template/project/cmd/server/config.go"
