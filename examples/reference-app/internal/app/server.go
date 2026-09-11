@@ -10,7 +10,6 @@ package app
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -40,7 +39,6 @@ import (
 	"github.com/vislake/speed/go/jobs"
 	"github.com/vislake/speed/go/metering"
 	"github.com/vislake/speed/go/notification"
-	obs "github.com/vislake/speed/go/observability"
 
 	// Blank-imported for its init() side effect: obs.Init's local
 	// exporters wire a real /metrics scrape endpoint only when a local
@@ -611,12 +609,9 @@ func BuildServer(ctx context.Context, cfg ServerConfig) (http.Handler, func() er
 	b := newServerBuild(cfg)
 	a, err := speedapp.New(ctx, b.options()...)
 	if err != nil {
-		// The engine's rollback tears down everything the engine built;
-		// the audit bus and, when Redis composes it, the client it runs on
-		// were built before New and are this host's, so they close here.
-		if closeErr := b.closeExternal(); closeErr != nil {
-			obs.FromContext(ctx).Error("reference-app: closing the pre-assembly resources after a failed assembly failed", "error", closeErr)
-		}
+		// The engine's rollback already tore the process down -- the
+		// background worker's Close included, which owns the audit bus and
+		// its Redis client, the two resources this host builds before New.
 		return nil, nil, nil, err
 	}
 	return a.Handler(), func() error { return a.Close(context.Background()) }, b.complianceModule, nil
@@ -739,24 +734,6 @@ func (b *serverBuild) openBus() {
 	b.redisBus = eventbusredis.NewEventBus(b.redisClient)
 	b.bus = b.redisBus
 	b.busCapabilities = pkgcore.MultiReplicaSafe | pkgcore.SurvivesRestart
-}
-
-// closeExternal closes the resources built before the engine runs: the
-// audit bus and, when Redis composes it, the client it was built on. On a
-// failed assembly the engine has already rolled back everything it built
-// and never saw these; on a successful one the background worker's Close
-// owns them instead, in the same order.
-func (b *serverBuild) closeExternal() error {
-	var errs []error
-	if b.redisBus != nil {
-		b.redisBus.Close()
-	}
-	if b.redisClient != nil {
-		if err := b.redisClient.Close(); err != nil {
-			errs = append(errs, err)
-		}
-	}
-	return errors.Join(errs...)
 }
 
 // backgroundWorker is this host's seat in the engine's lifecycle: Start
