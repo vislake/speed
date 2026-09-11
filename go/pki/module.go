@@ -383,7 +383,7 @@ func WithExpiryScanWindow(d time.Duration) Option {
 // LocalSigner unless overridden by WithSigner. Constructing a Module
 // performs no I/O: opening and migrating db, and registering
 // LocalKeySerializerName against a cipher (RegisterLocalKeySerializer), are
-// the host's responsibility, done before Bootstrap ever calls Register.
+// the host's responsibility, done before the assembly ever calls Register.
 func NewModule(db *gorm.DB, opts ...Option) *Module {
 	m := &Module{
 		db:                db,
@@ -508,7 +508,7 @@ func (m *Module) OpenAPISpec() []byte { return openAPISpecYAML }
 // both. It also builds and mounts pki's HTTP surface: Handler is built
 // here, not in NewModule, so it serves the service and repository
 // instances every Option has already configured by the time Register runs
-// (Bootstrap calls Register only after NewModule has returned) -- the same
+// (the assembly calls Register only after NewModule has returned) -- the same
 // reasoning storage.Module's identical placement documents. Routes.Mount
 // is a plain registration, no I/O, so Register's no-I/O contract stands.
 func (m *Module) Register(reg *pkgcore.ComponentRegistry) error {

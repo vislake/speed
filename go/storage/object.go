@@ -899,7 +899,7 @@ func (s *ObjectService) findByID(ctx context.Context, objectID string) (*Object,
 // under the derivative key the grammar in key.go fixes. Module.Register
 // registers the type's handler (derive.go's deriveHandler, backed by
 // DeriveService); a host that wants registered handlers claimed drains
-// reg.Jobs.Handlers() onto its jobs.Queue after Bootstrap, exactly as
+// reg.Jobs.Handlers() onto its jobs.Queue after the assembly has run, exactly as
 // go/jobs documents.
 const taskTypeDeriveThumbnail = "storage.object.derive.thumbnail"
 

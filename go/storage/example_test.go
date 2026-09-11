@@ -263,7 +263,7 @@ func ExampleLifecycleService() {
 	ctx := pkgcore.WithTenant(context.Background(), pkgcore.TenantID("acme-dental"))
 
 	// The host opens the connection and migrates it from zero, then
-	// bootstraps the module through the real kernel so the services' host
+	// bootstraps the module through the real assembly so the services' host
 	// seams -- the standalone object store, the event bus -- are real.
 	db, err := dbkit.Open(ctx, dbkit.Options{
 		Dialect: dbkit.DialectSQLite,

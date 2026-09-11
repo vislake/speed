@@ -265,7 +265,7 @@ func WithUserLocaleResolver(resolver UserLocaleResolver) Option {
 
 // NewModule returns a Module whose tables live in db. Constructing a Module
 // performs no I/O: opening and migrating db is the host's responsibility,
-// done once at startup before Bootstrap ever calls Register. The required
+// done once at startup before the assembly ever calls Register. The required
 // seams -- the consent ledger's four (see the With* option docs) plus the
 // delivery pipeline's queue and user-address resolver -- arrive through the
 // With* options; a Module missing any of them fails Register (see the
@@ -292,7 +292,7 @@ func NewModule(db *gorm.DB, opts ...Option) *Module {
 
 // Preferences returns the module's preference service -- the matrix's only
 // sanctioned read/write face. A host hands this to its HTTP handler once
-// Bootstrap has run, so the service's type-taxonomy reference is attached
+// the assembly has run, so the service's type-taxonomy reference is attached
 // (Register) by the time any caller reaches it.
 func (m *Module) Preferences() *PreferenceService {
 	return m.prefs
@@ -301,8 +301,8 @@ func (m *Module) Preferences() *PreferenceService {
 // Contacts returns the module's contact service -- the consent ledger's
 // only sanctioned read/write face, and the deliverability gate the
 // delivery job calls before every send to an external contact. A host
-// hands this to its HTTP handler and its queue handlers once Bootstrap has
-// run, so the service's seams are validated and attached (Register) by the
+// hands this to its HTTP handler and its queue handlers once the assembly
+// has run, so the service's seams are validated and attached (Register) by the
 // time any caller reaches it.
 func (m *Module) Contacts() *ContactService {
 	return m.contacts
@@ -311,7 +311,7 @@ func (m *Module) Contacts() *ContactService {
 // Deliveries returns the module's delivery pipeline -- the only sanctioned
 // way to enqueue an outbound delivery (DeliveryService.Dispatch), and the
 // jobs.Handler the module registered for its delivery jobs. A host calls
-// this once Bootstrap has run: the pipeline's queue and resolver seams were
+// this once the assembly has run: the pipeline's queue and resolver seams were
 // validated by Register, and its registry slice is attached, by the time any
 // caller reaches it.
 func (m *Module) Deliveries() *DeliveryService {
@@ -465,7 +465,7 @@ func (m *Module) Register(reg *pkgcore.ComponentRegistry) error {
 
 	// Handler is built here, not in NewModule, deliberately: every Option a
 	// caller passed to NewModule -- WithSubjectResolver above all -- has
-	// already run by the time Register is called (Bootstrap calls Register
+	// already run by the time Register is called (the assembly calls Register
 	// only after NewModule has returned), so the resolver Handler is given
 	// is whichever one the host actually configured, never a nil one
 	// captured before the option ran. The registry slice the handler reads

@@ -329,7 +329,7 @@ func (s *Service) EnsurePurpose(ctx context.Context, purpose, algorithm string, 
 		for i := range pending {
 			if keyInValidity(pending[i], now) {
 				// A usable successor is staged; the scan (or PromoteNow)
-				// promotes it. Bootstrap must not create a rival.
+				// promotes it. The heal must not create a rival.
 				return nil
 			}
 		}

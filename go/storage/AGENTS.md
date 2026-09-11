@@ -326,7 +326,7 @@ magic numbers:
   (derive.go's `deriveHandler`, backed by `DeriveService`) and the
   expiry-sweep task `EnqueueExpirySweep` schedules (cleanup.go, through the
   shared `jobs.NewEmptyPayloadHandler` over `LifecycleService.Sweep`) —
-  catalog insertions a host drains onto its queue after Bootstrap and gets a
+  catalog insertions a host drains onto its queue after the assembly has run and gets a
   worker that produces thumbnails and sweeps expiry — and declares the expiry
   sweep's periodic schedule on `reg.SchedulesSeat()` (cleanup.go's
   `expirySweepSchedule`), the seat a host's `jobs.Scheduler` reads;

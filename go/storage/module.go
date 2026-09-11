@@ -280,7 +280,7 @@ func WithAllowedTypes(types ...string) Option {
 
 // NewModule returns a Module whose metadata tables live in db. Constructing
 // a Module performs no I/O: opening and migrating db is the host's
-// responsibility, done once at startup before Bootstrap ever calls
+// responsibility, done once at startup before the assembly ever calls
 // Register.
 func NewModule(db *gorm.DB, opts ...Option) *Module {
 	m := &Module{
@@ -475,7 +475,7 @@ func (m *Module) Register(reg *pkgcore.ComponentRegistry) error {
 	m.life.attach(reg)
 	// Claim the handlers of the tasks the services enqueue and schedule,
 	// so a host that drains reg.Jobs.Handlers() onto its jobs.Queue after
-	// Bootstrap gets a worker that produces thumbnails and sweeps expiry.
+	// the assembly has run gets a worker that produces thumbnails and sweeps expiry.
 	// Jobs.Handle is a plain catalog insertion, no I/O.
 	if err := reg.JobsSeat().Handle(taskTypeDeriveThumbnail, deriveHandler{svc: m.derive}); err != nil {
 		return err
@@ -492,7 +492,7 @@ func (m *Module) Register(reg *pkgcore.ComponentRegistry) error {
 	}
 	// Build and mount the module's HTTP surface. Handler is built here, not
 	// in NewModule, deliberately: every Option a caller passed to NewModule
-	// has already run by the time Register is called (Bootstrap calls
+	// has already run by the time Register is called (the assembly calls
 	// Register only after NewModule has returned), so the handler serves the
 	// service and repository instances the host actually configured -- the
 	// same m.svc, m.life, m.objects and m.derivatives the job handlers above

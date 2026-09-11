@@ -95,7 +95,7 @@ func TestModule_Locales_ShipsBothLanguages(t *testing.T) {
 }
 
 // TestModule_Register_DeclaresItsSurface bootstraps storage through the real
-// kernel -- the same path a host takes -- and asserts every declaration
+// assembly -- the same path a host takes -- and asserts every declaration
 // arrives on the registry. Bootstrapping rather than calling Register against
 // a hand-built Registry is deliberate: it also proves storage's locale files
 // survive i18n.Builder.AddModule's parity validation, which only runs there.
@@ -186,7 +186,7 @@ func TestModule_Register_DoesNotDeclareForeignEvents(t *testing.T) {
 func TestModule_Register_CoexistsWithAnotherModule(t *testing.T) {
 	reg, err := componenttest.DeclareModules(newWiredModule(t, nil), neighbourModule{})
 	if err != nil {
-		t.Fatalf("Bootstrap: %v", err)
+		t.Fatalf("assembly: %v", err)
 	}
 	assertContainsAll(t, reg.PermissionsSeat().Permissions(), []string{PermissionRead, "neighbour:read"})
 }
@@ -227,7 +227,7 @@ func TestModule_Register_DeclaresTheExpirySweepSchedule(t *testing.T) {
 func TestModule_Register_RefusesAQueuelessBoot(t *testing.T) {
 	_, err := componenttest.DeclareModules(NewModule(nil))
 	if !apperr.HasCode(err, ErrQueueRequired.Code) {
-		t.Fatalf("Bootstrap without a queue error = %v, want storage.queue_required", err)
+		t.Fatalf("assembly without a queue error = %v, want storage.queue_required", err)
 	}
 }
 
@@ -254,7 +254,7 @@ func TestModule_Register_RefusesAnUnadmittableAllowedType(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			_, err := componenttest.DeclareModules(newWiredModule(t, nil, WithAllowedTypes(tc.types...)))
 			if !apperr.HasCode(err, ErrAllowedTypeUnsupported.Code) {
-				t.Fatalf("Bootstrap with allowed types %v error = %v, want storage.allowed_type_unsupported", tc.types, err)
+				t.Fatalf("assembly with allowed types %v error = %v, want storage.allowed_type_unsupported", tc.types, err)
 			}
 		})
 	}
@@ -268,12 +268,12 @@ func TestModule_Register_RefusesAnUnadmittableAllowedType(t *testing.T) {
 func TestModule_Register_AdmitsTheDefaultAllowlistAndOnlyIt(t *testing.T) {
 	t.Run("no WithAllowedTypes option", func(t *testing.T) {
 		if _, err := componenttest.DeclareModules(newWiredModule(t, nil)); err != nil {
-			t.Fatalf("Bootstrap with the default allowlist: %v", err)
+			t.Fatalf("assembly with the default allowlist: %v", err)
 		}
 	})
 	t.Run("the full safety set spelled out", func(t *testing.T) {
 		if _, err := componenttest.DeclareModules(newWiredModule(t, nil, WithAllowedTypes("image/jpeg", "image/png"))); err != nil {
-			t.Fatalf("Bootstrap with the safety-covered allowlist: %v", err)
+			t.Fatalf("assembly with the safety-covered allowlist: %v", err)
 		}
 	})
 }
@@ -539,7 +539,7 @@ func TestModule_Register_WiresTheServiceHostSeams(t *testing.T) {
 // TestModule_Register_RegistersTheServicesJobHandlers proves the two
 // handler registrations land on the registry bound to the module's own
 // services -- a host that drains reg.Jobs.Handlers() onto its jobs.Queue
-// after Bootstrap gets a derive worker and an expiry-sweep worker acting
+// after the assembly has run gets a derive worker and an expiry-sweep worker acting
 // on the module that registered them, never on some other module's
 // services. Each handler's behaviour on a real job is pinned by
 // derive_test.go and cleanup_test.go; this test pins the registration the
@@ -548,7 +548,7 @@ func TestModule_Register_RegistersTheServicesJobHandlers(t *testing.T) {
 	m := newWiredModule(t, nil)
 	reg, err := componenttest.DeclareModules(m)
 	if err != nil {
-		t.Fatalf("Bootstrap: %v", err)
+		t.Fatalf("assembly: %v", err)
 	}
 
 	handlers := reg.JobsSeat().Handlers()
@@ -653,15 +653,15 @@ func newWiredModule(t *testing.T, db *gorm.DB, opts ...Option) *Module {
 }
 
 // bootstrapTestModule bootstraps a fully wired storage module through the
-// real kernel and returns the registry it registered against. Going through
-// Bootstrap rather than calling Register on a hand-built Registry is
+// real assembly and returns the registry it registered against. Going through
+// the assembly rather than calling Register on a hand-built Registry is
 // deliberate: it is the only path that also merges the locale files and so
 // proves they survive i18n.Builder.AddModule's parity validation.
 func bootstrapTestModule(t *testing.T, opts ...Option) *pkgcore.ComponentRegistry {
 	t.Helper()
 	reg, err := componenttest.DeclareModules(newWiredModule(t, nil, opts...))
 	if err != nil {
-		t.Fatalf("Bootstrap: %v", err)
+		t.Fatalf("assembly: %v", err)
 	}
 	return reg
 }

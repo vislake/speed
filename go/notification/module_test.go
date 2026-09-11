@@ -52,7 +52,7 @@ func (r *stubUserResolver) Resolve(_ context.Context, userID string) (UserAddres
 // implementations -- the shape a standalone-deployment host assembles for
 // itself -- with the module's three fixture types declared on the
 // notification-type registrar, exactly as a declaring business module would
-// register them before Bootstrap walks the module graph.
+// register them before the assembly walks the module graph.
 //
 // The fixture types and every extra declaration step the caller passes --
 // a module's own Register, typically -- share the registry's one Init

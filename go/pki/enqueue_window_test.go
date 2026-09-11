@@ -27,7 +27,7 @@ import (
 // cadence.
 //
 // The collapse tests run against a REAL jobs.StandaloneQueue over a real
-// SQLite database, the same shape go/storage's sweep_window_test.go uses:
+// SQLite database, the same shape go/storage's cleanup_test.go uses:
 // the dedupe behaviour under test lives in jobs' partial unique index and
 // row semantics, which a fake queue cannot exercise. The windowed
 // idempotency key is what the collapse tests pin: without it every enqueue
