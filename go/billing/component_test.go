@@ -45,6 +45,49 @@ func TestComponentWellFormed(t *testing.T) {
 	componenttest.AssertWellFormed(t, component())
 }
 
+// TestComponent_InitDeclaresThroughTheGate drives the descriptor's Init
+// through a real assembly: the module's Register runs inside the one stage
+// whose seats accept writes, so every declaration lands in the assembly's
+// own seats and the module's handler is built over its own services.
+func TestComponent_InitDeclaresThroughTheGate(t *testing.T) {
+	db := testutil.NewSQLite(t, moduleName, migrations.FS)
+	reg := pkgcore.NewComponentRegistry()
+	if err := componenttest.RunInit(t, reg, component(), db, pkgcore.NewMemoryEventBus()); err != nil {
+		t.Fatalf("RunInit: %v", err)
+	}
+	assertContainsAll(t, reg.Permissions.Permissions(), []string{
+		PermissionPlanManage, PermissionSubscriptionRead, PermissionSubscriptionManage,
+		PermissionCreditRead, PermissionCreditManage,
+	})
+	assertContainsAll(t, reg.AuditActions.Actions(), []string{
+		AuditActionCreditGrant, AuditActionCreditDeductReserve, AuditActionCreditDeductConfirm,
+		AuditActionCreditRefund, AuditActionCreditExpire,
+	})
+	var types []string
+	for _, decl := range reg.Events.Published() {
+		types = append(types, decl.Type)
+	}
+	assertContainsAll(t, types, []string{EventPlanChanged, EventSubscriptionStatusChanged})
+	if routes := reg.Routes.Routes(); len(routes) != 1 || routes[0].Path != apiPath {
+		t.Fatalf("Init mounted %v, want exactly the %s mount", routes, apiPath)
+	}
+	// No queue was wired: Init must claim neither the poll handler nor its
+	// schedule.
+	if _, ok := reg.Jobs.Handlers()[taskTypePoll]; ok {
+		t.Errorf("Init claimed the poll job handler without a queue")
+	}
+	if decls := reg.Schedules.Declarations(); len(decls) != 0 {
+		t.Errorf("Init declared %v, want no schedule without a queue", decls)
+	}
+	m, err := pkgcore.Get[*Module](reg)
+	if err != nil {
+		t.Fatalf("the assembly's product: %v", err)
+	}
+	if m.handler == nil {
+		t.Error("the module's HTTP handler was not built by Init")
+	}
+}
+
 // TestComponentAssemblesThroughRegistry drives the registered descriptor
 // through the assembly's stages the way a host would: selection from a
 // composition configuration, construction from the database, usage-reader
