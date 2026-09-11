@@ -165,6 +165,62 @@ func TestPutGetStructuralMatch(t *testing.T) {
 	assertPanicContains(t, "Put requires a non-nil value", func() { reg.Put(nil) })
 }
 
+// typedNilProduct is the New callback of a component whose construction
+// "succeeds" with a typed nil pointer -- the shape an interface-typed return
+// turns silently non-nil, so every nil check that compares the interface
+// against nil lets it through.
+func typedNilProduct() (any, error) {
+	var product *compTokenA
+	return product, nil
+}
+
+// TestTypedNilPointersAreAbsent pins the nil rule at the three boundaries a
+// product crosses: Put, the Construct stage's product delivery and Build. A
+// typed nil pointer is the absence it is, never a present value -- so a
+// consumer can never read a present-but-nil value out of the by-type context
+// and panic at first use far from the wiring error.
+func TestTypedNilPointersAreAbsent(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("Put refuses a typed nil", func(t *testing.T) {
+		reg := NewComponentRegistry()
+		assertPanicContains(t, "Put requires a non-nil value", func() { reg.Put((*compTokenA)(nil)) })
+		if _, err := Get[*compTokenA](reg); !errors.Is(err, ErrMissingRequirement) {
+			t.Fatalf("Get after a refused typed-nil Put = %v, want ErrMissingRequirement", err)
+		}
+	})
+
+	t.Run("a typed-nil product fails Construct", func(t *testing.T) {
+		reg := newTestRegistry(t, recordingComponent(&stageLog{}, "typednil", "", nil, func(c *Component) {
+			c.New = func(context.Context, *ComponentRegistry, ComponentConfig) (any, error) { return typedNilProduct() }
+		}))
+		reg.Put(testComposition(configEntry{key: "typednil", value: nil}))
+		if err := reg.Prepare(ctx); err != nil {
+			t.Fatalf("Prepare = %v", err)
+		}
+		err := reg.Construct(ctx)
+		if !errors.Is(err, ErrComponentFailed) || !strings.Contains(err.Error(), "returned no product") {
+			t.Fatalf("Construct = %v, want ErrComponentFailed naming the absent product", err)
+		}
+		if _, err := Get[*compTokenA](reg); !errors.Is(err, ErrMissingRequirement) {
+			t.Fatalf("Get after the failed Construct = %v, want ErrMissingRequirement; a typed nil must not be readable as a present value", err)
+		}
+	})
+
+	t.Run("a typed-nil product fails Build", func(t *testing.T) {
+		reg := newTestRegistry(t, recordingComponent(&stageLog{}, "typednilbuild", "", nil, func(c *Component) {
+			c.New = func(context.Context, *ComponentRegistry, ComponentConfig) (any, error) { return typedNilProduct() }
+		}))
+		reg.Put(testComposition(configEntry{key: "typednilbuild", value: nil}))
+		if err := reg.Prepare(ctx); err != nil {
+			t.Fatalf("Prepare = %v", err)
+		}
+		if built, err := Build[*compTokenA](ctx, reg, "typednilbuild", nil); err == nil {
+			t.Fatalf("Build = (%v, nil), want an error for the typed-nil product", built)
+		}
+	})
+}
+
 func TestGetOptional(t *testing.T) {
 	reg := NewComponentRegistry()
 

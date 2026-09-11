@@ -267,18 +267,32 @@ func (r *ComponentRegistry) Register(c Component) error {
 	return nil
 }
 
+// nilValue reports whether v is nil: the untyped nil an interface holds
+// directly, or a typed nil pointer. A typed nil is a value whose dynamic type
+// is present -- so a type-addressed read matches it -- while the value itself
+// is absent, the "present but nil" reading every consumer would only trip
+// over at first use.
+func nilValue(v any) bool {
+	if v == nil {
+		return true
+	}
+	rv := reflect.ValueOf(v)
+	return rv.Kind() == reflect.Pointer && rv.IsNil()
+}
+
 // Put adds v to the by-type value context: a component's product, a runtime
 // service published during Init, or a value the host injects before Prepare
 // (its own data, or the code-override layer of the configuration chain). All
 // consumers read one shared context, addressed by type. Put is append-only,
 // so no value is ever displaced by a later one.
 //
-// A nil v panics: nil matches no type, so it could only ever produce a Get
-// that reports a type missing while a put was made -- the silent absence the
-// by-type context exists to prevent.
+// A nil v panics, untyped or typed: an untyped nil matches no type and would
+// leave a later Get reporting a silent absence, while a typed nil pointer
+// matches its type and would leave a later Get reporting a present-but-nil
+// value no consumer can use -- the same silent lie with the opposite sign.
 func (r *ComponentRegistry) Put(v any) {
-	if v == nil {
-		panic("pkgcore: Put requires a non-nil value: nil matches no type and would leave a later Get reporting a silent absence")
+	if nilValue(v) {
+		panic("pkgcore: Put requires a non-nil value: an untyped nil matches no type, and a typed nil pointer is a present-but-nil value no consumer can use")
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -446,8 +460,8 @@ func (r *ComponentRegistry) Construct(ctx context.Context) error {
 		if err != nil {
 			return r.failStage(ctx, stageConstruct, name, err)
 		}
-		if instance == nil {
-			return r.failStage(ctx, stageConstruct, name, errors.New("the New callback returned no product"))
+		if nilValue(instance) {
+			return r.failStage(ctx, stageConstruct, name, errors.New("the New callback returned no product (a nil or typed nil pointer value)"))
 		}
 		// The values the New callback put itself are, by construction, this
 		// component's own additional deliveries: the stage drives one New at
@@ -1023,6 +1037,9 @@ func Build[T any](ctx context.Context, r *ComponentRegistry, name string, overri
 	instance, err := p.component.New(ctx, r, cfg)
 	if err != nil {
 		return zero, fmt.Errorf("pkgcore: component %q (build): %w", name, err)
+	}
+	if nilValue(instance) {
+		return zero, fmt.Errorf("pkgcore: component %q built no product: New returned a nil or typed nil pointer value", name)
 	}
 	value, ok := instance.(T)
 	if !ok {

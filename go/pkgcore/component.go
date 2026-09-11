@@ -93,10 +93,12 @@ type Component struct {
 	// cfg carries the component's resolved configuration, the
 	// components.<name> subtree of the composition; a component with no
 	// configuration block receives an empty config. The product may carry
-	// resources it owns; returning (nil, nil) is refused, because a nil
-	// product is indistinguishable from no product and would leave every
-	// dependent requirement silently unsatisfiable. The registry puts the
-	// returned product into the by-type context, so New itself must not.
+	// resources it owns; returning no product -- (nil, nil), or a typed nil
+	// pointer such as (*T)(nil) -- is refused, because a nil product would
+	// leave every dependent requirement reading a present-but-nil value
+	// instead of failing at the construction that produced it. The registry
+	// puts the returned product into the by-type context, so New itself must
+	// not.
 	New func(ctx context.Context, reg *ComponentRegistry, cfg ComponentConfig) (any, error)
 
 	// Verify runs after every product is constructed and the database is
