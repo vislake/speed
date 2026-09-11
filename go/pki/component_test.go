@@ -16,7 +16,7 @@ import (
 
 // testDBComponent is a stand-in for the database component a real assembly
 // selects: it declares the *gorm.DB product and constructs the test's
-// migrated handle, so the descriptor's declared database dependency resolves
+// migrated handle, so the descriptors' declared database dependency resolves
 // exactly as it will against the real db component.
 func testDBComponent(db *gorm.DB) pkgcore.Component {
 	return pkgcore.Component{
@@ -140,4 +140,69 @@ func TestComponentConstructionRefusesBadInputs(t *testing.T) {
 			t.Fatal("construction picked one of two queue values instead of refusing the ambiguity")
 		}
 	})
+}
+
+// TestSignerLocalComponent_WellFormed runs the descriptor through the
+// component contract: the naming convention, the typed tokens (no schema --
+// the shared connection replaces the flat adapter's dialect/dsn pair).
+func TestSignerLocalComponent_WellFormed(t *testing.T) {
+	t.Parallel()
+	componenttest.AssertWellFormed(t, signerLocalComponent)
+}
+
+// TestSignerLocalComponent_DeclaresCapabilities pins the declaration: 0
+// bits, the same non-declaration the seam registration records -- LocalSigner
+// decrypts the private key into this process's memory for the duration of a
+// signing call, so it must not claim KeyNeverLeavesBoundary.
+func TestSignerLocalComponent_DeclaresCapabilities(t *testing.T) {
+	t.Parallel()
+	if signerLocalComponent.Capabilities != 0 {
+		t.Errorf("signer.local capabilities = %v, want 0 (the documented non-declaration)", signerLocalComponent.Capabilities)
+	}
+	if signerLocalComponent.Capabilities.Has(pkgcore.KeyNeverLeavesBoundary) {
+		t.Error("signer.local declares KeyNeverLeavesBoundary, which LocalSigner's in-process decryption does not earn")
+	}
+}
+
+// TestSignerLocalComponent_ConstructsOverTheSharedConnection drives the
+// component through a real assembly: it resolves the *gorm.DB the database
+// provider put, builds the LocalSigner over that very connection -- not the
+// second connection the flat seam adapter must open for itself -- and the
+// signer's writes land in the shared database.
+func TestSignerLocalComponent_ConstructsOverTheSharedConnection(t *testing.T) {
+	ctx := context.Background()
+	db := newTestDB(t)
+
+	reg := pkgcore.NewComponentRegistry()
+	if err := reg.Register(testDBComponent(db)); err != nil {
+		t.Fatalf("registering the database stand-in: %v", err)
+	}
+	reg.Put(pkgcore.NewComponentConfig(map[string]any{
+		"components": map[string]any{
+			"test.db":      nil,
+			"signer.local": nil,
+		},
+	}))
+
+	if err := reg.Prepare(ctx); err != nil {
+		t.Fatalf("Prepare() error = %v", err)
+	}
+	if err := reg.Construct(ctx); err != nil {
+		t.Fatalf("Construct() error = %v", err)
+	}
+
+	signer, err := pkgcore.Get[Signer](reg)
+	if err != nil {
+		t.Fatalf("Get[Signer] error = %v, want the constructed signer", err)
+	}
+
+	// The signer writes through the shared connection: a key it generates is
+	// visible to a repository built on the same *gorm.DB.
+	keyRef, _, err := signer.GenerateKey(ctx, AlgorithmEd25519)
+	if err != nil {
+		t.Fatalf("GenerateKey() error = %v", err)
+	}
+	if _, err := NewLocalKeyRepository(db).FindByKeyRef(ctx, keyRef); err != nil {
+		t.Errorf("FindByKeyRef(%q) error = %v: the signer must write through the shared connection", keyRef, err)
+	}
 }

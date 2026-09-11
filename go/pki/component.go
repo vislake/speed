@@ -1,13 +1,13 @@
 package pki
 
-// component.go carries pki's descriptor for the config-driven component
-// assembly: the selection key a composition configuration names, the assets
-// the module brings, the contracts it consumes, and the callbacks that
-// construct and close it. The descriptor is additive: pkgcore.Module.Register,
-// driven by the host's bootstrap, remains pki's declaration path, and the
-// descriptor states the same surface in the assembly's terms.
+// component.go carries pki's descriptors for the config-driven component
+// assembly: the pki module's selection key, assets, consumed contracts and
+// lifecycle callbacks, and the "signer.local" implementation the signer
+// module binds. Both are additive: pkgcore.Module.Register, driven by the
+// host's bootstrap, remains pki's declaration path, and the descriptors
+// state the same surface in the assembly's terms.
 //
-// The descriptor declares no Prepare callback. RegisterLocalKeySerializer --
+// The pki descriptor declares no Prepare callback. RegisterLocalKeySerializer --
 // the pre-open step that registers the cipher GORM resolves the LocalSigner's
 // private-key column through -- consumes the pki.local_key_cipher_key
 // material, and the by-purpose material source that hands a component its own
@@ -116,6 +116,44 @@ func component() pkgcore.Component {
 	}
 }
 
+// signerLocalComponent is the component descriptor for "signer.local": the
+// ed25519 LocalSigner the standalone deployment mode runs and every test
+// can use as a double. signer is a binding module -- exactly one
+// implementation is selected -- and this component is the
+// zero-external-dependency one, beside the vault and kmsaws providers that
+// register their own names from their subpackages; the seam registration of
+// the same name (signer_registry.go) stays the name-based path for a
+// Preset-shaped caller.
+//
+// Requires the database (its *gorm.DB product) and builds the signer over
+// that shared connection -- not the second connection the flat seam adapter
+// must open for itself, because a flat Config cannot carry a *gorm.DB.
+// Provides (*Signer)(nil), the contract a consumer's token resolves through.
+// Capabilities are deliberately 0, the same non-declaration the seam
+// registration records: LocalSigner decrypts the private key into this
+// process's memory for the duration of a signing call, so it does not
+// declare KeyNeverLeavesBoundary. Like every LocalSigner caller, this
+// component expects LocalKeySerializerName to be registered (once, at
+// bootstrap, before any connection using the schema opens) against the
+// cipher the host injected; the pki component's own host wiring is where
+// that registration goes.
+var signerLocalComponent = pkgcore.Component{
+	Name:         "signer.local",
+	Module:       "signer",
+	Provides:     []any{(*Signer)(nil)},
+	Capabilities: 0,
+	ConfigSchema: nil, // the shared connection replaces the adapter's dialect/dsn pair
+	Requires:     []pkgcore.Requirement{{Token: (*gorm.DB)(nil)}},
+	New: func(_ context.Context, reg *pkgcore.ComponentRegistry, _ pkgcore.ComponentConfig) (any, error) {
+		db, err := pkgcore.Get[*gorm.DB](reg)
+		if err != nil {
+			return nil, err
+		}
+		return NewLocalSigner(db), nil
+	},
+}
+
 func init() {
 	pkgcore.MustRegister(component())
+	pkgcore.MustRegister(signerLocalComponent)
 }
