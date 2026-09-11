@@ -668,8 +668,8 @@ var (
 
 // RegisterMountedRoutes hands Middleware the application's real route
 // table -- the pkgcore.MountedRoute values the host's modules registered
-// on their pkgcore.Registry (the registry's Routes registrar:
-// pkgcore.Registry.Routes.Routes()), plus any host-level routes the host
+// on the host's pkgcore.ComponentRegistry (the registry's MountedRoutes
+// reading of the Routes seat), plus any host-level routes the host
 // mounts itself -- so the route label limiter every Middleware instance
 // creates can reserve a place for each real route BEFORE any request
 // traffic arrives. Without that reservation, the limiter's
