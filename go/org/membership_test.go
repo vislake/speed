@@ -663,10 +663,10 @@ func TestMemberService_Restore_Twice_SecondCallReturnsMembershipNotFound(t *test
 // file, so a single pair of goroutines is not a reliable signal on its
 // own; this test therefore repeats the pair trialAttempts times and fails
 // the whole test the moment ANY attempt shows the forbidden outcome (both
-// succeeding, or the tenant ever dropping to zero active members). On the
-// fixed shape (MembershipRepository.removeIfNotLastActive, one
-// database-arbitrated transaction per Remove) that forbidden outcome must
-// never occur, in any of the trialAttempts attempts: exactly one goroutine
+// succeeding, or the tenant ever dropping to zero active members). On
+// MembershipRepository.removeIfNotLastActive -- one database-arbitrated
+// transaction per Remove -- that forbidden outcome must never occur, in
+// any of the trialAttempts attempts: exactly one goroutine
 // succeeds and the other is refused with ErrMemberNotRemovable every single
 // time.
 func TestMemberService_Remove_ConcurrentLastTwoActiveMembers(t *testing.T) {
@@ -735,8 +735,8 @@ func TestMemberService_Remove_ConcurrentLastTwoActiveMembers(t *testing.T) {
 }
 
 // TestMemberService_Remove_ConcurrentDistinctUsers_BothSucceed proves the
-// fix's cost is contention, not correctness lost the other way: with THREE
-// active members, two concurrent Removes of two different users (leaving
+// arbitration's cost is contention, not correctness lost the other way:
+// with THREE active members, two concurrent Removes of two different users (leaving
 // one behind) must both succeed -- removeIfNotLastActive's bulk lock-and-
 // count step must never refuse a removal that a real, safe margin of active
 // members remains after.

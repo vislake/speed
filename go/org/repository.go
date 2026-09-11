@@ -451,9 +451,10 @@ func softDeleteActor(ctx context.Context) string {
 // genuine and reproducible against a real PostgreSQL server
 // (integration_test/postgres_concurrency_test.go), not a theoretical
 // concern; SQLite's coarser, whole-file locking
-// combination is not the property either one alone appeared to be. The fix
-// is the row lock as this function's OWN first statement (the blind touch
-// lockLiveNode starts with, BEFORE the bulk scan below ever runs): it
+// combination is not the property either one alone appeared to be. The row
+// lock as this function's OWN first statement (the blind touch
+// lockLiveNode starts with, BEFORE the bulk scan below ever runs) closes
+// this: it
 // contends for the identical row lock lockLiveNode(nodeID) takes, so a
 // concurrent CreateChild (or Restore, or Move locking this same node) is
 // now forced to either have already fully committed, or to block behind

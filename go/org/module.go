@@ -119,8 +119,8 @@ const (
 //
 // The contract is asymmetric on purpose, and the asymmetry is dbkit's own,
 // not this module's: Open refuses an entry that lost the marker
-// (dbkit.invalid_audit_model -- a listed model whose Auditable marker a
-// later round removed must not be silently skipped), while nothing can
+// (dbkit.invalid_audit_model -- a listed model that has lost the Auditable
+// marker must not be silently skipped), while nothing can
 // refuse a model that GAINED the marker while this list forgot it, because
 // Open receives no model inventory -- GORM's models register lazily, per
 // statement. The marker side of the contract is therefore this module's

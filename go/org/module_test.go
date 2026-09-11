@@ -368,10 +368,10 @@ func captureColumnAutoRedacts(f reflect.StructField) bool {
 	return false
 }
 
-// TestModule_Register_DoesNotDeclareAuthnsEvent is the guard for the trap
-// that would only surface once the authn module ships: declaring another
-// module's event type collides at bootstrap, so org must subscribe to
-// authn.user.created without ever declaring it.
+// TestModule_Register_DoesNotDeclareAuthnsEvent is the guard for the
+// cross-module event-name collision: declaring authn.user.created would
+// collide with authn's own declaration at bootstrap, so org must subscribe
+// to that event without ever declaring it.
 func TestModule_Register_DoesNotDeclareAuthnsEvent(t *testing.T) {
 	reg := bootstrapTestModule(t)
 	for _, decl := range reg.EventsSeat().Published() {

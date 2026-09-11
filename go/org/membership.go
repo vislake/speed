@@ -268,17 +268,17 @@ var (
 //
 // # The race this closes
 //
-// The original shape here was activeSample(ctx, 2) (its own transaction, a
-// plain read) followed by a separate Delete call (another transaction): with
-// a tenant at exactly two active members, two goroutines each removing one
-// of them could both read "2 active" before either committed its own
-// delete, both pass the "at least 2" check, and both proceed -- leaving
-// zero active members, which is permanently unrecoverable (invitations
-// require an authenticated member; getting a token requires active
-// membership). ErrMemberNotRemovable's guarantee held only against a
-// single, serial caller.
+// A split check and write -- activeSample(ctx, 2) in its own transaction (a
+// plain read) followed by a separate Delete call in another -- leaves this
+// window open: with a tenant at exactly two active members, two goroutines
+// each removing one of them could both read "2 active" before either
+// committed its own delete, both pass the "at least 2" check, and both
+// proceed -- leaving zero active members, which is permanently unrecoverable
+// (invitations require an authenticated member; getting a token requires
+// active membership). ErrMemberNotRemovable's guarantee, split that way,
+// holds only for a single, serial caller.
 //
-// # The fix: one arbitrated lock, then the write, both in one transaction
+// # One arbitrated lock, then the write, both in one transaction
 //
 // Two writes, and deliberately NO read of anything in between them, so
 // this whole transaction's first database statement is a write -- the
@@ -501,20 +501,19 @@ func (s *MemberService) EnsureRootSeat(ctx context.Context, userID, rootName, ro
 //
 // # Locking nodeID before creating the membership
 //
-// The original shape here was a plain, unlocked s.tree.Get(nodeID) read
-// followed by a separate s.repo.Create -- two independent statements with
-// nothing between them contending for any lock at all. That left a real
-// TOCTOU window against TreeService.Delete: Delete's own subtree scan and
-// mark-delete run in ONE transaction, but a plain read of nodeID here could
-// observe the node as live in the gap before that transaction commits, and
-// this call's own Create -- writing to a completely different table
-// (memberships), with no lock relationship to org_nodes at all -- would
-// then land regardless of what Delete's transaction was doing, leaving a
-// membership bound to a row Delete's cascade was already committing as
-// mark-deleted. See tree.go's Delete doc comment for the other half of this
-// same fix.
+// A plain, unlocked s.tree.Get(nodeID) read followed by a separate
+// s.repo.Create -- two independent statements with nothing between them
+// contending for any lock at all -- would leave a real TOCTOU window
+// against TreeService.Delete: Delete's own subtree scan and mark-delete run
+// in ONE transaction, but a plain read of nodeID here could observe the
+// node as live in the gap before that transaction commits, and this call's
+// own Create -- writing to a completely different table (memberships), with
+// no lock relationship to org_nodes at all -- would then land regardless of
+// what Delete's transaction was doing, leaving a membership bound to a row
+// Delete's cascade was already committing as mark-deleted. See tree.go's
+// Delete doc comment for the other half of this same guard.
 //
-// The fix takes the identical lockLiveNode lock Delete's own transaction
+// This call takes the identical lockLiveNode lock Delete's own transaction
 // takes on nodeID, inside ONE transaction that also creates the membership:
 // either this call's lock wins first (forcing a concurrent Delete of the
 // same node to wait behind it, so the membership it creates is never
@@ -653,10 +652,9 @@ func (s *MemberService) List(ctx context.Context, nodeID string) ([]Membership, 
 // member: inviting somebody requires an authenticated member, so a tenant
 // emptied this way could never be re-entered through the product. That
 // refusal is enforced by removeIfNotLastActive as one database-arbitrated
-// transaction -- see its own doc comment in repository.go for why the
-// original shape here (a separate read-then-check followed by a separate
-// delete) let two concurrent removals of a tenant's last two active members
-// both succeed.
+// transaction -- see its own doc comment in repository.go for why a
+// separate read-then-check followed by a separate delete would let two
+// concurrent removals of a tenant's last two active members both succeed.
 //
 // org does NOT invalidate the removed user's sessions -- it publishes the
 // event and authn, which owns session state, subscribes. Reaching into

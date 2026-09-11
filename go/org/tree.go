@@ -962,14 +962,14 @@ func (s *TreeService) publishDeleted(ctx context.Context, node OrgNode, cascade 
 // # Atomicity against concurrent parent changes: cascade delete, and re-parent
 //
 // What needs to be atomic is the parent-liveness CHECK and the restore WRITE
-// together: the original shape here (a plain s.Get(parentID) read, then a
-// separate s.repo.Restore call) left exactly the window a concurrent cascade
+// together: a plain s.Get(parentID) read followed by a separate
+// s.repo.Restore call would leave exactly the window a concurrent cascade
 // TreeService.Delete of the ancestor could land in, committing between the
 // two and leaving the freshly restored node under a now-dead parent -- the
 // corrupt state this method's own "refuses to land a node on a dead parent"
 // section above exists to rule out.
 //
-// The fix runs both steps inside ONE dbkit.WithTenantSession transaction,
+// This method runs both steps inside ONE dbkit.WithTenantSession transaction,
 // parent-lock first: lockLiveNode's blind, no-prior-read touch-update on the
 // row's parent either blocks until a concurrent cascade delete of that same
 // parent resolves (and then correctly fails to match once it commits), or

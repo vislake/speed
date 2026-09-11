@@ -236,15 +236,14 @@ func TestConcurrentMoveAndCreateChild_TreeInvariantHolds_Postgres(t *testing.T) 
 // node being Moved (a.ID), a row Move already locks via lockLiveNode -- never
 // an INTERIOR DESCENDANT of the moved subtree (a-child), a row Move's
 // rewrite would touch only through its own plain, unlocked subtree scan.
-// This is the tier that actually caught the bug: a real PostgreSQL server's
-// READ COMMITTED semantics let CreateChild's insert land, and commit,
-// entirely within the gap between Move's scan and that scan's later
-// per-row rewrite of a-child -- SQLite's coarser whole-file locking masks
-// this window, which is why the unit tier's SQLite twin of this test
-// (tree_test.go) could not reproduce it within its own round budget. The
-// fix, lockSubtree (repository.go), locks every row of the subtree before
-// trusting the scanned set is complete, not merely the two endpoints Move
-// already locked.
+// Only a real PostgreSQL server reproduces this window: READ COMMITTED
+// semantics let CreateChild's insert land, and commit, entirely within the
+// gap between Move's scan and that scan's later per-row rewrite of a-child,
+// while SQLite's coarser whole-file locking masks it -- which is why the
+// unit tier's SQLite twin of this test (tree_test.go) cannot reproduce it
+// within its own round budget. lockSubtree (repository.go) closes it by
+// locking every row of the subtree before trusting the scanned set is
+// complete, not merely the two endpoints Move already locked.
 func TestConcurrentMoveAndCreateChild_InteriorDescendant_TreeInvariantHolds_Postgres(t *testing.T) {
 	db := newPostgres(t)
 
