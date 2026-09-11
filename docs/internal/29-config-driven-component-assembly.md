@@ -82,7 +82,7 @@ type Component struct {
     Capabilities Capability    // 能力位（可选；部署模式校验用）
     ConfigSchema any           // 类型化 nil 指针（可选；nil = 不吃配置）
     BootstrapKeys []BootstrapKey // 启动期配置声明（键路径＋Format）；loader 在 Prepare 拍① 按 Format 直接解析取值——不要求任何宿主/引擎结构体字段绑定，先于一切构造，不受 Init 席门禁；机制见 30 号文
-    SystemPurposes []SystemPurpose // 系统用途声明；装配器在 Init 收尾统一汇总注册（重复/冲突 fail-closed）
+    SystemPurposes []SystemPurpose // 系统用途声明；装配器在 Init 阶段**入口**统一汇总注册（先于任何 Init 回调——声明数据先于使用；重复/冲突 fail-closed）
     Migrations   embed.FS      // 资产（可选；零值 = 不携带）
     Locales      embed.FS      // 资产（可选；zh-CN/en-US 键集契约）
     OpenAPISpec  []byte        // 资产（可选）
@@ -277,7 +277,7 @@ stateDiagram-v2
 
 **Verify——数据库可达后的自验。** db 组件先应用迁移（全部构造已完成，迁移集合完整；零依赖使其在本阶段序最先），随后各组件校验自身前提（如 schema 与模型一致、依赖的外部条件成立）。只做校验，不承担初始化。需要“全目录”的领域级校验（如权限目录快照、配置 schema 冻结）放在相应组件的 `Start` 回调——进入 Start 的条件是 Init 全部完成，彼时声明集合完整。
 
-**Init——声明、挂接与服务发布。** 声明席开放；按拓扑序执行各组件 `Init`：声明束进 10 席、挂接依赖、发布运行时服务（含 app 组件的 face 组装与订阅——它拓扑序最后，彼时声明齐备，且订阅先于一切 Start）。全部完成后装配器做收尾统一校验（席一致性、资产合并、特征图）并汇总注册各组件的 `SystemPurposes`（重复/冲突 fail-closed）。**值进构造、服务进 Init**：能进构造图的是值，进不了的是服务（见 §5.4）。
+**Init——声明、挂接与服务发布。** **进入本阶段即汇总注册各选中组件的 `SystemPurposes`（先于任何 Init 回调——声明数据先于使用，任何 Init 回调都可能开启系统上下文；重复/冲突 fail-closed、全量校验通过后一次性注册）**；随后声明席开放，按拓扑序执行各组件 `Init`：声明束进 10 席、挂接依赖、发布运行时服务（含 app 组件的 face 组装与订阅——它拓扑序最后，彼时声明齐备，且订阅先于一切 Start）。全部完成后装配器做收尾统一校验（席一致性、资产合并、特征图）。**值进构造、服务进 Init**：能进构造图的是值，进不了的是服务（见 §5.4）。
 
 **Start——开始服务。** 在 Init 收尾校验通过之后：`jobs` 的 queue 组件先 wire（Jobs/Schedules 席已完整——全部 Init 已毕），再按自身配置启动 worker 与 scheduler（“本副本不启 worker”即该组件的配置，如 `worker: false`）；seed 执行；对外监听由**宿主应用组件**承担——face 的组装与订阅已在 Init 完成（订阅须先于任何 Start，运行期事件不致丢失），本阶段只起监听。引擎不含任何 HTTP 组装或监听逻辑。
 
@@ -536,7 +536,7 @@ type Component struct {
     Capabilities   Capability
     ConfigSchema   any
     BootstrapKeys  []BootstrapKey  // 启动期配置声明；loader 拍① 按 Format 直接解析（不经宿主/引擎结构体绑定，不受 Init 席门禁；机制见 30 号文）
-    SystemPurposes []SystemPurpose // 装配器 Init 收尾汇总注册
+    SystemPurposes []SystemPurpose // 装配器 Init 入口汇总注册（先于任何 Init 回调）
     Migrations     embed.FS
     Locales      embed.FS
     OpenAPISpec  []byte
