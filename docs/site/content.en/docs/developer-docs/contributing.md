@@ -54,17 +54,21 @@ real way to run the app; frontend work happens in
 ## Branches and merging
 
 Development is trunk-based — short-lived branches, `main` always
-releasable — and history on `main` stays linear, enforced by branch
-protection: rebase onto the target before merging and merge
+releasable — and history on `main` stays linear by repository rule,
+upheld in review: rebase onto the target before merging and merge
 fast-forward only (`git merge --ff-only`); merge commits are rejected.
-Linear history matters beyond aesthetics: under lockstep
+There is no native branch protection on `main` — direct pushes are the
+team convention — so the discipline rests on review, not on a GitHub
+gate. Linear history matters beyond aesthetics: under lockstep
 versioning, locating which commits a version contains and bisecting
 both depend on it.
 
 `pkgcore`, `dbkit` and `tenancy` are the dependency floor — a change
-there ripples through every module and project — so CODEOWNERS gives
-those directories, and the release pipeline, dedicated owners whose
-review is required.
+there ripples through every module and project — so `CODEOWNERS`
+designates the foundation reviewers for those three directories. It
+records the intended review gate: no branch protection is switched on
+and the team handle is still a placeholder, so the requirement is not
+machine-enforced today.
 
 ## Write commits
 
