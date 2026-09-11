@@ -9,13 +9,12 @@
 # go/observability/redact_test.go -- "testSecret and friends are stand-in
 # secret values the tests below log and then assert never reach the sink
 # in plaintext"). Those literals are the point of the code, so the three
-# files are exempted by path -- the allowlists block at the bottom of
-# this file lists them.
+# files are exempted by path -- the allowlists block below lists them.
 #
 # Every exemption below is scoped to exact, named files -- the single
-# exception being the regex-scoped saasctl appconfig block at the very
-# bottom, which matches two exact Go identifier spellings rather than a
-# file -- and the scan keeps
+# exception being the regex-scoped saasctl appconfig block, which
+# matches two exact Go identifier spellings rather than a file -- and
+# the scan keeps
 # firing on every other file in the tree and in the commit history (the
 # security pipeline's secrets job checks out the full history -- see
 # .github/workflows/security.yml). Real credentials must never enter
@@ -50,8 +49,8 @@
 # `cfg.S3SecretKey, cfg.S3SecretKeyFromEnv` (introduced by commit
 # 6c20870, where it then stood at line 311) because the rule's span
 # tolerates the identifier's dots and the separating comma, and the
-# identifier alone clears the rule's entropy floor. The block at the
-# bottom allowlists the two exact identifier spellings the rule can
+# identifier alone clears the rule's entropy floor. The block below
+# allowlists the two exact identifier spellings the rule can
 # capture; scoping to those spellings rather than to the file keeps the
 # rule firing on genuine secret-shaped values everywhere else, this file
 # included, and was re-verified against the same pinned gitleaks 8.30.1
@@ -71,13 +70,14 @@ paths = [
 ]
 
 [[allowlists]]
-description = "encrypted-field / blind-index / payment-webhook test fixture keys: fixed, hard-coded 32-byte hex strings (and one hard-coded Stripe-shaped webhook secret) that each file's own doc comment names as a fixture -- registering a GORM field-encryption or blind-index serializer under a known key so the test can assert round-trip behaviour without touching a real key store, mirroring go/dbkit's own encryption_test.go precedent. go/ai-gateway/model_test.go's testCipherKey and go/pki/repository_test.go's testLocalKeyCipherKey are both the fixed literal \"0123456789abcdef0123456789abcdef\", explicitly documented as mirroring one another; go/notification/contact_test.go's testCipherKey/testEmailIndexKey/testPhoneIndexKey trio (and its byte-for-byte integration-tier twin in go/notification/integration_test/postgres_leg_test.go, which the twin's own header comment says exists only so that external test binary stands alone) are three deliberately distinct fixture keys proving an index key never doubles as the encryption key; go/billing/gateway/stripe/gateway_test.go's testWebhookSecret is fed only to a fakeBackend that never dials a real network connection, so it is never verified against Stripe's real webhook-signing logic"
+description = "encrypted-field / blind-index / payment-webhook test fixture keys: fixed, hard-coded 32-byte hex strings (and one hard-coded Stripe-shaped webhook secret) that each file's own doc comment names as a fixture -- registering a GORM field-encryption or blind-index serializer under a known key so the test can assert round-trip behaviour without touching a real key store, mirroring go/dbkit's own encryption_test.go precedent. go/ai-gateway/model_test.go's testCipherKey and go/pki/repository_test.go's testLocalKeyCipherKey are both the fixed literal \"0123456789abcdef0123456789abcdef\", explicitly documented as mirroring one another; examples/reference-app/internal/attestation/service_test.go's testPKICipherKey carries the same fixed literal again -- the file's own comment says it mirrors go/pki's own test registration, registering once per test process so that suite can exercise pki's serializers from a binary that cannot bootstrap the module; go/notification/contact_test.go's testCipherKey/testEmailIndexKey/testPhoneIndexKey trio (and its byte-for-byte integration-tier twin in go/notification/integration_test/postgres_leg_test.go, which the twin's own header comment says exists only so that external test binary stands alone) are three deliberately distinct fixture keys proving an index key never doubles as the encryption key; go/billing/gateway/stripe/gateway_test.go's testWebhookSecret is fed only to a fakeBackend that never dials a real network connection, so it is never verified against Stripe's real webhook-signing logic"
 paths = [
   "go/ai-gateway/model_test.go",
   "go/billing/gateway/stripe/gateway_test.go",
   "go/pki/repository_test.go",
   "go/notification/contact_test.go",
   "go/notification/integration_test/postgres_leg_test.go",
+  "examples/reference-app/internal/attestation/service_test.go",
 ]
 
 [[allowlists]]
@@ -94,9 +94,11 @@ paths = [
 ]
 
 [[allowlists]]
-description = "examples/reference-app/README.md: the \"Try it\" curl walkthrough authenticates one example request with the literal placeholder `Authorization: Bearer not-a-real-token`, a string chosen specifically to read as fake rather than as a redacted real token"
+description = "the reference-app walkthrough's anonymous-request refusal sample: examples/reference-app/README.md and its docs-site twins (content.en and content.zh-cn walkthrough-reference-app.md) each authenticate one example request with the literal placeholder `Authorization: Bearer not-a-real-token`, a string chosen specifically to read as fake rather than as a redacted real token; the curl-auth-header rule fires on any Bearer header, so no placeholder spelling can avoid it"
 paths = [
   "examples/reference-app/README.md",
+  "docs/site/content.en/docs/user-guide/walkthrough-reference-app.md",
+  "docs/site/content.zh-cn/docs/user-guide/walkthrough-reference-app.md",
 ]
 
 [[allowlists]]
@@ -124,9 +126,35 @@ paths = [
 ]
 
 [[allowlists]]
-description = "the committed docs/config.example.yaml / docs/config.example.json pair and tools/configrefgen/config_example.go's placeholder constant: the pair is the committed config-file template whose whole purpose is showing the platform key surface's shape with the literal placeholder REPLACE_WITH_64_HEX_CHARS in every key slot -- never a real value, and the file's own header tells a reader to generate one with `openssl rand -hex 32` and keep it out of the repository; config_example.go's configExampleKeyPlaceholder defines that same literal as the constant the load-verification test compares the parsed file against, so it carries no key material either. Mirrors the examples/reference-app/.env.example block above for the same placeholder; scoped by path so generic-api-key keeps firing on genuine secret-shaped values everywhere else"
+description = "the committed docs/config.example.yaml / docs/config.example.json pair and tools/configrefgen/config_example.go's placeholder constant: the pair is the committed config-file template whose whole purpose is showing the platform key surface's shape with the literal placeholder REPLACE_WITH_64_HEX_CHARS in every key slot -- never a real value, and the file's own header tells a reader to generate one with `openssl rand -hex 32` and keep it out of the repository; the pair lived at the repository root before the move into docs/ (commit 80650828), and the full-history scan reports those earlier commits' placeholder lines under the root spellings config.example.json / config.example.yaml, so the two root spellings are listed below alongside the current paths; config_example.go's configExampleKeyPlaceholder defines that same literal as the constant the load-verification test compares the parsed file against, so it carries no key material either. Mirrors the examples/reference-app/.env.example block above for the same placeholder; scoped by path so generic-api-key keeps firing on genuine secret-shaped values everywhere else"
 paths = [
   "docs/config.example.yaml",
   "docs/config.example.json",
+  "config.example.yaml",
+  "config.example.json",
   "tools/configrefgen/config_example.go",
+]
+
+[[allowlists]]
+description = "the generated configuration reference's env face: the repository-root .env.example the configrefgen generator emitted alongside the config.example pair above -- every flagged line is the literal placeholder string REPLACE_WITH_64_HEX_CHARS on a key variable, never a real value; the reference later became declaration-sourced and the generated file left the tree, so the full-history scan meets it only in the commits that carried it. The pattern is anchored to the exact root spelling so the grant covers this one retired file rather than any .env.example that may appear elsewhere -- examples/reference-app/.env.example above stays its own, narrower grant"
+paths = [
+  '''^\.env\.example$''',
+]
+
+[[allowlists]]
+description = "tools/test_check_env_example_consistency.py: the env-example consistency checker's own fixture suite. Its fixtures are synthetic bootstrap declarations and .env.example bodies fed to the checker -- the flagged lines are the same literal placeholder REPLACE_WITH_64_HEX_CHARS on a key variable the production example carries, spelled inside the fixtures so the suite proves the checker accepts a matching key set and fires on drift in either direction. The suite asserts key sets, never values: the fixtures' placeholder spelling is what makes them read like the real files, and no key material is present to assert on"
+paths = [
+  "tools/test_check_env_example_consistency.py",
+]
+
+[[allowlists]]
+description = "examples/reference-app/flowtests/server_config_equivalence_test.go: the reference app's server-config equivalence suite. Its rootSecret fixture is the fixed 64-hex root key material the suite feeds as APP_ROOT_KEY through both composition paths to prove they derive the same keys -- the value must be valid 64-hex key material (the derivation rejects any other shape), so the fixture's shape is load-bearing rather than decorative, and it only ever feeds the suite's own in-process composition cases, never a real deployment or key store"
+paths = [
+  "examples/reference-app/flowtests/server_config_equivalence_test.go",
+]
+
+[[allowlists]]
+description = "docs/site/content.en/docs/user-guide/modules/identity/authn.md: the flagged span is documentation prose listing the sign-in channels the module deliberately does not implement -- the provider names in that list read to the default generic-api-key rule as a high-entropy-looking value next to the word for passkey support. There is no literal secret value anywhere on the line; it is a prose false positive of the same class as go/pki/AGENTS.md above"
+paths = [
+  "docs/site/content.en/docs/user-guide/modules/identity/authn.md",
 ]
