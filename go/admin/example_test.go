@@ -111,14 +111,19 @@ func ExampleModule_AttachRBAC() {
 		return
 	}
 
-	registry, err := componenttest.DeclareModules(rbacModule)
-	if err != nil {
-		fmt.Println("bootstrap:", err)
-		return
-	}
-	rbacService, err := rbacModule.Attach(registry)
-	if err != nil {
-		fmt.Println("attach:", err)
+	registry := componenttest.NewRegistry()
+	var rbacService *rbac.Service
+	if err := componenttest.DeclareAll(registry, rbacModule.Register,
+		func(r *pkgcore.ComponentRegistry) error {
+			attached, attachErr := rbacModule.Attach(r)
+			if attachErr != nil {
+				return attachErr
+			}
+			rbacService = attached
+			return nil
+		},
+	); err != nil {
+		fmt.Println("declare and attach:", err)
 		return
 	}
 	defer func() { _ = rbacService.Close() }()

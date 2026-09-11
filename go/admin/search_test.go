@@ -17,6 +17,7 @@ import (
 	"github.com/vislake/speed/go/org"
 	orgmigrations "github.com/vislake/speed/go/org/migrations"
 	"github.com/vislake/speed/go/pkgcore"
+	"github.com/vislake/speed/go/pkgcore/componenttest"
 	"github.com/vislake/speed/go/tenancy"
 )
 
@@ -97,7 +98,7 @@ func newTestAuthnService(t *testing.T) *authn.Service {
 	// Service() is nil until Register has run (it needs the event bus and
 	// key-value store the registry carries) -- see Module.Service's own
 	// doc comment.
-	if err := module.Register(newTestRegistry()); err != nil {
+	if err := componenttest.DeclareInto(newTestRegistry(), module); err != nil {
 		t.Fatalf("authn Register() error = %v", err)
 	}
 	return module.Service()

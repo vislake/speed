@@ -295,14 +295,21 @@ func ExampleNewConfigReader() {
 		fmt.Println("before Attach:", readErr)
 	}
 
-	reg, err := componenttest.DeclareModules(m, configModule)
-	if err != nil {
-		fmt.Println("bootstrap:", err)
-		return
-	}
-	svc, err := configModule.Attach(reg)
-	if err != nil {
-		fmt.Println("attach config:", err)
+	// The module's Register and config's Attach share the registry's one
+	// Init window: the seats accept writes only during Init.
+	reg := componenttest.NewRegistry()
+	var svc *config.Service
+	if err := componenttest.DeclareAll(reg, m.Register, configModule.Register,
+		func(r *pkgcore.ComponentRegistry) error {
+			attached, attachErr := configModule.Attach(r)
+			if attachErr != nil {
+				return attachErr
+			}
+			svc = attached
+			return nil
+		},
+	); err != nil {
+		fmt.Println("declare and attach config:", err)
 		return
 	}
 	defer func() { _ = svc.Close() }()

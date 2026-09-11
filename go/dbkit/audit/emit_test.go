@@ -41,7 +41,7 @@ func TestEmit_RegisteredAction_PublishesRecordedEvent(t *testing.T) {
 
 	var got RecordedEvent
 	var receivedType string
-	reg.Events.Subscribe(EventRecorded, func(_ context.Context, evt pkgcore.Event) error {
+	reg.EventBus().Subscribe(EventRecorded, func(_ context.Context, evt pkgcore.Event) error {
 		receivedType = evt.Type
 		payload, ok := evt.Payload.(RecordedEvent)
 		if !ok {
@@ -101,7 +101,7 @@ func TestEmit_NoActorOrOnBehalfOfOrTenantInContext_LeavesThemAtZeroValue(t *test
 	})
 
 	var got RecordedEvent
-	reg.Events.Subscribe(EventRecorded, func(_ context.Context, evt pkgcore.Event) error {
+	reg.EventBus().Subscribe(EventRecorded, func(_ context.Context, evt pkgcore.Event) error {
 		got = evt.Payload.(RecordedEvent)
 		return nil
 	})
@@ -138,7 +138,7 @@ func TestEmit_RequestMetadataInContext_CarriesTheTrio(t *testing.T) {
 	})
 
 	var got RecordedEvent
-	reg.Events.Subscribe(EventRecorded, func(_ context.Context, evt pkgcore.Event) error {
+	reg.EventBus().Subscribe(EventRecorded, func(_ context.Context, evt pkgcore.Event) error {
 		got = evt.Payload.(RecordedEvent)
 		return nil
 	})

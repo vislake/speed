@@ -29,15 +29,16 @@ func newCreditService(t *testing.T) *CreditService {
 func newAuditedCreditService(t *testing.T) (svc *CreditService, received chan pkgcore.Event) {
 	t.Helper()
 	bus := pkgcore.NewMemoryEventBus()
-	reg := componenttest.NewRegistry()
-	reg.Put(bus)
-	if err := reg.AuditActions.Add(
-		AuditActionCreditGrant,
-		AuditActionCreditDeductReserve,
-		AuditActionCreditDeductConfirm,
-		AuditActionCreditRefund,
-		AuditActionCreditExpire,
-	); err != nil {
+	reg := componenttest.NewRegistryWithBus(bus)
+	if err := componenttest.Declare(reg, func(r *pkgcore.ComponentRegistry) error {
+		return r.AuditActions.Add(
+			AuditActionCreditGrant,
+			AuditActionCreditDeductReserve,
+			AuditActionCreditDeductConfirm,
+			AuditActionCreditRefund,
+			AuditActionCreditExpire,
+		)
+	}); err != nil {
 		t.Fatalf("declare this module's audit actions: %v", err)
 	}
 

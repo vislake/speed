@@ -303,7 +303,7 @@ func TestModule_Register_DeclaresBothPeriodicSchedules(t *testing.T) {
 
 	// A queue-less module registers no handlers, so it declares nothing.
 	queueless := componenttest.NewRegistry()
-	if err := NewModule(newTestDB(t)).Register(queueless); err != nil {
+	if err := componenttest.DeclareInto(queueless, NewModule(newTestDB(t))); err != nil {
 		t.Fatalf("Register without a queue: %v", err)
 	}
 	if decls := queueless.Schedules.Declarations(); len(decls) != 0 {
@@ -380,7 +380,7 @@ func TestModule_Register_DeclaresItsBootstrapKey(t *testing.T) {
 	t.Parallel()
 
 	reg := componenttest.NewRegistry()
-	if err := NewModule(newTestDB(t)).Register(reg); err != nil {
+	if err := componenttest.DeclareInto(reg, NewModule(newTestDB(t))); err != nil {
 		t.Fatalf("Register: %v", err)
 	}
 

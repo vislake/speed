@@ -15,12 +15,15 @@ import (
 // openAuditTestDB), builds a Module over it, registers it on a fresh
 // in-memory pkgcore.ComponentRegistry, and returns both -- the shape every test in
 // this file starts from.
-func newRegisteredModule(t *testing.T) (*pkgcore.ComponentRegistry, *Module) {
+func newRegisteredModule(t *testing.T, declares ...func(*pkgcore.ComponentRegistry) error) (*pkgcore.ComponentRegistry, *Module) {
 	t.Helper()
 	db := openAuditTestDB(t)
 	m := New(db)
 	reg := componenttest.NewRegistry()
-	if err := componenttest.DeclareInto(reg, m); err != nil {
+	// The module's Register and every extra declaration step the caller
+	// passes share the registry's one Init window: the seats accept writes
+	// only during Init, and a registry runs Init once.
+	if err := componenttest.DeclareAll(reg, append([]func(*pkgcore.ComponentRegistry) error{m.Register}, declares...)...); err != nil {
 		t.Fatalf("Register() error = %v", err)
 	}
 	return reg, m
@@ -76,15 +79,14 @@ func TestModule_Register_DeclaresEventsAndTheSystemContextAuditAction(t *testing
 }
 
 func TestModule_OnWriteCaptured_PersistsAuditEvent(t *testing.T) {
-	reg, m := newRegisteredModule(t)
 	// A captured write's derived action ("<resource_type>.<operation>") is
 	// only persisted when the owning module declared it on the registrar --
 	// onWriteCaptured's gate. This test declares the vocabulary its payload
 	// derives ("note.create" from note + create) the way a host wiring the
-	// capture plugin would.
-	if err := reg.AuditActions.Add("note.create"); err != nil {
-		t.Fatalf("AuditActions.Add() error = %v", err)
-	}
+	// capture plugin would, inside the registry's one Init window.
+	reg, m := newRegisteredModule(t, func(r *pkgcore.ComponentRegistry) error {
+		return r.AuditActions.Add("note.create")
+	})
 
 	admin := pkgcore.Actor{Type: pkgcore.ActorTypePlatformAdmin, ID: "admin-1", DisplayName: "Grace"}
 	payload := dbkit.WriteCapturedEvent{
@@ -157,12 +159,12 @@ func TestModule_OnWriteCaptured_JSONMapPayload_PersistsAuditEvent(t *testing.T) 
 	// into interface{} on delivery), proving writeCapturedFromWire's
 	// map[string]any branch against real JSON semantics rather than a
 	// hand-built map.
-	reg, m := newRegisteredModule(t)
 	// Declare the derived action ("note.update") this payload's capture
-	// would produce, the way a host wiring the plugin must.
-	if err := reg.AuditActions.Add("note.update"); err != nil {
-		t.Fatalf("AuditActions.Add() error = %v", err)
-	}
+	// would produce, the way a host wiring the plugin must, inside the
+	// registry's one Init window.
+	_, m := newRegisteredModule(t, func(r *pkgcore.ComponentRegistry) error {
+		return r.AuditActions.Add("note.update")
+	})
 
 	original := dbkit.WriteCapturedEvent{
 		Actor:        pkgcore.Actor{Type: pkgcore.ActorTypeUser, ID: "user-1"},
@@ -262,11 +264,10 @@ func TestModule_OnWriteCaptured_UndeclaredDerivedAction_RefusedWithAlert(t *test
 }
 
 func TestModule_OnRecorded_PersistsAuditEvent(t *testing.T) {
-	reg, m := newRegisteredModule(t)
 	const action = "notes.note.create"
-	if err := reg.AuditActions.Add(action); err != nil {
-		t.Fatalf("AuditActions.Add() error = %v", err)
-	}
+	reg, m := newRegisteredModule(t, func(r *pkgcore.ComponentRegistry) error {
+		return r.AuditActions.Add(action)
+	})
 
 	ctx := pkgcore.WithTenant(context.Background(), "tenant-a")
 	ctx = pkgcore.WithActor(ctx, pkgcore.Actor{Type: pkgcore.ActorTypeUser, ID: "user-1"})
@@ -445,12 +446,12 @@ func TestChangesJSON_Populated_MarshalsBoth(t *testing.T) {
 // real deployment's replicas would also share, and asserts exactly one row
 // results, not two.
 func TestModule_OnWriteCaptured_DeliveredToMultipleReplicas_PersistsExactlyOnce(t *testing.T) {
-	reg, m := newRegisteredModule(t)
 	// Declare the derived action ("note.create") this payload's capture
-	// would produce, the way a host wiring the plugin must.
-	if err := reg.AuditActions.Add("note.create"); err != nil {
-		t.Fatalf("AuditActions.Add() error = %v", err)
-	}
+	// would produce, the way a host wiring the plugin must, inside the
+	// registry's one Init window.
+	_, m := newRegisteredModule(t, func(r *pkgcore.ComponentRegistry) error {
+		return r.AuditActions.Add("note.create")
+	})
 
 	original := dbkit.WriteCapturedEvent{
 		Actor:        pkgcore.Actor{Type: pkgcore.ActorTypeUser, ID: "user-1"},

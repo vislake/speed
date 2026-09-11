@@ -33,9 +33,9 @@ var errFakeParticipant = errors.New("testutil: fake participant refuses")
 // the real defaultRetentionWindow (30 days) rather than overriding it, so
 // seeded rows are backdated relative to it instead of the harness
 // carrying a test-only window-override seam.
-func newRetentionHarness(t *testing.T) (*RetentionService, *testutil.FakeRepository) {
+func newRetentionHarness(t *testing.T, extra ...pkgcore.RetentionParticipant) (*RetentionService, *testutil.FakeRepository) {
 	t.Helper()
-	return newRetentionHarnessOn(t, pkgcore.NewMemoryEventBus())
+	return newRetentionHarnessOn(t, pkgcore.NewMemoryEventBus(), extra...)
 }
 
 // newRetentionHarnessOn is newRetentionHarness over an injected bus: the
@@ -43,26 +43,34 @@ func newRetentionHarness(t *testing.T) (*RetentionService, *testutil.FakeReposit
 // provides, so a test can substitute a scripted bus whose Publish fails
 // and drive the fail-closed branches (WithSystemContext's audit publish,
 // the sweep's own audit emit) that a healthy memory bus can never reach.
-func newRetentionHarnessOn(t *testing.T, bus pkgcore.EventBus) (*RetentionService, *testutil.FakeRepository) {
+func newRetentionHarnessOn(t *testing.T, bus pkgcore.EventBus, extra ...pkgcore.RetentionParticipant) (*RetentionService, *testutil.FakeRepository) {
 	t.Helper()
-	reg := componenttest.NewRegistry()
-	reg.Put(bus)
-	if err := reg.AuditActions.Add(AuditActionRetentionSweep); err != nil {
-		t.Fatalf("declare audit action: %v", err)
-	}
-	pkgcore.RegisterSystemPurpose(SystemPurposeRetentionSweep)
-
 	repo := testutil.NewFakeRepository(testutil.NewDB(t))
 	participant := testutil.NewParticipant("testutil.fake_note", repo)
-	if err := reg.Retention.Add(participant); err != nil {
-		t.Fatalf("register fake participant: %v", err)
-	}
+	reg := retentionHarnessRegistry(t, bus, append([]pkgcore.RetentionParticipant{participant}, extra...)...)
 
 	svc := newRetentionService()
 	svc.retention = reg.Retention
 	svc.bus = bus
 	svc.actions = reg.AuditActions
 	return svc, repo
+}
+
+// retentionHarnessRegistry builds the registry the retention service tests
+// read: bus as its one EventBus value, the sweep audit action declared, and
+// the participants registered -- all inside the registry's one Init window,
+// the only turn in which the seats accept writes.
+func retentionHarnessRegistry(t *testing.T, bus pkgcore.EventBus, participants ...pkgcore.RetentionParticipant) *pkgcore.ComponentRegistry {
+	t.Helper()
+	pkgcore.RegisterSystemPurpose(SystemPurposeRetentionSweep)
+	reg := componenttest.NewRegistryWithBus(bus)
+	if err := componenttest.DeclareAll(reg,
+		func(r *pkgcore.ComponentRegistry) error { return r.AuditActions.Add(AuditActionRetentionSweep) },
+		func(r *pkgcore.ComponentRegistry) error { return r.Retention.Add(participants...) },
+	); err != nil {
+		t.Fatalf("declare the audit action and participants: %v", err)
+	}
+	return reg
 }
 
 // scriptedBus is an EventBus that starts refusing Publish once its own
@@ -220,10 +228,6 @@ func TestRetentionService_SweepTenant_Idempotent(t *testing.T) {
 // a failing participant does not stop the pass and is reported both in
 // the SweepResult and as ErrSweepPartialFailure.
 func TestRetentionService_SweepTenant_ParticipantErrorIsPartialFailure(t *testing.T) {
-	svc, repo := newRetentionHarness(t)
-	tenant := pkgcore.TenantID("tenant-a")
-	seedFakeNote(t, repo, tenant, "expired-1", "subject-1", wellPastDefaultWindow())
-
 	failing := pkgcore.RetentionParticipant{
 		Name: "testutil.failing",
 		Sweep: func(context.Context, pkgcore.TenantID, time.Time) (int, error) {
@@ -233,9 +237,11 @@ func TestRetentionService_SweepTenant_ParticipantErrorIsPartialFailure(t *testin
 		// retention sweep under test never invokes it.
 		Erase: testutil.NoopErase,
 	}
-	if err := svc.retention.Add(failing); err != nil {
-		t.Fatalf("register failing participant: %v", err)
-	}
+	// The failing participant registers inside the harness's one Init
+	// window: the seats accept writes only during Init.
+	svc, repo := newRetentionHarness(t, failing)
+	tenant := pkgcore.TenantID("tenant-a")
+	seedFakeNote(t, repo, tenant, "expired-1", "subject-1", wellPastDefaultWindow())
 
 	result, err := svc.SweepTenant(context.Background(), tenant)
 	if !apperr.HasCode(err, ErrSweepPartialFailure.Code) {
@@ -261,21 +267,6 @@ func TestRetentionService_SweepTenant_ParticipantErrorIsPartialFailure(t *testin
 // vanish from the audit trail's reaped map entirely.
 func TestRetentionService_SweepTenant_ParticipantPartialCountSurvivesError(t *testing.T) {
 	bus := pkgcore.NewMemoryEventBus()
-	reg := componenttest.NewRegistry()
-	reg.Put(bus)
-	if err := reg.AuditActions.Add(AuditActionRetentionSweep); err != nil {
-		t.Fatalf("declare audit action: %v", err)
-	}
-	pkgcore.RegisterSystemPurpose(SystemPurposeRetentionSweep)
-
-	captured := &[]audit.RecordedEvent{}
-	bus.Subscribe(audit.EventRecorded, func(_ context.Context, evt pkgcore.Event) error {
-		if rec, ok := evt.Payload.(audit.RecordedEvent); ok {
-			*captured = append(*captured, rec)
-		}
-		return nil
-	})
-
 	repo := testutil.NewFakeRepository(testutil.NewDB(t))
 	partial := pkgcore.RetentionParticipant{
 		Name: "testutil.partial",
@@ -297,9 +288,16 @@ func TestRetentionService_SweepTenant_ParticipantPartialCountSurvivesError(t *te
 			return 2, errFakeParticipant
 		},
 	}
-	if err := reg.Retention.Add(partial); err != nil {
-		t.Fatalf("register partial participant: %v", err)
-	}
+	reg := retentionHarnessRegistry(t, bus, partial)
+
+	captured := &[]audit.RecordedEvent{}
+	bus.Subscribe(audit.EventRecorded, func(_ context.Context, evt pkgcore.Event) error {
+		if rec, ok := evt.Payload.(audit.RecordedEvent); ok {
+			*captured = append(*captured, rec)
+		}
+		return nil
+	})
+
 	svc := newRetentionService()
 	svc.retention = reg.Retention
 	svc.bus = bus
@@ -352,12 +350,7 @@ func TestRetentionService_SweepTenant_ParticipantPartialCountSurvivesError(t *te
 // is a clean, empty pass rather than an error.
 func TestRetentionService_SweepTenant_NoParticipants(t *testing.T) {
 	bus := pkgcore.NewMemoryEventBus()
-	reg := componenttest.NewRegistry()
-	reg.Put(bus)
-	if err := reg.AuditActions.Add(AuditActionRetentionSweep); err != nil {
-		t.Fatalf("declare audit action: %v", err)
-	}
-	pkgcore.RegisterSystemPurpose(SystemPurposeRetentionSweep)
+	reg := retentionHarnessRegistry(t, bus)
 	svc := newRetentionService()
 	svc.retention = reg.Retention
 	svc.bus = bus
@@ -538,21 +531,6 @@ func TestRetentionSweepHandler_RejectsAPayload(t *testing.T) {
 // Changes["errors"]; a verbatim write fails the assertions below.
 func TestRetentionService_SweepTenant_ChangesRecordClassificationNeverErrorText(t *testing.T) {
 	bus := pkgcore.NewMemoryEventBus()
-	reg := componenttest.NewRegistry()
-	reg.Put(bus)
-	if err := reg.AuditActions.Add(AuditActionRetentionSweep); err != nil {
-		t.Fatalf("declare audit action: %v", err)
-	}
-	pkgcore.RegisterSystemPurpose(SystemPurposeRetentionSweep)
-
-	captured := &[]audit.RecordedEvent{}
-	bus.Subscribe(audit.EventRecorded, func(_ context.Context, evt pkgcore.Event) error {
-		if rec, ok := evt.Payload.(audit.RecordedEvent); ok {
-			*captured = append(*captured, rec)
-		}
-		return nil
-	})
-
 	// The failure text names an internal object key -- the class of
 	// platform-internal content the permanent record must never carry.
 	carving := errors.New("hard delete compliance/exports/tenant-a/x.json failed: object store timeout")
@@ -565,9 +543,16 @@ func TestRetentionService_SweepTenant_ChangesRecordClassificationNeverErrorText(
 			return 0, carving
 		},
 	}
-	if err := reg.Retention.Add(failing); err != nil {
-		t.Fatalf("register failing participant: %v", err)
-	}
+	reg := retentionHarnessRegistry(t, bus, failing)
+
+	captured := &[]audit.RecordedEvent{}
+	bus.Subscribe(audit.EventRecorded, func(_ context.Context, evt pkgcore.Event) error {
+		if rec, ok := evt.Payload.(audit.RecordedEvent); ok {
+			*captured = append(*captured, rec)
+		}
+		return nil
+	})
+
 	svc := newRetentionService()
 	svc.retention = reg.Retention
 	svc.bus = bus

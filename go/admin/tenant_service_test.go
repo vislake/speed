@@ -30,7 +30,9 @@ func TestTenantService_HandleOrgNodeCreated_RootNode_LazilyRegisters(t *testing.
 	db := testutil.NewDB(t)
 	svc := NewTenantService(NewTenantRepository(db))
 	reg := newTestRegistry()
-	if err := reg.AuditActions.Add(AuditActionTenantStatusChanged); err != nil {
+	if err := componenttest.Declare(reg, func(r *pkgcore.ComponentRegistry) error {
+		return r.AuditActions.Add(AuditActionTenantStatusChanged)
+	}); err != nil {
 		t.Fatalf("register audit action: %v", err)
 	}
 	svc.attachAudit(reg.EventBus(), reg.AuditActions, nil)
@@ -227,7 +229,9 @@ func TestTenantService_SetStatus_RecordsAuditEvent(t *testing.T) {
 	tenantRepo := NewTenantRepository(db)
 	svc := NewTenantService(tenantRepo)
 	reg := newTestRegistry()
-	if err := reg.AuditActions.Add(AuditActionTenantStatusChanged); err != nil {
+	if err := componenttest.Declare(reg, func(r *pkgcore.ComponentRegistry) error {
+		return r.AuditActions.Add(AuditActionTenantStatusChanged)
+	}); err != nil {
 		t.Fatalf("register audit action: %v", err)
 	}
 	svc.attachAudit(reg.EventBus(), reg.AuditActions, nil)

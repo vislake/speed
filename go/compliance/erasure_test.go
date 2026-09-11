@@ -36,11 +36,7 @@ func newErasureServiceWith(t *testing.T, participants ...pkgcore.RetentionPartic
 // the erasure's own audit emit) that a healthy memory bus can never reach.
 func newErasureServiceOn(t *testing.T, bus pkgcore.EventBus, participants ...pkgcore.RetentionParticipant) (*ErasureService, *[]audit.RecordedEvent) {
 	t.Helper()
-	reg := componenttest.NewRegistry()
-	reg.Put(bus)
-	if err := reg.AuditActions.Add(AuditActionErasureRequest); err != nil {
-		t.Fatalf("declare audit action: %v", err)
-	}
+	reg := componenttest.NewRegistryWithBus(bus)
 	pkgcore.RegisterSystemPurpose(SystemPurposeRightToErasure)
 
 	captured := &[]audit.RecordedEvent{}
@@ -51,8 +47,13 @@ func newErasureServiceOn(t *testing.T, bus pkgcore.EventBus, participants ...pkg
 		return nil
 	})
 
-	if err := reg.Retention.Add(participants...); err != nil {
-		t.Fatalf("register participants: %v", err)
+	// The audit action and the participants declare inside the registry's
+	// one Init window: the seats accept writes only during Init.
+	if err := componenttest.DeclareAll(reg,
+		func(r *pkgcore.ComponentRegistry) error { return r.AuditActions.Add(AuditActionErasureRequest) },
+		func(r *pkgcore.ComponentRegistry) error { return r.Retention.Add(participants...) },
+	); err != nil {
+		t.Fatalf("declare the audit action and participants: %v", err)
 	}
 
 	svc := newErasureService()
@@ -187,8 +188,8 @@ func TestErasureService_Erase_EmptySubjectRefIsRefused(t *testing.T) {
 // finishes the job without re-erasing (or re-auditing as a duplicate) what
 // already succeeded.
 func TestErasureService_Erase_ParticipantErrorIsPartialFailureAndRetryConverges(t *testing.T) {
-	svc, repo, captured := newErasureHarness(t)
 	tenant := pkgcore.TenantID("tenant-a")
+	repo := testutil.NewFakeRepository(testutil.NewDB(t))
 	seedLiveFakeNote(t, repo, tenant, "note-1", "subject-1")
 
 	attempt := 0
@@ -205,9 +206,9 @@ func TestErasureService_Erase_ParticipantErrorIsPartialFailureAndRetryConverges(
 			return 0, nil // nothing of its own to erase, but healthy on retry
 		},
 	}
-	if err := svc.retention.Add(flaky); err != nil {
-		t.Fatalf("register flaky participant: %v", err)
-	}
+	// The healthy participant and the flaky one register inside the
+	// harness's one Init window: the seats accept writes only during Init.
+	svc, captured := newErasureServiceWith(t, testutil.NewParticipant("testutil.fake_note", repo), flaky)
 
 	subject := pkgcore.SubjectRef{TenantID: tenant, SubjectID: "subject-1"}
 	ctx := pkgcore.WithTenant(context.Background(), tenant)

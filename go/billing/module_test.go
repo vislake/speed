@@ -308,7 +308,7 @@ func TestModule_Register_DeclaresThePollSchedule(t *testing.T) {
 	}
 
 	queueless := componenttest.NewRegistry()
-	if err := NewModule(newTestDB(t), stubUsage{}).Register(queueless); err != nil {
+	if err := componenttest.DeclareInto(queueless, NewModule(newTestDB(t), stubUsage{})); err != nil {
 		t.Fatalf("Register without a queue: %v", err)
 	}
 	if decls := queueless.Schedules.Declarations(); len(decls) != 0 {

@@ -3,6 +3,7 @@ package admin
 import (
 	"bytes"
 	"context"
+	"embed"
 	"errors"
 	"io/fs"
 	"testing"
@@ -28,6 +29,7 @@ import (
 	"github.com/vislake/speed/go/pkgcore"
 	"github.com/vislake/speed/go/pkgcore/apperr"
 	"github.com/vislake/speed/go/pkgcore/componenttest"
+	"github.com/vislake/speed/go/pkgcore/i18n"
 	"github.com/vislake/speed/go/rbac"
 	rbacmigrations "github.com/vislake/speed/go/rbac/migrations"
 	"github.com/vislake/speed/go/sharing"
@@ -112,7 +114,7 @@ type testAdminEnv struct {
 // comments) real rbac, sharing, metering and billing modules over the
 // SAME database, for the tests that need them to build on without each
 // standing up its own parallel module graph.
-func buildTestAdminModule(t *testing.T) testAdminEnv {
+func buildTestAdminModule(t *testing.T, extra ...func(*pkgcore.ComponentRegistry) error) testAdminEnv {
 	t.Helper()
 	pkgcore.RegisterSystemPurpose(SystemPurposeAdminCrossTenant)
 
@@ -212,16 +214,43 @@ func buildTestAdminModule(t *testing.T) testAdminEnv {
 		WithBilling(billingModule),
 	)
 
-	reg, err := componenttest.DeclareModules(authnModule, orgModule, complianceModule, notificationModule, adminModule,
-		rbacModule, sharingModule, meteringModule, billingModule,
-	)
-	if err != nil {
-		t.Fatalf("Bootstrap() error = %v", err)
+	reg := componenttest.NewRegistry()
+	var rbacService *rbac.Service
+	// The modules' Register calls, rbac's Attach and every extra
+	// declaration step the caller passes share the registry's one Init
+	// window: Attach subscribes on the Events seat, and the seats accept
+	// writes only during Init.
+	declares := []func(*pkgcore.ComponentRegistry) error{
+		authnModule.Register, orgModule.Register, complianceModule.Register, notificationModule.Register, adminModule.Register,
+		rbacModule.Register, sharingModule.Register, meteringModule.Register, billingModule.Register,
+		func(r *pkgcore.ComponentRegistry) error {
+			attached, err := rbacModule.Attach(r)
+			if err != nil {
+				return err
+			}
+			rbacService = attached
+			return nil
+		},
 	}
+	// The two host-owned assembly values the graph's runtime reads: the
+	// object store sharing's export path writes through, and the merged
+	// message catalog every renderer (notification delivery, admin's
+	// impersonation locale tier) resolves messages in -- the same steps a
+	// host's own assembly performs after the declaration turns.
+	reg.Put(pkgcore.NewLocalObjectStore(t.TempDir()))
+	builder := i18n.NewBuilder()
+	for _, localized := range []interface {
+		Name() string
+		Locales() embed.FS
+	}{authnModule, orgModule, complianceModule, notificationModule, adminModule, rbacModule, sharingModule, meteringModule, billingModule} {
+		if err := builder.AddModule(localized.Name(), localized.Locales()); err != nil {
+			t.Fatalf("merge %s's locale resources: %v", localized.Name(), err)
+		}
+	}
+	reg.Put(builder.Build())
 
-	rbacService, err := rbacModule.Attach(reg)
-	if err != nil {
-		t.Fatalf("rbacModule.Attach() error = %v", err)
+	if err := componenttest.DeclareAll(reg, append(declares, extra...)...); err != nil {
+		t.Fatalf("Bootstrap() error = %v", err)
 	}
 	t.Cleanup(func() { _ = rbacService.Close() })
 
@@ -373,9 +402,9 @@ func contains(list []string, want string) bool {
 func TestModule_Register_MissingMandatoryOption_RefusesByName(t *testing.T) {
 	env := buildTestAdminModule(t)
 	// Every case below fails before Register touches the registry (the
-	// option checks precede any declaration), so one bare registry serves
-	// them all.
-	reg := newTestRegistry()
+	// option checks precede any declaration), and each subtest gets its own
+	// bare registry: a registry runs its Init stage once, so the
+	// declaration helper cannot be driven twice over one instance.
 
 	freshAuthn, err := authn.NewModule(env.DB,
 		authn.WithBlindIndexKey(testBlindIndexKey),
@@ -423,7 +452,7 @@ func TestModule_Register_MissingMandatoryOption_RefusesByName(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			m := NewModule(env.DB, tc.opts...)
-			if err := componenttest.DeclareInto(reg, m); !apperr.HasCode(err, tc.want) {
+			if err := componenttest.DeclareInto(newTestRegistry(), m); !apperr.HasCode(err, tc.want) {
 				t.Fatalf("Register() error = %v, want %s", err, tc.want)
 			}
 		})
@@ -439,12 +468,22 @@ func TestModule_Register_MissingMandatoryOption_RefusesByName(t *testing.T) {
 func TestModule_Register_TwiceOnOneRegistry_FailsClosed(t *testing.T) {
 	env := buildTestAdminModule(t)
 
-	err := env.Admin.Register(env.Registry)
-	if err == nil {
+	// Both calls share one Init window -- the seats accept writes only
+	// during Init -- so the second Register genuinely re-declares the same
+	// catalog, which is what the duplicate-permission gate must refuse.
+	reg := newTestRegistry()
+	var second error
+	if err := componenttest.DeclareAll(reg, env.Admin.Register, func(r *pkgcore.ComponentRegistry) error {
+		second = env.Admin.Register(r)
+		return nil
+	}); err != nil {
+		t.Fatalf("declare: %v", err)
+	}
+	if second == nil {
 		t.Fatal("second Register() succeeded, want a duplicate-declaration refusal")
 	}
-	if !errors.Is(err, pkgcore.ErrDuplicatePermission) {
-		t.Fatalf("second Register() error = %v, want pkgcore.ErrDuplicatePermission", err)
+	if !errors.Is(second, pkgcore.ErrDuplicatePermission) {
+		t.Fatalf("second Register() error = %v, want pkgcore.ErrDuplicatePermission", second)
 	}
 }
 

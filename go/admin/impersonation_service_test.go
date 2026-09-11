@@ -61,7 +61,9 @@ func newTestImpersonationService(t *testing.T, notifier Notifier) (*Impersonatio
 	db := testutil.NewDB(t)
 	svc := newImpersonationService(NewImpersonationRepository(db))
 	reg := newTestRegistry()
-	if err := reg.AuditActions.Add(AuditActionImpersonationStarted, AuditActionImpersonationEnded); err != nil {
+	if err := componenttest.Declare(reg, func(r *pkgcore.ComponentRegistry) error {
+		return r.AuditActions.Add(AuditActionImpersonationStarted, AuditActionImpersonationEnded)
+	}); err != nil {
 		t.Fatalf("register audit actions: %v", err)
 	}
 	// authnSvc and members are both deliberately nil here: every test in
@@ -98,13 +100,22 @@ func newAttachedRBAC(t *testing.T, db *gorm.DB) *rbac.Service {
 	t.Helper()
 	dbtest.Migrate(t, db, dbkit.DialectSQLite, dbtest.Migration{Module: "rbac", FS: rbacmigrations.FS})
 	rbacModule := rbac.NewModule(db)
-	reg, err := componenttest.DeclareModules(rbacModule)
-	if err != nil {
-		t.Fatalf("bootstrap the rbac module: %v", err)
-	}
-	svc, err := rbacModule.Attach(reg)
-	if err != nil {
-		t.Fatalf("rbacModule.Attach() error = %v", err)
+	reg := componenttest.NewRegistry()
+	var svc *rbac.Service
+	// Register and Attach share the registry's one Init window: Attach
+	// subscribes on the Events seat, and the seats accept writes only
+	// during Init.
+	if err := componenttest.DeclareAll(reg, rbacModule.Register,
+		func(r *pkgcore.ComponentRegistry) error {
+			attached, err := rbacModule.Attach(r)
+			if err != nil {
+				return err
+			}
+			svc = attached
+			return nil
+		},
+	); err != nil {
+		t.Fatalf("declare and attach the rbac module: %v", err)
 	}
 	t.Cleanup(func() { _ = svc.Close() })
 	return svc

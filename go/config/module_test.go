@@ -232,18 +232,37 @@ func TestKernelBootstrap_AttachServesTheAssembledHostSchema(t *testing.T) {
 	}
 }
 
+// declareTestSchema is the declaration step that folds the shared test
+// schema into a registry's seats; the caller runs it inside an Init window,
+// which is the only time the seats accept writes.
+func declareTestSchema(r *pkgcore.ComponentRegistry) error {
+	if err := r.ConfigSeat().Add(serviceTestSchemaItems...); err != nil {
+		return err
+	}
+	return r.FeaturesSeat().Add(serviceTestSchemaFlags...)
+}
+
+// attachModule is the declaration step that runs m.Attach inside an Init
+// window, storing the attached Service in out when out is non-nil.
+func attachModule(m *Module, out **Service) func(*pkgcore.ComponentRegistry) error {
+	return func(r *pkgcore.ComponentRegistry) error {
+		svc, err := m.Attach(r)
+		if err != nil {
+			return err
+		}
+		if out != nil {
+			*out = svc
+		}
+		return nil
+	}
+}
+
 func TestModule_Attach_RejectsASecondCall(t *testing.T) {
 	db := openModuleTestDB(t)
 	reg := newPlainRegistry()
-	if err := reg.ConfigSeat().Add(serviceTestSchemaItems...); err != nil {
-		t.Fatalf("reg.ConfigSeat().Add: %v", err)
-	}
-	if err := reg.FeaturesSeat().Add(serviceTestSchemaFlags...); err != nil {
-		t.Fatalf("reg.FeaturesSeat().Add: %v", err)
-	}
 	m := NewModule(db, WithCipher(buildTestCipher(t)), WithPollInterval(0))
-	if _, err := m.Attach(reg); err != nil {
-		t.Fatalf("first Attach: %v", err)
+	if err := componenttest.DeclareAll(reg, declareTestSchema, attachModule(m, nil)); err != nil {
+		t.Fatalf("declare and attach: %v", err)
 	}
 
 	_, err := m.Attach(reg)
@@ -263,30 +282,34 @@ func TestModule_Attach_ExactlyOneCallSucceedsUnderConcurrentCallers(t *testing.T
 	db := openModuleTestDB(t)
 	for round := 0; round < 8; round++ {
 		reg := newPlainRegistry()
-		if err := reg.ConfigSeat().Add(serviceTestSchemaItems...); err != nil {
-			t.Fatalf("round %d reg.ConfigSeat().Add: %v", round, err)
-		}
-		if err := reg.FeaturesSeat().Add(serviceTestSchemaFlags...); err != nil {
-			t.Fatalf("round %d reg.FeaturesSeat().Add: %v", round, err)
-		}
 		m := NewModule(db, WithCipher(buildTestCipher(t)), WithPollInterval(0))
 
 		const callers = 16
-		start := make(chan struct{})
 		results := make(chan error, callers)
-		var wg sync.WaitGroup
-		for i := 0; i < callers; i++ {
-			wg.Add(1)
-			go func() {
-				defer wg.Done()
-				<-start
-				_, err := m.Attach(reg)
-				results <- err
-			}()
+		// The concurrent batch runs inside the registry's one Init window:
+		// Attach subscribes on the Events seat, and the seats accept writes
+		// only during Init.
+		if err := componenttest.DeclareAll(reg, declareTestSchema,
+			func(r *pkgcore.ComponentRegistry) error {
+				start := make(chan struct{})
+				var wg sync.WaitGroup
+				for i := 0; i < callers; i++ {
+					wg.Add(1)
+					go func() {
+						defer wg.Done()
+						<-start
+						_, err := m.Attach(r)
+						results <- err
+					}()
+				}
+				close(start)
+				wg.Wait()
+				close(results)
+				return nil
+			},
+		); err != nil {
+			t.Fatalf("round %d: declare and attach: %v", round, err)
 		}
-		close(start)
-		wg.Wait()
-		close(results)
 
 		successes := 0
 		for err := range results {
@@ -318,14 +341,12 @@ func TestModule_Attach_GuardsItsDependencies(t *testing.T) {
 func TestModule_Attach_RequiresACipherForSensitiveDeclarations(t *testing.T) {
 	db := openModuleTestDB(t)
 	reg := newPlainRegistry()
-	if err := reg.ConfigSeat().Add(serviceTestSchemaItems...); err != nil {
-		t.Fatalf("reg.ConfigSeat().Add: %v", err)
-	}
+	m := NewModule(db, WithPollInterval(0))
 
 	// serviceTestSchemaItems declares the Sensitive support.reply_email; a
 	// host that hands the module no cipher could never write or read that
 	// value without leaking it at rest, so Attach must refuse the pairing.
-	_, err := NewModule(db, WithPollInterval(0)).Attach(reg)
+	err := componenttest.DeclareAll(reg, declareTestSchema, attachModule(m, nil))
 	assertCode(t, err, ErrCipherRequired)
 }
 
@@ -336,7 +357,7 @@ func TestModule_Attach_RequiresACipherForSensitiveDeclarations(t *testing.T) {
 // schema must stay free of the identifier.
 func TestModule_Register_DeclaresItsBootstrapKey(t *testing.T) {
 	reg := newPlainRegistry()
-	if err := NewModule(nil).Register(reg); err != nil {
+	if err := componenttest.DeclareInto(reg, NewModule(nil)); err != nil {
 		t.Fatalf("Register: %v", err)
 	}
 

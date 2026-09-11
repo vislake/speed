@@ -8,6 +8,7 @@ import (
 	"image/color"
 	"image/png"
 	"io"
+	"os"
 	"strings"
 	"time"
 
@@ -137,14 +138,13 @@ func Example() {
 
 // ExampleObjectService drives the transfer lifecycle the service ships end
 // to end, the way a host would: open and migrate the module's tables,
-// construct the module with the queue Register requires, and bootstrap it
-// through the real kernel so the service's host seams -- the object store the
-// standalone deployment mode resolves -- are the real ones, not hand-wired
-// fakes. A small image is declared, streamed into the store, run through the
-// completion revalidation pipeline, and read back from the store. It is
-// compiled and run by the module's unit suite, so the whole example is also a
-// proof that the lifecycle works over a real, migrated connection and a real
-// kernel bootstrap.
+// construct the module with the queue Register requires, and assemble a
+// registry carrying the object store the service's host seams read through,
+// so the store is a real local-directory one, not a hand-wired fake. A small
+// image is declared, streamed into the store, run through the completion
+// revalidation pipeline, and read back from the store. It is compiled and run
+// by the module's unit suite, so the whole example is also a proof that the
+// lifecycle works over a real, migrated connection and a real assembly.
 //
 // The queue is stubbed because this example proves the transfer lifecycle,
 // not derivation; the completion pipeline enqueues a derive task onto it and
@@ -169,9 +169,19 @@ func ExampleObjectService() {
 	if err = registry.Apply(ctx, db, dbkit.DialectSQLite); err != nil {
 		panic(err)
 	}
-	// Bootstrap resolves the registry's standalone object store and event bus
-	// and runs the module's Register, which hands the registry to the service.
-	if _, err = componenttest.DeclareModules(m); err != nil {
+	// The host assembles the registry the service's host seams read: a local
+	// object store over a directory of its own, plus the in-process event bus
+	// componenttest.NewRegistry puts. DeclareInto then runs the module's
+	// Register inside the assembly's one Init window, which hands the
+	// registry to the service.
+	dir, err := os.MkdirTemp("", "storage-example-")
+	if err != nil {
+		panic(err)
+	}
+	defer func() { _ = os.RemoveAll(dir) }()
+	reg := componenttest.NewRegistry()
+	reg.Put(pkgcore.NewLocalObjectStore(dir))
+	if err = componenttest.DeclareInto(reg, m); err != nil {
 		panic(err)
 	}
 
@@ -270,7 +280,14 @@ func ExampleLifecycleService() {
 	if err = registry.Apply(ctx, db, dbkit.DialectSQLite); err != nil {
 		panic(err)
 	}
-	if _, err = componenttest.DeclareModules(m); err != nil {
+	dir, err := os.MkdirTemp("", "storage-lifecycle-example-")
+	if err != nil {
+		panic(err)
+	}
+	defer func() { _ = os.RemoveAll(dir) }()
+	reg := componenttest.NewRegistry()
+	reg.Put(pkgcore.NewLocalObjectStore(dir))
+	if err = componenttest.DeclareInto(reg, m); err != nil {
 		panic(err)
 	}
 	svc := m.ObjectService()

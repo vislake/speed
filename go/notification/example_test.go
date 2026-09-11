@@ -269,12 +269,13 @@ func ExamplePreferenceService() {
 		DefaultChannels: []string{"in_app", "email"},
 		Unsubscribable:  true,
 	}
-	if err = host.Notifications.Add(appointment, result); err != nil {
-		fmt.Println("add types:", err)
-		return
-	}
-	if err = module.Register(host); err != nil {
-		fmt.Println("register:", err)
+	// The host's own type declarations and the module's Register share the
+	// registry's one Init window: the seats accept writes only during Init.
+	if err = componenttest.DeclareAll(host,
+		func(r *pkgcore.ComponentRegistry) error { return r.Notifications.Add(appointment, result) },
+		module.Register,
+	); err != nil {
+		fmt.Println("declare:", err)
 		return
 	}
 

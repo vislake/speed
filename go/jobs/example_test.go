@@ -260,7 +260,9 @@ func ExampleWire() {
 	}
 
 	reg := componenttest.NewRegistry()
-	err = reg.Jobs.Handle("greet", exampleGreeter{})
+	err = componenttest.Declare(reg, func(r *pkgcore.ComponentRegistry) error {
+		return r.Jobs.Handle("greet", exampleGreeter{})
+	})
 	if err != nil {
 		fmt.Println("declare handler:", err)
 		return
@@ -419,18 +421,21 @@ func ExampleScheduler() {
 	// scheduler over the seat runs exactly this declaration.
 	sweeps := &exampleSweepRuns{ran: make(chan string, 1)}
 	reg := componenttest.NewRegistry()
-	if err = reg.Jobs.Handle(sweeps.Type(), sweeps); err != nil {
-		fmt.Println("declare handler:", err)
-		return
-	}
-	err = reg.Schedules.Add(pkgcore.PeriodicTask{
-		Type:      sweeps.Type(),
-		Every:     time.Hour,
-		Scope:     pkgcore.PeriodicScopePerTenant,
-		KeyPrefix: "storage.sweep:",
+	// The handler and the schedule are one declaration turn: the seats
+	// accept writes only while the assembly's Init stage runs.
+	err = componenttest.Declare(reg, func(r *pkgcore.ComponentRegistry) error {
+		if err := r.Jobs.Handle(sweeps.Type(), sweeps); err != nil {
+			return err
+		}
+		return r.Schedules.Add(pkgcore.PeriodicTask{
+			Type:      sweeps.Type(),
+			Every:     time.Hour,
+			Scope:     pkgcore.PeriodicScopePerTenant,
+			KeyPrefix: "storage.sweep:",
+		})
 	})
 	if err != nil {
-		fmt.Println("declare schedule:", err)
+		fmt.Println("declare:", err)
 		return
 	}
 

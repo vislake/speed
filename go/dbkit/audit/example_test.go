@@ -120,19 +120,17 @@ func ExampleEmit() {
 	}
 
 	// A real host builds this Registry once at bootstrap and calls every
-	// module's Register on it, persister's included; this example does
-	// the same for just the one module it needs.
+	// module's Register on it, persister's included; this example does the
+	// same for just the one module it needs. A business module declares its
+	// own qualified action name at Register time -- here, standing in for
+	// org's own Register call -- inside the same Init window, the only turn
+	// in which the seats accept writes.
 	reg := componenttest.NewRegistry()
-	if registerErr := componenttest.DeclareInto(reg, persister); registerErr != nil {
-		fmt.Println("register persister error:", registerErr)
-		return
-	}
-
-	// A business module declares its own qualified action name at
-	// Register time -- here, standing in for org's own Register call.
 	const action = "org.member.remove"
-	if addErr := reg.AuditActionsSeat().Add(action); addErr != nil {
-		fmt.Println("add audit action error:", addErr)
+	if registerErr := componenttest.DeclareAll(reg, persister.Register,
+		func(r *pkgcore.ComponentRegistry) error { return r.AuditActionsSeat().Add(action) },
+	); registerErr != nil {
+		fmt.Println("register persister error:", registerErr)
 		return
 	}
 

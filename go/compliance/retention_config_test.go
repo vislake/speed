@@ -53,18 +53,23 @@ func newRetentionConfigService(t *testing.T, withComplianceItems bool) *config.S
 
 	reg := componenttest.NewRegistry()
 	cfgModule := config.NewModule(db)
-	if err := componenttest.DeclareInto(reg, cfgModule); err != nil {
-		t.Fatalf("config.Module.Register: %v", err)
-	}
+	// The modules' Register calls and config's Attach share the registry's
+	// one Init window: the seats accept writes only during Init.
+	declares := []func(*pkgcore.ComponentRegistry) error{cfgModule.Register}
 	if withComplianceItems {
-		m := NewModule(newTestAuditRepo(t), WithQueue(&recordingQueue{}))
-		if err := componenttest.DeclareInto(reg, m); err != nil {
-			t.Fatalf("compliance.Module.Register: %v", err)
-		}
+		declares = append(declares, NewModule(newTestAuditRepo(t), WithQueue(&recordingQueue{})).Register)
 	}
-	svc, err := cfgModule.Attach(reg)
-	if err != nil {
-		t.Fatalf("config.Module.Attach: %v", err)
+	var svc *config.Service
+	declares = append(declares, func(r *pkgcore.ComponentRegistry) error {
+		attached, attachErr := cfgModule.Attach(r)
+		if attachErr != nil {
+			return attachErr
+		}
+		svc = attached
+		return nil
+	})
+	if err := componenttest.DeclareAll(reg, declares...); err != nil {
+		t.Fatalf("declare and attach: %v", err)
 	}
 	t.Cleanup(func() { _ = svc.Close() })
 	return svc

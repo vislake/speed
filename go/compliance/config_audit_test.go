@@ -245,13 +245,22 @@ func TestModule_OnConfigItemChanged_ScopeMissingWireMap_MatchesConfigsOwnDrop(t 
 	auditRepo := audit.NewRepository(db)
 	compMod := NewModule(auditRepo, WithQueue(&recordingQueue{}))
 	configMod := config.NewModule(db, config.WithPollInterval(0))
-	reg, err := componenttest.DeclareModules(compMod, configMod)
-	if err != nil {
-		t.Fatalf("Bootstrap: %v", err)
-	}
-	configSvc, err := configMod.Attach(reg)
-	if err != nil {
-		t.Fatalf("config Attach: %v", err)
+	reg := componenttest.NewRegistry()
+	var configSvc *config.Service
+	// The modules' Register calls and config's Attach share the registry's
+	// one Init window: Attach subscribes on the Events seat, and the seats
+	// accept writes only during Init.
+	if err := componenttest.DeclareAll(reg, compMod.Register, configMod.Register,
+		func(r *pkgcore.ComponentRegistry) error {
+			attached, err := configMod.Attach(r)
+			if err != nil {
+				return err
+			}
+			configSvc = attached
+			return nil
+		},
+	); err != nil {
+		t.Fatalf("declare and attach: %v", err)
 	}
 
 	// A watcher on a compliance-declared key: config fires it exactly when
@@ -259,7 +268,7 @@ func TestModule_OnConfigItemChanged_ScopeMissingWireMap_MatchesConfigsOwnDrop(t 
 	// the observable verdict of config's own decoder on the payload below.
 	key := ConfigDefaultRetentionWindow
 	fired := make(chan config.Value, 4)
-	if err = configSvc.Watch(key, func(v config.Value) { fired <- v }); err != nil {
+	if err := configSvc.Watch(key, func(v config.Value) { fired <- v }); err != nil {
 		t.Fatalf("config Watch(%q): %v", key, err)
 	}
 
@@ -275,7 +284,7 @@ func TestModule_OnConfigItemChanged_ScopeMissingWireMap_MatchesConfigsOwnDrop(t 
 		"Sensitive": false,
 		"ChangedAt": "2026-09-04T10:00:00Z",
 	}
-	if err = reg.EventBus().Publish(context.Background(), pkgcore.Event{
+	if err := reg.EventBus().Publish(context.Background(), pkgcore.Event{
 		Type:     config.EventConfigItemChanged,
 		TenantID: "tenant-acme",
 		Payload:  scopeMissing,
@@ -314,7 +323,7 @@ func TestModule_OnConfigItemChanged_ScopeMissingWireMap_MatchesConfigsOwnDrop(t 
 		"Sensitive": false,
 		"ChangedAt": "2026-09-04T10:00:00Z",
 	}
-	if err = reg.EventBus().Publish(context.Background(), pkgcore.Event{
+	if err := reg.EventBus().Publish(context.Background(), pkgcore.Event{
 		Type:     config.EventConfigItemChanged,
 		TenantID: "tenant-acme",
 		Payload:  scopeTenant,

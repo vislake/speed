@@ -317,11 +317,6 @@ func TestExportService_Handle_ComplianceExportRequestAuditEvent_AttributesOperat
 // result reports -- and completes the job with the partial result recorded
 // in jobs.Result.Data, never riding the queue's retry budget.
 func TestExportService_Handle_PartialFailure_CompletesTerminallyAndIsAudited(t *testing.T) {
-	env := buildTestAdminModule(t)
-	if err := env.Queue.RegisterHandler(env.Admin.Export()); err != nil {
-		t.Fatalf("RegisterHandler() error = %v", err)
-	}
-
 	const (
 		tenant      = pkgcore.TenantID("tenant-export-partial")
 		operatorID  = "operator-partial-9"
@@ -330,28 +325,34 @@ func TestExportService_Handle_PartialFailure_CompletesTerminallyAndIsAudited(t *
 	// One registered participant contributes data, one fails -- the
 	// partial-failure shape built from the module registrar's own
 	// RetentionParticipant vocabulary, the same vocabulary compliance's
-	// export harness uses for the identical construction.
+	// export harness uses for the identical construction. Both are
+	// registered inside the assembly's one Init window, the only time the
+	// Retention seat accepts writes.
 	noopSweep := func(context.Context, pkgcore.TenantID, time.Time) (int, error) { return 0, nil }
 	noopErase := func(context.Context, pkgcore.SubjectRef) (int, error) { return 0, nil }
-	if err := env.Registry.Retention.Add(pkgcore.RetentionParticipant{
+	healthy := pkgcore.RetentionParticipant{
 		Name:  "admin.test.fake_notes",
 		Sweep: noopSweep,
 		Erase: noopErase,
 		Export: func(context.Context, pkgcore.TenantID) (any, error) {
 			return map[string]int{"rows": 3}, nil
 		},
-	}); err != nil {
-		t.Fatalf("register healthy export participant: %v", err)
 	}
-	if err := env.Registry.Retention.Add(pkgcore.RetentionParticipant{
-		Name:  failingName,
-		Sweep: noopSweep,
-		Erase: noopErase,
-		Export: func(context.Context, pkgcore.TenantID) (any, error) {
-			return nil, errors.New("participant gather failed")
-		},
-	}); err != nil {
-		t.Fatalf("register failing export participant: %v", err)
+	env := buildTestAdminModule(t, func(r *pkgcore.ComponentRegistry) error {
+		if err := r.Retention.Add(healthy); err != nil {
+			return err
+		}
+		return r.Retention.Add(pkgcore.RetentionParticipant{
+			Name:  failingName,
+			Sweep: noopSweep,
+			Erase: noopErase,
+			Export: func(context.Context, pkgcore.TenantID) (any, error) {
+				return nil, errors.New("participant gather failed")
+			},
+		})
+	})
+	if err := env.Queue.RegisterHandler(env.Admin.Export()); err != nil {
+		t.Fatalf("RegisterHandler() error = %v", err)
 	}
 
 	var recorded []audit.RecordedEvent

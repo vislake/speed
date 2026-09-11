@@ -40,16 +40,7 @@ func newManifestCleanupHarness(t *testing.T) (*RetentionService, *audit.Reposito
 func newManifestCleanupHarnessSeamed(t *testing.T, auditRepo *audit.Repository, store pkgcore.ObjectStore) (*RetentionService, *audit.Repository, pkgcore.ObjectStore) {
 	t.Helper()
 	bus := pkgcore.NewMemoryEventBus()
-	reg := componenttest.NewRegistry()
-	reg.Put(bus)
-	if err := reg.AuditActions.Add(AuditActionRetentionSweep); err != nil {
-		t.Fatalf("declare audit action: %v", err)
-	}
-	pkgcore.RegisterSystemPurpose(SystemPurposeRetentionSweep)
-
-	if err := reg.Retention.Add(exportManifestsParticipant(auditRepo, store)); err != nil {
-		t.Fatalf("register export-manifests participant: %v", err)
-	}
+	reg := retentionHarnessRegistry(t, bus, exportManifestsParticipant(auditRepo, store))
 
 	svc := newRetentionService()
 	svc.retention = reg.Retention

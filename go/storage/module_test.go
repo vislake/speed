@@ -470,27 +470,28 @@ func TestModule_ServiceAccessors_AreStablePinnedAccessors(t *testing.T) {
 // seams arrive through Register, end to end: each service's host is nil
 // before any registration -- store-needing calls fail closed until then,
 // which object_test.go and cleanup_test.go pin from the service side --
-// and after Bootstrap through the real kernel it is the registry, whose
-// ObjectStore the standalone kernel resolves for real (a fresh
-// local-directory store). The lifecycle driven here -- create, upload,
-// complete, open content -- therefore runs against the kernel's own store,
-// not a test fake, so a change that stopped Register from attaching the
-// registry would fail this test rather than only the fail-closed one.
+// and after the declaration turn it is the registry, over the
+// local-directory object store the test put before declaring. The lifecycle
+// driven here -- create, upload, complete, open content -- therefore runs
+// against a real store, not a test fake, so a change that stopped Register
+// from attaching the registry would fail this test rather than only the
+// fail-closed one.
 func TestModule_Register_WiresTheServiceHostSeams(t *testing.T) {
 	m := newWiredModule(t, newTestDB(t))
 	if m.svc.host != nil || m.derive.host != nil || m.life.host != nil {
 		t.Fatal("the services hold a registry before Register; they must fail closed until the module registers")
 	}
 
-	reg, err := componenttest.DeclareModules(m)
-	if err != nil {
-		t.Fatalf("Bootstrap: %v", err)
+	reg := componenttest.NewRegistry()
+	reg.Put(pkgcore.NewLocalObjectStore(t.TempDir()))
+	if err := componenttest.DeclareInto(reg, m); err != nil {
+		t.Fatalf("declare: %v", err)
 	}
 	if m.svc.host == nil || m.derive.host == nil || m.life.host == nil {
 		t.Fatal("Register did not hand the registry to the services; store-needing calls will fail closed forever")
 	}
 	if reg.ObjectStore() == nil || reg.EventBus() == nil {
-		t.Fatal("the standalone kernel did not resolve the registry's object store and event bus")
+		t.Fatal("the registry the services read carries no object store or event bus")
 	}
 
 	ctx := serviceCtx("tenant-a")

@@ -153,7 +153,11 @@ func TestModule_Register_WiresTheRetentionSweepJobHandler(t *testing.T) {
 // are non-nil, so a call into any of them does not panic on a nil field.
 func TestModule_Register_WiresServicesFromTheRegistry(t *testing.T) {
 	m := NewModule(newTestAuditRepo(t), WithQueue(&recordingQueue{}))
-	if _, err := componenttest.DeclareModules(m); err != nil {
+	// The registry carries the object store the export path writes through,
+	// the same host-assembled value a real deployment provides.
+	reg := componenttest.NewRegistry()
+	reg.Put(pkgcore.NewLocalObjectStore(t.TempDir()))
+	if err := componenttest.DeclareInto(reg, m); err != nil {
 		t.Fatalf("Bootstrap: %v", err)
 	}
 	if m.Retention().retention == nil || m.Retention().bus == nil || m.Retention().actions == nil {
@@ -291,9 +295,17 @@ func TestModule_Register_DuplicateDeclarationsArePropagated(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			reg := componenttest.NewRegistry()
-			tc.preseed(t, reg)
 			m := NewModule(newTestAuditRepo(t), WithQueue(&recordingQueue{}))
-			err := componenttest.DeclareInto(reg, m)
+			// The preseeded declaration and the module's Register share the
+			// registry's one Init window: the seats accept writes only
+			// during Init.
+			err := componenttest.DeclareAll(reg,
+				func(r *pkgcore.ComponentRegistry) error {
+					tc.preseed(t, r)
+					return nil
+				},
+				m.Register,
+			)
 			if !errors.Is(err, tc.wantError) {
 				t.Fatalf("Register over a preseeded registry error = %v, want %v", err, tc.wantError)
 			}

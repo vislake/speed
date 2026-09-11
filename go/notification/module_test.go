@@ -52,11 +52,19 @@ func (r *stubUserResolver) Resolve(_ context.Context, userID string) (UserAddres
 // itself -- with the module's three fixture types declared on the
 // notification-type registrar, exactly as a declaring business module would
 // register them before Bootstrap walks the module graph.
-func newHostRegistry(t *testing.T) *pkgcore.ComponentRegistry {
+//
+// The fixture types and every extra declaration step the caller passes --
+// a module's own Register, typically -- share the registry's one Init
+// window: the seats accept writes only during Init, and a registry runs
+// Init once.
+func newHostRegistry(t *testing.T, declares ...func(*pkgcore.ComponentRegistry) error) *pkgcore.ComponentRegistry {
 	t.Helper()
 	reg := componenttest.NewRegistry()
-	if err := reg.Notifications.Add(fixtureTypes...); err != nil {
-		t.Fatalf("reg.Notifications.Add: %v", err)
+	steps := append([]func(*pkgcore.ComponentRegistry) error{
+		func(r *pkgcore.ComponentRegistry) error { return r.Notifications.Add(fixtureTypes...) },
+	}, declares...)
+	if err := componenttest.DeclareAll(reg, steps...); err != nil {
+		t.Fatalf("declare into the host registry: %v", err)
 	}
 	return reg
 }
@@ -220,11 +228,7 @@ func TestModule_Register_RequiresUserAddressResolver(t *testing.T) {
 func TestModule_Register_DeclaresContactAuditActions(t *testing.T) {
 	db := newTestDB(t)
 	module := NewModule(db, testModuleOptions(t)...)
-	reg := newHostRegistry(t)
-
-	if err := componenttest.DeclareInto(reg, module); err != nil {
-		t.Fatalf("Register: %v", err)
-	}
+	reg := newHostRegistry(t, module.Register)
 
 	declared := reg.AuditActions.Actions()
 	for _, want := range contactAuditActionDecls {
@@ -251,11 +255,7 @@ func TestModule_Register_DeclaresContactAuditActions(t *testing.T) {
 func TestModule_Register_AttachesTheHostRegistrarToPreferenceService(t *testing.T) {
 	db := newTestDB(t)
 	module := NewModule(db, testModuleOptions(t)...)
-	reg := newHostRegistry(t)
-
-	if err := componenttest.DeclareInto(reg, module); err != nil {
-		t.Fatalf("Register: %v", err)
-	}
+	newHostRegistry(t, module.Register)
 
 	ctx := tenantCtx("tenant-acme")
 	got, err := module.Preferences().ResolveChannels(ctx, "user-7", fixtureTypeAppointment)
@@ -282,11 +282,7 @@ func TestModule_Register_AttachesTheHostRegistrarToPreferenceService(t *testing.
 func TestModule_Register_AttachesTransportSeamsToContactService(t *testing.T) {
 	db := newTestDB(t)
 	module := NewModule(db, testModuleOptions(t)...)
-	reg := newHostRegistry(t)
-
-	if err := componenttest.DeclareInto(reg, module); err != nil {
-		t.Fatalf("Register: %v", err)
-	}
+	newHostRegistry(t, module.Register)
 
 	contacts := module.Contacts()
 	if contacts.sms == nil {
@@ -323,11 +319,7 @@ func TestModule_Register_AttachesTransportSeamsToContactService(t *testing.T) {
 func TestModule_Register_AttachesTheHostRegistrarToContactService(t *testing.T) {
 	db := newTestDB(t)
 	module := NewModule(db, testModuleOptions(t)...)
-	reg := newHostRegistry(t)
-
-	if err := componenttest.DeclareInto(reg, module); err != nil {
-		t.Fatalf("Register: %v", err)
-	}
+	newHostRegistry(t, module.Register)
 
 	ctx := tenantCtx("tenant-acme")
 	contact, err := module.Contacts().CreateContact(ctx, ContactCreateInput{
@@ -353,28 +345,23 @@ func TestModule_Register_AttachesTheHostRegistrarToContactService(t *testing.T) 
 }
 
 // TestModule_Register_TaxonomyIsLiveNotASnapshot proves the reference is
-// live: a type the host registers AFTER Register still governs preference
-// writes and reads. The module must hold the registrar, never a copy taken at
-// registration time -- a module registering before its declaring siblings
-// would otherwise freeze a taxonomy missing everything those siblings add
-// later.
+// live: a type declared after the module's own Register turn still governs
+// preference writes and reads. The module must hold the registrar, never a
+// copy taken at registration time -- a module registering before its
+// declaring siblings would otherwise freeze a taxonomy missing everything
+// those siblings declare later in the same declaration window.
 func TestModule_Register_TaxonomyIsLiveNotASnapshot(t *testing.T) {
 	db := newTestDB(t)
 	module := NewModule(db, testModuleOptions(t)...)
-	reg := newHostRegistry(t)
-
-	if err := componenttest.DeclareInto(reg, module); err != nil {
-		t.Fatalf("Register: %v", err)
-	}
 	late := pkgcore.NotificationType{
 		Key:             "clinic.billing_invoice_ready",
 		Group:           "billing",
 		DefaultChannels: []string{ChannelEmail},
 		Unsubscribable:  false,
 	}
-	if err := reg.Notifications.Add(late); err != nil {
-		t.Fatalf("reg.Notifications.Add(late type, after Register): %v", err)
-	}
+	newHostRegistry(t, module.Register, func(r *pkgcore.ComponentRegistry) error {
+		return r.Notifications.Add(late)
+	})
 
 	ctx := tenantCtx("tenant-acme")
 	if err := module.Preferences().Set(ctx, "user-7", late.Key, []string{ChannelEmail}); err != nil {
@@ -397,11 +384,7 @@ func TestModule_Register_TaxonomyIsLiveNotASnapshot(t *testing.T) {
 func TestModule_Register_DeclaresTheInboxEvent(t *testing.T) {
 	db := newTestDB(t)
 	module := NewModule(db, testModuleOptions(t)...)
-	reg := newHostRegistry(t)
-
-	if err := componenttest.DeclareInto(reg, module); err != nil {
-		t.Fatalf("Register: %v", err)
-	}
+	reg := newHostRegistry(t, module.Register)
 
 	found := false
 	for _, decl := range reg.Events.Published() {
@@ -429,11 +412,7 @@ func TestModule_Register_DeclaresTheInboxEvent(t *testing.T) {
 func TestModule_Register_RegistersTheDeliveryJobHandler(t *testing.T) {
 	db := newTestDB(t)
 	module := NewModule(db, testModuleOptions(t)...)
-	reg := newHostRegistry(t)
-
-	if err := componenttest.DeclareInto(reg, module); err != nil {
-		t.Fatalf("Register: %v", err)
-	}
+	reg := newHostRegistry(t, module.Register)
 
 	handlers := reg.Jobs.Handlers()
 	handler, ok := handlers[jobTypeDeliver]
@@ -456,11 +435,7 @@ func TestModule_Register_RegistersTheDeliveryJobHandler(t *testing.T) {
 func TestModule_Register_SubscribesTheHubToTheInboxEvent(t *testing.T) {
 	db := newTestDB(t)
 	module := NewModule(db, testModuleOptions(t)...)
-	reg := newHostRegistry(t)
-
-	if err := componenttest.DeclareInto(reg, module); err != nil {
-		t.Fatalf("Register: %v", err)
-	}
+	reg := newHostRegistry(t, module.Register)
 
 	conn := module.hub.Subscribe()
 	defer conn.Close()
@@ -504,11 +479,7 @@ func mapKeys(m map[string]any) []string {
 func TestModule_Register_DeclaresItsBootstrapKey(t *testing.T) {
 	db := newTestDB(t)
 	module := NewModule(db, testModuleOptions(t)...)
-	reg := newHostRegistry(t)
-
-	if err := componenttest.DeclareInto(reg, module); err != nil {
-		t.Fatalf("Register: %v", err)
-	}
+	newHostRegistry(t, module.Register)
 
 	declared := notificationComponent.BootstrapKeys
 	if len(declared) != 1 {

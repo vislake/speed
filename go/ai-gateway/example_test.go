@@ -22,6 +22,7 @@ import (
 	"image/png"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"time"
 
 	"github.com/vislake/speed/go/dbkit"
@@ -247,9 +248,21 @@ func Example_generateImage() {
 		return
 	}
 
-	reg, err := componenttest.DeclareModules(storageModule, module)
+	// The host assembles the registry the job handlers read: a local object
+	// store over a directory of its own (storage's service writes the
+	// generated image through it) plus the in-process event bus
+	// componenttest.NewRegistry puts. DeclareInto then runs both modules'
+	// Register inside the assembly's one Init window.
+	dir, err := os.MkdirTemp("", "aigateway-image-example-")
 	if err != nil {
-		fmt.Println("bootstrap:", err)
+		fmt.Println("temp dir:", err)
+		return
+	}
+	defer func() { _ = os.RemoveAll(dir) }()
+	reg := componenttest.NewRegistry()
+	reg.Put(pkgcore.NewLocalObjectStore(dir))
+	if err = componenttest.DeclareInto(reg, storageModule, module); err != nil {
+		fmt.Println("declare:", err)
 		return
 	}
 
@@ -275,7 +288,12 @@ func Example_generateImage() {
 	// Store the platform-wide credential under the image provider's own
 	// name -- a separate row from a chat credential, even for the same
 	// vendor, since routing and credential resolution are both keyed by
-	// Provider (see route.go).
+	// Provider (see route.go). The module's component descriptor carries
+	// the purpose and the assembly registers it, but this example drives
+	// the modules' declaration turns without their descriptors;
+	// registering it here keeps the example runnable on its own, and the
+	// registration is idempotent.
+	pkgcore.RegisterSystemPurpose(aigateway.SystemPurposeCredentialWrite)
 	sysCtx, err := pkgcore.WithSystemContext(ctx, pkgcore.SystemReason{
 		Actor:   "example-bootstrap",
 		Purpose: aigateway.SystemPurposeCredentialWrite,

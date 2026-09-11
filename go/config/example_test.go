@@ -53,6 +53,31 @@ func (*brandModule) Register(reg *pkgcore.ComponentRegistry) error {
 	})
 }
 
+// exampleService drives each stand-in module's Register and then the config
+// module's Attach inside the assembly's one Init window -- the seats accept
+// writes only during Init, and a registry runs Init once -- and returns the
+// attached Service.
+func exampleService(configModule *config.Module, standins ...componenttest.Declarer) *config.Service {
+	reg := componenttest.NewRegistry()
+	declares := make([]func(*pkgcore.ComponentRegistry) error, 0, len(standins)+1)
+	for _, standin := range standins {
+		declares = append(declares, standin.Register)
+	}
+	var svc *config.Service
+	declares = append(declares, func(r *pkgcore.ComponentRegistry) error {
+		attached, err := configModule.Attach(r)
+		if err != nil {
+			return err
+		}
+		svc = attached
+		return nil
+	})
+	if err := componenttest.DeclareAll(reg, declares...); err != nil {
+		panic(err)
+	}
+	return svc
+}
+
 // Example shows the module's headline path end to end: a host bootstraps
 // the config module beside its business modules, calls Attach exactly once
 // to freeze the assembled schema, and then reads values that fall back
@@ -81,17 +106,11 @@ func Example() {
 		panic(err)
 	}
 
-	// Bootstrap walks the module graph, calling Register on each; Attach is
-	// called exactly once afterwards and freezes the union of everything
-	// declared into a schema the service serves.
-	reg, err := componenttest.DeclareModules(&brandModule{}, configModule)
-	if err != nil {
-		panic(err)
-	}
-	svc, err := configModule.Attach(reg)
-	if err != nil {
-		panic(err)
-	}
+	// The modules' Register calls and the module's Attach share the
+	// assembly's one Init window: the seats accept writes only during Init,
+	// and Attach is what folds the union of everything declared into the
+	// schema the service serves.
+	svc := exampleService(configModule, &brandModule{})
 	defer svc.Close()
 
 	// With nothing written, the platform default declared by brandModule is
@@ -152,14 +171,7 @@ func ExampleService_Describe() {
 		panic(err)
 	}
 
-	reg, err := componenttest.DeclareModules(&brandModule{}, configModule)
-	if err != nil {
-		panic(err)
-	}
-	svc, err := configModule.Attach(reg)
-	if err != nil {
-		panic(err)
-	}
+	svc := exampleService(configModule, &brandModule{})
 	defer svc.Close()
 
 	for _, item := range svc.Describe() {
@@ -221,14 +233,7 @@ func ExampleService_TenantDuration() {
 	if err = migrations.Apply(ctx, db, dbkit.DialectSQLite); err != nil {
 		panic(err)
 	}
-	reg, err := componenttest.DeclareModules(&shareExpiryModule{}, configModule)
-	if err != nil {
-		panic(err)
-	}
-	svc, err := configModule.Attach(reg)
-	if err != nil {
-		panic(err)
-	}
+	svc := exampleService(configModule, &shareExpiryModule{})
 	defer svc.Close()
 
 	_, configured, durErr := svc.TenantDuration(ctx, "share.default_expiry", "acme")
@@ -319,14 +324,7 @@ func ExampleModule_Handle() {
 		fmt.Println("before Attach:", appErr.Code)
 	}
 
-	reg, err := componenttest.DeclareModules(&brandModule{}, configModule)
-	if err != nil {
-		panic(err)
-	}
-	svc, err := configModule.Attach(reg)
-	if err != nil {
-		panic(err)
-	}
+	svc := exampleService(configModule, &brandModule{})
 	defer svc.Close()
 
 	enabled, err := handle.IsEnabled(ctx, "brand.custom_theme")

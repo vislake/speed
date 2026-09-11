@@ -88,11 +88,7 @@ func newExportHarnessSeamed(t *testing.T, bus pkgcore.EventBus, store pkgcore.Ob
 	if store == nil {
 		store = pkgcore.NewLocalObjectStore(t.TempDir())
 	}
-	reg := componenttest.NewRegistry()
-	reg.Put(bus)
-	if err := reg.AuditActionsSeat().Add(AuditActionExportRequest); err != nil {
-		t.Fatalf("declare audit action: %v", err)
-	}
+	reg := componenttest.NewRegistryWithBus(bus)
 
 	captured := &[]audit.RecordedEvent{}
 	bus.Subscribe(audit.EventRecorded, func(_ context.Context, evt pkgcore.Event) error {
@@ -104,11 +100,15 @@ func newExportHarnessSeamed(t *testing.T, bus pkgcore.EventBus, store pkgcore.Ob
 
 	repo := testutil.NewFakeRepository(testutil.NewDB(t))
 	participant := testutil.NewParticipant("testutil.fake_note", repo)
-	if err := reg.RetentionSeat().Add(participant); err != nil {
-		t.Fatalf("register fake participant: %v", err)
-	}
-	if err := reg.RetentionSeat().Add(extra...); err != nil {
-		t.Fatalf("register extra participants: %v", err)
+	// The export-request audit action and every participant register
+	// inside the registry's one Init window: the seats accept writes only
+	// during Init.
+	if err := componenttest.DeclareAll(reg,
+		func(r *pkgcore.ComponentRegistry) error { return r.AuditActionsSeat().Add(AuditActionExportRequest) },
+		func(r *pkgcore.ComponentRegistry) error { return r.RetentionSeat().Add(participant) },
+		func(r *pkgcore.ComponentRegistry) error { return r.RetentionSeat().Add(extra...) },
+	); err != nil {
+		t.Fatalf("declare the audit action and participants: %v", err)
 	}
 
 	fakeSharing := &fakeSharingCreator{}
@@ -162,7 +162,6 @@ func TestExportService_Export_GathersAndStoresParticipantData(t *testing.T) {
 // participant that left Export nil contributes nothing and causes no
 // error -- a nil Export is documented as a legal "not opted in" value.
 func TestExportService_Export_SkipsParticipantsWithNoExportCallback(t *testing.T) {
-	svc, _, _, _ := newExportHarness(t)
 	noExport := pkgcore.RetentionParticipant{
 		// NoopSweep and NoopErase satisfy the registrar's mandatory-Sweep
 		// and mandatory-Erase rules; the export service under test never
@@ -172,9 +171,9 @@ func TestExportService_Export_SkipsParticipantsWithNoExportCallback(t *testing.T
 		Sweep: testutil.NoopSweep,
 		Erase: testutil.NoopErase,
 	}
-	if err := svc.retention.Add(noExport); err != nil {
-		t.Fatalf("register no-export participant: %v", err)
-	}
+	// The participant registers inside the harness's one Init window: the
+	// seats accept writes only during Init.
+	svc, _, _, _, _ := newExportHarnessWith(t, noExport)
 
 	result, err := svc.Export(pkgcore.WithTenant(context.Background(), "tenant-a"), "tenant-a")
 	if err != nil {
@@ -190,10 +189,6 @@ func TestExportService_Export_SkipsParticipantsWithNoExportCallback(t *testing.T
 // both in ExportManifest.Errors and as ErrExportPartialFailure -- and that
 // delivery still happens for the data that was gathered.
 func TestExportService_Export_ParticipantErrorIsPartialFailure(t *testing.T) {
-	svc, repo, _, fakeSharing := newExportHarness(t)
-	tenant := pkgcore.TenantID("tenant-a")
-	seedLiveFakeNote(t, repo, tenant, "note-1", "subject-1")
-
 	failing := pkgcore.RetentionParticipant{
 		// NoopSweep and NoopErase satisfy the registrar's mandatory-Sweep
 		// and mandatory-Erase rules; the export service under test never
@@ -205,9 +200,11 @@ func TestExportService_Export_ParticipantErrorIsPartialFailure(t *testing.T) {
 			return nil, errFakeParticipant
 		},
 	}
-	if err := svc.retention.Add(failing); err != nil {
-		t.Fatalf("register failing participant: %v", err)
-	}
+	// The participant registers inside the harness's one Init window: the
+	// seats accept writes only during Init.
+	svc, repo, _, fakeSharing, _ := newExportHarnessWith(t, failing)
+	tenant := pkgcore.TenantID("tenant-a")
+	seedLiveFakeNote(t, repo, tenant, "note-1", "subject-1")
 
 	result, err := svc.Export(pkgcore.WithTenant(context.Background(), tenant), tenant)
 	if !apperr.HasCode(err, ErrExportPartialFailure.Code) {

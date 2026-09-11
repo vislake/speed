@@ -90,7 +90,7 @@ func TestModule_Register_ImageJobHandler_RegisteredOnlyWhenWired(t *testing.T) {
 	chatOnlyDB := newTestDB(t)
 	chatOnlyModule := NewModule(chatOnlyDB)
 	chatOnlyReg := newTestRegistry()
-	if err := chatOnlyModule.Register(chatOnlyReg); err != nil {
+	if err := componenttest.DeclareInto(chatOnlyReg, chatOnlyModule); err != nil {
 		t.Fatalf("Register: %v", err)
 	}
 	if _, ok := chatOnlyReg.Jobs.Handlers()[TaskTypeImageGenerate]; ok {
