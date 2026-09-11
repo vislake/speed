@@ -407,3 +407,7 @@ Q1 建议的独立后续轮已落地:生成骨架不再直读 env,`os.Getenv` �
 - **选择值与嵌套键**:`components.<name>` 为 null/映射/`false`(文源里字面 `"false"`/`"true"` 归一为布尔);组件块内的键路径以点继续嵌套。五源为"内置默认 < 项目文件 < 环境 < 命令行 < 代码覆盖",代码覆盖经 `CompositionOverrides`(宿主 Put)或 `LoadSpec.Overrides`(无注册表句柄的调用者)注入,恒赢;层间按键深合并,同名组件块合并不替换。
 - **顺序确定性**:文源层无书写序(koanf 成图即失序),按名排序;代码覆盖层保序(`ComponentConfig.With` 调用序),过渡适配器即靠它复现 WithModules 的模块序。
 
+### 9.9 后续轮:BootstrapKey.Format 升格为 schema 合成源
+
+§3.2"声明层不放 Go 类型信息(Default/Required/Min/Max),因为宿主结构体是唯一的类型/默认值真源"这一判断,对**宿主自己拥有、按部署环境定制**的键(reference-app 的 29 个宿主键)继续成立,机制不变。但对 `app.PlatformConfig` 覆盖的六枚平台密钥——一个由引擎(`go/app`)手写、与模块声明逐字对应的镜像结构体,本身不是独立于模块声明的"宿主定制层",只是模块声明的手抄副本——该判断不再成立:手抄副本不是第二个真源,是同一真源的复制品,复制品必然漂移(新模块要素每次都要去 `go/app/config.go` 手工加一段结构体)。此场景由 [30 号文](30-bootstrap-key-schema-synthesis.md) 取代旧结论:`BootstrapKey.Format` 直接驱动引擎的 flag/env/file 解析(`go/pkgcore/config` 新增声明驱动的解析入口),`PlatformConfig` 及其五个子结构体、`platformKeyPaths`、`verifyBinding` 删除;六枚平台键当前的环境变量拼写(`APP_AUTHN__PII_CIPHER_KEY` 等,无 pin、通用前缀派生)逐字不变。五个声明模块(authn/config/pki/org/notification)的既有 `BootstrapKey` 声明不需要任何改动。
+

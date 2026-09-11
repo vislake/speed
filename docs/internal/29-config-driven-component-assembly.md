@@ -81,7 +81,7 @@ type Component struct {
     Provides     []any         // 产物将满足的接口 token（类型化 nil 指针；与消费方 Requires 同词表）——选前解析、auto-pull 与歧义校验、构造后的产物断言都读它
     Capabilities Capability    // 能力位（可选；部署模式校验用）
     ConfigSchema any           // 类型化 nil 指针（可选；nil = 不吃配置）
-    BootstrapKeys []BootstrapKey // 启动期密钥材料声明（键路径＋purpose）；loader 在 Prepare 拍① 读取——先于一切构造，不受 Init 席门禁
+    BootstrapKeys []BootstrapKey // 启动期配置声明（键路径＋Format）；loader 在 Prepare 拍① 按 Format 直接解析取值——不要求任何宿主/引擎结构体字段绑定，先于一切构造，不受 Init 席门禁；机制见 30 号文
     SystemPurposes []SystemPurpose // 系统用途声明；装配器在 Init 收尾统一汇总注册（重复/冲突 fail-closed）
     Migrations   embed.FS      // 资产（可选；零值 = 不携带）
     Locales      embed.FS      // 资产（可选；zh-CN/en-US 键集契约）
@@ -271,7 +271,7 @@ stateDiagram-v2
 
 ### 5.2 逐阶段
 
-**Prepare——一切构造之前。** 内部三拍：① loader（引导根：引擎内建的前置步骤，零依赖、必然执行）做命令行解析与五源分层加载，把宿主配置、组合配置写入注册表；同时解析全部已注册组件的 `BootstrapKeys`（键路径＋purpose，沿用 pkgcore 的解析/派生链），把结果作为**按 purpose 寻址的材料源**（`pkgcore.BootstrapMaterial`）发布进注册表；装载完成后立即核对“已声明键 ↔ 解析结果 ↔ 宿主目标”的绑定，不闭合即四要素错误、启动失败。② 装配器对组合配置严格解码，完成选择解析、拓扑排序与依赖验证（见 §7）。③ 其余组件执行各自 Prepare——需要“先于开库”的行为都在这里：如 authn 经材料源取自己的密钥材料、自建 PII cipher 并注册 serializer。
+**Prepare——一切构造之前。** 内部三拍：① loader（引导根：引擎内建的前置步骤，零依赖、必然执行）做命令行解析与五源分层加载，把宿主配置、组合配置写入注册表；同时按全部已注册组件声明的 `BootstrapKeys`（键路径＋Format）直接解析取值——Format 驱动 flag/env/file 解析与 `hexkey` 派生，不要求声明键映射到任何宿主或引擎结构体字段——把结果作为**按键路径（等价地，按 purpose）寻址的材料源**（`pkgcore.BootstrapMaterial`）发布进注册表；解析失败——Format 闭集校验、`Sensitive` 与 `Description` 配对、跨组件重复键——即四要素错误、启动失败（机制见 30 号文）。② 装配器对组合配置严格解码，完成选择解析、拓扑排序与依赖验证（见 §7）。③ 其余组件执行各自 Prepare——需要“先于开库”的行为都在这里：如 authn 经材料源取自己的密钥材料、自建 PII cipher 并注册 serializer。
 
 **Construct——构造产物。** 按 Requires 图拓扑序执行 `New`；每个产物 `Put` 进注册表，组装信息随之写入。db 组件零依赖、最先构造：`New` 只完成连接——构造期尚不知全部组件是否构造成功，且构造失败不应先动库。失败语义见 §5.3。
 
@@ -480,7 +480,7 @@ components:
 
 `loader`、`observability`、`config`、`db`、`app` 与业务组件零差别：同一注册、同一配置选择、同一生命周期；引擎只负责“按序调用阶段方法”与相间的宿主步骤。
 
-- **loader（引导根，引擎内建）**：引擎驱动的**前置步骤**——先于注册与选择（不存在“选中与否”的语义，故不以组件描述符注册；它是装配器自身的组成部分，不是被装配的组件）。零依赖、必然执行。`Prepare` 第一拍做命令行解析与五源分层加载，产出宿主配置与组合配置（一棵 `ComponentConfig`），并解析各组件的 `BootstrapKeys`、发布材料源、核对键绑定（见 §5.2 拍①）——宿主不必自带加载器；加载设施来自 `pkgcore/config` 子包。
+- **loader（引导根，引擎内建）**：引擎驱动的**前置步骤**——先于注册与选择（不存在“选中与否”的语义，故不以组件描述符注册；它是装配器自身的组成部分，不是被装配的组件）。零依赖、必然执行。`Prepare` 第一拍做命令行解析与五源分层加载，产出宿主配置与组合配置（一棵 `ComponentConfig`），并按各组件 `BootstrapKeys` 声明的 Format 直接解析取值、发布材料源（见 §5.2 拍①，机制见 30 号文）——宿主不必自带加载器，也不必为声明键准备匹配字段；加载设施来自 `pkgcore/config` 子包。
 - **observability**：标准组件（引擎提供、默认参与）：`Prepare`（拍③首位）初始化 OTel（配置经 loader 同路装载）、`Close` 关停并 flush——引擎不再在装配之前自行初始化观察面。
 - **config（配置服务）**：`go/config` 模块的组件，只承担运行期配置服务。依赖 db（存在 Sensitive 项时还需 cipher）与 tenancy 的解析数据；`Init` 发布配置服务；`Start` 做 schema 冻结校验。
 - **db**：模块 `db`，实现 `db.sqlite` / `db.postgres`（方言注册表，database/sql 式）。`New` 完成连接；`Verify` 应用选中组件的迁移（零依赖 → 序最先）；`Close` 关库；产物 `(*gorm.DB)`。
@@ -535,7 +535,7 @@ type Component struct {
     Provides       []any // 产物将满足的接口 token；与 Requires 成对
     Capabilities   Capability
     ConfigSchema   any
-    BootstrapKeys  []BootstrapKey  // 启动期密钥材料声明；loader 拍① 读取（不受 Init 席门禁）
+    BootstrapKeys  []BootstrapKey  // 启动期配置声明；loader 拍① 按 Format 直接解析（不经宿主/引擎结构体绑定，不受 Init 席门禁；机制见 30 号文）
     SystemPurposes []SystemPurpose // 装配器 Init 收尾汇总注册
     Migrations     embed.FS
     Locales      embed.FS
