@@ -235,7 +235,7 @@ func TestModule_Attach_UsesInjectedClock(t *testing.T) {
 // lifetime, while a zero or negative one is ignored and leaves the zero
 // value standing -- which the Service resolves as the MaxAPIKeyLifetime
 // package default (see maxAPIKeyLifetime). A value nobody can configure
-// away by accident is a value an enforcing round can trust.
+// away by accident is a value enforcement can trust.
 func TestModule_WithMaxAPIKeyLifetime_OptionStoresOnlyPositiveValues(t *testing.T) {
 	m := NewModule(nil, WithMaxAPIKeyLifetime(30*24*time.Hour))
 	if m.maxLifetime != 30*24*time.Hour {

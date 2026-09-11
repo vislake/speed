@@ -70,8 +70,8 @@ func AuthenticatedAPIKeyFromContext(ctx context.Context) (*AuthenticatedAPIKey, 
 // go/integration's own Service is built in Module.Attach, strictly after
 // Bootstrap's Register phase -- too late for a middleware a host may want to
 // construct and wire during Register, alongside every other module's own
-// route mounting. Reading m.service AT CALL TIME is the fix, the identical
-// forwarding-wrapper technique Handler, handleDomainEvent and
+// route mounting. Reading m.service AT CALL TIME bridges that gap, the
+// identical forwarding-wrapper technique Handler, handleDomainEvent and
 // webhookDeliveryHandler already use.
 //
 // # Deliberately separate from HTTPGuard -- and rate-limited BEFORE it
