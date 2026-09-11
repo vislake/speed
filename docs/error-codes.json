@@ -1653,7 +1653,7 @@
       "file": "examples/reference-app/internal/app/consult.go",
       "ident": "consultErrInternal",
       "kind": "declared",
-      "line": 41,
+      "line": 42,
       "module": "consult",
       "status": 500
     },
@@ -1662,7 +1662,7 @@
       "file": "examples/reference-app/internal/app/consult.go",
       "ident": "",
       "kind": "inline",
-      "line": 70,
+      "line": 71,
       "module": "consult",
       "status": 400
     },
@@ -1671,7 +1671,7 @@
       "file": "examples/reference-app/internal/app/consult.go",
       "ident": "",
       "kind": "inline",
-      "line": 74,
+      "line": 75,
       "module": "consult",
       "status": 400
     },
@@ -3264,7 +3264,7 @@
       "file": "examples/reference-app/internal/app/smilesim.go",
       "ident": "smileSimErrInternal",
       "kind": "declared",
-      "line": 56,
+      "line": 57,
       "module": "smilesim",
       "status": 500
     },
@@ -3273,7 +3273,7 @@
       "file": "examples/reference-app/internal/app/smilesim.go",
       "ident": "smilesimErrInvalidRequestBody",
       "kind": "declared",
-      "line": 67,
+      "line": 68,
       "module": "smilesim",
       "status": 400
     },
@@ -3282,7 +3282,7 @@
       "file": "examples/reference-app/internal/app/smilesim.go",
       "ident": "smileSimErrOutputNotFound",
       "kind": "declared",
-      "line": 92,
+      "line": 93,
       "module": "smilesim",
       "status": 404
     },
@@ -3291,7 +3291,7 @@
       "file": "examples/reference-app/internal/app/smilesim.go",
       "ident": "smileSimErrOutputNotReady",
       "kind": "declared",
-      "line": 87,
+      "line": 88,
       "module": "smilesim",
       "status": 404
     },
@@ -3300,7 +3300,7 @@
       "file": "examples/reference-app/internal/app/smilesim.go",
       "ident": "smilesimErrPhotoObjectIDRequired",
       "kind": "declared",
-      "line": 71,
+      "line": 72,
       "module": "smilesim",
       "status": 400
     },
@@ -3309,7 +3309,7 @@
       "file": "examples/reference-app/internal/app/smilesim.go",
       "ident": "smilesimErrRecipientNotInTenant",
       "kind": "declared",
-      "line": 485,
+      "line": 486,
       "module": "smilesim",
       "status": 400
     },
@@ -3318,7 +3318,7 @@
       "file": "examples/reference-app/internal/app/smilesim.go",
       "ident": "smileSimErrSimulationNotFound",
       "kind": "declared",
-      "line": 83,
+      "line": 84,
       "module": "smilesim",
       "status": 404
     },
