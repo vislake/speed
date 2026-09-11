@@ -196,6 +196,11 @@ type Aggregator struct {
 	thresholds OverageThresholds
 	bus        pkgcore.EventBus
 
+	// settings is the dynamic-configuration reader (settings.go), wired by
+	// WithSettingsReader. Nil -- a bare Aggregator or a host that wires no
+	// config module -- keeps bucket and thresholds exactly as constructed.
+	settings SettingsReader
+
 	counters sync.Map // counterKey -> *counterEntry
 	mu       sync.Mutex
 
@@ -330,12 +335,11 @@ func (a *Aggregator) Ingest(ctx context.Context, event UsageEvent) error {
 	if occurredAt.IsZero() {
 		occurredAt = time.Now()
 	}
-	start, end, err := periodBounds(occurredAt, a.bucket)
+	tenantCtx := pkgcore.WithTenant(ctx, pkgcore.TenantID(event.TenantID))
+	start, end, err := periodBounds(occurredAt, a.bucketFor(tenantCtx))
 	if err != nil {
 		return err
 	}
-
-	tenantCtx := pkgcore.WithTenant(ctx, pkgcore.TenantID(event.TenantID))
 
 	// The seed read and the upsert run under the same mu acquisition, in
 	// that order: the counter entry must be reconstructed from the summary
@@ -344,7 +348,7 @@ func (a *Aggregator) Ingest(ctx context.Context, event UsageEvent) error {
 	a.mu.Lock()
 	entry, err := a.ensureSeeded(tenantCtx, event.TenantID, event.Feature, start)
 	if err == nil {
-		err = upsertSummaryInto(tenantCtx, a.summaries, event.Feature, start, end, event.Quantity, a.foldThreshold(event.Feature))
+		err = upsertSummaryInto(tenantCtx, a.summaries, event.Feature, start, end, event.Quantity, a.foldThreshold(tenantCtx, event.Feature))
 	}
 	a.sweepExpiredCountersLocked(start)
 	a.mu.Unlock()
@@ -352,7 +356,7 @@ func (a *Aggregator) Ingest(ctx context.Context, event UsageEvent) error {
 		return err
 	}
 
-	quantity, crossed := a.applyDelta(entry, event.Feature, event.Quantity)
+	quantity, crossed := a.applyDelta(tenantCtx, entry, event.Feature, event.Quantity)
 	if crossed {
 		a.deliverOverageCrossing(ctx, entry, event, start, end, quantity, occurredAt)
 	}
@@ -432,7 +436,7 @@ func (a *Aggregator) ensureSeeded(tenantCtx context.Context, tenantID, feature s
 		// publish, it must not latch either: this rule leaves an
 		// unattested row open for RealtimeCount's map-miss seed too, so a
 		// pure read can never swallow the lowered threshold's signal.
-		threshold, hasThreshold := a.thresholds.resolve(feature)
+		threshold, hasThreshold := a.resolveThreshold(tenantCtx, feature)
 		if hasThreshold && entry.quantity >= threshold && existing.OverageThreshold != nil && *existing.OverageThreshold == threshold {
 			entry.notifiedOverage = true
 		}
@@ -466,14 +470,14 @@ func (a *Aggregator) ensureSeeded(tenantCtx context.Context, tenantID, feature s
 // before an unconfirmed publish is a latch a failed publish can consume,
 // after which no later fold in the period can ever fire the crossing
 // again -- the overage signal lost permanently.
-func (a *Aggregator) applyDelta(entry *counterEntry, feature string, delta float64) (quantity float64, crossed bool) {
+func (a *Aggregator) applyDelta(ctx context.Context, entry *counterEntry, feature string, delta float64) (quantity float64, crossed bool) {
 	entry.mu.Lock()
 	defer entry.mu.Unlock()
 
 	entry.quantity += delta
 	quantity = entry.quantity
 
-	threshold, hasThreshold := a.thresholds.resolve(feature)
+	threshold, hasThreshold := a.resolveThreshold(ctx, feature)
 	if hasThreshold && !entry.notifiedOverage && !entry.publishPending && quantity >= threshold {
 		entry.publishPending = true
 		crossed = true
@@ -538,7 +542,11 @@ func (a *Aggregator) deliverOverageCrossing(ctx context.Context, entry *counterE
 // value it cannot know. See that error's doc comment for the alignment
 // with go/billing's own refusal vocabulary.
 func (a *Aggregator) RealtimeCount(tenantID, feature string, at time.Time) (float64, error) {
-	start, _, err := periodBounds(at, a.bucket)
+	// The tenant-scoped context exists from the top so the bucket
+	// resolution below sees the tenant's own dynamic configuration, the
+	// same scope every ingest path reads it under.
+	tenantCtx := pkgcore.WithTenant(context.Background(), pkgcore.TenantID(tenantID))
+	start, _, err := periodBounds(at, a.bucketFor(tenantCtx))
 	if err != nil {
 		return 0, err
 	}
@@ -548,7 +556,6 @@ func (a *Aggregator) RealtimeCount(tenantID, feature string, at time.Time) (floa
 		if a.summaries == nil {
 			return 0, ErrUsageSummariesUnconfigured
 		}
-		tenantCtx := pkgcore.WithTenant(context.Background(), pkgcore.TenantID(tenantID))
 		entry, err := a.ensureSeeded(tenantCtx, tenantID, feature, start)
 		if err != nil {
 			return 0, err
@@ -610,8 +617,8 @@ func (a *Aggregator) sweepExpiredCountersLocked(start time.Time) {
 // from PerFeature to Default at the same number, say) is the same
 // configuration for the restart-reconstruction attestation, and one that
 // resolves to a different value is not, whatever the map it came from.
-func (a *Aggregator) foldThreshold(feature string) *float64 {
-	if t, ok := a.thresholds.resolve(feature); ok {
+func (a *Aggregator) foldThreshold(ctx context.Context, feature string) *float64 {
+	if t, ok := a.resolveThreshold(ctx, feature); ok {
 		return &t
 	}
 	return nil
@@ -768,12 +775,11 @@ func (a *Aggregator) IngestBillingGrade(ctx context.Context, event UsageEvent) e
 	if occurredAt.IsZero() {
 		occurredAt = time.Now()
 	}
-	start, end, err := periodBounds(occurredAt, a.bucket)
+	tenantCtx := pkgcore.WithTenant(ctx, pkgcore.TenantID(event.TenantID))
+	start, end, err := periodBounds(occurredAt, a.bucketFor(tenantCtx))
 	if err != nil {
 		return err
 	}
-
-	tenantCtx := pkgcore.WithTenant(ctx, pkgcore.TenantID(event.TenantID))
 
 	// The seed read runs before the fold, under the same mu acquisition:
 	// the counter must be reconstructed from the summary state as it is
@@ -793,7 +799,7 @@ func (a *Aggregator) IngestBillingGrade(ctx context.Context, event UsageEvent) e
 	entry, err := a.ensureSeeded(tenantCtx, event.TenantID, event.Feature, start)
 	var alreadyIngested bool
 	if err == nil {
-		alreadyIngested, err = a.foldIntoSummaryOnce(tenantCtx, event, start, end, a.foldThreshold(event.Feature))
+		alreadyIngested, err = a.foldIntoSummaryOnce(tenantCtx, event, start, end, a.foldThreshold(tenantCtx, event.Feature))
 	}
 	a.sweepExpiredCountersLocked(start)
 	a.mu.Unlock()
@@ -808,7 +814,7 @@ func (a *Aggregator) IngestBillingGrade(ctx context.Context, event UsageEvent) e
 		return nil
 	}
 
-	quantity, crossed := a.applyDelta(entry, event.Feature, event.Quantity)
+	quantity, crossed := a.applyDelta(tenantCtx, entry, event.Feature, event.Quantity)
 	if crossed {
 		a.deliverOverageCrossing(ctx, entry, event, start, end, quantity, occurredAt)
 	}

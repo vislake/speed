@@ -19,6 +19,8 @@ import (
 	"gorm.io/gorm"
 
 	"github.com/vislake/speed/go/dbkit"
+	"github.com/vislake/speed/go/pkgcore"
+	"github.com/vislake/speed/go/pkgcore/componenttest"
 
 	"github.com/vislake/speed/go/metering"
 )
@@ -138,4 +140,81 @@ func waitForCount(m *metering.Module, tenantID, feature string, at time.Time, wa
 		}
 		time.Sleep(5 * time.Millisecond)
 	}
+}
+
+// exampleThresholdReader is the smallest stand-in for the config module's
+// handle: it answers only metering.default_overage_threshold, so this
+// example shows a declared item actually reaching the overage gate. The
+// config module's real Handle satisfies metering.SettingsReader
+// structurally, so a host passes it directly.
+type exampleThresholdReader struct{ defaultThreshold int64 }
+
+func (r exampleThresholdReader) Int(_ context.Context, key string) (int64, bool, error) {
+	if key == metering.ConfigDefaultOverageThreshold {
+		return r.defaultThreshold, true, nil
+	}
+	return 0, false, nil
+}
+
+func (exampleThresholdReader) String(context.Context, string) (string, bool, error) {
+	return "", false, nil
+}
+
+var _ metering.SettingsReader = exampleThresholdReader{}
+
+// ExampleWithSettingsReader wires a dynamic default overage threshold and
+// watches the crossing event fire: without the settings seam nothing links
+// any threshold and no event would ever publish for a feature with no
+// per-feature entry (see OverageThresholds).
+func ExampleWithSettingsReader() {
+	ctx := context.Background()
+
+	db, err := dbkit.Open(ctx, dbkit.Options{
+		Dialect: dbkit.DialectSQLite,
+		DSN:     "file:metering_example_settings?mode=memory&cache=shared",
+	})
+	if err != nil {
+		panic(err)
+	}
+
+	m := metering.NewModule(db, metering.WithSettingsReader(exampleThresholdReader{defaultThreshold: 5}))
+	registry := dbkit.NewMigrationRegistry()
+	if err = registry.Register(m); err != nil {
+		panic(err)
+	}
+	if err = registry.Apply(ctx, db, dbkit.DialectSQLite); err != nil {
+		panic(err)
+	}
+
+	// The declaration turn wires the module's event bus onto the Aggregator,
+	// exactly as the assembly does.
+	assembly := componenttest.NewRegistry()
+	if err = componenttest.DeclareInto(assembly, m); err != nil {
+		panic(err)
+	}
+	crossed := make(chan struct{}, 1)
+	assembly.EventBus().Subscribe(metering.EventOverageThresholdCrossed, func(context.Context, pkgcore.Event) error {
+		crossed <- struct{}{}
+		return nil
+	})
+
+	if err = m.Aggregator().Ingest(ctx, metering.UsageEvent{
+		TenantID:       "tenant-acme",
+		Feature:        "image.render",
+		Quantity:       6,
+		IdempotencyKey: "settings-1",
+		OccurredAt:     time.Now(),
+	}); err != nil {
+		panic(err)
+	}
+
+	select {
+	case <-crossed:
+		fmt.Println("overage crossing published: true")
+	case <-time.After(2 * time.Second):
+		fmt.Println("overage crossing published: false")
+	}
+
+	// Output:
+	// overage crossing published: true
 }

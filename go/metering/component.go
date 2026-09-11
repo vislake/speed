@@ -15,6 +15,7 @@ import (
 
 	"gorm.io/gorm"
 
+	"github.com/vislake/speed/go/config"
 	"github.com/vislake/speed/go/pkgcore"
 
 	"github.com/vislake/speed/go/metering/locales"
@@ -58,6 +59,14 @@ func component() pkgcore.Component {
 			// The database connection the module's tables live in, the
 			// selected db component's product.
 			{Token: (*gorm.DB)(nil)},
+			// The configuration module, whose Handle this descriptor wires
+			// as the module's SettingsReader: the seam that makes
+			// metering's declared dynamic config items
+			// (ConfigPeriodBucketSize, ConfigDefaultOverageThreshold)
+			// effective at runtime. Optional -- a composition without a
+			// config module keeps every construction-time value, exactly
+			// the behavior before the seam existed (settings.go).
+			{Token: (*config.Module)(nil), Optional: true},
 		},
 		// The construction deliveries are the *Module plus the *Aggregator
 		// it exposes -- the usage reading billing's UsageReader token
@@ -107,6 +116,17 @@ func component() pkgcore.Component {
 			}
 			if c.OutboxRetention != 0 {
 				opts = append(opts, WithOutboxRetention(c.OutboxRetention))
+			}
+			// The dynamic-configuration reader: the config module's lazy
+			// handle satisfies metering.SettingsReader structurally, and
+			// the handle exists from the config module's own construction,
+			// so wiring it here is a plain value capture.
+			cfgModule, ok, err := pkgcore.GetOptional[*config.Module](reg)
+			if err != nil {
+				return nil, err
+			}
+			if ok {
+				opts = append(opts, WithSettingsReader(cfgModule.Handle()))
 			}
 			m := NewModule(db, opts...)
 			// The Aggregator is a construction value (NewModule builds it
