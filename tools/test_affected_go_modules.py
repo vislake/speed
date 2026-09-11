@@ -177,7 +177,7 @@ class ScopeRules(unittest.TestCase):
         )
         # rbac is required only by admin.
         self.assertEqual(
-            scope(["go/rbac/service.go"]), {"go/rbac", "go/admin"}
+            scope(["go/rbac/authorizer_service.go"]), {"go/rbac", "go/admin"}
         )
         # The reference app has no dependents.
         self.assertEqual(

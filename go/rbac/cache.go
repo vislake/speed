@@ -217,7 +217,7 @@ func (c *grantCache) beginLoad(key grantKey) uint64 {
 // read finally returns, its put is fenced by the gen it captured before
 // the read started: since the slot's gen has moved on, the store is
 // discarded instead of resurrecting the just-revoked permission for a
-// full cache TTL. See grantsFor in service.go for the caller side of the
+// full cache TTL. See grantsFor in authorizer_service.go for the caller side of the
 // fence, and beginLoad for why the fence is per-subject rather than
 // process-wide.
 //

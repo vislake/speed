@@ -1,6 +1,6 @@
 package rbac
 
-// service_bench_test.go benchmarks the authorization-decision hot path --
+// authorizer_service_bench_test.go benchmarks the authorization-decision hot path --
 // docs/internal/20-quality-and-security.md's "single-decision latency and
 // cache hit rate" hotspot, owned by this module. Every request a host
 // authorizes pays one Service.Can; the benchmarks report that cost in the
@@ -45,7 +45,7 @@ const (
 // newBenchService attaches a Service over a private temp-file SQLite
 // database migrated from the module's real migration files, registering the
 // host permissions the way a real host would -- the identical sequence the
-// module's own test fixture (service_test.go's attachTestService) runs, with
+// module's own test fixture (authorizer_service_test.go's attachTestService) runs, with
 // *testing.T swapped for *testing.TB.
 func newBenchService(b *testing.B) *Service {
 	b.Helper()

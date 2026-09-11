@@ -24,7 +24,7 @@ The **semantics** the design asks for are preserved exactly: domain = tenant, `r
 |---|---|
 | `Module`, the Register/Attach wiring seam, `Option`s (`WithSubtreeResolver`, `WithCacheTTL`, `WithQueue`), `DefaultCacheTTL`, `PermissionRead` / `PermissionManage` | `module.go` |
 | `Authorizer`, the interface every consumer programs against, and `Permission(resource, action)` | `authorizer.go` |
-| `Service`, the runtime handle `Attach` returns, plus `Can` / `ListPermissions` / `DataScope` and `Close` | `service.go` |
+| `Service`, the runtime handle `Attach` returns, plus `Can` / `ListPermissions` / `DataScope` and `Close` | `authorizer_service.go` |
 | `DefineRole` / `AssignRole` / `RevokeRole` / `RestoreRole` and `RoleDefinition` | `assign.go` |
 | The built-in roles (`BuiltinRoleOwner` / `Admin` / `Member`) and `EnsureBuiltinRoles` | `builtin.go` |
 | The per-subject decision cache, its TTL expiry and its janitor | `cache.go` |

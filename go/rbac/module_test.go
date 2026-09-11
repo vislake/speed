@@ -202,7 +202,7 @@ func TestModule_Attach_RejectsMissingWiring(t *testing.T) {
 }
 
 func TestModule_Options_ReachTheService(t *testing.T) {
-	// stubResolver (service_test.go) with no paths answers nothing, which
+	// stubResolver (authorizer_service_test.go) with no paths answers nothing, which
 	// is all this test needs: it proves the option carries the host's
 	// implementation onto the Service, not what a resolver's answers mean.
 	resolver := &stubResolver{}

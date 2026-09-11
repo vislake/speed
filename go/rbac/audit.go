@@ -28,7 +28,7 @@ import (
 // management write never lands a blank attribution: when ctx carries no
 // pkgcore.Actor at all, emitAudit derives one from the rbac.Subject the
 // host's authenticating layer installed (rbac.WithSubject, the module's
-// own audit-context carrier; service.go's actorFrom reads it the same
+// own audit-context carrier; authorizer_service.go's actorFrom reads it the same
 // way). A Subject in rbac.SystemDomain -- the pseudo-
 // tenant every admin:* permission is evaluated in, and the one go/admin's
 // operations handlers install -- derives a
