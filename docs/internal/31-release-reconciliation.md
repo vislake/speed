@@ -196,6 +196,14 @@
 - **登记理由**：公共符号面新增，按"宿主可见面变更须带 `!BREAKING` footer 或登记本清单"的纪律登记（纯新增面，不带 footer）。
 - **出处**：`afd4997f`（`fix(admin): refuse system-domain impersonation targets and page the full tenant ledger`）+ `68bd691b`（`refactor(admin): fan cross-tenant ledger reads out through one walk`；改为 `ListAllRows` 投影）。
 
+### 5.14. Mailer 地址结构预校验：`Send` 拒绝不可寻址的地址（行为收紧）
+
+- **面**：`pkgcore` 的共享校验 `validateMail`（`mailer_validation.go`，console 与 SMTP 两实现共用）在既有"空值/控制字符"规则之外新增结构规则：From、每个 To 项与可选 ReplyTo 必须各自经 `net/mail.ParseAddress` 解析为**一个**地址，否则以既有 `ErrInvalidMail` 拒绝（错误只点名字段，不回显地址，也不携带解析器的错误文本——`net/mail` 的解析错误会引用输入片段）。
+- **消费者影响**：此前不是地址形态的取值（裸字符串、缺 `@`、空本地部/域名、含空白、一个字段塞两个地址、点位异常如 `a..b@example.com`）会经 `Send` 直达传输层——SMTP 面上原样进入 `MAIL FROM`/`RCPT TO` 与原始头，现改为**拨号/打印前**失败（`ErrInvalidMail`）。接受面不变：展示名形式（`Ada <ada@example.com>`）、加号标签、非 ASCII/IDN 本地部与域名、无点域名等一切 `net/mail.ParseAddress` 接受的形式继续放行；org 邀请与 notification 外部联系人各自的入口门（ASCII、域名含点等）不受影响，但两者都放行而解析器拒绝的点位异常形态（如 `a..b@example.com`）改为本地失败而非交给中继。`mailertest.AssertConforms` 同步要求每个 Mailer 实现（含宿主自带实现）满足该规则——此前通过套件的宿主实现需一并收紧。
+- **替代路径**：无（行为收紧）；调用方修正地址本身即可。
+- **登记理由**：宿主/API 调用面可见的契约行为收紧（`Mailer.Send` 的接受面变化 + 契约套件新增必过用例），按"宿主可见面变更须带 `!BREAKING` footer 或登记本清单"的纪律**双轨**登记（提交带 `!BREAKING` footer，先例同 §5.2/§5.8）。
+- **出处**：`1267ce1c`（`fix(pkgcore)!: structurally validate addresses before Send`）。
+
 ## 6. D 组：configrefgen 工具内部迁移（工具面，非宿主面）
 
 - **面**：`tools/configrefgen` 的内部实现从旧内核面迁到组件面（工具自身不在消费者依赖面内）。
@@ -221,6 +229,7 @@
 | `0c7a61a8` | notification 永久传输失败哨兵改挂 pkgcore（ErrTransportPermanent 移除） |
 | `0a62299d` | pki RootCAParams / IntermediateCAParams 合并为 CAParams |
 | `09fffdc9` | billing ExpireInput 并入 PreDeductInput |
+| `1267ce1c` | Mailer 地址结构预校验：`Send` 拒绝不可寻址的地址（§5.14） |
 | `a92adfb6` | 三条 integration 腿与三处运行时文案迁到组件面（本轮） |
 | `53a824b8` | reference-app 选用模块自身描述符（去宿主拷贝面） |
 | `91ffde15` | config/rbac 快照服务改在 Start 补齐（不再发布 Provides token） |
