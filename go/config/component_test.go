@@ -3,6 +3,7 @@ package config
 import (
 	"context"
 	"net/http"
+	"slices"
 	"testing"
 
 	"gorm.io/gorm"
@@ -58,6 +59,55 @@ func TestComponentWellFormed(t *testing.T) {
 	componenttest.AssertWellFormed(t, component())
 }
 
+// TestComponent_InitDeclaresAndPublishesTheService drives the descriptor's
+// Init through a real assembly: Register runs inside the one stage whose
+// seats accept writes, so its declarations land in the assembly's own
+// seats; Attach then runs in the same stage -- the only stage that can carry
+// its seat writes -- and the runtime *Service it builds is put into the
+// by-type context, where a consumer reads it after the assembly.
+func TestComponent_InitDeclaresAndPublishesTheService(t *testing.T) {
+	db := openModuleTestDB(t)
+	reg := pkgcore.NewComponentRegistry()
+	bus := pkgcore.NewMemoryEventBus()
+	if err := componenttest.RunInit(t, reg, component(), db, bus, pkgcore.NewMemoryKVStore()); err != nil {
+		t.Fatalf("RunInit: %v", err)
+	}
+	if actions := reg.AuditActions.Actions(); !slices.Contains(actions, AuditActionConfigSet) {
+		t.Errorf("AuditActions seat = %v, want the config-set action", actions)
+	}
+	var types []string
+	for _, decl := range reg.Events.Published() {
+		types = append(types, decl.Type)
+	}
+	if !slices.Contains(types, EventConfigItemChanged) {
+		t.Errorf("Events seat = %v, want the item-changed event declaration", types)
+	}
+	paths := make([]string, 0, 2)
+	for _, route := range reg.Routes.Routes() {
+		paths = append(paths, route.Path)
+	}
+	if !slices.Contains(paths, PathPublic) || !slices.Contains(paths, PathSystemFeatures) {
+		t.Errorf("Routes seat = %v, want the two pre-auth mounts", paths)
+	}
+
+	// The Service is the Init stage's publication: reachable from the
+	// assembly's by-type context, carrying the schema frozen over the
+	// declarations above and the assembly's own bus and store.
+	svc, err := pkgcore.Get[*Service](reg)
+	if err != nil {
+		t.Fatalf("the published service is not reachable: %v", err)
+	}
+	if svc.schema == nil {
+		t.Error("the published service carries no schema snapshot")
+	}
+	if svc.bus != pkgcore.EventBus(bus) {
+		t.Error("the service did not take the assembly's bus")
+	}
+	if svc.kv == nil {
+		t.Error("the service did not take the assembly's key-value store")
+	}
+}
+
 // TestComponentAssemblesThroughRegistry drives the registered descriptor
 // through the assembly's stages the way a host would: selection from a
 // composition configuration, construction from the database, cipher and
@@ -72,6 +122,11 @@ func TestComponentAssemblesThroughRegistry(t *testing.T) {
 	}
 	reg.Put(testCipher(t))
 	reg.Put(testResolver{})
+	// The Init callback runs Attach during the assembly's Init stage:
+	// Attach installs the service's own subscription and reads the
+	// assembly's seam values, so the assembly carries a bus and a store.
+	reg.Put(pkgcore.NewMemoryEventBus())
+	reg.Put(pkgcore.NewMemoryKVStore())
 	reg.Put(pkgcore.NewComponentConfig(map[string]any{
 		"deployment": "standalone",
 		"components": map[string]any{

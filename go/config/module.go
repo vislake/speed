@@ -39,14 +39,13 @@ var bootstrapKeyDecl = pkgcore.BootstrapKey{
 }
 
 // SystemPurposeSystemWrite is the audited system purpose a host declares
-// (pkgcore.RegisterSystemPurpose, or via tenancy.WithSystemContext's own
-// registration path) when it builds the system context that authorizes
-// platform-wide configuration writes: a ScopeSystem Set requires the
-// context to carry a system reason, and the reason's Purpose is expected
-// to be this one. Register calls RegisterSystemPurpose with it, so a host
-// that bootstraps this module never needs to register it by hand; the
-// constant exists so the host can name the purpose when building the
-// reason.
+// when it builds the system context that authorizes platform-wide
+// configuration writes: a ScopeSystem Set requires the context to carry a
+// system reason, and the reason's Purpose is expected to be this one. The
+// component descriptor (component.go) carries it as SystemPurposes, so the
+// assembly registers it when its Init stage closes and a host that
+// bootstraps this module never needs to register it by hand; the constant
+// exists so the host can name the purpose when building the reason.
 const SystemPurposeSystemWrite pkgcore.SystemPurpose = "config.system_write"
 
 // Module implements pkgcore.Module for go/config: the dynamic
@@ -221,15 +220,14 @@ func (m *Module) OpenAPISpec() []byte { return openAPISpecYAML }
 // Register implements pkgcore.Module. Per the interface's own contract
 // ("It must not perform I/O; it only declares"), it mounts the two
 // endpoints through this module's spec fragment's generated wrapper
-// (preAuthHandler), registers the module's own system purpose (idempotent,
-// process-global), and declares the event and audit-action vocabulary. The
+// (preAuthHandler) and declares the event and audit-action vocabulary. The
 // configuration schema is deliberately NOT read here: other modules may
-// register after this one, and the schema snapshot must be complete before
-// it freezes, so the snapshot happens in Attach -- after Bootstrap has
-// returned -- never in Register.
+// register after this one, so the snapshot happens in Attach, never in
+// Register. The module's own system purpose is descriptor data, not a
+// declaration made here: the component descriptor (component.go) carries it
+// as SystemPurposes, and the assembly registers it when its Init stage
+// closes.
 func (m *Module) Register(reg pkgcore.Registrar) error {
-	pkgcore.RegisterSystemPurpose(SystemPurposeSystemWrite)
-
 	// One handler, two mounts: the fragment's wrapper dispatches on a
 	// request's own literal path, so the same http.Handler serves both
 	// paths -- the identical shape go/sharing's Register gives its own
@@ -253,11 +251,13 @@ func (m *Module) Register(reg pkgcore.Registrar) error {
 }
 
 // Attach freezes the schema snapshot and hands the caller the runtime
-// Service. It must be called exactly once, after Kernel.Bootstrap has
-// returned, with the registry Bootstrap produced: only then has every
-// module registered, so reg.Config.Items() and reg.Features.Flags() are
-// the complete declarations the runtime schema folds together (see
-// buildSchema).
+// Service. It must be called exactly once, with the registry the modules
+// declared into: the host calls it after Kernel.Bootstrap has returned
+// (only then has every module registered, so reg.Config.Items() and
+// reg.Features.Flags() are the complete declarations the runtime schema
+// folds together, see buildSchema), and the component descriptor calls it
+// from its Init callback, which publishes the returned *Service into the
+// assembly's by-type context.
 //
 // Attach wires the Service's store to the Module's db, captures the
 // registry's KVStore as the backend of the pre-auth endpoints' rate

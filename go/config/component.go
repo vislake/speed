@@ -2,21 +2,26 @@ package config
 
 // component.go carries config's descriptor for the config-driven component
 // assembly: the selection key a composition configuration names, the assets
-// the module brings, the contracts it consumes, and the callback that
-// constructs it. The descriptor is additive: pkgcore.Module.Register, driven
-// by the host's bootstrap, remains config's declaration path, and the
-// descriptor states the same surface in the assembly's terms.
+// the module brings, the contracts it consumes, and the callbacks that
+// construct and declare it. Its Init runs the module's one declaration entry
+// point, Register, and then Attach -- the schema snapshot that publishes the
+// runtime *Service -- inside the assembly's Init stage, the one stage whose
+// seats accept writes: Attach installs the Service's own subscription and
+// the poller, so it can run nowhere else. The *Service is put into the
+// by-type context, where a consumer requires and reads it. The snapshot
+// therefore covers the declarations made before this component's Init turn
+// in plan order, not the full catalog: the design's full-catalog freeze
+// (docs/internal/29 §7, the component's Start callback) is not implemented.
 //
-// The descriptor declares no Init and no Start. Attach -- the schema freeze
-// that also publishes the runtime *Service -- must run after every module
-// has registered, and the schema freeze has no method of its own (Attach's
-// buildSchema runs inside it), so the host's Attach call remains both the
-// freeze and the publication until a Component's Init can reach it.
+// The module's own system purpose moves with it: the descriptor's
+// SystemPurposes carries the system-write purpose Register used to register
+// itself, and the assembly registers it when its Init stage closes.
 
 import (
 	"context"
 	"embed"
 	"errors"
+	"fmt"
 	"time"
 
 	"gorm.io/gorm"
@@ -39,7 +44,9 @@ type componentConfig struct {
 
 // component returns config's component descriptor: the value init registers,
 // so a composition configuration can select the module and the assembly can
-// construct it from the database product in the by-type context.
+// construct it from the database product in the by-type context. Its Init
+// declares through Register and publishes the runtime *Service through
+// Attach.
 func component() pkgcore.Component {
 	return pkgcore.Component{
 		Name:   moduleName,
@@ -62,9 +69,13 @@ func component() pkgcore.Component {
 		},
 		// The construction product is the *Module; the *Service Attach
 		// builds from it is the runtime configuration and feature-flag
-		// reader consumers take.
+		// reader consumers take, put into the by-type context during Init.
 		Provides:     []any{(*Module)(nil), (*Service)(nil)},
 		ConfigSchema: (*componentConfig)(nil),
+		// The one system context this module takes -- the system-scope
+		// configuration write -- is descriptor data the assembly registers
+		// when its Init stage closes.
+		SystemPurposes: []pkgcore.SystemPurpose{SystemPurposeSystemWrite},
 		// The process-start key material the module's cipher is built from.
 		// It is descriptor data: the loader resolves it before anything is
 		// constructed.
@@ -110,6 +121,21 @@ func component() pkgcore.Component {
 				return nil, err
 			}
 			return NewModule(db, opts...), nil
+		},
+		Init: func(_ context.Context, reg *pkgcore.ComponentRegistry, instance any) error {
+			m, ok := instance.(*Module)
+			if !ok {
+				return fmt.Errorf("config: component init got a %T instance, want *config.Module", instance)
+			}
+			if err := m.Register(reg); err != nil {
+				return err
+			}
+			svc, err := m.Attach(reg)
+			if err != nil {
+				return err
+			}
+			reg.Put(svc)
+			return nil
 		},
 	}
 }
