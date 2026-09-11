@@ -4,10 +4,12 @@
 
 The first DOM-rendering package: the `createAppTheme` theme factory that
 maps the merged token tree onto an MUI v9 theme, `AppThemeProvider`
-(theme + MUI locale linkage + CssBaseline), and seven controlled core
+(theme + MUI locale linkage + CssBaseline), and the controlled
 components (`PageHeader`, `EmptyState`, `ConfirmDialog`, `FormField`,
-`FormLayout`, `DataTable`, `FileUploader`) that render only the state
-hosts give them. `FileUploader` is no carve-out: the queue renders from
+`FormLayout`, `DataTable`, `FileUploader`, `InlineError`,
+`ListSkeleton`, `AsyncSection`) that render only the state hosts give
+them, plus the shared state primitives (`errorCodeOf`, the
+`visuallyHiddenSx` clip recipe). `FileUploader` is no carve-out: the queue renders from
 host-owned `rows` props, every pick, cancel, retry and remove reports up
 through a callback (`onSelectFiles` / `onCancel` / `onRetry` /
 `onRemove`), and the upload transport — one logical transfer per picked

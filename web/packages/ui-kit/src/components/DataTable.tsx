@@ -115,6 +115,7 @@ import type { SxProps, Theme } from '@mui/material/styles'
 import { EmptyState } from './EmptyState.js'
 import type { EmptyStateHeadingLevel } from './EmptyState.js'
 import { useUiKitTranslation } from '../internal/translation.js'
+import { visuallyHiddenSx } from '../visually-hidden.js'
 
 /**
  * Opt-in column visibility priority (see the header note for the full
@@ -246,26 +247,6 @@ const PRIORITY_VISIBLE_FROM: Record<DataTableColumnPriority, 'sm' | 'md' | 'lg'>
   medium: 'md',
   low: 'lg',
 }
-
-/**
- * The visually-hidden presentation of the empty-result wording inside
- * the status region: the EmptyState beneath is the empty result's
- * visual, so the region's copy must take no painted space -- but it must
- * stay in the accessibility tree or the live region has nothing to
- * announce, so it is clipped, never display:none (the same clip
- * technique FileUploader's hidden file input uses).
- */
-const visuallyHiddenSx = {
-  clip: 'rect(0 0 0 0)',
-  clipPath: 'inset(50%)',
-  height: 1,
-  overflow: 'hidden',
-  position: 'absolute',
-  bottom: 0,
-  left: 0,
-  whiteSpace: 'nowrap',
-  width: 1,
-} as const
 
 /**
  * Renders a column's opt-in priority into a breakpoint-keyed `display`
@@ -511,6 +492,13 @@ export function DataTable<T>({
                           {t('dataTable.loading')}
                         </>
                       ) : (
+                        // The empty-result wording inside the status
+                        // region: the EmptyState beneath is the empty
+                        // result's visual, so the region's copy takes
+                        // the package's clip recipe (see
+                        // src/visually-hidden.ts) and no painted space,
+                        // staying in the accessibility tree so the
+                        // region still has something to announce.
                         <Box component="span" sx={visuallyHiddenSx}>
                           {t('dataTable.noData')}
                         </Box>

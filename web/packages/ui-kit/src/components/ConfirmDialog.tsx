@@ -69,6 +69,7 @@ import DialogContent from '@mui/material/DialogContent'
 import DialogContentText from '@mui/material/DialogContentText'
 import DialogTitle from '@mui/material/DialogTitle'
 import { useUiKitTranslation } from '../internal/translation.js'
+import { visuallyHiddenSx } from '../visually-hidden.js'
 
 export type ConfirmDialogVariant = 'default' | 'danger'
 
@@ -242,22 +243,7 @@ export function ConfirmDialog({
             through the clip technique (never display:none: a hidden
             region would not be live). */}
         {variant === 'danger' && doubleConfirm ? (
-          <Box
-            component="p"
-            role="status"
-            sx={{
-              clip: 'rect(0 0 0 0)',
-              clipPath: 'inset(50%)',
-              height: 1,
-              width: 1,
-              overflow: 'hidden',
-              position: 'absolute',
-              bottom: 0,
-              left: 0,
-              whiteSpace: 'nowrap',
-              margin: 0,
-            }}
-          >
+          <Box component="p" role="status" sx={visuallyHiddenSx}>
             {armed ? t('confirmDialog.confirmAgainLabel') : ''}
           </Box>
         ) : null}

@@ -64,6 +64,7 @@ import LinearProgress from '@mui/material/LinearProgress'
 import Typography from '@mui/material/Typography'
 import { styled } from '@mui/material/styles'
 import { useUiKitTranslation } from '../internal/translation.js'
+import { visuallyHiddenSx } from '../visually-hidden.js'
 
 /** One row's transfer state, owned by the host. */
 export type FileUploaderRowStatus = 'uploading' | 'succeeded' | 'failed'
@@ -118,26 +119,17 @@ export interface FileUploaderProps {
 }
 
 /**
- * The file input itself: visually hidden through the clip technique (not
- * `display: none`), so it stays focusable and keeps its place in the tab
- * order. The trigger is a MUI Button rendered as a <label> wrapping this
- * input, so an activation opens the native picker; the label carries no
- * button role and is removed from the tab order (`role={undefined}` and
+ * The file input itself: visually hidden through the package's clip
+ * recipe (see src/visually-hidden.ts) -- clipped, never `display: none`
+ * -- so it stays focusable and keeps its place in the tab order. The
+ * trigger is a MUI Button rendered as a <label> wrapping this input, so
+ * an activation opens the native picker; the label carries no button
+ * role and is removed from the tab order (`role={undefined}` and
  * `tabIndex={-1}`), leaving the input as the control's single tab stop.
  * While the input is focused the trigger shows a visible focus
  * indicator through the label's :focus-within rule.
  */
-const HiddenFileInput = styled('input')({
-  clip: 'rect(0 0 0 0)',
-  clipPath: 'inset(50%)',
-  height: 1,
-  overflow: 'hidden',
-  position: 'absolute',
-  bottom: 0,
-  left: 0,
-  whiteSpace: 'nowrap',
-  width: 1,
-})
+const HiddenFileInput = styled('input')(visuallyHiddenSx)
 
 /**
  * The last settle, for the live region. Rendered at render time in the

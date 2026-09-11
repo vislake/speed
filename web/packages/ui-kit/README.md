@@ -2,11 +2,17 @@
 
 The platform's first DOM-rendering package: the theme factory that turns
 `@speed/tokens` into an MUI v9 theme (`createAppTheme`,
-`AppThemeProvider`), and seven controlled core components (`PageHeader`,
+`AppThemeProvider`), and the controlled components (`PageHeader`,
 `EmptyState`, `ConfirmDialog`, `FileUploader`, `FormField`,
-`FormLayout`, `DataTable`) that render only the state hosts give them --
+`FormLayout`, `DataTable`, `InlineError`, `ListSkeleton`,
+`AsyncSection`) that render only the state hosts give them --
 FileUploader renders the upload queue the host owns as `rows` props
-while the transfers themselves run in the host's own code. Every
+while the transfers themselves run in the host's own code. The
+cross-surface state primitives ship beside the components: the
+whole-attempt failure banner and its classifier
+(`InlineError` / `errorCodeOf`), the pending/error/empty/content
+branches of an async read (`ListSkeleton`, `AsyncSection`) and the
+hidden-element style recipe (`visuallyHiddenSx`). Every
 built-in user-facing
 string lives in the bilingual `ui-kit` namespace registered through
 `@speed/i18n` -- components never ship text in code, and the workspace's
@@ -25,6 +31,10 @@ string lives in the bilingual `ui-kit` namespace registered through
 | `components/FormField.tsx` | `FormField`, `FormFieldProps`, `FormFieldRenderState`, `REQUIRED_ERROR_KEY` |
 | `components/FormLayout.tsx` | `FormLayout`, `FormLayoutProps`, `FormLayoutColumns` |
 | `components/DataTable.tsx` | `DataTable`, `DataTableColumn`, `DataTableColumnPriority`, `DataTableSort`, `DataTableSortDirection`, `DataTableFilter`, `DataTablePagination`, `DataTableProps` |
+| `components/InlineError.tsx` | `InlineError`, `InlineErrorProps`, `errorCodeOf` |
+| `components/ListSkeleton.tsx` | `ListSkeleton`, `ListSkeletonProps` |
+| `components/AsyncSection.tsx` | `AsyncSection`, `AsyncSectionProps`, `AsyncSectionErrorState`, `AsyncSectionEmptyState` |
+| `visually-hidden.ts` | `visuallyHiddenSx` |
 | `resources.ts` | `UI_KIT_NAMESPACE`, `uiKitResources` |
 
 Everything else (`src/internal/`) is shared component plumbing and is
@@ -666,6 +676,50 @@ when its text changes.
 Props: `rows` (required), `onSelectFiles?`, `onCancel?`, `onRetry?`,
 `onRemove?`, `multiple?`, `accept?`, `allowDrop?`, `disabled?`,
 `chooseFilesLabel?`, `sx?`.
+
+### InlineError (the failure banner)
+
+The one rendering of a whole-attempt failure: a `role="alert"` error
+Alert for a non-null code, nothing for `null`. The banner is
+namespace-agnostic -- text comes from the `resolve` prop, which a
+surface family binds to its own namespace's error-text resolver -- so
+no API message and no cross-language fallback can reach a user.
+`errorCodeOf` is the companion classifier: an ApiError-shaped failure
+keeps its code, anything else collapses to a code no resolver lists
+(rendered as the family's unknown fallback).
+Props: `code` (required, `string | null`), `resolve` (required).
+
+### ListSkeleton (the pending-state placeholder)
+
+The loading announcement of a list read: a `role="status"` region with
+the passed accessible name and `aria-busy`, one envelope row per entry
+with the list's spacing and the divider between rows. The caller passes
+what each row looks like (`rows` entries mirror the content rows); the
+announcement contract and the row envelope are the component's.
+Props: `label` (required), `rows` (required).
+
+### AsyncSection (the four-state branch)
+
+The fixed rendering of the four states of an async read: `pending`
+renders the `loading` announcement, an absent `payload` renders the
+retryable error placeholder (`errorState`), an `empty` payload renders
+the empty placeholder (`emptyState`, optional for surfaces whose
+payload cannot be empty), otherwise the content callback renders with
+the narrowed payload. The placeholders are `EmptyState` at
+`headingLevel` (default `'h2'`, the section-title level they stand in
+for).
+Props: `pending`, `payload`, `empty`, `loading`, `errorState`,
+`emptyState?`, `headingLevel?`, `children` (all required except the
+marked ones).
+
+### visuallyHiddenSx (the hidden-element recipe)
+
+The one style object for elements that must stay in the accessibility
+tree while painting nothing -- the clip technique, never
+`display: none`, so live regions stay live and a hidden input stays
+focusable. Usable wherever MUI takes styles (`sx={visuallyHiddenSx}`,
+`styled('input')(visuallyHiddenSx)`). It serves the kit's own hidden
+elements and the consuming packages' hidden live regions.
 
 ## Text and i18n
 
