@@ -40,6 +40,7 @@
 import { expect, test } from '@playwright/test'
 import { DEMO_OWNER, DEMO_READER } from './test-utils/accounts.js'
 import {
+  expectWhileSignedIn,
   openSurface,
   readCurrentTenant,
   signInAs,
@@ -82,10 +83,12 @@ test.describe('the core journey', { tag: '@budget' }, () => {
     // The case exists, is findable, and carries the photo -- which is
     // what go/storage's three-step protocol exists to make true.
     await page.getByText(name).click()
-    await expect(
+    await expectWhileSignedIn(
+      page,
       page.getByRole('img', { name: /photo|patient|before/i }).first(),
       'the photo submitted with the case must appear on it',
-    ).toBeVisible({ timeout: 30_000 })
+      30_000,
+    )
   })
 
   test('block A: a case one colleague opened is visible to another', async ({ page }) => {
@@ -105,7 +108,12 @@ test.describe('the core journey', { tag: '@budget' }, () => {
     await page.getByRole('button', { name: CASE_UI.addPhoto }).click()
     await (await chooser).setFiles(PATIENT_PHOTO)
     await page.getByRole('button', { name: /create|save|confirm/i }).click()
-    await expect(page.getByText(name)).toBeVisible({ timeout: 30_000 })
+    await expectWhileSignedIn(
+      page,
+      page.getByText(name),
+      'a case created through the form is not findable in the list',
+      30_000,
+    )
     // The clinic the case was opened in, read from the frame rather
     // than assumed (an account's landing tenant is the first row of its
     // own membership enumeration, an app-seeded fact rather than a
@@ -119,10 +127,12 @@ test.describe('the core journey', { tag: '@budget' }, () => {
     await signInAs(page, DEMO_READER)
     await switchTenant(page, clinic)
     await openSurface(page, CASE_UI.navCases)
-    await expect(
+    await expectWhileSignedIn(
+      page,
       page.getByText(name),
       'a colleague in the same practice cannot see the case, so the patient gets a second chart',
-    ).toBeVisible({ timeout: 30_000 })
+      30_000,
+    )
   })
 
   test('block B: the practice chooses the smile it wants, not a hardcoded one', async ({

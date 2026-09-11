@@ -15,7 +15,7 @@
  * test id.
  */
 import { expect, type Locator, type Page } from '@playwright/test'
-import { openSurface } from './journeys.js'
+import { expectWhileSignedIn, openSurface } from './journeys.js'
 
 /** The accessible names the case-journey gates look for. */
 export const CASE_UI = {
@@ -75,9 +75,12 @@ export async function createCaseWithPhoto(page: Page, name: string): Promise<voi
   await (await chooser).setFiles(PATIENT_PHOTO)
 
   await page.getByRole('button', { name: /create|save|confirm/i }).click()
-  await expect(page.getByText(name), 'the case must be findable after creation').toBeVisible({
-    timeout: 30_000,
-  })
+  await expectWhileSignedIn(
+    page,
+    page.getByText(name),
+    'the case must be findable after creation',
+    30_000,
+  )
 }
 
 /**
@@ -95,19 +98,22 @@ export async function openCaseWithPhoto(page: Page): Promise<void> {
   const name = caseName()
   await createCaseWithPhoto(page, name)
   await page.getByText(name).click()
-  await expect(
+  await expectWhileSignedIn(
+    page,
     page.getByRole('img', { name: /photo|patient|before/i }).first(),
     'the case just created does not show the photo submitted with it',
-  ).toBeVisible({ timeout: 30_000 })
+    30_000,
+  )
 }
 
 /** Leaves the browser on a case whose simulation has been generated. */
 export async function openCaseWithSimulation(page: Page): Promise<void> {
   await openCaseWithPhoto(page)
-  await expect(
+  await expectWhileSignedIn(
+    page,
     page.getByRole('region', { name: CASE_UI.comparison }),
     'this gate starts from a generated simulation, which block B is what produces',
-  ).toBeVisible()
+  )
 }
 
 /** The two images a comparison must show: both loaded, and not the same one. */

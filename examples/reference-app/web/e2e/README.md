@@ -251,6 +251,22 @@ login-heavy journey after a deployment is a local exercise, and an
 acceptance report should say which environment it was run in rather than
 claiming "verified" without qualification.
 
+The same decision has a second consequence on the LOCAL side, and the
+suite names it rather than preventing it: a full page load discards the
+session, and the suite drives a vite dev server, whose client reloads
+the page whenever its HMR socket is lost (`@vite/client`'s
+"[vite] server connection lost" branch pings and then reloads
+unconditionally) -- which a browser network-process crash brings about.
+A reload that lands mid-journey leaves the app anonymous, so every later
+wait can never be satisfied, and an unguarded gate spends its timeout
+reporting that some control never appeared: an answer that is not about
+the product. `expectWhileSignedIn` (test-utils/journeys.ts) is how the
+shared journey waits answer it -- the assertion is unchanged (the element
+must still appear, within the same timeout), but the wait stops at the
+moment the sign-in surface reappears and says the session is gone, naming
+what to look for in the trace. A session the SERVER ended is a different
+state: it renders the "Session ended" screen, not the sign-in form.
+
 **Adding a gate:** if it signs in more than once, leave it untagged --
 it belongs to the local tier. If it must run against a deployment, keep
 it to one sign-in and pick an account the neighbouring `@deployment`
