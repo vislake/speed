@@ -1,9 +1,9 @@
 package app
 
 // This file carries the host's single assembly view: one reading of the
-// declaration seats, the resolved infrastructure seam values and the merged
-// message catalog an assembly produced. Every host step is written against
-// the view, so one step body serves every step component.
+// declaration seats, the resolved infrastructure seam values and the boot's
+// merged message catalog. Every host step is written against the view, so
+// one step body serves every step component.
 
 import (
 	"embed"
@@ -44,10 +44,10 @@ type assemblyView struct {
 
 // viewFromComponents returns the view over a component assembly's registry:
 // its declaration seats, the EventBus and KVStore values the assembly put,
-// and the catalog merged from the selected components' locale resources. A
-// registry missing either seam value fails here, naming the seam, rather
-// than surfacing a nil store somewhere inside a step.
-func viewFromComponents(reg *pkgcore.ComponentRegistry) (assemblyView, error) {
+// and the boot's shared message catalog (mergedCatalog). A registry missing
+// either seam value fails here, naming the seam, rather than surfacing a
+// nil store somewhere inside a step.
+func (b *serverBuild) viewFromComponents(reg *pkgcore.ComponentRegistry) (assemblyView, error) {
 	bus, err := pkgcore.Get[pkgcore.EventBus](reg)
 	if err != nil {
 		return assemblyView{}, fmt.Errorf("reference-app: read the assembled event bus: %w", err)
@@ -56,7 +56,7 @@ func viewFromComponents(reg *pkgcore.ComponentRegistry) (assemblyView, error) {
 	if err != nil {
 		return assemblyView{}, fmt.Errorf("reference-app: read the assembled key-value store: %w", err)
 	}
-	catalog, err := hostCatalog(pkgcore.Assets(reg))
+	catalog, err := b.mergedCatalog(reg)
 	if err != nil {
 		return assemblyView{}, err
 	}
@@ -70,6 +70,19 @@ func viewFromComponents(reg *pkgcore.ComponentRegistry) (assemblyView, error) {
 		kv:        kv,
 		catalog:   catalog,
 	}, nil
+}
+
+// mergedCatalog returns the boot's one merged message catalog. Its input --
+// the plan's locale assets -- is frozen when Prepare writes the plan (Assets
+// reads the plan, and a registration after Prepare never enters it), so
+// every view this build derives reads the same catalog: the first view
+// builds it, every later view shares the instance, and the instance is
+// retired with the build itself -- one serverBuild serves one boot.
+func (b *serverBuild) mergedCatalog(reg *pkgcore.ComponentRegistry) (*i18n.Catalog, error) {
+	b.catalogOnce.Do(func() {
+		b.catalog, b.catalogErr = hostCatalog(pkgcore.Assets(reg))
+	})
+	return b.catalog, b.catalogErr
 }
 
 // hostCatalog merges the selected components' locale resources into the

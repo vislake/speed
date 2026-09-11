@@ -192,7 +192,7 @@ func appComponent(b *serverBuild, baseCtx context.Context, live bool) pkgcore.Co
 			if err != nil {
 				return err
 			}
-			view, err := viewFromComponents(reg)
+			view, err := b.viewFromComponents(reg)
 			if err != nil {
 				return err
 			}
@@ -273,7 +273,7 @@ func (b *serverBuild) stepInit(run func(ctx context.Context, view assemblyView) 
 		if err := b.bindRuntimeServices(reg); err != nil {
 			return err
 		}
-		view, err := viewFromComponents(reg)
+		view, err := b.viewFromComponents(reg)
 		if err != nil {
 			return err
 		}
@@ -290,7 +290,7 @@ func (b *serverBuild) stepInitWithFace(run func(ctx context.Context, view assemb
 		if err != nil {
 			return fmt.Errorf("reference-app: read the composed HTTP face: %w", err)
 		}
-		view, err := viewFromComponents(reg)
+		view, err := b.viewFromComponents(reg)
 		if err != nil {
 			return err
 		}
@@ -311,7 +311,7 @@ func (b *serverBuild) postBootstrapComponent() pkgcore.Component {
 			if err := b.bindRegistry(reg); err != nil {
 				return err
 			}
-			view, err := viewFromComponents(reg)
+			view, err := b.viewFromComponents(reg)
 			if err != nil {
 				return err
 			}

@@ -14,6 +14,7 @@ import (
 	"io"
 	"net/http"
 	"os/signal"
+	"sync"
 	"syscall"
 	"time"
 
@@ -63,6 +64,7 @@ import (
 	_ "github.com/vislake/speed/go/observability/exporter/otlp"
 	"github.com/vislake/speed/go/org"
 	"github.com/vislake/speed/go/pkgcore"
+	"github.com/vislake/speed/go/pkgcore/i18n"
 
 	// Blank-imported for their init() side effects: each registers its
 	// distributed component ("eventbus.redis", "kv.redis") with pkgcore's
@@ -530,6 +532,13 @@ type serverBuild struct {
 	authnUserLocales    demo.AuthnUserLocales
 	gatewayEntitlements aigateway.EntitlementsFunc
 	memberships         *signInMemberships
+
+	// catalogOnce guards catalog and catalogErr, the boot's one merged
+	// message catalog: the first view derives it from the plan's locale
+	// assets and every later view shares the same instance.
+	catalogOnce sync.Once
+	catalog     *i18n.Catalog
+	catalogErr  error
 }
 
 // newServerBuild returns the build state one BuildServer or Run call
