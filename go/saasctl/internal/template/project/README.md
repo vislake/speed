@@ -163,7 +163,8 @@ migrations to the project's SQLite database from the command line (the
 operator-driven twin of this app's own startup Apply), and `saasctl config
 print` shows how this project's bootstrap environment resolves -- each
 `APP_*` variable's value and provenance, with every secret-shaped value
-(the five key variables, the S3 secret key and the SMTP password) rendered
+(the six key variables and the three infrastructure credentials -- the S3
+secret key, the SMTP password and the SMS gateway URL) rendered
 `[redacted]`. Dynamic-configuration value print and editing (the `configs`
 table's values with their tenant scopes and schema-driven redaction) and
 the web-side scaffolds are not part of `saasctl` today. Speed modules are

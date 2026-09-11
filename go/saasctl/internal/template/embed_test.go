@@ -991,9 +991,9 @@ func TestReadmeNamesOnlyRealDevKeyIdentifiers(t *testing.T) {
 // regression guard for TestProjectReadmeNamesTheShippedMaintenanceCommands
 // in embed_test.go: the "Editing and regenerating" section's own
 // [redacted]-secrets sentence must still name every secret-shaped print
-// row (the five key variables plus the two infrastructure credentials),
+// row (the six key variables plus the three infrastructure credentials),
 // so the README's own description of `saasctl config print` stays
-// truthful once the command renders more than five lines.
+// truthful across the twenty-three rows the command renders.
 func TestReadmeEditingSectionStillNamesTheShippedCommands(t *testing.T) {
 	readme := readmeContent(t)
 	const section = "## Editing and regenerating"
@@ -1002,7 +1002,7 @@ func TestReadmeEditingSectionStillNamesTheShippedCommands(t *testing.T) {
 		t.Fatalf("README has no %q section", section)
 	}
 	body := strings.Join(strings.Fields(readme[start:]), " ")
-	for _, want := range []string{"S3 secret key", "SMTP password"} {
+	for _, want := range []string{"S3 secret key", "SMTP password", "SMS gateway URL"} {
 		if !strings.Contains(body, want) {
 			t.Errorf("%s section's config-print description does not mention %q; it will misrepresent which rows are redacted", section, want)
 		}
