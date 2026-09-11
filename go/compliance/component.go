@@ -8,6 +8,7 @@ package compliance
 
 import (
 	"context"
+	"fmt"
 
 	"gorm.io/gorm"
 
@@ -85,7 +86,11 @@ var complianceComponent = pkgcore.Component{
 		return NewModule(audit.NewRepository(db), opts...), nil
 	},
 	Init: func(_ context.Context, reg *pkgcore.ComponentRegistry, instance any) error {
-		return instance.(*Module).Register(reg)
+		m, ok := instance.(*Module)
+		if !ok {
+			return fmt.Errorf("compliance: component init got a %T instance, want *compliance.Module", instance)
+		}
+		return m.Register(reg)
 	},
 }
 
