@@ -543,7 +543,7 @@ type ExpireInput struct {
 	// EnqueueExpirySweep does) is answered with the first call's own row
 	// and applies NO second deduction (see Expire's own doc comment for
 	// the full contract, including which existing rows count as the
-	// retry's own earlier run). Empty (the default) keeps Expire's legacy
+	// retry's own earlier run). Empty (the default) selects the
 	// single-phase shape: a fresh uuid.NewString() transaction id per
 	// call, not idempotent under retry -- the right mode for a one-off,
 	// operator-driven expiry, wrong for any caller that may retry.
@@ -626,7 +626,7 @@ func (s *CreditService) Expire(ctx context.Context, in ExpireInput) (*CreditTran
 	var resultBalance *CreditBalance
 	txErr := dbkit.WithTenantSession(ctx, s.db, func(session *gorm.DB) error {
 		if in.IdempotencyKey == "" {
-			// Unkeyed: the legacy single-phase shape -- a fresh UUID per
+			// Unkeyed: the single-phase shape -- a fresh UUID per
 			// call, the balance CAS followed by a strict insert, all in
 			// one transaction. Not idempotent under retry by design; see
 			// Expire's own doc comment for which caller that fits.

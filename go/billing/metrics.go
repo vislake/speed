@@ -47,8 +47,8 @@ const InstrumentationName = "github.com/vislake/speed/go/billing"
 //     (gateway/stripe, gateway/alipay, gateway/wechat -- each
 //     subpackage owns its VerifyWebhook implementation); the finer
 //     classification (signature-invalid vs payload-unrecognized) is a
-//     diagnostic refinement deliberately deferred, the outcome binary
-//     being the alert the 09-table's first-alert list actually names.
+//     diagnostic refinement this metric does not carry, the outcome
+//     binary being the alert the 09-table's first-alert list names.
 const (
 	invoiceTransitionMetricName = "billing.invoice.transition"
 	invoiceOpenDwellMetricName  = "billing.invoice.open_dwell"

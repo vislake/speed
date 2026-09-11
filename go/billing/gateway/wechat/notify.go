@@ -121,8 +121,8 @@ func (g *Gateway) VerifyWebhook(ctx context.Context, headers map[string][]string
 	// billing.webhook.verify for this channel (billing root's
 	// metrics.go): the outcome is derived from the returned error's
 	// nilness, so a refusal added in a future branch counts itself
-	// without a new record site. The previously unnamed _ context
-	// gains its name here for the recording call.
+	// without a new record site. The context parameter is named here
+	// for the recording call.
 	defer func() {
 		billing.RecordWebhookVerify(ctx, g.webhookVerify, "wechat", verifyErr)
 	}()
