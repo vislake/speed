@@ -10,7 +10,7 @@ import (
 )
 
 // taskTypeExpiryScan names the jobs queue task EnqueueExpiryScan schedules
-// and expiryScanHandler claims. One run walks every purpose's signing keys
+// and the module's registered scan handler claims. One run walks every purpose's signing keys
 // (lifecycle.go's ScanExpiry) -- there is no per-tenant shape to this task
 // the way storage.taskTypeExpirySweep has one, because pki_signing_keys is
 // platform data (model.go), not tenant data: a signing key belongs to the
@@ -20,7 +20,7 @@ const taskTypeExpiryScan = "pki.expiry_scan"
 // DefaultExpiryScanWindow is the period one expiry-scan idempotency key
 // covers when the host does not override it (WithExpiryScanWindow): a scan
 // is enqueued under the key of the DefaultExpiryScanWindow window
-// (expiryScanWindowStart) its enqueue falls in, so the same-window
+// (jobs.ScheduleWindowStart) its enqueue falls in, so the same-window
 // duplicates a multi-replica scheduler produces -- every replica's tick of
 // one schedule instant -- collapse into one job, while an enqueue in a
 // later window is a NEW job and the scan runs again.
@@ -44,47 +44,20 @@ const taskTypeExpiryScan = "pki.expiry_scan"
 // interval toward it.
 const DefaultExpiryScanWindow = time.Hour
 
-// expiryScanWindowStart is the expiry-scan window the enqueue at now
-// belongs to -- the absolute-clock boundary now.Truncate(window) lands in,
-// the identical shape storage's expirySweepWindowStart and compliance's
-// retentionSweepWindowStart use: every replica agrees on the boundary
-// regardless of its own location, since Truncate is on the absolute clock,
-// never a timezone-local calendar cut. Two replicas enqueuing within the
-// same window share one key (and one job); a tick in a later window gets
-// its own.
-func expiryScanWindowStart(now time.Time, window time.Duration) time.Time {
-	return now.Truncate(window)
-}
-
 // expiryScanKeyPrefix is the prefix of every expiry-scan idempotency key.
 // It is a named constant because two derivations must agree on it byte for
-// byte: expiryScanIdempotencyKey below, and the declaration
-// (Service.expiryScanSchedule) a jobs.Scheduler composes keys from with
-// its own window derivation -- one window must resolve one key through
-// both paths.
+// byte: the manual EnqueueExpiryScan path and the declaration
+// (Service.expiryScanSchedule) a jobs.Scheduler expands -- one window must
+// resolve one key through both paths, and both derive it through
+// jobs.SchedulePlatformIdempotencyKey with this prefix.
 const expiryScanKeyPrefix = "pki.expiry_scan:"
-
-// expiryScanIdempotencyKey derives the jobs idempotency key of one
-// expiry-scan window, per the rule that an idempotency key derives from
-// the business operation, never random: the operation one key names is
-// "the scan of windowStart", not "some scan or other" -- a periodic task's
-// identity inherently includes WHICH period it is for (the same reasoning
-// storage's expirySweepIdempotencyKey and compliance's
-// retentionSweepIdempotencyKey document for their own sweeps). windowStart
-// is the DefaultExpiryScanWindow window start the enqueue belongs to
-// (expiryScanWindowStart). The expiryScanKeyPrefix keeps the key inside
-// the task's own namespace within the shared queue store, and the RFC
-// 3339 window stamp keeps the key readable in DeadLetterJobs while staying
-// unambiguous.
-func expiryScanIdempotencyKey(windowStart time.Time) string {
-	return expiryScanKeyPrefix + windowStart.UTC().Format(time.RFC3339)
-}
 
 // expiryScanSchedule is the module's declaration of the expiry scan on the
 // pkgcore.Registry.Schedules seat: one platform-wide task per window,
 // under the standard sentinel tenant, at the service's configured scan
 // window (WithExpiryScanWindow included) and keyed with the same prefix
-// and window function the manual EnqueueExpiryScan path uses -- so a
+// and the same window derivation the manual EnqueueExpiryScan path uses
+// (jobs.ScheduleWindowStart / jobs.SchedulePlatformIdempotencyKey) -- so a
 // scheduler tick and a manual enqueue landing in one window resolve one
 // key and dedupe onto one job.
 func (s *Service) expiryScanSchedule() pkgcore.PeriodicTask {
@@ -107,7 +80,7 @@ func (s *Service) expiryScanSchedule() pkgcore.PeriodicTask {
 // tenant data. pki_signing_keys is not: the expiry scan is a single,
 // deployment-wide run, and jobs offers no "no tenant" task shape for that
 // case. A fixed sentinel value is the accommodation, not a design pki would
-// have chosen on its own -- expiryScanHandler.Handle never reads it,
+// have chosen on its own -- the registered scan handler never reads it,
 // because SigningKeyRepository is a plain *gorm.DB with no tenant-filtering
 // plugin engaged (SigningKey does not implement dbkit.TenantScoped), so the
 // rebuilt tenant context the worker attaches (Handler.Handle's own doc
@@ -123,7 +96,7 @@ const platformScanTenantID = pkgcore.TenantID("_pki_platform_scan")
 // the RotationConfig defaults Service was built with, the same "no payload,
 // everything read at run time" shape storage.EnqueueExpirySweep uses.
 //
-// The task carries a window-scoped idempotency key (expiryScanIdempotencyKey,
+// The task carries a window-scoped idempotency key (jobs.SchedulePlatformIdempotencyKey,
 // DefaultExpiryScanWindow -- overridable through WithExpiryScanWindow): the
 // enqueues of one DefaultExpiryScanWindow window -- a multi-replica scheduler
 // whose replicas each tick the same schedule instant, a manual re-run --
@@ -164,37 +137,18 @@ func (s *Service) EnqueueExpiryScan(ctx context.Context) error {
 	_, err := s.queue.Enqueue(ctx, jobs.Task{
 		Type:           taskTypeExpiryScan,
 		TenantID:       platformScanTenantID,
-		IdempotencyKey: expiryScanIdempotencyKey(expiryScanWindowStart(s.now(), s.expiryScanWindow)),
+		IdempotencyKey: jobs.SchedulePlatformIdempotencyKey(expiryScanKeyPrefix, jobs.ScheduleWindowStart(s.now(), s.expiryScanWindow)),
 	})
 	return err
 }
 
-// expiryScanHandler is the jobs.Handler claiming taskTypeExpiryScan, the
-// task EnqueueExpiryScan schedules. Its Handle runs Service.ScanExpiry with
+// runScheduledExpiryScan runs one scheduled expiry scan: ScanExpiry with
 // the RotationConfig zero value, which falls back to whatever
 // propagationWindow/renewalLeadTime Service was constructed with (NewModule,
-// WithPropagationWindow/WithRenewalLeadTime).
-type expiryScanHandler struct {
-	svc *Service
+// WithPropagationWindow/WithRenewalLeadTime), with the regenerated list
+// discarded -- a scheduled task's outcome is success or failure alone.
+// Module.Register wires it through jobs.NewEmptyPayloadHandler.
+func (s *Service) runScheduledExpiryScan(ctx context.Context) error {
+	_, err := s.ScanExpiry(ctx, RotationConfig{})
+	return err
 }
-
-// Type implements jobs.Handler.
-func (h expiryScanHandler) Type() string { return taskTypeExpiryScan }
-
-// Handle implements jobs.Handler. The task's payload must be empty -- see
-// EnqueueExpiryScan's doc comment for why a scan needs none; a non-empty
-// payload is a task-shape violation the queue's retry policy cannot fix by
-// re-running, so it fails the attempt every time exactly like
-// storage.expirySweepHandler.Handle's identical check.
-func (h expiryScanHandler) Handle(ctx context.Context, job *jobs.Job, _ jobs.ProgressFn) (jobs.Result, error) {
-	if len(job.Payload) != 0 {
-		return jobs.Result{}, errors.New("pki: expiry-scan task carries an unexpected payload")
-	}
-	if _, err := h.svc.ScanExpiry(ctx, RotationConfig{}); err != nil {
-		return jobs.Result{}, err
-	}
-	return jobs.Result{}, nil
-}
-
-// compile-time check that expiryScanHandler satisfies jobs.Handler.
-var _ jobs.Handler = expiryScanHandler{}

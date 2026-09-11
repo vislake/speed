@@ -528,10 +528,10 @@ func (m *Module) Register(reg *pkgcore.ComponentRegistry) error {
 	if m.queue != nil {
 		m.service.attachQueue(m.queue)
 		m.ca.attachQueue(m.queue)
-		if err := reg.JobsSeat().Handle(taskTypeExpiryScan, expiryScanHandler{svc: m.service}); err != nil {
+		if err := reg.JobsSeat().Handle(taskTypeExpiryScan, jobs.NewEmptyPayloadHandler(taskTypeExpiryScan, m.service.runScheduledExpiryScan)); err != nil {
 			return err
 		}
-		if err := reg.JobsSeat().Handle(taskTypeCRLRegenerate, crlRegenerateHandler{ca: m.ca}); err != nil {
+		if err := reg.JobsSeat().Handle(taskTypeCRLRegenerate, jobs.NewEmptyPayloadHandler(taskTypeCRLRegenerate, m.ca.runScheduledCRLRegenerate)); err != nil {
 			return err
 		}
 		// Declare both periodic schedules alongside their handlers:

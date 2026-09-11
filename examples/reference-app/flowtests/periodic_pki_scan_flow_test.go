@@ -5,12 +5,12 @@ package flowtests
 // signing-key expiry scan through the composed stack: real ticks at the
 // flow tests' cfg.PeriodicTaskInterval (periodicFlowTickInterval, one
 // second) enqueue Service.EnqueueExpiryScan tasks, the app's real
-// standalone queue drains them into pki's expiryScanHandler, and each run
-// of ScanExpiry advances the signing-key state machine over the real
-// pki_signing_keys rows.
+// standalone queue drains them into pki's registered scan handler, and
+// each run of ScanExpiry advances the signing-key state machine over the
+// real pki_signing_keys rows.
 //
-// The enqueues are window-scoped (go/pki/job.go's expiryScanIdempotencyKey,
-// DefaultExpiryScanWindow), so on this app's StandaloneQueue -- which holds
+// The enqueues are window-scoped (go/pki/job.go, through
+// jobs.SchedulePlatformIdempotencyKey, DefaultExpiryScanWindow), so on this app's StandaloneQueue -- which holds
 // a resolved idempotency key forever (go/jobs) -- the scan would run at
 // most once per hour-long window in production, per-minute ticks
 // collapsing into the window's one job: exactly the cadence the day-scale
@@ -43,8 +43,9 @@ package flowtests
 //     test calls ScanExpiry, EnqueueExpiryScan, or any pki service method,
 //     and the observer connection never writes. The stage (a pending
 //     successor key) and the promotion (pending -> active while the boot
-//     key -> retiring) can only be produced by expiryScanHandler runs that
-//     real ticks enqueued and the real queue worker drained.
+//     key -> retiring) can only be produced by the registered scan
+//     handler's runs that real ticks enqueued and the real queue worker
+//     drained.
 //   - The test's only timing nudge is the same test-override ServerConfig
 //     fields every flow test uses: cfg.PKIPropagationWindow,
 //     cfg.PKIRenewalLeadTime and cfg.PKIExpiryScanWindow (BuildServer
@@ -277,7 +278,7 @@ func activeSigningKey(t *testing.T, repo *pki.SigningKeyRepository, purpose stri
 // of a completed rotation -- failing after deadline. The poll replaces any
 // sleep-based timing: the condition can be satisfied only by rows the
 // scheduled expiry scans wrote (a promotion requires a prior staged key
-// and runs inside expiryScanHandler), so a pass is real regardless of how
+// and runs inside the registered scan handler), so a pass is real regardless of how
 // loaded the machine is, and a deadline miss means the scans never
 // advanced the state machine.
 func waitForSigningKeyRotation(t *testing.T, repo *pki.SigningKeyRepository, purpose, bootID string, deadline time.Duration) pki.SigningKey {

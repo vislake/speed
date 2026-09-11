@@ -56,7 +56,8 @@ package storage
 // # The expiry-sweep task
 //
 // EnqueueExpirySweep is the host-facing enqueue for one tenant's sweep, and
-// expirySweepHandler is the jobs.Handler claiming the task on the queue.
+// Module.Register claims the task on the queue with the shared
+// jobs.NewEmptyPayloadHandler adapter over LifecycleService.Sweep.
 // The task is tenant-scoped because every query the sweep runs is: one task
 // exists per tenant -- the registered declaration expands through the
 // host's TenantLister, and a manual EnqueueExpirySweep call names its own
@@ -80,13 +81,13 @@ import (
 
 // taskTypeExpirySweep names the jobs queue task a sweep run is enqueued
 // under. The task carries no payload -- the sweep takes its inputs from the
-// rows and the clock at run time -- and its handler is expirySweepHandler,
-// backed by LifecycleService.
+// rows and the clock at run time -- and its handler runs
+// LifecycleService.Sweep (Module.Register's registration).
 const taskTypeExpirySweep = "storage.expiry_sweep"
 
 // expirySweepWindowSize is the period one expiry-sweep idempotency key
 // covers: a sweep is enqueued under the key of the expirySweepWindowSize
-// window (expirySweepWindowStart) its enqueue falls in, so the same-window
+// window (jobs.ScheduleWindowStart) its enqueue falls in, so the same-window
 // duplicates that key exists to collapse -- a scheduler with two
 // replicas, a manual re-run -- still merge into one job, while an enqueue
 // in a later window becomes a NEW job and the sweep runs again. The window
@@ -104,43 +105,19 @@ const taskTypeExpirySweep = "storage.expiry_sweep"
 // per tenant per hour at most.
 const expirySweepWindowSize = time.Hour
 
-// expirySweepWindowStart is the expiry-sweep window the enqueue at now
-// belongs to -- the absolute hour boundary now.Truncate(expirySweepWindowSize)
-// lands in. Two replicas enqueuing within the same window share one key
-// (and one job); a tick in a later window gets its own. Truncation is on
-// the absolute clock, never a timezone-local calendar cut, so every
-// replica agrees on the boundary regardless of its own location.
-func expirySweepWindowStart(now time.Time) time.Time {
-	return now.Truncate(expirySweepWindowSize)
-}
-
 // expirySweepKeyPrefix is the prefix of every expiry-sweep idempotency
 // key. It is a named constant because two derivations must agree on it
-// byte for byte: expirySweepIdempotencyKey below, and the declaration
-// (expirySweepSchedule) a jobs.Scheduler composes keys from with its own
-// window derivation -- one window must resolve one key through both
-// paths.
+// byte for byte: the manual EnqueueExpirySweep path and the declaration
+// (expirySweepSchedule) a jobs.Scheduler expands -- one window must
+// resolve one key through both paths, and both derive it through
+// jobs.ScheduleIdempotencyKey with this prefix.
 const expirySweepKeyPrefix = "storage.sweep:"
-
-// expirySweepIdempotencyKey derives the jobs idempotency key of one
-// expiry-sweep window for a tenant, per the rule that an idempotency key
-// derives from the business operation, never random: the operation one key
-// names is "the sweep of windowStart", not "some sweep or other" -- a
-// periodic task's identity inherently includes WHICH period it is for (the
-// same reasoning notification's derived keys encode the business
-// operation's identity). windowStart is the expirySweepWindowSize window
-// start the enqueue belongs to (expirySweepWindowStart). The
-// expirySweepKeyPrefix keeps the key inside the module's namespace within
-// the shared queue store, and the RFC 3339 window stamp keeps the key
-// readable in DeadLetterJobs while staying unambiguous.
-func expirySweepIdempotencyKey(tenant pkgcore.TenantID, windowStart time.Time) string {
-	return expirySweepKeyPrefix + string(tenant) + ":" + windowStart.UTC().Format(time.RFC3339)
-}
 
 // expirySweepSchedule is the module's declaration of the expiry sweep on
 // the pkgcore.Registry.Schedules seat: a per-tenant task at the sweep's
-// own window, keyed with the same prefix and window function the manual
-// EnqueueExpirySweep path uses, so a scheduler tick and a manual enqueue
+// own window, keyed with the same prefix and the same window derivation
+// the manual EnqueueExpirySweep path uses (jobs.ScheduleWindowStart /
+// jobs.ScheduleIdempotencyKey), so a scheduler tick and a manual enqueue
 // landing in one window resolve one key and dedupe onto one job.
 var expirySweepSchedule = pkgcore.PeriodicTask{
 	Type:      taskTypeExpirySweep,
@@ -169,7 +146,7 @@ type LifecycleService struct {
 	queue jobs.Queue
 
 	// now is the clock EnqueueExpirySweep reads to place the enqueue in its
-	// expirySweepWindowSize window (expirySweepWindowStart). It is a field,
+	// expirySweepWindowSize window (jobs.ScheduleWindowStart). It is a field,
 	// not a time.Now() call at the enqueue site, so the window a sweep is
 	// enqueued under is deterministic in tests -- the same clock-seam
 	// pattern Sweep's own callers rely on -- while defaulting to the real
@@ -304,8 +281,9 @@ func (s *LifecycleService) Delete(ctx context.Context, objectID string) error {
 // Sweep runs one tenant's full cleanup pass: it resumes every interrupted
 // deletion, reclaims every upload whose window closed, and deletes every
 // completed object whose retention deadline passed. It is the expiry-sweep
-// task's body (expirySweepHandler) and doubles as the module's service
-// entry point for a host that wants a tenant swept synchronously.
+// task's body (the registered handler's run function) and doubles as the
+// module's service entry point for a host that wants a tenant swept
+// synchronously.
 //
 // ctx must carry a tenant -- the worker rebuilds it from the task's
 // TenantID before Handle runs, and a direct caller passes
@@ -436,14 +414,14 @@ func (s *LifecycleService) reclaimUpload(ctx context.Context, row Object) error 
 // a per-tenant task at the sweep's own window), so a host that runs a
 // jobs.Scheduler sweeps every tenant without writing a schedule point of
 // its own; this method remains the manual entry point. The task's
-// window-scoped idempotency key (expirySweepIdempotencyKey) collapses the
+// window-scoped idempotency key (jobs.ScheduleIdempotencyKey) collapses the
 // enqueues of one expirySweepWindowSize window -- a scheduler with two
 // replicas ticking in the same window, a manual re-run -- into one job, so
 // a tenant is never swept by two workers at once. An enqueue whose clock
-// has moved into a later window (expirySweepWindowStart) is a new job and
+// has moved into a later window (jobs.ScheduleWindowStart) is a new job and
 // runs again: this is what makes the sweep periodic on queues whose idempotency
 // is unconditional, and what keeps one dead-lettered sweep from poisoning
-// its tenant forever -- see expirySweepIdempotencyKey's doc comment for
+// its tenant forever -- see jobs.ScheduleIdempotencyKey's doc comment for
 // the full window semantics. The task carries no payload: the sweep reads
 // the rows and the clock when it runs.
 //
@@ -467,35 +445,7 @@ func (s *LifecycleService) EnqueueExpirySweep(ctx context.Context) error {
 	_, err = s.queue.Enqueue(ctx, jobs.Task{
 		Type:           taskTypeExpirySweep,
 		TenantID:       tenant,
-		IdempotencyKey: expirySweepIdempotencyKey(tenant, expirySweepWindowStart(s.now())),
+		IdempotencyKey: jobs.ScheduleIdempotencyKey(expirySweepKeyPrefix, tenant, jobs.ScheduleWindowStart(s.now(), expirySweepWindowSize)),
 	})
 	return err
-}
-
-// expirySweepHandler is the jobs.Handler claiming taskTypeExpirySweep, the
-// task EnqueueExpirySweep schedules. Its Handle runs LifecycleService.Sweep
-// on the tenant context the worker rebuilt from the task.
-type expirySweepHandler struct {
-	svc *LifecycleService
-}
-
-// Type returns the task type this handler claims -- the type the schedule
-// point enqueues under, and the string jobs matches at dispatch.
-func (h expirySweepHandler) Type() string { return taskTypeExpirySweep }
-
-// Handle runs one expiry-sweep task. The task's payload must be empty -- a
-// sweep takes its inputs from the rows and the clock at run time, so a
-// payload would have nothing to say; one that is not empty is a task-shape
-// violation and fails the job (the queue retries and eventually
-// dead-letters such a task -- it can never succeed by re-running). Every
-// other outcome is the service's own: nil for a completed pass, the typed
-// service error for a failure the queue's retry policy exists for.
-func (h expirySweepHandler) Handle(ctx context.Context, job *jobs.Job, _ jobs.ProgressFn) (jobs.Result, error) {
-	if len(job.Payload) != 0 {
-		return jobs.Result{}, errors.New("storage: expiry-sweep task carries an unexpected payload")
-	}
-	if err := h.svc.Sweep(ctx); err != nil {
-		return jobs.Result{}, err
-	}
-	return jobs.Result{}, nil
 }

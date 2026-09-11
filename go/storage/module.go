@@ -480,7 +480,7 @@ func (m *Module) Register(reg *pkgcore.ComponentRegistry) error {
 	if err := reg.JobsSeat().Handle(taskTypeDeriveThumbnail, deriveHandler{svc: m.derive}); err != nil {
 		return err
 	}
-	if err := reg.JobsSeat().Handle(taskTypeExpirySweep, expirySweepHandler{svc: m.life}); err != nil {
+	if err := reg.JobsSeat().Handle(taskTypeExpirySweep, jobs.NewEmptyPayloadHandler(taskTypeExpirySweep, m.life.Sweep)); err != nil {
 		return err
 	}
 	// Declare the expiry sweep's periodic schedule alongside its handler:

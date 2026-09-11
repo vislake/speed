@@ -133,7 +133,7 @@ func TestService_EnqueueAPIKeyExpirySweep_ShapesTheTask(t *testing.T) {
 	if len(task.Payload) != 0 {
 		t.Errorf("task.Payload = %q, want empty (the sweep reads rows and the clock when it runs)", task.Payload)
 	}
-	wantKey := apiKeyExpirySweepIdempotencyKey(testTenant, apiKeyExpirySweepWindowStart(fixedNow))
+	wantKey := "integration.sweep:tenant-1:2026-01-01T00:00:00Z"
 	if task.IdempotencyKey != wantKey {
 		t.Errorf("task.IdempotencyKey = %q, want %q (the windowed key)", task.IdempotencyKey, wantKey)
 	}

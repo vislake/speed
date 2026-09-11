@@ -14,7 +14,7 @@ import (
 )
 
 // This file pins the window semantics of the expiry-sweep idempotency key
-// (expirySweepIdempotencyKey): enqueues inside one expirySweepWindowSize
+// (jobs.ScheduleIdempotencyKey): enqueues inside one expirySweepWindowSize
 // window collapse into one job (the concurrency protection the key exists
 // for), enqueues in a later window become new jobs and sweep again
 // (periodicity), a sweep job that dead-letters poisons only its own
@@ -290,10 +290,11 @@ func TestModule_EnqueueExpirySweep_LaterWindowSweepRefundsAnOverageReservation(t
 	}
 	svc.attach(reg)
 
-	// The real expiry-sweep handler, wrapped only to report each completed
+	// The real expiry-sweep handler (the registered payload-free adapter
+	// over the module's own Service), wrapped only to report each completed
 	// run -- the queue worker supplies the tenant context (go/jobs worker.go
 	// rebuilds pkgcore.WithTenant from the job's own stored tenant).
-	real := expirySweepHandler{svc: svc}
+	real := jobs.NewEmptyPayloadHandler(taskTypeExpirySweep, svc.Sweep)
 	runs := make(chan jobs.JobID, 4)
 	if err := q.RegisterHandler(jobs.NewHandlerFunc(taskTypeExpirySweep, func(ctx context.Context, job *jobs.Job, progress jobs.ProgressFn) (jobs.Result, error) {
 		result, err := real.Handle(ctx, job, progress)

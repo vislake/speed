@@ -23,7 +23,7 @@ import (
 // instead of reactively.
 
 // taskTypePoll names the jobs queue task PollingService.EnqueuePoll
-// schedules and pollHandler claims. The task is tenant-scoped, mirroring
+// schedules and the module's registered poll handler claims. The task is tenant-scoped, mirroring
 // go/storage's taskTypeExpirySweep: every query Poll runs is tenant-scoped
 // (billing_payment_events is tenant data -- PaymentEvent's own doc comment),
 // so a host with many tenants schedules one task per tenant.
@@ -32,8 +32,8 @@ const taskTypePoll = "billing.poll_pending_payments"
 // pollIdempotencyWindowSize is the period one poll idempotency key
 // covers, mirroring go/storage's expirySweepWindowSize and go/compliance's
 // retentionSweepWindowSize exactly: a poll is enqueued under the key of
-// the pollIdempotencyWindowSize window (pollWindowStart) its enqueue falls
-// in, so the same-window duplicates that key exists to collapse
+// the pollIdempotencyWindowSize window (jobs.ScheduleWindowStart) its
+// enqueue falls in, so the same-window duplicates that key exists to collapse
 // -- a scheduler with two replicas, a manual re-run -- still merge into
 // one job, while an enqueue in a later window becomes a NEW job and the
 // poll runs again. The window is what makes the poll periodic at all:
@@ -54,47 +54,20 @@ const taskTypePoll = "billing.poll_pending_payments"
 // day-scale sweeps' choice) would soften to hour-granularity detection.
 const pollIdempotencyWindowSize = DefaultPollStuckAfter
 
-// pollWindowStart is the poll window the enqueue at now belongs to -- the
-// absolute boundary now.Truncate(pollIdempotencyWindowSize) lands in, the
-// twin of storage's expirySweepWindowStart. Two replicas enqueuing within
-// the same window share one key (and one job); a tick in a later window
-// gets its own. Truncation is on the absolute clock, never a
-// timezone-local calendar cut, so every replica agrees on the boundary
-// regardless of its own location.
-func pollWindowStart(now time.Time) time.Time {
-	return now.Truncate(pollIdempotencyWindowSize)
-}
-
 // pollKeyPrefix is the prefix of every payment-poll idempotency key. It is
 // a named constant because two derivations must agree on it byte for byte:
-// pollIdempotencyKey below, and the declaration (pollSchedule) a
-// jobs.Scheduler composes keys from with its own window derivation -- one
-// window must resolve one key through both paths.
+// the manual EnqueuePoll path and the declaration (pollSchedule) a
+// jobs.Scheduler expands -- one window must resolve one key through both
+// paths, and both derive it through jobs.ScheduleIdempotencyKey with this
+// prefix.
 const pollKeyPrefix = "billing.poll:"
-
-// pollIdempotencyKey derives the jobs idempotency key of one poll window
-// for a tenant, per the rule that an idempotency key derives from the
-// business operation, never random -- the identical shape go/storage's
-// expirySweepIdempotencyKey uses for its own per-tenant sweep: the
-// operation one key names is "the poll of windowStart", not "some poll or
-// other" -- a periodic task's identity inherently includes WHICH period
-// it is for. windowStart is the pollIdempotencyWindowSize window start
-// the enqueue belongs to (pollWindowStart). Two enqueues for the same
-// tenant's poll inside one window (a scheduler with two replicas, a
-// manual re-run) collapse into one job; a dead-lettered job poisons only
-// its own window; and an enqueue in a later window resolves a fresh key
-// and the poll runs again -- a stuck PaymentEvent is actively polled as
-// long as a host keeps scheduling EnqueuePoll, instead of once per tenant
-// lifetime.
-func pollIdempotencyKey(tenant pkgcore.TenantID, windowStart time.Time) string {
-	return pollKeyPrefix + string(tenant) + ":" + windowStart.UTC().Format(time.RFC3339)
-}
 
 // pollSchedule is the module's declaration of the payment-poll fallback on
 // the pkgcore.ComponentRegistry.Schedules seat: a per-tenant task at the poll's own
-// window, keyed with the same prefix and window function the manual
-// EnqueuePoll path uses, so a scheduler tick and a manual enqueue landing
-// in one window resolve one key and dedupe onto one job.
+// window, keyed with the same prefix and the same window derivation the
+// manual EnqueuePoll path uses (jobs.ScheduleWindowStart /
+// jobs.ScheduleIdempotencyKey), so a scheduler tick and a manual enqueue
+// landing in one window resolve one key and dedupe onto one job.
 var pollSchedule = pkgcore.PeriodicTask{
 	Type:      taskTypePoll,
 	Every:     pollIdempotencyWindowSize,
@@ -146,7 +119,7 @@ type PollingService struct {
 
 	// now is the clock both Poll and EnqueuePoll read: Poll's own stuck
 	// cutoff (listPending's now.Add(-stuckAfter)) and EnqueuePoll's window
-	// placement (pollWindowStart). It is a field, not a time.Now() call at
+	// placement (jobs.ScheduleWindowStart). It is a field, not a time.Now() call at
 	// each site, so both the poll cutoff and the window an enqueue lands
 	// under are deterministic in tests -- the same clock-seam pattern
 	// go/storage's expiry sweep uses -- while defaulting to the real clock
@@ -180,8 +153,8 @@ func newPollingService(events *PaymentEventRepository, gateways map[string]Payme
 // exactly as live webhook processing does.
 //
 // ctx must carry a tenant -- the worker rebuilds it from the task's
-// TenantID before Handle runs (see pollHandler.Handle), and a direct caller
-// passes pkgcore.WithTenant -- because every query this runs is
+// TenantID before the registered handler runs (module.go), and a direct
+// caller passes pkgcore.WithTenant -- because every query this runs is
 // tenant-scoped.
 //
 // A row whose Channel has no wired PaymentGateway (gateways has no entry
@@ -249,16 +222,17 @@ func (s *PollingService) Poll(ctx context.Context) error {
 // pkgcore.ComponentRegistry.Schedules seat (pollSchedule, a per-tenant task at the
 // poll's own window), so a host that runs a jobs.Scheduler polls every
 // tenant without writing a schedule point of its own. The task's
-// window-scoped idempotency key (pollIdempotencyKey) collapses the
-// enqueues of one pollIdempotencyWindowSize window into one job. An
-// enqueue whose clock has moved into a later window (pollWindowStart) is a
-// new job and runs again -- this is what makes the poll periodic on queues
-// whose idempotency is unconditional (StandaloneQueue holds a resolved key
-// forever, so a tenant-only key would poll a tenant exactly once per
-// database file, and a dead-lettered poll would silence its tenant's
-// later enqueues entirely), and what keeps one dead-lettered poll window
-// from poisoning its tenant's later windows; see pollIdempotencyKey's doc
-// comment for the full window semantics.
+// window-scoped idempotency key (jobs.ScheduleIdempotencyKey) collapses
+// the enqueues of one pollIdempotencyWindowSize window into one job. An
+// enqueue whose clock has moved into a later window
+// (jobs.ScheduleWindowStart) is a new job and runs again -- this is what
+// makes the poll periodic on queues whose idempotency is unconditional
+// (StandaloneQueue holds a resolved key forever, so a tenant-only key
+// would poll a tenant exactly once per database file, and a dead-lettered
+// poll would silence its tenant's later enqueues entirely), and what keeps
+// one dead-lettered poll window from poisoning its tenant's later windows;
+// see jobs.ScheduleIdempotencyKey's doc comment for the full window
+// semantics.
 //
 // ctx must carry a tenant. With no queue wired (nil -- Module constructed
 // without WithQueue), this fails with a plain error: polling is optional
@@ -275,33 +249,9 @@ func (s *PollingService) EnqueuePoll(ctx context.Context) error {
 	_, err = s.queue.Enqueue(ctx, jobs.Task{
 		Type:           taskTypePoll,
 		TenantID:       tenant,
-		IdempotencyKey: pollIdempotencyKey(tenant, pollWindowStart(s.now())),
+		IdempotencyKey: jobs.ScheduleIdempotencyKey(pollKeyPrefix, tenant, jobs.ScheduleWindowStart(s.now(), pollIdempotencyWindowSize)),
 	})
 	return err
-}
-
-// pollHandler is the jobs.Handler claiming taskTypePoll, the task
-// EnqueuePoll schedules. Its Handle runs PollingService.Poll on the tenant
-// context the worker rebuilt from the task.
-type pollHandler struct {
-	svc *PollingService
-}
-
-// Type implements jobs.Handler.
-func (h pollHandler) Type() string { return taskTypePoll }
-
-// Handle implements jobs.Handler. The task's payload must be empty -- a
-// poll pass takes its inputs from the rows and the clock at run time, the
-// identical shape go/storage's expirySweepHandler and go/pki's
-// expiryScanHandler both use for their own periodic tasks.
-func (h pollHandler) Handle(ctx context.Context, job *jobs.Job, _ jobs.ProgressFn) (jobs.Result, error) {
-	if len(job.Payload) != 0 {
-		return jobs.Result{}, errors.New("billing: poll task carries an unexpected payload")
-	}
-	if err := h.svc.Poll(ctx); err != nil {
-		return jobs.Result{}, err
-	}
-	return jobs.Result{}, nil
 }
 
 // pollFailureClassUnclassified is pollFailureClass's fixed answer for a
@@ -344,6 +294,3 @@ func pollFailureClass(err error) string {
 	}
 	return pollFailureClassUnclassified
 }
-
-// compile-time check that pollHandler satisfies jobs.Handler.
-var _ jobs.Handler = pollHandler{}

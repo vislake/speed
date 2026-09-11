@@ -76,10 +76,9 @@ package flowtests
 //
 // What remains honestly limited:
 //
-//   - The sweep keys are window-scoped (go/storage/cleanup.go's
-//     expirySweepIdempotencyKey and go/compliance/retention.go's
-//     retentionSweepIdempotencyKey each name their enqueue's
-//     window-start), so on this app's StandaloneQueue -- which holds a
+//   - The sweep keys are window-scoped (go/storage's and go/compliance's
+//     enqueues each name their window-start through
+//     jobs.ScheduleIdempotencyKey), so on this app's StandaloneQueue -- which holds a
 //     resolved key forever (go/jobs) -- each tenant is swept at most once
 //     per window, not once per tick. That is why the two-boot shape above
 //     must exist at all (boot
@@ -89,13 +88,13 @@ package flowtests
 //     pre-window design -- one sweep per database file ever, with a
 //     dead-lettered sweep poisoning its tenant forever -- and the dated
 //     records of it are closed: the windowed keying and its proofs live
-//     in the modules (go/storage's sweep_window_test.go,
-//     go/compliance's retention_sweep_window_test.go, each against a real
+//     in the modules (go/storage's cleanup_test.go,
+//     go/compliance's retention_test.go, each against a real
 //     StandaloneQueue).
 //
 //   - pki's signing-key expiry scan is window-scoped like the sweeps --
-//     go/pki/job.go's expiryScanIdempotencyKey names its enqueue's
-//     window-start, so on this app's StandaloneQueue the scan runs at
+//     go/pki/job.go's enqueue names its window-start through
+//     jobs.SchedulePlatformIdempotencyKey, so on this app's StandaloneQueue the scan runs at
 //     most once per DefaultExpiryScanWindow hour, and the rotation flow
 //     test compresses that window below its own tick cadence through
 //     cfg.PKIExpiryScanWindow so each test tick runs a real scan. The

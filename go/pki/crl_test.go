@@ -309,7 +309,7 @@ func TestCAService_EnqueueCRLRegenerate_Enqueues(t *testing.T) {
 	if queue.tasks[0].TenantID != platformCRLRegenerateTenantID {
 		t.Errorf("task TenantID = %q, want %q", queue.tasks[0].TenantID, platformCRLRegenerateTenantID)
 	}
-	if want := crlRegenerateIdempotencyKey(crlRegenerateWindowStart(windowA, ca.crlRegenerateWindow)); queue.tasks[0].IdempotencyKey != want {
+	if want := "pki.crl_regenerate:2026-09-07T10:00:00Z"; queue.tasks[0].IdempotencyKey != want {
 		t.Errorf("task IdempotencyKey = %q, want %q (the windowed key of the enqueue's clock read)", queue.tasks[0].IdempotencyKey, want)
 	}
 }
@@ -325,7 +325,7 @@ func TestCrlRegenerateHandler(t *testing.T) {
 		t.Fatalf("CreateRootCA: %v", err)
 	}
 
-	h := crlRegenerateHandler{ca: ca}
+	h := jobs.NewEmptyPayloadHandler(taskTypeCRLRegenerate, ca.runScheduledCRLRegenerate)
 	if h.Type() != taskTypeCRLRegenerate {
 		t.Errorf("Type() = %q, want %q", h.Type(), taskTypeCRLRegenerate)
 	}

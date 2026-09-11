@@ -368,7 +368,7 @@ func TestPollingService_EnqueuePoll_EnqueuesWithWindowScopedIdempotencyKey(t *te
 	if task.TenantID != "tenant-a" {
 		t.Errorf("TenantID = %q, want tenant-a", task.TenantID)
 	}
-	want := pollIdempotencyKey("tenant-a", pollWindowStart(enqueuedAt))
+	want := "billing.poll:tenant-a:2026-09-07T10:15:00Z"
 	if task.IdempotencyKey != want {
 		t.Errorf("IdempotencyKey = %q, want %q (the key must name the enqueue's own poll window)", task.IdempotencyKey, want)
 	}
@@ -406,7 +406,7 @@ func TestPollKeyMatchesTheSchedulerDerivation(t *testing.T) {
 	if decl.Scope != pkgcore.PeriodicScopePerTenant {
 		t.Errorf("declaration scope = %q, want %q", decl.Scope, pkgcore.PeriodicScopePerTenant)
 	}
-	if got := jobs.ScheduleIdempotencyKey(decl.KeyPrefix, pkgcore.TenantID("tenant-a"), pollWindowStart(enqueuedAt)); got != manual {
+	if got := jobs.ScheduleIdempotencyKey(decl.KeyPrefix, pkgcore.TenantID("tenant-a"), jobs.ScheduleWindowStart(enqueuedAt, pollIdempotencyWindowSize)); got != manual {
 		t.Errorf("the scheduler-derived key %q != the manual key %q -- one window would run twice", got, manual)
 	}
 }
@@ -422,7 +422,7 @@ func TestPollHandler_Handle_DrivesPoll(t *testing.T) {
 
 	gw := &fakeGateway{status: ChannelStatusSucceeded}
 	svc := newPollingService(events, map[string]PaymentGateway{"stripe": gw}, nil)
-	h := pollHandler{svc: svc}
+	h := jobs.NewEmptyPayloadHandler(taskTypePoll, svc.Poll)
 
 	if got := h.Type(); got != taskTypePoll {
 		t.Errorf("Type() = %q, want %q", got, taskTypePoll)
@@ -439,7 +439,7 @@ func TestPollHandler_Handle_DrivesPoll(t *testing.T) {
 
 func TestPollHandler_Handle_RejectsNonEmptyPayload(t *testing.T) {
 	svc := newPollingService(NewPaymentEventRepository(newTestDB(t)), nil, nil)
-	h := pollHandler{svc: svc}
+	h := jobs.NewEmptyPayloadHandler(taskTypePoll, svc.Poll)
 
 	job := &jobs.Job{TenantID: "tenant-a", Payload: []byte(`{"unexpected":true}`)}
 	if _, err := h.Handle(context.Background(), job, nil); err == nil {
@@ -448,7 +448,7 @@ func TestPollHandler_Handle_RejectsNonEmptyPayload(t *testing.T) {
 }
 
 // The tests below pin the window semantics of the poll idempotency key
-// (pollIdempotencyKey): enqueues inside one poll window collapse into one
+// (jobs.ScheduleIdempotencyKey): enqueues inside one poll window collapse into one
 // job (the concurrency protection the key exists for, preserved),
 // enqueues in a later window become new jobs and the poll runs again
 // (periodicity -- jobs' dedup is permanent on StandaloneQueue, so a

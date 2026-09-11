@@ -613,7 +613,7 @@ func TestLifecycleService_Sweep_OneRowSFailureDoesNotStarveThePass(t *testing.T)
 // the tenant in context, with no payload and with the window-scoped
 // idempotency key that collapses one expirySweepWindowSize window's
 // concurrent enqueues into one job -- the enqueue's key naming the window
-// (expirySweepWindowStart) its clock places it in.
+// (jobs.ScheduleWindowStart) its clock places it in.
 func TestLifecycleService_EnqueueExpirySweep_ShapesTheTask(t *testing.T) {
 	life, _, _, _, queue, _ := newCleanupHarness(t)
 	now := time.Date(2026, 9, 7, 10, 30, 0, 0, time.UTC)
@@ -636,7 +636,7 @@ func TestLifecycleService_EnqueueExpirySweep_ShapesTheTask(t *testing.T) {
 	if task.Payload != nil {
 		t.Errorf("task payload = %v, want nil -- the sweep reads the rows and the clock when it runs", task.Payload)
 	}
-	want := expirySweepIdempotencyKey("tenant-a", expirySweepWindowStart(now))
+	want := "storage.sweep:tenant-a:2026-09-07T10:00:00Z"
 	if task.IdempotencyKey != want {
 		t.Errorf("idempotency key = %q, want %q (the enqueue's own window, not a tenant-only key)", task.IdempotencyKey, want)
 	}
@@ -718,7 +718,7 @@ func TestExpirySweepHandler_EmptyPayloadRunsTheSweep(t *testing.T) {
 	c.ExpiresAt = &past
 	seedObject(t, life.objects, ctx, c)
 
-	h := expirySweepHandler{svc: life}
+	h := jobs.NewEmptyPayloadHandler(taskTypeExpirySweep, life.Sweep)
 	result, err := h.Handle(ctx, &jobs.Job{
 		Type:     taskTypeExpirySweep,
 		TenantID: "tenant-a",
@@ -739,7 +739,7 @@ func TestExpirySweepHandler_EmptyPayloadRunsTheSweep(t *testing.T) {
 // succeed by re-running.
 func TestExpirySweepHandler_RejectsAPayload(t *testing.T) {
 	life, _, _, _, _, _ := newCleanupHarness(t)
-	h := expirySweepHandler{svc: life}
+	h := jobs.NewEmptyPayloadHandler(taskTypeExpirySweep, life.Sweep)
 	_, err := h.Handle(serviceCtx("tenant-a"), &jobs.Job{
 		Type:     taskTypeExpirySweep,
 		TenantID: "tenant-a",
@@ -751,7 +751,7 @@ func TestExpirySweepHandler_RejectsAPayload(t *testing.T) {
 }
 
 // The tests below pin the window semantics of the expiry-sweep
-// idempotency key (expirySweepIdempotencyKey): enqueues inside one
+// idempotency key (jobs.ScheduleIdempotencyKey): enqueues inside one
 // expirySweepWindowSize
 // window collapse into one job (the concurrency protection the key exists
 // for, preserved), enqueues in a later window become new jobs and sweep

@@ -279,7 +279,7 @@ func (m *Module) Register(reg *pkgcore.ComponentRegistry) error {
 	m.credits.auditActions = reg.AuditActionsSeat()
 
 	if m.queue != nil {
-		if err := reg.JobsSeat().Handle(taskTypePoll, pollHandler{svc: m.polling}); err != nil {
+		if err := reg.JobsSeat().Handle(taskTypePoll, jobs.NewEmptyPayloadHandler(taskTypePoll, m.polling.Poll)); err != nil {
 			return err
 		}
 		// Declare the poll's periodic schedule alongside its handler:

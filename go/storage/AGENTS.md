@@ -324,12 +324,12 @@ magic numbers:
 - claims the handlers of the two task types the module's services schedule on
   `reg.JobsSeat()`: the thumbnail-derive task the completion pipeline enqueues
   (derive.go's `deriveHandler`, backed by `DeriveService`) and the
-  expiry-sweep task `EnqueueExpirySweep` schedules (cleanup.go's
-  `expirySweepHandler`, backed by `LifecycleService`) — catalog insertions a
-  host drains onto its queue after Bootstrap and gets a worker that produces
-  thumbnails and sweeps expiry — and declares the expiry sweep's periodic
-  schedule on `reg.SchedulesSeat()` (cleanup.go's `expirySweepSchedule`), the seat
-  a host's `jobs.Scheduler` reads;
+  expiry-sweep task `EnqueueExpirySweep` schedules (cleanup.go, through the
+  shared `jobs.NewEmptyPayloadHandler` over `LifecycleService.Sweep`) —
+  catalog insertions a host drains onto its queue after Bootstrap and gets a
+  worker that produces thumbnails and sweeps expiry — and declares the expiry
+  sweep's periodic schedule on `reg.SchedulesSeat()` (cleanup.go's
+  `expirySweepSchedule`), the seat a host's `jobs.Scheduler` reads;
 - builds `Handler` (`handler.go`) and mounts the module's HTTP surface on
   `reg.RoutesSeat()` at `apiPath` (`/api/v1/storage`, agreed with the fragment's
   `paths:` keys so the host's outer mux knows which requests to hand over).
@@ -506,7 +506,7 @@ invocation full-check.yml's integration-tiers job runs for this module:
   shape), through `EnqueueExpirySweep`, or by calling `Sweep` directly —
   retention is validated at create and enforced at sweep time, and a host
   that runs no scheduler and enqueues nothing retains everything. The
-  window-scoped idempotency key (`expirySweepIdempotencyKey`, one
+  window-scoped idempotency key (`jobs.ScheduleIdempotencyKey`, one
   `expirySweepWindowSize` window per key) keeps one window's concurrent
   enqueues from racing each other — the sweeps that do run never duplicate
   within a window — while later windows' enqueues schedule the sweep again.
@@ -520,7 +520,7 @@ invocation full-check.yml's integration-tiers job runs for this module:
   tenant-scoped — started and stopped with the queue worker (the same
   `cfg.DisableQueueWorker` gate). `EnqueueExpirySweep` derives its
   idempotency key from the `expirySweepWindowSize` window the enqueue falls
-  in (`expirySweepIdempotencyKey`/`expirySweepWindowStart`, cleanup.go), not
+  in (cleanup.go, through `jobs.ScheduleWindowStart`/`jobs.ScheduleIdempotencyKey`), not
   from the tenant alone, and the scheduler's own derivation over the
   declared schedule resolves the byte-identical key for the same window
   (pinned by `cleanup_test.go`'s key-identity test): on the host's

@@ -73,7 +73,7 @@ func TestService_EnqueueExpiryScan_ShapesTheTask(t *testing.T) {
 	if len(task.Payload) != 0 {
 		t.Errorf("task.Payload = %q, want empty", task.Payload)
 	}
-	if want := expiryScanIdempotencyKey(expiryScanWindowStart(windowA, svc.expiryScanWindow)); task.IdempotencyKey != want {
+	if want := "pki.expiry_scan:2026-09-07T10:00:00Z"; task.IdempotencyKey != want {
 		t.Errorf("task.IdempotencyKey = %q, want %q (the windowed key of the enqueue's clock read)", task.IdempotencyKey, want)
 	}
 }
@@ -90,14 +90,7 @@ func TestService_EnqueueExpiryScan_PropagatesAQueueFailure(t *testing.T) {
 	}
 }
 
-// --- expiryScanHandler --------------------------------------------------------
-
-func TestExpiryScanHandler_Type(t *testing.T) {
-	h := expiryScanHandler{}
-	if got := h.Type(); got != taskTypeExpiryScan {
-		t.Errorf("Type() = %q, want %q", got, taskTypeExpiryScan)
-	}
-}
+// --- the registered expiry-scan handler --------------------------------------
 
 // TestExpiryScanHandler_Handle_RunsScanExpiry proves Handle actually drives
 // the state machine: a pending key past its propagation window is promoted
@@ -112,7 +105,7 @@ func TestExpiryScanHandler_Handle_RunsScanExpiry(t *testing.T) {
 		t.Fatalf("seed pending key: %v", err)
 	}
 
-	h := expiryScanHandler{svc: svc}
+	h := jobs.NewEmptyPayloadHandler(taskTypeExpiryScan, svc.runScheduledExpiryScan)
 	result, err := h.Handle(ctx, &jobs.Job{TenantID: platformScanTenantID}, nil)
 	if err != nil {
 		t.Fatalf("Handle: %v", err)
@@ -136,7 +129,7 @@ func TestExpiryScanHandler_Handle_RunsScanExpiry(t *testing.T) {
 // never fix by re-running.
 func TestExpiryScanHandler_Handle_RejectsANonEmptyPayload(t *testing.T) {
 	svc := newTestService(t)
-	h := expiryScanHandler{svc: svc}
+	h := jobs.NewEmptyPayloadHandler(taskTypeExpiryScan, svc.runScheduledExpiryScan)
 	_, err := h.Handle(context.Background(), &jobs.Job{Payload: []byte("{}")}, nil)
 	if err == nil {
 		t.Fatalf("Handle with a non-empty payload succeeded, want an error")

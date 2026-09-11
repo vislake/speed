@@ -401,7 +401,7 @@ func TestRetentionService_SweepAllTenants_NoListerIsAnError(t *testing.T) {
 // for the tenant in context, with no payload and with the window-scoped
 // idempotency key that collapses one retentionSweepWindowSize window's
 // concurrent enqueues into one job -- the enqueue's key naming the window
-// (retentionSweepWindowStart) its clock places it in.
+// (jobs.ScheduleWindowStart) its clock places it in.
 func TestRetentionService_EnqueueRetentionSweep_ShapesTheTask(t *testing.T) {
 	svc, _ := newRetentionHarness(t)
 	now := time.Date(2026, 9, 7, 10, 30, 0, 0, time.UTC)
@@ -423,7 +423,7 @@ func TestRetentionService_EnqueueRetentionSweep_ShapesTheTask(t *testing.T) {
 	if task.TenantID != "tenant-a" {
 		t.Errorf("task.TenantID = %q, want %q", task.TenantID, "tenant-a")
 	}
-	want := retentionSweepIdempotencyKey("tenant-a", retentionSweepWindowStart(now))
+	want := "compliance.retention_sweep:tenant-a:2026-09-07T10:00:00Z"
 	if task.IdempotencyKey != want {
 		t.Errorf("task.IdempotencyKey = %q, want %q (the enqueue's own window, not a tenant-only key)", task.IdempotencyKey, want)
 	}
@@ -737,7 +737,7 @@ func TestRetentionSweepHandler_TypeAndFailedSweep(t *testing.T) {
 }
 
 // The following tests pin the window semantics of the retention-sweep
-// idempotency key (retentionSweepIdempotencyKey): enqueues inside one
+// idempotency key (jobs.ScheduleIdempotencyKey): enqueues inside one
 // retentionSweepWindowSize window collapse into one job (the concurrency
 // protection the key exists for, preserved), enqueues in a later window
 // become new jobs and sweep again (periodicity), and a sweep job that

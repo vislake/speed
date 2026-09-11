@@ -207,13 +207,6 @@ func TestService_Sweep_PublishesShareRevokedPerReapedShare(t *testing.T) {
 	}
 }
 
-func TestExpirySweepHandler_Type(t *testing.T) {
-	h := expirySweepHandler{}
-	if got := h.Type(); got != taskTypeExpirySweep {
-		t.Errorf("Type() = %q, want %q", got, taskTypeExpirySweep)
-	}
-}
-
 func TestExpirySweepHandler_Handle_RunsSweep(t *testing.T) {
 	svc, _ := newTestService(t, nil)
 	createAt := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
@@ -225,7 +218,7 @@ func TestExpirySweepHandler_Handle_RunsSweep(t *testing.T) {
 		t.Fatalf("Create: %v", err)
 	}
 
-	h := expirySweepHandler{svc: svc}
+	h := jobs.NewEmptyPayloadHandler(taskTypeExpirySweep, svc.Sweep)
 	svc.now = fixedClock(sweepAt)
 	job := &jobs.Job{TenantID: testTenant}
 	if _, handleErr := h.Handle(testCtx(), job, nil); handleErr != nil {
@@ -243,7 +236,7 @@ func TestExpirySweepHandler_Handle_RunsSweep(t *testing.T) {
 
 func TestExpirySweepHandler_Handle_RefusesNonEmptyPayload(t *testing.T) {
 	svc, _ := newTestService(t, nil)
-	h := expirySweepHandler{svc: svc}
+	h := jobs.NewEmptyPayloadHandler(taskTypeExpirySweep, svc.Sweep)
 	job := &jobs.Job{TenantID: testTenant, Payload: []byte("{}")}
 	if _, err := h.Handle(testCtx(), job, nil); err == nil {
 		t.Errorf("Handle with a non-empty payload succeeded, want an error")
@@ -292,7 +285,7 @@ func TestModule_EnqueueExpirySweep_BuildsTheExpectedTask(t *testing.T) {
 	if fq.lastTask.TenantID != testTenant {
 		t.Errorf("Task.TenantID = %q, want %q", fq.lastTask.TenantID, testTenant)
 	}
-	if fq.lastTask.IdempotencyKey != expirySweepIdempotencyKey(testTenant, expirySweepWindowStart(now)) {
-		t.Errorf("Task.IdempotencyKey = %q, want %q (the enqueue's own window, not a tenant-only key)", fq.lastTask.IdempotencyKey, expirySweepIdempotencyKey(testTenant, expirySweepWindowStart(now)))
+	if fq.lastTask.IdempotencyKey != "sharing.sweep:tenant-a:2026-09-07T10:00:00Z" {
+		t.Errorf("Task.IdempotencyKey = %q, want %q (the enqueue's own window, not a tenant-only key)", fq.lastTask.IdempotencyKey, "sharing.sweep:tenant-a:2026-09-07T10:00:00Z")
 	}
 }

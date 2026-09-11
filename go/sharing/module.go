@@ -227,14 +227,14 @@ func (m *Module) Handler() *Handler { return m.handler }
 // task at the sweep's own window), so a host that runs a jobs.Scheduler
 // sweeps every tenant without writing a schedule point of its own; this
 // method remains the manual entry point. The task's window-scoped
-// idempotency key (expirySweepIdempotencyKey) collapses the enqueues of
+// idempotency key (jobs.ScheduleIdempotencyKey) collapses the enqueues of
 // one expirySweepWindowSize window -- a scheduler with two replicas ticking
 // in the same window, a manual re-run -- into one job, so a tenant is never
 // swept by two workers at once. An enqueue whose clock has moved into a
-// later window (expirySweepWindowStart) is a new job and runs again: this
+// later window (jobs.ScheduleWindowStart) is a new job and runs again: this
 // is what makes the sweep periodic on queues whose idempotency is
 // unconditional, and what keeps one dead-lettered sweep from poisoning its
-// tenant forever -- see expirySweepIdempotencyKey's doc comment for the
+// tenant forever -- see jobs.ScheduleIdempotencyKey's doc comment for the
 // full window semantics. The window is read from the module service's
 // clock (Service.now, the same seam Service.Sweep reads when the task
 // runs): one clock drives the enqueue-time window and the run-time rows in
@@ -256,7 +256,7 @@ func (m *Module) EnqueueExpirySweep(ctx context.Context) error {
 	_, err = m.queue.Enqueue(ctx, jobs.Task{
 		Type:           taskTypeExpirySweep,
 		TenantID:       tenant,
-		IdempotencyKey: expirySweepIdempotencyKey(tenant, expirySweepWindowStart(m.svc.now())),
+		IdempotencyKey: jobs.ScheduleIdempotencyKey(expirySweepKeyPrefix, tenant, jobs.ScheduleWindowStart(m.svc.now(), expirySweepWindowSize)),
 	})
 	return err
 }
@@ -356,7 +356,7 @@ func (m *Module) Register(reg *pkgcore.ComponentRegistry) error {
 	if err := reg.ConfigSeat().Add(configItemDecls...); err != nil {
 		return err
 	}
-	if err := reg.JobsSeat().Handle(taskTypeExpirySweep, expirySweepHandler{svc: m.svc}); err != nil {
+	if err := reg.JobsSeat().Handle(taskTypeExpirySweep, jobs.NewEmptyPayloadHandler(taskTypeExpirySweep, m.svc.Sweep)); err != nil {
 		return err
 	}
 	// Declare the sweep's periodic schedule alongside its handler:

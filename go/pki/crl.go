@@ -169,9 +169,9 @@ func (s *CAService) GenerateCRL(ctx context.Context, authorityID string, validit
 }
 
 // RegenerateAllCRLs runs GenerateCRL, with DefaultCRLValidity, for every
-// authority this deployment has -- the batch operation crlRegenerateHandler
-// drives on a schedule (below) and a host may also call directly for an
-// on-demand, deployment-wide refresh. It is best-effort: one authority's
+// authority this deployment has -- the batch operation the registered
+// regeneration handler drives on a schedule (below) and a host may also
+// call directly for an on-demand, deployment-wide refresh. It is best-effort: one authority's
 // failure does not stop the others from being attempted, and every failure
 // is collected into a single joined error via errors.Join, so a caller can
 // tell "regenerated 3 of 4, authority X failed" apart from "the whole batch
@@ -201,7 +201,7 @@ func (s *CAService) RegenerateAllCRLs(ctx context.Context) ([]string, error) {
 }
 
 // taskTypeCRLRegenerate names the jobs queue task EnqueueCRLRegenerate
-// schedules and crlRegenerateHandler claims. One run regenerates every
+// schedules and the module's registered regeneration handler claims. One run regenerates every
 // authority's CRL (RegenerateAllCRLs) -- pki_authorities is platform data,
 // so there is no per-tenant shape to this task, the identical reasoning
 // job.go's taskTypeExpiryScan doc comment gives for that task.
@@ -209,7 +209,7 @@ const taskTypeCRLRegenerate = "pki.crl_regenerate"
 
 // DefaultCRLRegenerateWindow is the period one CRL-regeneration idempotency
 // key covers: a regeneration is enqueued under the key of the
-// DefaultCRLRegenerateWindow window (crlRegenerateWindowStart) its enqueue
+// DefaultCRLRegenerateWindow window (jobs.ScheduleWindowStart) its enqueue
 // falls in, so the same-window duplicates a multi-replica scheduler
 // produces collapse into one job, while an enqueue in a later window is a
 // NEW job and regenerates again -- the identical window semantics
@@ -228,43 +228,22 @@ const taskTypeCRLRegenerate = "pki.crl_regenerate"
 // (the expiry-scan window's own doc comment makes the same point).
 const DefaultCRLRegenerateWindow = time.Hour
 
-// crlRegenerateWindowStart is the CRL-regeneration window the enqueue at
-// now belongs to -- the absolute-clock boundary now.Truncate(window) lands
-// in, the twin of job.go's expiryScanWindowStart: every replica agrees on
-// the boundary regardless of its own location, since Truncate is on the
-// absolute clock, never a timezone-local calendar cut.
-func crlRegenerateWindowStart(now time.Time, window time.Duration) time.Time {
-	return now.Truncate(window)
-}
-
 // crlRegenerateKeyPrefix is the prefix of every CRL-regeneration
 // idempotency key. It is a named constant because two derivations must
-// agree on it byte for byte: crlRegenerateIdempotencyKey below, and the
-// declaration (CAService.crlRegenerateSchedule) a jobs.Scheduler composes
-// keys from with its own window derivation -- one window must resolve one
-// key through both paths.
+// agree on it byte for byte: the manual EnqueueCRLRegenerate path and the
+// declaration (CAService.crlRegenerateSchedule) a jobs.Scheduler expands
+// -- one window must resolve one key through both paths, and both derive
+// it through jobs.SchedulePlatformIdempotencyKey with this prefix.
 const crlRegenerateKeyPrefix = "pki.crl_regenerate:"
-
-// crlRegenerateIdempotencyKey derives the jobs idempotency key of one
-// CRL-regeneration window, mirroring job.go's expiryScanIdempotencyKey:
-// the operation one key names is "the regeneration of windowStart", never
-// "some regeneration or other". windowStart is the
-// DefaultCRLRegenerateWindow window start the enqueue belongs to
-// (crlRegenerateWindowStart). The crlRegenerateKeyPrefix keeps the key
-// inside the task's own namespace within the shared queue store, and the
-// RFC 3339 window stamp keeps the key readable in DeadLetterJobs while
-// staying unambiguous.
-func crlRegenerateIdempotencyKey(windowStart time.Time) string {
-	return crlRegenerateKeyPrefix + windowStart.UTC().Format(time.RFC3339)
-}
 
 // crlRegenerateSchedule is the module's declaration of CRL regeneration on
 // the pkgcore.Registry.Schedules seat: one platform-wide task per window,
 // under the CRL task's own sentinel tenant, at the service's configured
-// regeneration window and keyed with the same prefix and window function
-// the manual EnqueueCRLRegenerate path uses -- so a scheduler tick and a
-// manual enqueue landing in one window resolve one key and dedupe onto one
-// job.
+// regeneration window and keyed with the same prefix and the same window
+// derivation the manual EnqueueCRLRegenerate path uses
+// (jobs.ScheduleWindowStart / jobs.SchedulePlatformIdempotencyKey) -- so a
+// scheduler tick and a manual enqueue landing in one window resolve one
+// key and dedupe onto one job.
 func (s *CAService) crlRegenerateSchedule() pkgcore.PeriodicTask {
 	return pkgcore.PeriodicTask{
 		Type:           taskTypeCRLRegenerate,
@@ -293,7 +272,7 @@ const platformCRLRegenerateTenantID = pkgcore.TenantID("_pki_platform_crl")
 // at run time" shape.
 //
 // The task carries a window-scoped idempotency key
-// (crlRegenerateIdempotencyKey, DefaultCRLRegenerateWindow): the enqueues
+// (jobs.SchedulePlatformIdempotencyKey, DefaultCRLRegenerateWindow): the enqueues
 // of one window -- a multi-replica scheduler whose replicas each tick the
 // same schedule instant, a manual re-run -- collapse into one job, so
 // regeneration runs at most once per window however many replicas tick,
@@ -319,32 +298,16 @@ func (s *CAService) EnqueueCRLRegenerate(ctx context.Context) error {
 	_, err := s.queue.Enqueue(ctx, jobs.Task{
 		Type:           taskTypeCRLRegenerate,
 		TenantID:       platformCRLRegenerateTenantID,
-		IdempotencyKey: crlRegenerateIdempotencyKey(crlRegenerateWindowStart(s.now(), s.crlRegenerateWindow)),
+		IdempotencyKey: jobs.SchedulePlatformIdempotencyKey(crlRegenerateKeyPrefix, jobs.ScheduleWindowStart(s.now(), s.crlRegenerateWindow)),
 	})
 	return err
 }
 
-// crlRegenerateHandler is the jobs.Handler claiming taskTypeCRLRegenerate,
-// the task EnqueueCRLRegenerate schedules.
-type crlRegenerateHandler struct {
-	ca *CAService
+// runScheduledCRLRegenerate runs one scheduled CRL regeneration:
+// RegenerateAllCRLs with its regenerated-authority list discarded -- a
+// scheduled task's outcome is success or failure alone. Module.Register
+// wires it through jobs.NewEmptyPayloadHandler.
+func (s *CAService) runScheduledCRLRegenerate(ctx context.Context) error {
+	_, err := s.RegenerateAllCRLs(ctx)
+	return err
 }
-
-// Type implements jobs.Handler.
-func (h crlRegenerateHandler) Type() string { return taskTypeCRLRegenerate }
-
-// Handle implements jobs.Handler. The task's payload must be empty, the
-// identical task-shape check job.go's expiryScanHandler.Handle applies to
-// its own task.
-func (h crlRegenerateHandler) Handle(ctx context.Context, job *jobs.Job, _ jobs.ProgressFn) (jobs.Result, error) {
-	if len(job.Payload) != 0 {
-		return jobs.Result{}, errors.New("pki: CRL-regenerate task carries an unexpected payload")
-	}
-	if _, err := h.ca.RegenerateAllCRLs(ctx); err != nil {
-		return jobs.Result{}, err
-	}
-	return jobs.Result{}, nil
-}
-
-// compile-time check that crlRegenerateHandler satisfies jobs.Handler.
-var _ jobs.Handler = crlRegenerateHandler{}

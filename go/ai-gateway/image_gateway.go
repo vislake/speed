@@ -371,8 +371,9 @@ func (g *Gateway) reportImageUsageEvent(ctx context.Context, tenant pkgcore.Tena
 // IdempotencyKey as identifying one event must not see the two dimensions
 // of the same job collide under one key. This is the identical
 // derived-not-random-key convention go/storage's own
-// thumbnailDeriveIdempotencyKey and expirySweepIdempotencyKey already
-// follow for their own jobs.Task.IdempotencyKey.
+// thumbnailDeriveIdempotencyKey and the periodic sweeps' window-scoped keys
+// (jobs.ScheduleIdempotencyKey) already follow for their own
+// jobs.Task.IdempotencyKey.
 func imageUsageIdempotencyKey(jobID, feature string) string {
 	return "aigateway.image_usage:" + jobID + ":" + feature
 }

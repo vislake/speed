@@ -60,41 +60,19 @@ const jobTypeAPIKeyExpirySweep = "integration.apikey.expiry_sweep"
 // most.
 const apiKeyExpirySweepWindowSize = time.Hour
 
-// apiKeyExpirySweepWindowStart is the expiry-sweep window the enqueue at
-// now belongs to -- the absolute hour boundary now.Truncate(
-// apiKeyExpirySweepWindowSize) lands in. Two replicas enqueuing within the
-// same window share one key (and one job); a tick in a later window gets
-// its own. Truncation is on the absolute clock, never a timezone-local
-// calendar cut, so every replica agrees on the boundary regardless of its
-// own location.
-func apiKeyExpirySweepWindowStart(now time.Time) time.Time {
-	return now.Truncate(apiKeyExpirySweepWindowSize)
-}
-
 // apiKeyExpirySweepKeyPrefix is the prefix of every API-key expiry-sweep
 // idempotency key. It is a named constant because two derivations must
-// agree on it byte for byte: apiKeyExpirySweepIdempotencyKey below, and
-// the declaration (apiKeyExpirySweepSchedule) a jobs.Scheduler composes
-// keys from with its own window derivation -- one window must resolve one
-// key through both paths.
+// agree on it byte for byte: the manual EnqueueAPIKeyExpirySweep path and
+// the declaration (apiKeyExpirySweepSchedule) a jobs.Scheduler expands --
+// one window must resolve one key through both paths, and both derive it
+// through jobs.ScheduleIdempotencyKey with this prefix.
 const apiKeyExpirySweepKeyPrefix = "integration.sweep:"
-
-// apiKeyExpirySweepIdempotencyKey derives the jobs idempotency key of one
-// expiry-sweep window for a tenant, per the rule that an idempotency key
-// derives from the business operation, never random: the operation one key
-// names is "the sweep of windowStart", not "some sweep or other" -- a
-// periodic task's identity inherently includes WHICH period it is for. The
-// apiKeyExpirySweepKeyPrefix keeps the key inside the module's namespace
-// within the shared queue store, and the RFC 3339 window stamp keeps the
-// key readable while staying unambiguous.
-func apiKeyExpirySweepIdempotencyKey(tenant pkgcore.TenantID, windowStart time.Time) string {
-	return apiKeyExpirySweepKeyPrefix + string(tenant) + ":" + windowStart.UTC().Format(time.RFC3339)
-}
 
 // apiKeyExpirySweepSchedule is the module's declaration of the API-key
 // expiry sweep on the pkgcore.ComponentRegistry.Schedules seat: a per-tenant task
-// at the sweep's own window, keyed with the same prefix and window
-// function the manual EnqueueAPIKeyExpirySweep path uses, so a scheduler
+// at the sweep's own window, keyed with the same prefix and the same
+// window derivation the manual EnqueueAPIKeyExpirySweep path uses
+// (jobs.ScheduleWindowStart / jobs.ScheduleIdempotencyKey), so a scheduler
 // tick and a manual enqueue landing in one window resolve one key and
 // dedupe onto one job.
 var apiKeyExpirySweepSchedule = pkgcore.PeriodicTask{
@@ -110,10 +88,10 @@ var apiKeyExpirySweepSchedule = pkgcore.PeriodicTask{
 // (apiKeyExpirySweepSchedule, a per-tenant task at the sweep's own window),
 // so a host that runs a jobs.Scheduler sweeps every tenant without writing
 // a schedule point of its own. The task's window-scoped idempotency key
-// (apiKeyExpirySweepIdempotencyKey) collapses the enqueues of one
+// (jobs.ScheduleIdempotencyKey) collapses the enqueues of one
 // apiKeyExpirySweepWindowSize window into one job, so a tenant is never
 // swept by two workers at once -- and an enqueue whose clock has moved into
-// a later window (apiKeyExpirySweepWindowStart) is a new job and runs
+// a later window (jobs.ScheduleWindowStart) is a new job and runs
 // again, which is what keeps the sweep periodic and what keeps one
 // dead-lettered sweep from poisoning its tenant forever.
 //
@@ -135,7 +113,7 @@ func (s *Service) EnqueueAPIKeyExpirySweep(ctx context.Context) error {
 	_, err = s.queue.Enqueue(ctx, jobs.Task{
 		Type:           jobTypeAPIKeyExpirySweep,
 		TenantID:       tenant,
-		IdempotencyKey: apiKeyExpirySweepIdempotencyKey(tenant, apiKeyExpirySweepWindowStart(s.clock())),
+		IdempotencyKey: jobs.ScheduleIdempotencyKey(apiKeyExpirySweepKeyPrefix, tenant, jobs.ScheduleWindowStart(s.clock(), apiKeyExpirySweepWindowSize)),
 	})
 	return err
 }

@@ -253,7 +253,7 @@ type Authority struct {
 	// rather than recomputed on every fetch, because a CRL is meant to be a
 	// stable, periodically-refreshed document a verifier caches, not a
 	// live query result; see crl.go's GenerateCRL for how it is produced
-	// and job.go's crlRegenerateHandler for how a host schedules refreshes.
+	// and crl.go's EnqueueCRLRegenerate for how a host schedules refreshes.
 	CRLPEM string `gorm:"column:crl_pem"`
 
 	CRLIssuedAt   *time.Time `gorm:"column:crl_issued_at"`

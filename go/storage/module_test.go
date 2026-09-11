@@ -562,11 +562,15 @@ func TestModule_Register_RegistersTheServicesJobHandlers(t *testing.T) {
 		t.Error("the derive handler backs a different DeriveService than the module's own")
 	}
 
-	e, ok := handlers[taskTypeExpirySweep].(expirySweepHandler)
+	// The expiry-sweep handler is the shared payload-free adapter
+	// (jobs.NewEmptyPayloadHandler) over the module's own LifecycleService;
+	// its Handle behaviour is pinned by cleanup_test.go against the real
+	// service, so the registration is pinned by the task type it claims.
+	e, ok := handlers[taskTypeExpirySweep].(jobs.Handler)
 	if !ok {
-		t.Errorf("handler of %q = %T, want expirySweepHandler", taskTypeExpirySweep, handlers[taskTypeExpirySweep])
-	} else if e.svc != m.life {
-		t.Error("the expiry-sweep handler backs a different LifecycleService than the module's own")
+		t.Errorf("handler of %q = %T, want a jobs.Handler", taskTypeExpirySweep, handlers[taskTypeExpirySweep])
+	} else if got := e.Type(); got != taskTypeExpirySweep {
+		t.Errorf("handler of %q claims type %q, want %q", taskTypeExpirySweep, got, taskTypeExpirySweep)
 	}
 }
 

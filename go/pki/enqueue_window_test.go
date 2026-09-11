@@ -12,9 +12,9 @@ import (
 )
 
 // This file pins the window semantics of the two platform-wide periodic
-// tasks' idempotency keys -- the expiry scan (job.go's
-// expiryScanIdempotencyKey, DefaultExpiryScanWindow) and the CRL
-// regeneration (crl.go's crlRegenerateIdempotencyKey,
+// tasks' idempotency keys -- the expiry scan (job.go's enqueue through
+// jobs.SchedulePlatformIdempotencyKey, DefaultExpiryScanWindow) and the
+// CRL regeneration (crl.go's enqueue through the same derivation,
 // DefaultCRLRegenerateWindow): enqueues inside one window collapse into
 // one job (the concurrency protection the keys exist for, preserved: a
 // multi-replica scheduler's same-window ticks must never fire N scans or N
@@ -223,7 +223,7 @@ func TestEnqueueExpiryScan_LaterWindowEnqueuesNewJobAndScansAgain(t *testing.T) 
 
 // TestEnqueueExpiryScan_WindowBoundaryIsPinnedByTheClock pins the expiry
 // scan's window boundary against the pinned clock: the boundary is exactly
-// expiryScanWindowStart's absolute-clock truncation -- two enqueues inside
+// jobs.ScheduleWindowStart's absolute-clock truncation -- two enqueues inside
 // one window (the window's start, and one nanosecond before its end) share
 // one key, and an enqueue AT the next window's start gets a fresh one. A
 // keyless enqueue would carry an empty key and defeat the collapse; these
@@ -247,7 +247,7 @@ func TestEnqueueExpiryScan_WindowBoundaryIsPinnedByTheClock(t *testing.T) {
 	if len(queue.tasks) != 2 {
 		t.Fatalf("Enqueue was called %d times, want 2", len(queue.tasks))
 	}
-	wantInWindow := expiryScanIdempotencyKey(windowStart)
+	wantInWindow := "pki.expiry_scan:2026-09-07T10:00:00Z"
 	if queue.tasks[0].IdempotencyKey != wantInWindow || queue.tasks[1].IdempotencyKey != wantInWindow {
 		t.Errorf("same-window keys = %q and %q, want both %q (regression: the windowed key must collapse one window's enqueues)", queue.tasks[0].IdempotencyKey, queue.tasks[1].IdempotencyKey, wantInWindow)
 	}
@@ -261,7 +261,7 @@ func TestEnqueueExpiryScan_WindowBoundaryIsPinnedByTheClock(t *testing.T) {
 	if len(queue.tasks) != 3 {
 		t.Fatalf("Enqueue was called %d times, want 3", len(queue.tasks))
 	}
-	wantNextWindow := expiryScanIdempotencyKey(nextStart)
+	wantNextWindow := "pki.expiry_scan:2026-09-07T11:00:00Z"
 	if queue.tasks[2].IdempotencyKey != wantNextWindow {
 		t.Errorf("next-window key = %q, want %q -- each window must name its own key", queue.tasks[2].IdempotencyKey, wantNextWindow)
 	}
@@ -362,7 +362,7 @@ func TestEnqueueCRLRegenerate_LaterWindowEnqueuesNewJobAndRegeneratesAgain(t *te
 // TestEnqueueCRLRegenerate_WindowBoundaryIsPinnedByTheClock is the CRL
 // task's twin of TestEnqueueExpiryScan_WindowBoundaryIsPinnedByTheClock:
 // with a pinned clock, the window boundary is exactly
-// crlRegenerateWindowStart's absolute-clock truncation. A keyless enqueue
+// jobs.ScheduleWindowStart's absolute-clock truncation. A keyless enqueue
 // would carry an empty key and defeat the collapse; the key assertions
 // below refuse that shape.
 func TestEnqueueCRLRegenerate_WindowBoundaryIsPinnedByTheClock(t *testing.T) {
@@ -384,7 +384,7 @@ func TestEnqueueCRLRegenerate_WindowBoundaryIsPinnedByTheClock(t *testing.T) {
 	if len(queue.tasks) != 2 {
 		t.Fatalf("Enqueue was called %d times, want 2", len(queue.tasks))
 	}
-	wantInWindow := crlRegenerateIdempotencyKey(windowStart)
+	wantInWindow := "pki.crl_regenerate:2026-09-07T10:00:00Z"
 	if queue.tasks[0].IdempotencyKey != wantInWindow || queue.tasks[1].IdempotencyKey != wantInWindow {
 		t.Errorf("same-window keys = %q and %q, want both %q (regression: the windowed key must collapse one window's enqueues)", queue.tasks[0].IdempotencyKey, queue.tasks[1].IdempotencyKey, wantInWindow)
 	}
@@ -398,7 +398,7 @@ func TestEnqueueCRLRegenerate_WindowBoundaryIsPinnedByTheClock(t *testing.T) {
 	if len(queue.tasks) != 3 {
 		t.Fatalf("Enqueue was called %d times, want 3", len(queue.tasks))
 	}
-	wantNextWindow := crlRegenerateIdempotencyKey(nextStart)
+	wantNextWindow := "pki.crl_regenerate:2026-09-07T11:00:00Z"
 	if queue.tasks[2].IdempotencyKey != wantNextWindow {
 		t.Errorf("next-window key = %q, want %q -- each window must name its own key", queue.tasks[2].IdempotencyKey, wantNextWindow)
 	}
