@@ -208,6 +208,13 @@ type ComponentRegistry struct {
 	constructedEntries []constructedEntry
 	closeRolled        []string
 	closeErr           error
+
+	// preparing is the planned member whose Prepare callback is currently
+	// running. The stage drives one callback at a time, so a Prepare
+	// callback reads its own resolved configuration through
+	// OwnComponentConfig without naming itself -- a host that selects a
+	// renamed copy of the component still gets the copy's block.
+	preparing *plannedComponent
 }
 
 // NewComponentRegistry returns a ComponentRegistry seeded with a snapshot of
@@ -369,7 +376,10 @@ func (r *ComponentRegistry) Prepare(ctx context.Context) error {
 			r.abandonStage()
 			return fmt.Errorf("pkgcore: component %q (stage prepare): %w", name, err)
 		}
-		if err := p.component.Prepare(ctx, r); err != nil {
+		r.setPreparing(p)
+		err := p.component.Prepare(ctx, r)
+		r.clearPreparing()
+		if err != nil {
 			r.abandonStage()
 			return fmt.Errorf("pkgcore: component %q (stage prepare): %w", name, err)
 		}
@@ -627,6 +637,45 @@ func (r *ComponentRegistry) registeredOrder() []string {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	return append([]string(nil), r.order...)
+}
+
+// setPreparing records the planned member whose Prepare callback is about
+// to run.
+func (r *ComponentRegistry) setPreparing(p plannedComponent) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.preparing = &p
+}
+
+// clearPreparing clears the current Prepare callback's member.
+func (r *ComponentRegistry) clearPreparing() {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.preparing = nil
+}
+
+// OwnComponentConfig returns the resolved configuration block of the
+// component whose Prepare callback is currently running: the
+// components.<name> subtree the assembly resolved for exactly that member
+// of the plan, under whatever name the host selected it.
+//
+// It is the reading a Prepare callback uses to see its own configuration
+// without naming itself. A component package ships one descriptor whose
+// callbacks are bound to the package, but a host may register a renamed
+// copy of that descriptor; a literal components.<package-name> lookup would
+// then silently read the original's block -- absent, or worse, another
+// assembly's -- while this reading follows the copy. Outside a Prepare
+// callback it fails with ErrStageViolation, because no component's
+// configuration is "current" anywhere else; New receives its block as its
+// cfg parameter instead.
+func OwnComponentConfig(r *ComponentRegistry) (ComponentConfig, error) {
+	r.mu.RLock()
+	p := r.preparing
+	r.mu.RUnlock()
+	if p == nil {
+		return ComponentConfig{}, fmt.Errorf("%w: no component Prepare callback is running; a component reads its own configuration through OwnComponentConfig only inside its Prepare callback, and New receives its resolved block as the cfg parameter", ErrStageViolation)
+	}
+	return p.cfg, nil
 }
 
 // registered returns the component registered under name on this instance.

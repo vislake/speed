@@ -1070,3 +1070,67 @@ func TestConstructProductDeliversProvides(t *testing.T) {
 		}
 	})
 }
+
+// ownConfig is the configuration schema the OwnComponentConfig fixtures
+// declare: one string key.
+type ownConfig struct {
+	Value string `json:"value"`
+}
+
+// TestOwnComponentConfigFollowsTheRunningComponent pins the reading a
+// Prepare callback uses to see its own resolved block. The callback is
+// bound to the package's descriptor, so when a host selects a renamed copy
+// of that descriptor, the copy's block -- not the original name's -- must
+// be the one the callback reads; a literal components.<package-name>
+// lookup would silently miss the copy's configuration entirely.
+func TestOwnComponentConfigFollowsTheRunningComponent(t *testing.T) {
+	ctx := context.Background()
+
+	var seen []string
+	sharedPrepare := func(_ context.Context, reg *ComponentRegistry) error {
+		block, err := OwnComponentConfig(reg)
+		if err != nil {
+			return err
+		}
+		value, err := Value[string](block, "value")
+		if err != nil {
+			return err
+		}
+		seen = append(seen, value)
+		return nil
+	}
+
+	original := Component{
+		Name:         "own.original",
+		ConfigSchema: (*ownConfig)(nil),
+		Prepare:      sharedPrepare,
+		New:          func(context.Context, *ComponentRegistry, ComponentConfig) (any, error) { return &compTokenA{}, nil },
+	}
+	renamed := original
+	renamed.Name = "host.renamed"
+	renamed.New = func(context.Context, *ComponentRegistry, ComponentConfig) (any, error) { return &compTokenB{}, nil }
+
+	reg := newTestRegistry(t, original, renamed)
+	reg.Put(testComposition(
+		configEntry{key: "own.original", value: map[string]any{"value": "original-block"}},
+		configEntry{key: "host.renamed", value: map[string]any{"value": "renamed-block"}},
+	))
+	if err := reg.Prepare(ctx); err != nil {
+		t.Fatalf("Prepare = %v", err)
+	}
+
+	// Prepare callbacks run in registration order.
+	if want := []string{"original-block", "renamed-block"}; !reflect.DeepEqual(seen, want) {
+		t.Errorf("the shared Prepare callback read %v, want %v (each component its own block)", seen, want)
+	}
+}
+
+// TestOwnComponentConfigOutsidePrepareFails pins the reading's stage: no
+// component's configuration is "current" outside its Prepare callback, so
+// the call fails rather than answering with whichever component ran last.
+func TestOwnComponentConfigOutsidePrepareFails(t *testing.T) {
+	reg := NewComponentRegistry()
+	if _, err := OwnComponentConfig(reg); !errors.Is(err, ErrStageViolation) {
+		t.Fatalf("OwnComponentConfig outside a Prepare callback = %v, want ErrStageViolation", err)
+	}
+}
