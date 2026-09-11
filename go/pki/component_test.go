@@ -52,6 +52,10 @@ func TestComponentAssemblesThroughRegistry(t *testing.T) {
 		t.Fatalf("registering the database stand-in: %v", err)
 	}
 	reg.Put(jobs.NewStandaloneQueue(db))
+	// The Init callback installs the service's own cache-invalidation
+	// subscriptions during the assembly's Init stage, so the assembly
+	// carries the bus they land on.
+	reg.Put(pkgcore.NewMemoryEventBus())
 	reg.Put(pkgcore.NewComponentConfig(map[string]any{
 		"deployment": "standalone",
 		"components": map[string]any{
@@ -99,6 +103,55 @@ func TestComponentAssemblesThroughRegistry(t *testing.T) {
 	}
 	if err := reg.Close(ctx); err != nil {
 		t.Fatalf("close: %v", err)
+	}
+}
+
+// TestComponent_InitDeclaresThroughTheGate drives the descriptor's Init
+// through a real assembly: the module's Register runs inside the one stage
+// whose seats accept writes, so every declaration lands in the assembly's
+// own seats and the module's handler is built over the assembly's own
+// values.
+func TestComponent_InitDeclaresThroughTheGate(t *testing.T) {
+	db := testutil.NewSQLite(t, moduleName, migrations.FS)
+	reg := pkgcore.NewComponentRegistry()
+	if err := componenttest.RunInit(t, reg, component(), db, pkgcore.NewMemoryEventBus()); err != nil {
+		t.Fatalf("RunInit: %v", err)
+	}
+	assertContainsAll(t, reg.Permissions.Permissions(), []string{
+		PermissionRead, PermissionIssue, PermissionRevokeSigningKey,
+		PermissionRevokeCertificate, PermissionRotate,
+	})
+	assertContainsAll(t, reg.AuditActions.Actions(), []string{
+		AuditActionAuthorityCreate, AuditActionCertificateIssue,
+		AuditActionKeyRevoke, AuditActionCertificateRevoke,
+	})
+	keys := make([]string, 0, len(reg.Config.Items()))
+	for _, item := range reg.Config.Items() {
+		keys = append(keys, item.Key)
+	}
+	assertContainsAll(t, keys, []string{ConfigCADefaultValidity, ConfigPropagationWindow, ConfigCRLValidity})
+
+	var types []string
+	for _, decl := range reg.Events.Published() {
+		types = append(types, decl.Type)
+	}
+	assertContainsAll(t, types, []string{EventSigningKeyStaged, EventSigningKeyActivated, EventSigningKeyRevoked, EventSigningKeyRetired, EventCertificateRevoked})
+
+	routes := reg.Routes.Routes()
+	if len(routes) != 1 || routes[0].Path != apiPath {
+		t.Fatalf("Init mounted %v, want exactly the %s mount", routes, apiPath)
+	}
+	// The module was constructed without a queue: Init must not claim the
+	// expiry-scan or CRL-regenerate handlers when there is none.
+	if _, ok := reg.Jobs.Handlers()[taskTypeExpiryScan]; ok {
+		t.Errorf("Init claimed the expiry-scan job handler without a queue")
+	}
+	m, err := pkgcore.Get[*Module](reg)
+	if err != nil {
+		t.Fatalf("the assembly's product: %v", err)
+	}
+	if m.handler == nil {
+		t.Error("the module's HTTP handler was not built by Init")
 	}
 }
 

@@ -3,18 +3,18 @@ package pki
 // component.go carries pki's descriptors for the config-driven component
 // assembly: the pki module's selection key, assets, consumed contracts and
 // lifecycle callbacks, and the "signer.local" implementation the signer
-// module binds. Both are additive: pkgcore.Module.Register, driven by the
-// host's bootstrap, remains pki's declaration path, and the descriptors
-// state the same surface in the assembly's terms.
+// module binds. The pki descriptor's Init runs the module's one declaration
+// entry point, Register, inside the assembly's Init stage -- the one stage
+// whose seats accept writes -- so the module's declarations reach the
+// assembly's seats exactly as they reach the kernel bootstrap's registry.
 //
-// The pki descriptor declares no Prepare callback. RegisterLocalKeySerializer --
-// the pre-open step that registers the cipher GORM resolves the LocalSigner's
-// private-key column through -- consumes the pki.local_key_cipher_key
-// material, and the by-purpose material source that hands a component its own
-// declared material is not part of the assembly yet; building the cipher from
-// anything else here would state a different contract than the declaration
-// does. The host wiring (pki.RegisterLocalKeySerializer over the material it
-// resolves) is the path that performs it today.
+// The pki descriptor declares no Prepare callback.
+// RegisterLocalKeySerializer -- the step that registers the cipher GORM
+// resolves the LocalSigner's private-key column through -- consumes the
+// pki.local_key_cipher_key material and must run before the connection that
+// parses the LocalSigner's model opens; the host wiring
+// (pki.RegisterLocalKeySerializer over the material it resolves) is the path
+// that performs it.
 
 import (
 	"context"
@@ -47,7 +47,9 @@ type componentConfig struct {
 // component returns pki's component descriptor: the value init registers, so
 // a composition configuration can select the module, the assembly can
 // construct it from the database component's product, and Close releases the
-// key-set cache's janitor.
+// key-set cache's janitor. Its Init runs the module's one declaration entry
+// point, Register, inside the assembly's Init stage -- the one stage whose
+// seats accept writes.
 func component() pkgcore.Component {
 	return pkgcore.Component{
 		Name:   moduleName,
@@ -105,6 +107,13 @@ func component() pkgcore.Component {
 				return nil, err
 			}
 			return NewModule(db, opts...), nil
+		},
+		Init: func(_ context.Context, reg *pkgcore.ComponentRegistry, instance any) error {
+			m, ok := instance.(*Module)
+			if !ok {
+				return fmt.Errorf("pki: component init got a %T instance, want *pki.Module", instance)
+			}
+			return m.Register(reg)
 		},
 		Close: func(_ context.Context, _ *pkgcore.ComponentRegistry, instance any) error {
 			m, ok := instance.(*Module)
