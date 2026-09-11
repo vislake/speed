@@ -113,6 +113,13 @@
 - **替代路径**：无（库内键修正）；升级动作即删库重建或改写账本行。
 - **出处**：`4c9464e2`（`fix(dbkit)!: key the migration ledger by the module a component implements`）。
 
+### 5.3. jobs 新增空载荷周期任务适配器（非破坏，新增面登记）
+
+- **面**：`go/jobs` 新增导出函数 `NewEmptyPayloadHandler(taskType, run)`——空载荷周期任务（poll/sweep/scan）的 `Handler` 适配器：拒绝非空 payload 并转调 `run`。既有导出符号无变化：各模块此前的窗口/键私有推导与私有空载荷适配器都是未导出面，删除不构成消费者可见破坏。
+- **消费者影响**：无破坏、无升级动作；替换的是"拒绝非空 payload + 转调"的逐模块样板（各模块 Enqueue* 的窗口/键推导改经 `jobs.ScheduleWindowStart`/`ScheduleIdempotencyKey`/`SchedulePlatformIdempotencyKey`，键格式与窗口语义逐字节不变）。
+- **登记理由**：公共符号面新增，按"宿主可见面变更须带 `!BREAKING` footer 或登记本清单"的纪律登记（本轮为纯新增，不带 footer）。
+- **出处**：`b8cbfd05`（`feat(jobs): add the shared empty-payload periodic handler adapter`）+ `867a58bc`（六模块改为调用共享推导与共享适配器）。
+
 ## 6. D 组：configrefgen 工具内部迁移（工具面，非宿主面）
 
 - **面**：`tools/configrefgen` 的内部实现从旧内核面迁到组件面（工具自身不在消费者依赖面内）。
