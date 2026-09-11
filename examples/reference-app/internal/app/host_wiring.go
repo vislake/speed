@@ -236,9 +236,11 @@ func (b *serverBuild) dbComponent() pkgcore.Component {
 
 // authnComponent returns authn's descriptor with this app's construction:
 // the membership store signing in resolves tenants through, the feature gate
-// that makes authn's flags effective, the social providers this deployment
-// assembled, the redirect allowlist and trusted-provider list their callbacks
-// are validated against, and the per-header vendor opt-in.
+// that makes authn's flags effective, the configuration module's handle as
+// authn's settings reader -- the seam that makes the module's declared
+// dynamic config items effective at runtime -- the social providers this
+// deployment assembled, the redirect allowlist and trusted-provider list
+// their callbacks are validated against, and the per-header vendor opt-in.
 func (b *serverBuild) authnComponent(reg *pkgcore.ComponentRegistry) (pkgcore.Component, error) {
 	return overrideComponent(reg, "authn", "authn", func(_ context.Context, reg *pkgcore.ComponentRegistry, _ pkgcore.ComponentConfig) (any, error) {
 		db, err := pkgcore.Get[*gorm.DB](reg)
@@ -285,6 +287,13 @@ func (b *serverBuild) authnComponent(reg *pkgcore.ComponentRegistry) (pkgcore.Co
 			// adapts the config module's lazy handle. Without it this app's
 			// flags would be declarations with no enforcement.
 			authn.WithFeatureGate(speedbridges.AuthnFeatureGate(configModule.Handle())),
+			// The dynamic-configuration reader: the same lazy handle, wired
+			// as authn's settings seam so the module's declared dynamic
+			// config items (password policy, token TTLs, the trusted-provider
+			// list, per-channel credentials) take effect at runtime. Every
+			// construction option above stays the documented fallback for a
+			// key with no explicit row.
+			authn.WithSettingsReader(configModule.Handle()),
 		}
 		// The per-header vendor opt-in: a generic reverse proxy forwards a
 		// client-chosen Fly-Client-IP verbatim, so the header is read only
