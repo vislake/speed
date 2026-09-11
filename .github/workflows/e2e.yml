@@ -14,8 +14,8 @@ name: e2e
 # examples/reference-app/web/e2e), its Playwright config with three
 # projects (chromium, webkit, ipad), the fake image provider, and the
 # app's vite dev server the config boots beside the Go server.
-# Selection counts, measured with `--list`: the default tier selects 78
-# tests (26 per project), the @budget tier 93 (31 per project), and
+# Selection counts, measured with `--list`: the default tier selects 81
+# tests (27 per project), the @budget tier 93 (31 per project), and
 # `pnpm test:e2e:pending` selects none. e2e/README.md is the authority
 # on what each tier means and on the constraints below.
 #
