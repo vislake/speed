@@ -45,6 +45,18 @@ func TestCheckAddr_RefusesEverythingNotPubliclyRoutable(t *testing.T) {
 		{name: "unspecified v6", addr: "::"},
 		{name: "multicast", addr: "224.0.0.1"},
 		{name: "ipv6 multicast", addr: "ff02::1"},
+		{name: "ipv4-mapped ipv6 cloud metadata", addr: "::ffff:169.254.169.254"},
+		{name: "rfc1918 172.31 upper edge", addr: "172.31.255.255"},
+		{name: "carrier-grade nat upper edge", addr: "100.64.255.255"},
+		// The IPv6 special-purpose ranges netip's own predicates leave
+		// unclassified: NAT64 in the dotted-quad form a DNS answer would
+		// actually carry, IPv4-compatible, and site-local.
+		{name: "nat64 well-known prefix", addr: "64:ff9b::1"},
+		{name: "nat64 embedding cloud metadata", addr: "64:ff9b::169.254.169.254"},
+		{name: "nat64 embedding loopback", addr: "64:ff9b::127.0.0.1"},
+		{name: "ipv4-compatible loopback", addr: "::127.0.0.1"},
+		{name: "ipv6 site-local", addr: "fec0::1"},
+		{name: "ipv6 site-local upper edge", addr: "feff::1"},
 	}
 	for _, tc := range blocked {
 		t.Run(tc.name, func(t *testing.T) {
@@ -56,7 +68,7 @@ func TestCheckAddr_RefusesEverythingNotPubliclyRoutable(t *testing.T) {
 		})
 	}
 
-	allowed := []string{"8.8.8.8", "1.1.1.1", "2606:4700:4700::1111", "203.0.114.1"}
+	allowed := []string{"8.8.8.8", "1.1.1.1", "2001:4860:4860::8888", "2606:4700:4700::1111", "203.0.114.1"}
 	for _, raw := range allowed {
 		t.Run("allows "+raw, func(t *testing.T) {
 			t.Parallel()

@@ -78,8 +78,15 @@ const (
 // know whether 10.0.0.0/8 is handled is a list nobody audits. The entries
 // that are NOT covered elsewhere are the carrier-grade NAT range that fronts
 // many internal networks, the benchmarking range, the three documentation
-// ranges, and 192.0.0.0/24 (IETF protocol assignments, which includes the
-// NAT64 well-known prefix's IPv4 side).
+// ranges, 192.0.0.0/24 (IETF protocol assignments, which includes the
+// NAT64 well-known prefix's IPv4 side), and the IPv6 special-purpose ranges
+// netip's predicates leave unclassified even though a NAT64 network or a
+// legacy stack can still steer an internal IPv4 destination through them:
+// 64:ff9b::/96 (RFC 6052's well-known NAT64 prefix -- 64:ff9b::a.b.c.d is
+// the NAT64 spelling of a.b.c.d, so a hostile DNS answer can present the
+// metadata endpoint or a loopback address in it), ::/96 (RFC 4291's
+// deprecated IPv4-compatible addresses -- ::127.0.0.1 is loopback in a form
+// Unmap does not rewrite), and fec0::/10 (RFC 3879-deprecated site-local).
 var blockedPrefixes = []netip.Prefix{
 	netip.MustParsePrefix("10.0.0.0/8"),
 	netip.MustParsePrefix("172.16.0.0/12"),
@@ -92,6 +99,9 @@ var blockedPrefixes = []netip.Prefix{
 	netip.MustParsePrefix("192.0.0.0/24"),
 	netip.MustParsePrefix("fc00::/7"),
 	netip.MustParsePrefix("2001:db8::/32"),
+	netip.MustParsePrefix("64:ff9b::/96"),
+	netip.MustParsePrefix("::/96"),
+	netip.MustParsePrefix("fec0::/10"),
 }
 
 // Resolver is the name-resolution seam. It exists so a test can prove the
