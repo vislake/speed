@@ -227,16 +227,16 @@ func NewComponentRegistry() *ComponentRegistry {
 	r.order = append(r.order, globalComponents.order...)
 	globalComponents.mu.RUnlock()
 
-	r.Routes = &routeSeat{reg: r}
-	r.Config = &configSeat{reg: r}
-	r.Features = &featuresSeat{reg: r}
-	r.Permissions = &permissionsSeat{reg: r}
-	r.Jobs = &jobsSeat{reg: r}
-	r.Notifications = &notificationsSeat{reg: r}
-	r.Events = &eventsSeat{reg: r}
-	r.AuditActions = &auditActionsSeat{reg: r}
-	r.Retention = &retentionSeat{reg: r}
-	r.Schedules = &schedulesSeat{reg: r}
+	r.Routes = &routeSeat{gatedSeatFor(r, "Routes", func(s seatSet) RouteRegistrar { return s.routes })}
+	r.Config = &configSeat{gatedSeatFor(r, "Config", func(s seatSet) ConfigSchemaRegistrar { return s.config })}
+	r.Features = &featuresSeat{gatedSeatFor(r, "Features", func(s seatSet) FeatureRegistrar { return s.features })}
+	r.Permissions = &permissionsSeat{gatedSeatFor(r, "Permissions", func(s seatSet) PermissionRegistrar { return s.permissions })}
+	r.Jobs = &jobsSeat{gatedSeatFor(r, "Jobs", func(s seatSet) JobHandlerRegistrar { return s.jobs })}
+	r.Notifications = &notificationsSeat{gatedSeatFor(r, "Notifications", func(s seatSet) NotificationRegistrar { return s.notifications })}
+	r.Events = &eventsSeat{gatedSeatFor(r, "Events", func(s seatSet) EventRegistrar { return s.events })}
+	r.AuditActions = &auditActionsSeat{gatedSeatFor(r, "AuditActions", func(s seatSet) AuditActionRegistrar { return s.auditActions })}
+	r.Retention = &retentionSeat{gatedSeatFor(r, "Retention", func(s seatSet) RetentionRegistrar { return s.retention })}
+	r.Schedules = &schedulesSeat{gatedSeatFor(r, "Schedules", func(s seatSet) PeriodicTaskRegistrar { return s.schedules })}
 	return r
 }
 
@@ -1139,126 +1139,177 @@ func Assets(r *ComponentRegistry) []Asset {
 }
 
 // The ten seat implementations below wrap the in-memory registrars with the
-// stage gate. Each write method asks seatFor first and refuses outside the
-// Init stage; where the registrar interface cannot report an error
+// stage gate. The gate itself is implemented once, by gatedSeat, and each
+// wrapper instantiates it for the registrar interface it fronts: a write
+// asks the registry for the opened registrar behind the seat and is
+// refused, naming the seat and the current stage, outside the Init stage;
+// a read answers from the opened registrar or, before Init, reports nothing
+// declared. Where the registrar interface cannot report an error
 // (RouteRegistrar.Mount, EventRegistrar.Subscribe, both void), the refusal
 // is a panic instead -- silently dropping a declaration is the one outcome
 // worse than a loud failure at startup, and a write outside Init is a wiring
-// error, not a runtime condition. Read methods answer from the opened seats
-// or, before Init, report nothing declared.
+// error, not a runtime condition.
 
-// routeSeat is the Routes seat.
-type routeSeat struct{ reg *ComponentRegistry }
+// gatedSeat is one seat's view over the registry: the seat's name for the
+// refusal, and the address of the seat's registrar within the registry's
+// seat set. It carries the whole gate.
+type gatedSeat[S any] struct {
+	reg  *ComponentRegistry
+	name string
+	seat func(seatSet) S
+}
 
-func (s *routeSeat) Mount(path string, handler http.Handler) {
-	seats, err := s.reg.seatFor("Routes")
+// gatedSeatFor returns the gate a seat wrapper embeds.
+func gatedSeatFor[S any](r *ComponentRegistry, name string, seat func(seatSet) S) gatedSeat[S] {
+	return gatedSeat[S]{reg: r, name: name, seat: seat}
+}
+
+// write returns the opened registrar behind the seat for a declaration, or
+// the gate's refusal when the seats are closed -- which is every moment
+// outside the Init stage.
+func (g gatedSeat[S]) write() (S, error) {
+	var zero S
+	seats, err := g.reg.seatFor(g.name)
+	if err != nil {
+		return zero, err
+	}
+	return g.seat(seats), nil
+}
+
+// writeOrPanic is write for the void-method registrars, whose interface
+// cannot carry the refusal.
+func (g gatedSeat[S]) writeOrPanic() S {
+	registrar, err := g.write()
 	if err != nil {
 		panic(err)
 	}
-	seats.routes.Mount(path, handler)
+	return registrar
+}
+
+// read returns the opened registrar behind the seat for a read: ok is false
+// before the seats open, when nothing has been declared (reads are legal at
+// any point, writes are not).
+func (g gatedSeat[S]) read() (S, bool) {
+	var zero S
+	registrar := g.seat(g.reg.seatRead())
+	if any(registrar) == nil {
+		return zero, false
+	}
+	return registrar, true
+}
+
+// routeSeat is the Routes seat.
+type routeSeat struct{ gatedSeat[RouteRegistrar] }
+
+func (s *routeSeat) Mount(path string, handler http.Handler) {
+	s.writeOrPanic().Mount(path, handler)
 }
 
 func (s *routeSeat) Routes() []MountedRoute {
-	seats := s.reg.seatRead()
-	if seats.routes == nil {
+	registrar, ok := s.read()
+	if !ok {
 		return nil
 	}
-	return seats.routes.Routes()
+	return registrar.Routes()
 }
 
 // configSeat is the Config seat.
-type configSeat struct{ reg *ComponentRegistry }
+type configSeat struct {
+	gatedSeat[ConfigSchemaRegistrar]
+}
 
 func (s *configSeat) Add(items ...ConfigItem) error {
-	seats, err := s.reg.seatFor("Config")
+	registrar, err := s.write()
 	if err != nil {
 		return err
 	}
-	return seats.config.Add(items...)
+	return registrar.Add(items...)
 }
 
 func (s *configSeat) Items() []ConfigItem {
-	seats := s.reg.seatRead()
-	if seats.config == nil {
+	registrar, ok := s.read()
+	if !ok {
 		return nil
 	}
-	return seats.config.Items()
+	return registrar.Items()
 }
 
 // featuresSeat is the Features seat.
-type featuresSeat struct{ reg *ComponentRegistry }
+type featuresSeat struct{ gatedSeat[FeatureRegistrar] }
 
 func (s *featuresSeat) Add(flags ...FeatureFlag) error {
-	seats, err := s.reg.seatFor("Features")
+	registrar, err := s.write()
 	if err != nil {
 		return err
 	}
-	return seats.features.Add(flags...)
+	return registrar.Add(flags...)
 }
 
 func (s *featuresSeat) Flags() []FeatureFlag {
-	seats := s.reg.seatRead()
-	if seats.features == nil {
+	registrar, ok := s.read()
+	if !ok {
 		return nil
 	}
-	return seats.features.Flags()
+	return registrar.Flags()
 }
 
 // permissionsSeat is the Permissions seat.
-type permissionsSeat struct{ reg *ComponentRegistry }
+type permissionsSeat struct{ gatedSeat[PermissionRegistrar] }
 
 func (s *permissionsSeat) Add(perms ...string) error {
-	seats, err := s.reg.seatFor("Permissions")
+	registrar, err := s.write()
 	if err != nil {
 		return err
 	}
-	return seats.permissions.Add(perms...)
+	return registrar.Add(perms...)
 }
 
 func (s *permissionsSeat) Permissions() []string {
-	seats := s.reg.seatRead()
-	if seats.permissions == nil {
+	registrar, ok := s.read()
+	if !ok {
 		return nil
 	}
-	return seats.permissions.Permissions()
+	return registrar.Permissions()
 }
 
 // jobsSeat is the Jobs seat.
-type jobsSeat struct{ reg *ComponentRegistry }
+type jobsSeat struct{ gatedSeat[JobHandlerRegistrar] }
 
 func (s *jobsSeat) Handle(jobType string, handler any) error {
-	seats, err := s.reg.seatFor("Jobs")
+	registrar, err := s.write()
 	if err != nil {
 		return err
 	}
-	return seats.jobs.Handle(jobType, handler)
+	return registrar.Handle(jobType, handler)
 }
 
 func (s *jobsSeat) Handlers() map[string]any {
-	seats := s.reg.seatRead()
-	if seats.jobs == nil {
+	registrar, ok := s.read()
+	if !ok {
 		return nil
 	}
-	return seats.jobs.Handlers()
+	return registrar.Handlers()
 }
 
 // notificationsSeat is the Notifications seat.
-type notificationsSeat struct{ reg *ComponentRegistry }
+type notificationsSeat struct {
+	gatedSeat[NotificationRegistrar]
+}
 
 func (s *notificationsSeat) Add(types ...NotificationType) error {
-	seats, err := s.reg.seatFor("Notifications")
+	registrar, err := s.write()
 	if err != nil {
 		return err
 	}
-	return seats.notifications.Add(types...)
+	return registrar.Add(types...)
 }
 
 func (s *notificationsSeat) Types() []NotificationType {
-	seats := s.reg.seatRead()
-	if seats.notifications == nil {
+	registrar, ok := s.read()
+	if !ok {
 		return nil
 	}
-	return seats.notifications.Types()
+	return registrar.Types()
 }
 
 // eventsSeat is the Events seat. Its declarations live in an in-memory
@@ -1268,26 +1319,26 @@ func (s *notificationsSeat) Types() []NotificationType {
 // installed during Init lands on the same bus a publisher reaches later.
 // Subscribe on an assembly with no EventBus value panics, for the same
 // void-method reason the seat gate panics.
-type eventsSeat struct{ reg *ComponentRegistry }
+type eventsSeat struct{ gatedSeat[EventRegistrar] }
 
 func (s *eventsSeat) Publishes(events ...EventDecl) error {
-	seats, err := s.reg.seatFor("Events")
+	registrar, err := s.write()
 	if err != nil {
 		return err
 	}
-	return seats.events.Publishes(events...)
+	return registrar.Publishes(events...)
 }
 
 func (s *eventsSeat) Published() []EventDecl {
-	seats := s.reg.seatRead()
-	if seats.events == nil {
+	registrar, ok := s.read()
+	if !ok {
 		return nil
 	}
-	return seats.events.Published()
+	return registrar.Published()
 }
 
 func (s *eventsSeat) Subscribe(eventType string, h EventHandler) {
-	if _, err := s.reg.seatFor("Events"); err != nil {
+	if _, err := s.write(); err != nil {
 		panic(err)
 	}
 	bus, err := Get[EventBus](s.reg)
@@ -1306,58 +1357,62 @@ func (s *eventsSeat) Bus() EventBus {
 }
 
 // auditActionsSeat is the AuditActions seat.
-type auditActionsSeat struct{ reg *ComponentRegistry }
+type auditActionsSeat struct {
+	gatedSeat[AuditActionRegistrar]
+}
 
 func (s *auditActionsSeat) Add(actions ...string) error {
-	seats, err := s.reg.seatFor("AuditActions")
+	registrar, err := s.write()
 	if err != nil {
 		return err
 	}
-	return seats.auditActions.Add(actions...)
+	return registrar.Add(actions...)
 }
 
 func (s *auditActionsSeat) Actions() []string {
-	seats := s.reg.seatRead()
-	if seats.auditActions == nil {
+	registrar, ok := s.read()
+	if !ok {
 		return nil
 	}
-	return seats.auditActions.Actions()
+	return registrar.Actions()
 }
 
 // retentionSeat is the Retention seat.
-type retentionSeat struct{ reg *ComponentRegistry }
+type retentionSeat struct{ gatedSeat[RetentionRegistrar] }
 
 func (s *retentionSeat) Add(participants ...RetentionParticipant) error {
-	seats, err := s.reg.seatFor("Retention")
+	registrar, err := s.write()
 	if err != nil {
 		return err
 	}
-	return seats.retention.Add(participants...)
+	return registrar.Add(participants...)
 }
 
 func (s *retentionSeat) Participants() []RetentionParticipant {
-	seats := s.reg.seatRead()
-	if seats.retention == nil {
+	registrar, ok := s.read()
+	if !ok {
 		return nil
 	}
-	return seats.retention.Participants()
+	return registrar.Participants()
 }
 
 // schedulesSeat is the Schedules seat.
-type schedulesSeat struct{ reg *ComponentRegistry }
+type schedulesSeat struct {
+	gatedSeat[PeriodicTaskRegistrar]
+}
 
 func (s *schedulesSeat) Add(decls ...PeriodicTask) error {
-	seats, err := s.reg.seatFor("Schedules")
+	registrar, err := s.write()
 	if err != nil {
 		return err
 	}
-	return seats.schedules.Add(decls...)
+	return registrar.Add(decls...)
 }
 
 func (s *schedulesSeat) Declarations() []PeriodicTask {
-	seats := s.reg.seatRead()
-	if seats.schedules == nil {
+	registrar, ok := s.read()
+	if !ok {
 		return nil
 	}
-	return seats.schedules.Declarations()
+	return registrar.Declarations()
 }
