@@ -9,11 +9,11 @@ import (
 	"io"
 	"net/http"
 	"net/url"
-	"strings"
 
 	"go.opentelemetry.io/otel/metric"
 
 	"github.com/vislake/speed/go/billing"
+	"github.com/vislake/speed/go/billing/gateway"
 )
 
 const nativePayPath = "/v3/pay/transactions/native"
@@ -98,11 +98,11 @@ type attachPayload struct {
 // never a native recurring subscription (WeChat Pay has none at this
 // repository's target tier).
 func (g *Gateway) CreateCharge(ctx context.Context, req billing.ChargeRequest) (billing.ChargeHandle, error) {
-	if err := requireCNY(req.Amount.Currency); err != nil {
+	if err := gateway.RequireCNY("wechat", req.Amount.Currency); err != nil {
 		return billing.ChargeHandle{}, err
 	}
 
-	outTradeNo := outTradeNoFor(req)
+	outTradeNo := gateway.OutTradeNo(req)
 	attach, err := json.Marshal(attachPayload{TenantID: req.TenantID, SubscriptionID: req.SubscriptionID, InvoiceID: req.InvoiceID})
 	if err != nil {
 		return billing.ChargeHandle{}, fmt.Errorf("billing/gateway/wechat: encode attach: %w", err)
@@ -111,13 +111,13 @@ func (g *Gateway) CreateCharge(ctx context.Context, req billing.ChargeRequest) (
 	body, err := json.Marshal(map[string]any{
 		"appid":        g.cfg.AppID,
 		"mchid":        g.cfg.MchID,
-		"description":  chargeDescription(req),
+		"description":  gateway.ChargeDescription(req),
 		"out_trade_no": outTradeNo,
 		"notify_url":   g.cfg.NotifyURL,
 		"attach":       string(attach),
 		"amount": map[string]any{
 			"total": req.Amount.Cents,
-			// "CNY" verbatim, not req.Amount.Currency: requireCNY above
+			// "CNY" verbatim, not req.Amount.Currency: gateway.RequireCNY above
 			// already refused any request whose currency was not CNY
 			// (case-insensitively), so this is the normalized, canonical
 			// ISO 4217 form WeChat Pay's own API expects, never a second,
@@ -143,47 +143,6 @@ func (g *Gateway) CreateCharge(ctx context.Context, req billing.ChargeRequest) (
 	}, nil
 }
 
-// chargeDescription falls back to a generic label when req.Description is
-// empty -- WeChat Pay's own "description" field is required on every
-// order-creating call.
-func chargeDescription(req billing.ChargeRequest) string {
-	if req.Description != "" {
-		return req.Description
-	}
-	return "Subscription"
-}
-
-// outTradeNoFor mirrors go/billing/gateway/alipay's identical helper:
-// prefers req.IdempotencyKey (so a retried CreateCharge reaches the SAME
-// WeChat Pay order rather than creating a duplicate -- WeChat Pay's own
-// out_trade_no uniqueness is exactly the channel-native idempotency
-// mechanism ChargeRequest.IdempotencyKey's own doc comment describes),
-// falling back to req.InvoiceID.
-func outTradeNoFor(req billing.ChargeRequest) string {
-	if req.IdempotencyKey != "" {
-		return req.IdempotencyKey
-	}
-	return req.InvoiceID
-}
-
-// requireCNY refuses currency at the CreateCharge boundary unless it names
-// CNY (case-insensitively) -- WeChat Pay's Native (QR-code) product only
-// ever settles in CNY (the domestic-leg trade-off), so a request naming
-// any other currency must be refused here rather than silently collected
-// as CNY. Without the check, a caller-supplied USD/EUR/etc amount would
-// ride into the request body's hardcoded "currency":"CNY" and be sent to
-// WeChat Pay, and collected from the payer, as if it were the same number
-// of CNY cents.
-func requireCNY(currency string) error {
-	if !strings.EqualFold(currency, "CNY") {
-		return billing.ErrUnsupportedCurrency.
-			WithParam("currency", currency).
-			WithParam("channel", "wechat").
-			WithParam("supported_currency", "CNY")
-	}
-	return nil
-}
-
 // QueryStatus implements billing.PaymentGateway: calls
 // `GET /v3/pay/transactions/out-trade-no/{out_trade_no}` for ref and maps
 // its trade_state to a billing.ChannelStatus -- the authoritative re-query
@@ -198,7 +157,7 @@ func requireCNY(currency string) error {
 // honest.
 func (g *Gateway) QueryStatus(ctx context.Context, ref billing.ChannelReference) (billing.ChannelStatus, billing.Money, error) {
 	// The reference (an out_trade_no this package itself derived from a
-	// caller's idempotency key -- see outTradeNoFor) is percent-escaped as
+	// caller's idempotency key -- see gateway.OutTradeNo) is percent-escaped as
 	// one URL path segment, and that SAME escaped form is what both the
 	// Authorization header's canonical URL and the actual request carry.
 	// WeChat Pay's APIv3 signing scheme requires the signed canonical URL
@@ -277,7 +236,7 @@ func (g *Gateway) call(ctx context.Context, method, pathAndQuery string, body []
 	if body != nil {
 		bodyReader = bytes.NewReader(body)
 	}
-	req, err := http.NewRequestWithContext(ctx, method, g.cfg.gatewayURL()+pathAndQuery, bodyReader)
+	req, err := http.NewRequestWithContext(ctx, method, gateway.GatewayURL(g.cfg.GatewayURL, defaultGatewayURL)+pathAndQuery, bodyReader)
 	if err != nil {
 		return fmt.Errorf("billing/gateway/wechat: build request: %w", err)
 	}

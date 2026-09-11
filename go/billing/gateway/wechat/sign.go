@@ -5,15 +5,15 @@ import (
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/sha256"
-	"crypto/x509"
 	"encoding/base64"
-	"encoding/pem"
 	"errors"
 	"fmt"
 	mathrand "math/rand"
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/vislake/speed/go/billing/gateway"
 )
 
 // requestSignMessage builds the message WeChat Pay's APIv3
@@ -125,54 +125,16 @@ func generateNonce() string {
 
 // ParsePrivateKeyPEM parses a PEM-encoded RSA private key in PKCS#1 or
 // PKCS#8 form -- either is common among WeChat Pay merchant-key exports.
+// The parsing itself is gateway.ParsePrivateKeyPEM's shared implementation.
 func ParsePrivateKeyPEM(pemBytes []byte) (*rsa.PrivateKey, error) {
-	block, _ := pem.Decode(pemBytes)
-	if block == nil {
-		return nil, errors.New("billing/gateway/wechat: parse private key: no PEM block found")
-	}
-	if key, err := x509.ParsePKCS1PrivateKey(block.Bytes); err == nil {
-		return key, nil
-	}
-	key, err := x509.ParsePKCS8PrivateKey(block.Bytes)
-	if err != nil {
-		return nil, fmt.Errorf("billing/gateway/wechat: parse private key: %w", err)
-	}
-	rsaKey, ok := key.(*rsa.PrivateKey)
-	if !ok {
-		return nil, fmt.Errorf("billing/gateway/wechat: parse private key: got %T, want *rsa.PrivateKey", key)
-	}
-	return rsaKey, nil
+	return gateway.ParsePrivateKeyPEM(pemBytes)
 }
 
 // ParsePublicKeyPEM parses a PEM-encoded RSA public key, or extracts the
 // public key from a PEM-encoded X.509 certificate -- WeChat Pay's own
 // platform certificate download endpoint returns the latter, so both forms
-// are accepted for the caller's convenience.
+// are accepted for the caller's convenience. The parsing itself is
+// gateway.ParsePublicKeyPEM's shared implementation.
 func ParsePublicKeyPEM(pemBytes []byte) (*rsa.PublicKey, error) {
-	block, _ := pem.Decode(pemBytes)
-	if block == nil {
-		return nil, errors.New("billing/gateway/wechat: parse public key: no PEM block found")
-	}
-
-	if block.Type == "CERTIFICATE" {
-		cert, err := x509.ParseCertificate(block.Bytes)
-		if err != nil {
-			return nil, fmt.Errorf("billing/gateway/wechat: parse certificate: %w", err)
-		}
-		rsaPub, ok := cert.PublicKey.(*rsa.PublicKey)
-		if !ok {
-			return nil, fmt.Errorf("billing/gateway/wechat: parse certificate: public key is %T, want *rsa.PublicKey", cert.PublicKey)
-		}
-		return rsaPub, nil
-	}
-
-	pub, err := x509.ParsePKIXPublicKey(block.Bytes)
-	if err != nil {
-		return nil, fmt.Errorf("billing/gateway/wechat: parse public key: %w", err)
-	}
-	rsaPub, ok := pub.(*rsa.PublicKey)
-	if !ok {
-		return nil, fmt.Errorf("billing/gateway/wechat: parse public key: got %T, want *rsa.PublicKey", pub)
-	}
-	return rsaPub, nil
+	return gateway.ParsePublicKeyPEM(pemBytes)
 }

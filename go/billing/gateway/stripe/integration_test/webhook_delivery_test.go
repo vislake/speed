@@ -16,12 +16,12 @@
 // over a real wire is the delivery contract the verification consumes: in
 // production the body and header arrive as an HTTP POST from Stripe, and
 // the header map handed to VerifyWebhook is net/http's own canonicalized
-// map (this package's firstHeader reads the exact key "Stripe-Signature"
+// map (gateway.FirstHeader reads the exact key "Stripe-Signature"
 // case-sensitively -- a map produced any other way silently misses it).
 // The unit tier always constructs that map by hand; this leg delivers a
 // genuinely signed payload over real HTTP (httptest server + real client)
 // and verifies the whole receiving path -- canonical header casing, raw
-// body bytes, firstHeader's lookup -- end to end.
+// body bytes, gateway.FirstHeader's lookup -- end to end.
 //
 // What this leg deliberately does not claim: it does not claim stripe-mock
 // signed anything. stripe-mock has no webhook-signing capability (verified

@@ -8,6 +8,8 @@
 
 **`go/billing/gateway` (and its three sub-subpackages) may import `go/billing`. `go/billing`'s own root package must never import `go/billing/gateway` or anything under it.** This is the mechanism that keeps the core design principle -- "`Subscription` is an internal domain concept, a payment channel is merely the collector" -- true in code rather than only in prose.
 
+The dependency runs both ways INSIDE the gateway subpackage tree: the three sub-subpackages import this root package for the helpers they share (`shared.go`'s order-number derivation, CNY guard, header lookup, gateway-URL resolution and PEM key parsing), so each helper exists once rather than per provider. The root package never imports the sub-subpackages -- it has no provider-specific import and carries no provider SDK, so a consumer of the shared helpers pulls in nothing channel-shaped.
+
 The mechanism is the identical `database/sql`-driver-registration pattern `go/pki`'s `SignerRegistry` established for its own provider splits (`go/pki/signer/vault`, `go/pki/signer/kmsaws`):
 
 - `go/billing`'s root package (`gateway.go`) declares `PaymentGateway`, an interface with three methods (`CreateCharge`, `VerifyWebhook`, `QueryStatus`) grounded in what `SubscriptionService`/`InvoiceRepository` actually need, and the provider-agnostic types every implementation exchanges with a caller (`ChargeRequest`/`ChargeHandle`, `NormalizedEvent`, `ChannelStatus`, `NormalizedEventType`, `ChannelReference`). None of these types ever carries a provider-specific field -- no `stripe.Subscription`-shaped field, no Alipay notify param map.

@@ -11,6 +11,7 @@ import (
 	"go.opentelemetry.io/otel/metric"
 
 	"github.com/vislake/speed/go/billing"
+	"github.com/vislake/speed/go/billing/gateway"
 )
 
 // metadataTenantID/metadataSubscriptionID/metadataInvoiceID are the
@@ -105,7 +106,7 @@ func (g *Gateway) CreateCharge(ctx context.Context, req billing.ChargeRequest) (
 						Interval: stripego.String(g.cfg.BillingInterval),
 					},
 					ProductData: &stripego.CheckoutSessionLineItemPriceDataProductDataParams{
-						Name: stripego.String(chargeDescription(req)),
+						Name: stripego.String(gateway.ChargeDescription(req)),
 					},
 				},
 			},
@@ -157,16 +158,6 @@ func (g *Gateway) CreateCharge(ctx context.Context, req billing.ChargeRequest) (
 	}, nil
 }
 
-// chargeDescription falls back to a generic label when req.Description is
-// empty -- Stripe's own product_data.name is required whenever price_data
-// is used, so this package must never send an empty string.
-func chargeDescription(req billing.ChargeRequest) string {
-	if req.Description != "" {
-		return req.Description
-	}
-	return "Subscription"
-}
-
 // VerifyWebhook implements billing.PaymentGateway. It performs no network
 // call: webhook.ConstructEventWithOptions (Stripe's own SDK function)
 // recomputes the expected HMAC-SHA256 signature over the timestamped
@@ -196,7 +187,7 @@ func (g *Gateway) VerifyWebhook(ctx context.Context, headers map[string][]string
 	defer func() {
 		billing.RecordWebhookVerify(ctx, g.webhookVerify, "stripe", verifyErr)
 	}()
-	sigHeader := firstHeader(headers, "Stripe-Signature")
+	sigHeader := gateway.FirstHeader(headers, "Stripe-Signature")
 	if sigHeader == "" {
 		return billing.NormalizedEvent{}, billing.ErrWebhookSignatureInvalid.WithParam("reason", "missing Stripe-Signature header")
 	}
@@ -209,17 +200,6 @@ func (g *Gateway) VerifyWebhook(ctx context.Context, headers map[string][]string
 	}
 
 	return normalizeEvent(event, body)
-}
-
-// firstHeader returns the first value of the named header, case-sensitively
-// -- callers of VerifyWebhook are expected to pass headers exactly as
-// received (net/http.Header's own canonical casing), matching Stripe's own
-// examples.
-func firstHeader(headers map[string][]string, name string) string {
-	for _, v := range headers[name] {
-		return v
-	}
-	return ""
 }
 
 // QueryStatus implements billing.PaymentGateway: retrieves the Checkout

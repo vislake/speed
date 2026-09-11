@@ -253,7 +253,7 @@ func TestGateway_CreateCharge_RefusesNonCNYCurrency(t *testing.T) {
 
 	doer := &fakeDoer{
 		respond: func(url.Values) (int, []byte) {
-			t.Fatal("CreateCharge reached the network for a non-CNY currency; requireCNY should have refused it first")
+			t.Fatal("CreateCharge reached the network for a non-CNY currency; gateway.RequireCNY should have refused it first")
 			return 0, nil
 		},
 	}
@@ -275,7 +275,7 @@ func TestGateway_CreateCharge_RefusesNonCNYCurrency(t *testing.T) {
 	}
 }
 
-// TestGateway_CreateCharge_AcceptsLowercaseCNY proves requireCNY's
+// TestGateway_CreateCharge_AcceptsLowercaseCNY proves gateway.RequireCNY's
 // case-insensitive comparison: a caller spelling the currency "cny"
 // (lowercase, e.g. matching Stripe's own lowercase currency convention
 // elsewhere in this codebase) must not be refused.

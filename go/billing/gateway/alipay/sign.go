@@ -5,14 +5,14 @@ import (
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/sha256"
-	"crypto/x509"
 	"encoding/base64"
-	"encoding/pem"
 	"errors"
 	"fmt"
 	"net/url"
 	"sort"
 	"strings"
+
+	"github.com/vislake/speed/go/billing/gateway"
 )
 
 // signContent builds Alipay's canonical string-to-sign for VERIFYING an
@@ -153,43 +153,19 @@ func VerifySignature(params map[string]string, pub *rsa.PublicKey) error {
 
 // ParsePublicKeyPEM parses a PEM-encoded RSA public key -- the form
 // Alipay's open-platform console hands out as the platform's own Alipay
-// public key, used to verify inbound notifications.
+// public key, used to verify inbound notifications. The parsing itself is
+// gateway.ParsePublicKeyPEM's shared implementation, which also accepts an
+// X.509 certificate carrying the same public key.
 func ParsePublicKeyPEM(pemBytes []byte) (*rsa.PublicKey, error) {
-	block, _ := pem.Decode(pemBytes)
-	if block == nil {
-		return nil, errors.New("billing/gateway/alipay: parse public key: no PEM block found")
-	}
-	pub, err := x509.ParsePKIXPublicKey(block.Bytes)
-	if err != nil {
-		return nil, fmt.Errorf("billing/gateway/alipay: parse public key: %w", err)
-	}
-	rsaPub, ok := pub.(*rsa.PublicKey)
-	if !ok {
-		return nil, fmt.Errorf("billing/gateway/alipay: parse public key: got %T, want *rsa.PublicKey", pub)
-	}
-	return rsaPub, nil
+	return gateway.ParsePublicKeyPEM(pemBytes)
 }
 
 // ParsePrivateKeyPEM parses a PEM-encoded RSA private key in PKCS#1 or
 // PKCS#8 form -- either is common among Alipay open-platform key-generation
-// tools, so both are accepted.
+// tools, so both are accepted. The parsing itself is
+// gateway.ParsePrivateKeyPEM's shared implementation.
 func ParsePrivateKeyPEM(pemBytes []byte) (*rsa.PrivateKey, error) {
-	block, _ := pem.Decode(pemBytes)
-	if block == nil {
-		return nil, errors.New("billing/gateway/alipay: parse private key: no PEM block found")
-	}
-	if key, err := x509.ParsePKCS1PrivateKey(block.Bytes); err == nil {
-		return key, nil
-	}
-	key, err := x509.ParsePKCS8PrivateKey(block.Bytes)
-	if err != nil {
-		return nil, fmt.Errorf("billing/gateway/alipay: parse private key: %w", err)
-	}
-	rsaKey, ok := key.(*rsa.PrivateKey)
-	if !ok {
-		return nil, fmt.Errorf("billing/gateway/alipay: parse private key: got %T, want *rsa.PrivateKey", key)
-	}
-	return rsaKey, nil
+	return gateway.ParsePrivateKeyPEM(pemBytes)
 }
 
 // decodeFormValues parses an application/x-www-form-urlencoded notify body

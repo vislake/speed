@@ -51,10 +51,3 @@ func (c Config) parseKeys() (resolvedKeys, error) {
 	}
 	return resolvedKeys{priv: priv, pub: pub}, nil
 }
-
-func (c Config) gatewayURL() string {
-	if c.GatewayURL != "" {
-		return c.GatewayURL
-	}
-	return defaultGatewayURL
-}

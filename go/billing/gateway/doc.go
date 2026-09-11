@@ -1,6 +1,12 @@
 // Package gateway provides payment gateway adapters for Stripe, Alipay, and
 // WeChat Pay.
 //
+// The three adapter implementations live in its subpackages (stripe,
+// alipay, wechat); this root package itself carries the helpers those
+// implementations share -- see shared.go -- so the same request shaping,
+// CNY guard, header lookup, URL resolution and PEM key parsing exist once
+// rather than per provider.
+//
 // It is a subpackage of go/billing rather than a module of its own: a
 // subpackage already isolates its dependencies completely -- the effect
 // reaches go.mod, go.sum and minimal version selection, so a project that

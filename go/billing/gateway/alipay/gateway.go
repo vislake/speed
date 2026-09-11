@@ -14,6 +14,7 @@ import (
 	"go.opentelemetry.io/otel/metric"
 
 	"github.com/vislake/speed/go/billing"
+	"github.com/vislake/speed/go/billing/gateway"
 )
 
 // productCodeFaceToFace is Alipay's product_code for the Native (QR-code)
@@ -94,7 +95,7 @@ func newGatewayWithClient(client httpDoer, cfg Config) (*Gateway, error) {
 // verbatim on the matching notification -- normalizeNotify decodes it back
 // out.
 func (g *Gateway) CreateCharge(ctx context.Context, req billing.ChargeRequest) (billing.ChargeHandle, error) {
-	if err := requireCNY(req.Amount.Currency); err != nil {
+	if err := gateway.RequireCNY("alipay", req.Amount.Currency); err != nil {
 		return billing.ChargeHandle{}, err
 	}
 	if req.Amount.Cents <= 0 {
@@ -107,7 +108,7 @@ func (g *Gateway) CreateCharge(ctx context.Context, req billing.ChargeRequest) (
 		return billing.ChargeHandle{}, billing.ErrInvalidAmount.WithParam("amount", req.Amount.Cents)
 	}
 
-	outTradeNo := outTradeNoFor(req)
+	outTradeNo := gateway.OutTradeNo(req)
 	passback, err := encodePassback(req)
 	if err != nil {
 		return billing.ChargeHandle{}, err
@@ -116,7 +117,7 @@ func (g *Gateway) CreateCharge(ctx context.Context, req billing.ChargeRequest) (
 	bizContent, err := json.Marshal(map[string]string{
 		"out_trade_no": outTradeNo,
 		"total_amount": formatAmount(req.Amount.Cents),
-		"subject":      chargeSubject(req),
+		"subject":      gateway.ChargeDescription(req),
 		"product_code": productCodeFaceToFace,
 	})
 	if err != nil {
@@ -155,38 +156,11 @@ func (g *Gateway) CreateCharge(ctx context.Context, req billing.ChargeRequest) (
 // envelope.
 const alipayResponseCodeSuccess = "10000"
 
-// chargeSubject falls back to a generic label when req.Description is
-// empty -- Alipay's own subject field is required on every trade-creating
-// call.
-func chargeSubject(req billing.ChargeRequest) string {
-	if req.Description != "" {
-		return req.Description
-	}
-	return "Subscription"
-}
-
-// outTradeNoFor derives the merchant order number CreateCharge creates the
-// trade under, and QueryStatus/notifications reference it by
-// (ChannelReference for this provider IS the out_trade_no -- Alipay has no
-// separate channel-generated order id at creation time; trade_no, its own
-// internal id, only exists once the trade itself exists). Prefers
-// req.IdempotencyKey (so a retried CreateCharge reaches the SAME Alipay
-// order rather than creating a duplicate -- Alipay's own out_trade_no
-// uniqueness is exactly the channel-native idempotency mechanism
-// ChargeRequest.IdempotencyKey's own doc comment describes), falling back
-// to req.InvoiceID when no idempotency key was given.
-func outTradeNoFor(req billing.ChargeRequest) string {
-	if req.IdempotencyKey != "" {
-		return req.IdempotencyKey
-	}
-	return req.InvoiceID
-}
-
 // formatAmount renders cents as Alipay's own decimal yuan string
 // ("total_amount"), e.g. 2900 -> "29.00". Alipay only ever settles in CNY
 // for this product, so no currency conversion is performed here -- CreateCharge's
-// own requireCNY call already refused any non-CNY req.Amount before this is
-// reached.
+// own gateway.RequireCNY call already refused any non-CNY req.Amount before
+// this is reached.
 //
 // The CreateCharge boundary refuses every non-positive amount before this
 // is ever reached (see that method's own check), so formatAmount's inputs
@@ -206,25 +180,6 @@ func formatAmount(cents int64) string {
 		return "-" + s
 	}
 	return s
-}
-
-// requireCNY refuses currency at the CreateCharge boundary unless it names
-// CNY (case-insensitively) -- Alipay's Native (QR-code) product only ever
-// settles in CNY (the domestic-leg trade-off), so a request naming any
-// other currency must be refused here rather than silently collected as
-// CNY --
-// formatAmount's own cents-to-yuan conversion has no unit conversion of its
-// own, so a caller-supplied USD/EUR/etc amount would otherwise be sent to
-// Alipay, and collected from the payer, as if it were the same number of
-// CNY cents.
-func requireCNY(currency string) error {
-	if !strings.EqualFold(currency, "CNY") {
-		return billing.ErrUnsupportedCurrency.
-			WithParam("currency", currency).
-			WithParam("channel", "alipay").
-			WithParam("supported_currency", "CNY")
-	}
-	return nil
 }
 
 // passbackPayload is what CreateCharge JSON-encodes into passback_params
@@ -291,7 +246,7 @@ func (g *Gateway) QueryStatus(ctx context.Context, ref billing.ChannelReference)
 	// Alipay's alipay.trade.query response carries no currency field of its
 	// own (total_amount is a bare decimal yuan string) -- reporting "CNY"
 	// here is honest, not a fabrication, precisely BECAUSE CreateCharge's own
-	// requireCNY call refuses every non-CNY ChargeRequest before an order can
+	// gateway.RequireCNY call refuses every non-CNY ChargeRequest before an order can
 	// ever be created: every ref this method can be asked about genuinely is
 	// a CNY order, by construction, never an assumption papering over a
 	// silently-accepted foreign currency.
@@ -416,7 +371,7 @@ func (g *Gateway) call(ctx context.Context, method, bizContent, passback, respon
 		form.Set(k, v)
 	}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, g.cfg.gatewayURL(), strings.NewReader(form.Encode()))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, gateway.GatewayURL(g.cfg.GatewayURL, defaultGatewayURL), strings.NewReader(form.Encode()))
 	if err != nil {
 		return fmt.Errorf("billing/gateway/alipay: build request: %w", err)
 	}

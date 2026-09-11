@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/vislake/speed/go/billing"
+	"github.com/vislake/speed/go/billing/gateway"
 )
 
 // notifyTimestampTolerance is how far a delivery's Wechatpay-Timestamp may
@@ -126,9 +127,9 @@ func (g *Gateway) VerifyWebhook(ctx context.Context, headers map[string][]string
 	defer func() {
 		billing.RecordWebhookVerify(ctx, g.webhookVerify, "wechat", verifyErr)
 	}()
-	sig := firstHeader(headers, "Wechatpay-Signature")
-	timestamp := firstHeader(headers, "Wechatpay-Timestamp")
-	nonce := firstHeader(headers, "Wechatpay-Nonce")
+	sig := gateway.FirstHeader(headers, "Wechatpay-Signature")
+	timestamp := gateway.FirstHeader(headers, "Wechatpay-Timestamp")
+	nonce := gateway.FirstHeader(headers, "Wechatpay-Nonce")
 	if sig == "" || timestamp == "" || nonce == "" {
 		return billing.NormalizedEvent{}, billing.ErrWebhookSignatureInvalid.WithParam("reason", "missing Wechatpay-Signature/Wechatpay-Timestamp/Wechatpay-Nonce header")
 	}
@@ -339,7 +340,7 @@ func decodeRefundResource(eventType string, plaintext, body []byte) (billing.Nor
 		// The resource carries no currency field -- the notification's
 		// amount object defines only the four integer fields above, and a
 		// WeChat Pay Native refund settles in CNY by definition (the
-		// requireCNY gate on the creation side is this same order's
+		// gateway.RequireCNY gate on the creation side is this same order's
 		// currency claim) -- so CNY is the one honest answer, mirroring
 		// how the transaction decode reads its own currency field when the
 		// channel echoes one.
@@ -347,11 +348,4 @@ func decodeRefundResource(eventType string, plaintext, body []byte) (billing.Nor
 		OccurredAt: occurredAt,
 		RawPayload: body,
 	}, nil
-}
-
-func firstHeader(headers map[string][]string, name string) string {
-	for _, v := range headers[name] {
-		return v
-	}
-	return ""
 }
