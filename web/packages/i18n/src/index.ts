@@ -17,6 +17,11 @@
 export { createI18n, switchLanguage } from './create.js'
 export { registerNamespace } from './register.js'
 export {
+  CLIENT_TRANSPORT_ERROR_CODES,
+  SESSION_LIFECYCLE_ERROR_CODES,
+  createErrorTextResolver,
+} from './error-text.js'
+export {
   DEFAULT_LANGUAGE,
   DEFAULT_SUPPORTED_LANGUAGES,
   normalizeLanguageTag,

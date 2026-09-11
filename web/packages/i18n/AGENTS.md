@@ -7,10 +7,13 @@ negotiated start language (`createI18n`), the manual language switch
 (`switchLanguage`), per-namespace resource registration
 (`registerNamespace`), the instance's own supported-language read
 (`readSupportedLanguages`, exported for surfaces that render a language
-picker from the instance's real set rather than the package default), the
-MUI localization bridge (`./mui-locale`), and the generated platform
+picker from the instance's real set rather than the package default),
+the MUI localization bridge (`./mui-locale`), the generated platform
 error-copy bundle with its registration (`./platform-errors`:
-`PLATFORM_ERRORS_NAMESPACE`, `registerPlatformErrors`).
+`PLATFORM_ERRORS_NAMESPACE`, `registerPlatformErrors`), and the
+error-code text convention the error surfaces resolve through
+(`createErrorTextResolver` plus the shared code families
+`SESSION_LIFECYCLE_ERROR_CODES` and `CLIENT_TRANSPORT_ERROR_CODES`).
 It wraps react-i18next/i18next and adds the platform's discipline on top:
 pinned supported-language sets, per-language coverage, key-set parity, and
 missing keys that warn and render as the key -- never another language's
@@ -83,6 +86,14 @@ catalog) and is non-negotiable here.
   localStorage, navigator) are guarded and injectable; tests run
   deterministically in Node. New browser touches go through the same
   inject-or-guard pattern.
+- **Error text resolves from the code through the shared convention, not
+  a per-package lookalike.** `createErrorTextResolver` owns the
+  `errors.<code>` leaf construction and the `errors.unknown` fallback; a
+  consuming package composes its whitelist (its own reachable codes plus
+  `SESSION_LIFECYCLE_ERROR_CODES` / `CLIENT_TRANSPORT_ERROR_CODES`) and
+  binds its namespace's `t`. Hand-rolling the key construction in a
+  package re-opens the raw-key / cross-language gaps the convention
+  closes.
 - **Instance options are internal to createI18n, and only some are pinned
   by tests.** i18next's option surface is an implementation detail here
   (v26 internals that shaped the code: `initAsync` defaults true and is

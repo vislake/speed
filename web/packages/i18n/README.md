@@ -274,6 +274,44 @@ Regenerate after any backend catalog or apperr code change:
 committed bundle is stale, and the docs-check pipeline runs both the
 generator's suite and that gate.
 
+## Error-code text convention
+
+The main entry also owns the one convention every error surface resolves
+through: a whitelisted code resolves to its own leaf under the bundle's
+`errors` section (`errors.<code>` — the same section the generated
+platform bundle ships), and anything unlisted to `errors.unknown`, so a
+resolver can never render a raw key and a missing translation never
+leaks another language's text.
+
+```ts
+import {
+  CLIENT_TRANSPORT_ERROR_CODES,
+  SESSION_LIFECYCLE_ERROR_CODES,
+  createErrorTextResolver,
+} from '@speed/i18n'
+
+// The surface's whitelist composes the shared families with the codes
+// its own operations reach, and the resolver binds the namespace's `t`:
+const ERROR_TEXT_CODES = [
+  'billing.invoice_not_found',
+  ...SESSION_LIFECYCLE_ERROR_CODES,
+  ...CLIENT_TRANSPORT_ERROR_CODES,
+] as const
+const resolve = createErrorTextResolver(
+  t,
+  new Set<string>(ERROR_TEXT_CODES),
+)
+resolve('billing.invoice_not_found') // -> t('errors.billing.invoice_not_found')
+resolve('authn.future_code') // -> t('errors.unknown')
+```
+
+The two shared families ship here because every protected surface can be
+answered with them: `SESSION_LIFECYCLE_ERROR_CODES` (a session that dies
+mid-flight surfaces through the refresh leg) and
+`CLIENT_TRANSPORT_ERROR_CODES` (the api-client contract's transport
+failures). Text for the shared codes stays in each consuming package's
+own bundle — same-tier packages never import one another's catalogs.
+
 ## Dependencies
 
 | Package | Kind | Why |
