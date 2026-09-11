@@ -84,7 +84,7 @@
 // # Key material
 //
 // A field typed []byte may carry the bare derive tag option
-// (config:"env=APP_CONFIG_KEY,derive"), marking it as one unit of key
+// (config:"env=APP_CONFIG__CIPHER_KEY,derive"), marking it as one unit of key
 // material: 32 bytes, the shape a bootstrap key's "hexkey" format spells as 64
 // hexadecimal characters. A derive field resolves through the five-source
 // chain above, with the derivation standing exactly where a struct default
