@@ -3,6 +3,8 @@ package pkgcore
 import (
 	"strings"
 	"testing"
+
+	"github.com/vislake/speed/go/pkgcore/config"
 )
 
 // bootstrapDecl is a valid declaration the tests vary one field at a time.
@@ -85,5 +87,36 @@ func TestBootstrap_SamePrefixOnBothSeats_Allowed(t *testing.T) {
 	}
 	if keys := reg.Bootstrap.Keys(); len(keys) != 1 {
 		t.Errorf("Keys() = %v, want the one declared bootstrap key", keys)
+	}
+}
+
+// TestBootstrapKeyFormats_MatchTheDeclarationResolverSet pins the two closed
+// sets equal: the declaring side's formats and the declaration-driven
+// resolver's own constants (go/pkgcore/config) describe the same four
+// shapes. Neither list can import the other's source of truth (the config
+// subpackage sits on the dependency floor and must not import this package),
+// so the equality holds in one place only -- here.
+func TestBootstrapKeyFormats_MatchTheDeclarationResolverSet(t *testing.T) {
+	t.Parallel()
+
+	declared := []string{
+		config.FormatString,
+		config.FormatInt,
+		config.FormatBool,
+		config.FormatHexKey,
+	}
+	if len(declared) != len(bootstrapKeyFormats) {
+		t.Fatalf("the resolver carries %d formats and bootstrapKeyFormats carries %d; the two closed sets must be equal",
+			len(declared), len(bootstrapKeyFormats))
+	}
+	for _, format := range declared {
+		if _, ok := bootstrapKeyFormats[format]; !ok {
+			t.Errorf("format %q is missing from bootstrapKeyFormats", format)
+		}
+		decl := bootstrapDecl()
+		decl.Format = format
+		if err := validateBootstrapKey(decl); err != nil {
+			t.Errorf("validateBootstrapKey(format %q) = %v, want the resolver's own format accepted", format, err)
+		}
 	}
 }

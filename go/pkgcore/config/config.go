@@ -313,6 +313,11 @@ type Loader struct {
 	// (WithKeyDerivation). Nil means no deriver is installed, which is an
 	// error only when a root key is configured and the target derives.
 	derivation func(rootKey []byte, keyPath string) ([]byte, error)
+	// devDefaults is the declared defaults table (WithDevDefaults): the
+	// lowest-priority source ResolveDeclarations falls back to for a hexkey
+	// declaration. It plays no part in Load, whose lowest-priority source is
+	// the values the target struct already holds.
+	devDefaults map[string][]byte
 }
 
 // Option customises a Loader built by New.
@@ -500,29 +505,8 @@ func (l *Loader) Load(target any) error {
 		return err
 	}
 
-	rootKey, err := l.resolveRootKey()
+	values, origins, rootKey, err := l.resolveSources(schema)
 	if err != nil {
-		return err
-	}
-	if rootKey != nil && schema.derives > 0 && l.derivation == nil {
-		return fmt.Errorf("%w: %d field(s) carry the %q tag option and a root key is configured, but no deriver is installed; build the loader with WithKeyDerivation, or drop the root key",
-			ErrInvalidTarget, schema.derives, tagDerive)
-	}
-
-	values, origins, err := l.collect(schema)
-	if err != nil {
-		return err
-	}
-
-	if err := l.checkEmpty(schema, values, origins); err != nil {
-		return err
-	}
-
-	// Text values are converted here, once, so that the decode and the per-key
-	// replay in explain judge the same value by the same rules. The empty-value
-	// check above keeps its own error, which states the fault better than a
-	// parse failure would.
-	if err := l.coerceTextValues(schema, values, origins); err != nil {
 		return err
 	}
 
@@ -548,6 +532,42 @@ func (l *Loader) Load(target any) error {
 	}
 
 	return l.checkRequired(target, schema)
+}
+
+// resolveSources runs the middle of the five-source chain every resolution
+// shares, whichever schema drives it: the root-key resolution and the
+// derivation-wiring precondition, then the merge steps that turn the
+// sources into values -- collect, the empty-value check and text coercion.
+// One function runs them for both the reflection path (Load) and the
+// declaration path (ResolveDeclarations), so the two can never judge a
+// value by different rules.
+func (l *Loader) resolveSources(s *schema) (map[string]any, map[string]source, []byte, error) {
+	rootKey, err := l.resolveRootKey()
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	if rootKey != nil && s.derives > 0 && l.derivation == nil {
+		return nil, nil, nil, fmt.Errorf("%w: %d field(s) carry the %q tag option and a root key is configured, but no deriver is installed; build the loader with WithKeyDerivation, or drop the root key",
+			ErrInvalidTarget, s.derives, tagDerive)
+	}
+
+	values, origins, err := l.collect(s)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+
+	if err := l.checkEmpty(s, values, origins); err != nil {
+		return nil, nil, nil, err
+	}
+
+	// Text values are converted here, once, so that the decode and the per-key
+	// replay in explain judge the same value by the same rules. The empty-value
+	// check above keeps its own error, which states the fault better than a
+	// parse failure would.
+	if err := l.coerceTextValues(s, values, origins); err != nil {
+		return nil, nil, nil, err
+	}
+	return values, origins, rootKey, nil
 }
 
 // collect merges every source into one flat map of key to value, lowest
@@ -873,34 +893,17 @@ func (l *Loader) applyKeyMaterial(target any, s *schema, values map[string]any, 
 
 		var material []byte
 		if raw, supplied := values[f.key]; supplied {
-			text, isText := raw.(string)
-			if !isText {
-				return fmt.Errorf("%w for key %q (supplied by %s): a key-material value must be a string of %d hex characters -- a config file's value may need quoting so its parser delivers text -- got %T; sources checked: %s",
-					ErrInvalidValue, f.key, origins[f.key], 2*rootKeySize, raw, l.sourcesFor(s, f.key))
-			}
-			if len(text) != 2*rootKeySize {
-				return fmt.Errorf("%w for key %q (supplied by %s): value must hold %d hex characters (a %d-byte key), got %d; sources checked: %s",
-					ErrInvalidValue, f.key, origins[f.key], 2*rootKeySize, rootKeySize, len(text), l.sourcesFor(s, f.key))
-			}
-			decoded, err := hex.DecodeString(text)
+			decoded, err := l.decodeDeclaredHex(s, f.key, raw, origins)
 			if err != nil {
-				return fmt.Errorf("%w for key %q (supplied by %s): %w; sources checked: %s",
-					ErrInvalidValue, f.key, origins[f.key], err, l.sourcesFor(s, f.key))
+				return err
 			}
 			material = decoded
 		} else if rootKey != nil {
-			derived, err := l.derivation(rootKey, f.key)
+			derived, err := l.deriveDeclaredKey(s, f.key, rootKey)
 			if err != nil {
-				return fmt.Errorf("%w for key %q (supplied by %s): %w; sources checked: %s",
-					ErrInvalidValue, f.key, sourceDerived, err, l.sourcesFor(s, f.key))
+				return err
 			}
-			if len(derived) != rootKeySize {
-				return fmt.Errorf("%w for key %q (supplied by %s): derived value must be %d bytes, got %d; sources checked: %s",
-					ErrInvalidValue, f.key, sourceDerived, rootKeySize, len(derived), l.sourcesFor(s, f.key))
-			}
-			// The field gets the loader's own copy, never the deriver's buffer,
-			// which the host is free to reuse across calls.
-			material = slices.Clone(derived)
+			material = derived
 		} else {
 			continue
 		}
@@ -919,12 +922,60 @@ func (l *Loader) applyKeyMaterial(target any, s *schema, values map[string]any, 
 	return nil
 }
 
+// decodeDeclaredHex decodes the explicit value a source supplied for a
+// hexkey key path: exactly 2*rootKeySize hexadecimal characters, which
+// decode to the key material's rootKeySize bytes. Anything else -- a value
+// a config file's parser delivered as a number, text of another length,
+// text that is not hexadecimal -- is refused naming the key, the source it
+// came from and every source consulted. It is shared by the reflection
+// path and the declaration path, so an explicit key-material value is
+// judged identically on both.
+func (l *Loader) decodeDeclaredHex(s *schema, key string, raw any, origins map[string]source) ([]byte, error) {
+	text, isText := raw.(string)
+	if !isText {
+		return nil, fmt.Errorf("%w for key %q (supplied by %s): a key-material value must be a string of %d hex characters -- a config file's value may need quoting so its parser delivers text -- got %T; sources checked: %s",
+			ErrInvalidValue, key, origins[key], 2*rootKeySize, raw, l.sourcesFor(s, key))
+	}
+	if len(text) != 2*rootKeySize {
+		return nil, fmt.Errorf("%w for key %q (supplied by %s): value must hold %d hex characters (a %d-byte key), got %d; sources checked: %s",
+			ErrInvalidValue, key, origins[key], 2*rootKeySize, rootKeySize, len(text), l.sourcesFor(s, key))
+	}
+	decoded, err := hex.DecodeString(text)
+	if err != nil {
+		return nil, fmt.Errorf("%w for key %q (supplied by %s): %w; sources checked: %s",
+			ErrInvalidValue, key, origins[key], err, l.sourcesFor(s, key))
+	}
+	return decoded, nil
+}
+
+// deriveDeclaredKey derives the material of one hexkey key path from the
+// configured root key, through the function WithKeyDerivation installed.
+// The result must be exactly rootKeySize bytes; the caller gets the
+// loader's own copy, never the deriver's buffer, which the host is free to
+// reuse across calls. Shared by the reflection path and the declaration
+// path.
+func (l *Loader) deriveDeclaredKey(s *schema, key string, rootKey []byte) ([]byte, error) {
+	derived, err := l.derivation(rootKey, key)
+	if err != nil {
+		return nil, fmt.Errorf("%w for key %q (supplied by %s): %w; sources checked: %s",
+			ErrInvalidValue, key, sourceDerived, err, l.sourcesFor(s, key))
+	}
+	if len(derived) != rootKeySize {
+		return nil, fmt.Errorf("%w for key %q (supplied by %s): derived value must be %d bytes, got %d; sources checked: %s",
+			ErrInvalidValue, key, sourceDerived, rootKeySize, len(derived), l.sourcesFor(s, key))
+	}
+	return slices.Clone(derived), nil
+}
+
 // sourcesFor lists, in priority order, every place the loader looked for a key,
 // so the reader of an error knows exactly where to put the missing value. The
 // environment name it names is the one this loader actually read -- a field's
 // pinned name when it has one, its prefix-derived name otherwise -- never a
 // hardcoded SPEED_ spelling. For a derive-tagged key the list also names the
-// derivation, which stands between the file and the struct default.
+// derivation, which stands between the file and the lowest-priority source.
+// That last source is the schema's own: "the default set on the target
+// struct" for a described struct, the declared defaults table for a
+// declaration-driven schema (schema.defaultSource).
 func (l *Loader) sourcesFor(s *schema, key string) string {
 	parts := []string{
 		"command-line flag " + flagPrefix + key,
@@ -938,7 +989,11 @@ func (l *Loader) sourcesFor(s *schema, key string) string {
 	if f, ok := s.byKey[key]; ok && f.derive {
 		parts = append(parts, "the root-key derivation over declared key path "+key)
 	}
-	return strings.Join(append(parts, "the default set on the target struct"), ", ")
+	last := s.defaultSource
+	if last == "" {
+		last = "the default set on the target struct"
+	}
+	return strings.Join(append(parts, last), ", ")
 }
 
 // envNameFor returns the environment variable name a config key is read from:
@@ -971,11 +1026,17 @@ type field struct {
 	subKeys  bool         // a map-like leaf, so keys nested under it belong to it
 }
 
-// schema is the flattened description of a target struct.
+// schema is the flattened description of a target struct or declaration
+// list.
 type schema struct {
 	fields  []field
 	byKey   map[string]*field
 	derives int // how many fields carry the derive tag option
+	// defaultSource names the lowest-priority source sourcesFor lists. It is
+	// empty for a described struct -- the target's own values are what stand
+	// there -- and the declared defaults table for a declaration-driven
+	// schema, which has no struct behind it.
+	defaultSource string
 }
 
 // accepts reports whether a key from a source maps onto this target at all.

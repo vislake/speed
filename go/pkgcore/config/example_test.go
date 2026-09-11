@@ -284,3 +284,49 @@ func ExampleVerify() {
 	// true
 	// true
 }
+
+// ExampleLoader_ResolveDeclarations shows the declaration-driven entry: keys
+// whose declaring module is their only owner are resolved without a struct,
+// on the same five-source chain, and the result is addressed by declared key
+// path. A hexkey declaration falls back to the declared defaults table
+// (WithDevDefaults) when no source supplies it.
+func ExampleLoader_ResolveDeclarations() {
+	decls := []config.Declaration{
+		{Key: "server.port", Format: config.FormatInt},
+		{Key: "authn.pii_cipher_key", Format: config.FormatHexKey},
+	}
+	defaults := map[string][]byte{"authn.pii_cipher_key": bytes.Repeat([]byte{0x01}, 32)}
+
+	values, err := config.New(
+		config.WithArgs(nil),
+		config.WithEnviron([]string{
+			"SPEED_SERVER__PORT=8080",
+			"SPEED_AUTHN__PII_CIPHER_KEY=" + strings.Repeat("ab", 32),
+		}),
+		config.WithDevDefaults(defaults),
+	).ResolveDeclarations(decls)
+	if err != nil {
+		fmt.Println("resolve:", err)
+		return
+	}
+
+	// server.port resolved to an int, and the explicitly supplied key
+	// material decoded to its 32 bytes -- not the table's default.
+	fmt.Println(values["server.port"])
+	material := values["authn.pii_cipher_key"].([]byte)
+	fmt.Println(len(material), hex.EncodeToString(material) == strings.Repeat("ab", 32))
+
+	// A key no source supplied is absent from the result.
+	absent, err := config.New(config.WithArgs(nil), config.WithEnviron(nil)).ResolveDeclarations(decls)
+	if err != nil {
+		fmt.Println("resolve:", err)
+		return
+	}
+	_, present := absent["authn.pii_cipher_key"]
+	fmt.Println(present)
+
+	// Output:
+	// 8080
+	// 32 true
+	// false
+}
