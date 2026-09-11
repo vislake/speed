@@ -44,7 +44,11 @@ go-module-ci coverage leg and by `python3 tools/check_coverage_baseline.py
     of the bounded tail, in source order, exact duplicates collapsed,
     capped at STREAM_FAILURE_LINE_LIMIT with the true match count in
     the header, so a long clean tail cannot truncate the failing test's
-    name away; a stream with no failure line contributes only its tail.
+    name away; a verdict line brings the indented test output beneath
+    it along (the assertion text saying why the test failed), while
+    the crash prefixes open no such block -- their message rides on
+    the same line, followed by a goroutine dump, not test output; a
+    stream with no failure line contributes only its tail.
   * short_toolchain -- the go version line's short form.
   * The gating rule's fail direction -- the mechanism must not go soft
     on the decline it exists to catch -- is proven against the real
@@ -573,7 +577,10 @@ class StreamFailureExtraction(unittest.TestCase):
     "--- FAIL: TestName" verdict and the "panic: " / "fatal error: "
     crash lines -- are pulled from the whole stream ahead of the
     bounded tail, so a long clean tail cannot truncate the failing
-    test's name away. Extraction keeps source order, collapses exact
+    test's name away. A verdict line brings the indented test output
+    beneath it along -- the "file_test.go:123: ..." lines carrying the
+    assertion text -- so the reason the test failed travels with the
+    line that names it. Extraction keeps source order, collapses exact
     duplicates, caps at STREAM_FAILURE_LINE_LIMIT with the true match
     count in the header, and a stream with no failure line contributes
     only its tail (the tail keeping its own role)."""
@@ -605,6 +612,140 @@ class StreamFailureExtraction(unittest.TestCase):
         self.assertIn(
             "stdout failure lines (showing 1 of 1):\n" + fail_line, report
         )
+
+    def test_assertion_lines_below_the_verdict_survive_the_tail(self):
+        # go test prints a failed test's buffered log -- the
+        # "file_test.go:123: ..." assertion lines -- directly beneath
+        # its "--- FAIL: TestName" verdict line: the verdict names the
+        # test, the indented lines say why it failed. A long clean tail
+        # can push the whole block beyond STREAM_TAIL_LIMIT characters,
+        # so the extract must carry the indented lines with the verdict
+        # -- a red run that reports only the test's name but not its
+        # assertion is the gap this pins.
+        fail_line = "--- FAIL: TestRace (11.06s)"
+        assertion = (
+            "    service_test.go:1097: iteration 3: no view was recorded "
+            "before the revoke deadline"
+        )
+        stdout = (
+            "=== RUN   TestRace\n%s\n%s\n%sFAIL\n"
+            % (fail_line, assertion, self._long_clean_tail())
+        )
+        # Fixture invariant: the assertion really sits outside the
+        # retained window, so the extract is the only thing that can
+        # carry it into the report.
+        self.assertGreater(
+            len(stdout) - stdout.index(assertion), m.STREAM_TAIL_LIMIT
+        )
+        self.assertNotIn(assertion, stdout[-m.STREAM_TAIL_LIMIT:])
+        report = m.captured_streams_report(stdout, "")
+        self.assertIn(
+            "stdout failure lines (showing 2 of 2):\n%s\n%s"
+            % (fail_line, assertion),
+            report,
+        )
+
+    def test_detail_block_is_exactly_the_indented_output(self):
+        # The block a verdict line opens is the indented test output
+        # beneath it: the first unindented line -- a package verdict,
+        # the stream trailer -- ends the block, so unrelated stream
+        # text is never swept into the extract.
+        stdout = (
+            "--- FAIL: TestAlpha (0.00s)\n"
+            "    alpha_test.go:7: want 2, got 3\n"
+            "FAIL\n"
+            "FAIL\texample.com/widgets\t0.005s\n"
+        )
+        self.assertEqual(
+            m.failure_lines_from_stream(stdout),
+            [
+                "--- FAIL: TestAlpha (0.00s)",
+                "    alpha_test.go:7: want 2, got 3",
+            ],
+        )
+
+    def test_detail_blocks_interleave_with_later_verdicts_in_order(self):
+        # Two failing tests each bring their own assertion lines: the
+        # extract interleaves verdicts and their blocks in source order,
+        # so which assertion belongs to which test stays readable.
+        stdout = (
+            "--- FAIL: TestAlpha (0.00s)\n"
+            "    alpha_test.go:7: want 2, got 3\n"
+            "--- FAIL: TestBeta (0.00s)\n"
+            "    beta_test.go:9: connection refused\n"
+            "FAIL\n"
+        )
+        self.assertEqual(
+            m.failure_lines_from_stream(stdout),
+            [
+                "--- FAIL: TestAlpha (0.00s)",
+                "    alpha_test.go:7: want 2, got 3",
+                "--- FAIL: TestBeta (0.00s)",
+                "    beta_test.go:9: connection refused",
+            ],
+        )
+
+    def test_duplicate_detail_lines_collapse_like_verdict_lines(self):
+        # Dedup covers the whole extract: a test failing the same
+        # assertion in a loop prints the identical line once per
+        # iteration, and the extract collapses exact duplicates in
+        # source order exactly as it already does for verdict lines.
+        fail_line = "--- FAIL: TestRace (0.31s)"
+        assertion = "    race_test.go:42: view was dropped"
+        stdout = (
+            "%s\n%s\n%s\n%s\n"
+            % (fail_line, assertion, assertion, self._long_clean_tail())
+        )
+        report = m.captured_streams_report(stdout, "")
+        self.assertIn(
+            "stdout failure lines (showing 2 of 2):\n%s\n%s"
+            % (fail_line, assertion),
+            report,
+        )
+        self.assertEqual(report.count(assertion), 1)
+
+    def test_detail_lines_fill_the_cap_and_the_header_counts_them(self):
+        # The cap governs the whole extract, verdicts and detail lines
+        # alike: a verdict whose block of distinct assertion lines is
+        # longer than the window fills it, and the header's true count
+        # keeps the cap from hiding the block's size.
+        assertions = [
+            "    race_test.go:%d: iteration %d diverged" % (i, i)
+            for i in range(m.STREAM_FAILURE_LINE_LIMIT + 5)
+        ]
+        stdout = (
+            "--- FAIL: TestRace (0.31s)\n"
+            + "\n".join(assertions)
+            + "\n"
+            + self._long_clean_tail()
+        )
+        report = m.captured_streams_report(stdout, "")
+        self.assertIn(
+            "stdout failure lines (showing %d of %d):"
+            % (m.STREAM_FAILURE_LINE_LIMIT, len(assertions) + 1),
+            report,
+        )
+        self.assertIn(assertions[m.STREAM_FAILURE_LINE_LIMIT - 2], report)
+        self.assertNotIn(assertions[m.STREAM_FAILURE_LINE_LIMIT - 1], report)
+
+    def test_crash_lines_do_not_open_a_detail_block(self):
+        # "panic: " and "fatal error: " carry their message on the same
+        # line; what follows them is a goroutine dump, not the failing
+        # test's own output. The extract keeps the crash line and
+        # leaves the dump to the tail window, so a crash report does
+        # not fill the extract with stack frames.
+        stdout = (
+            "panic: nil map write\n"
+            "\tgoroutine 1 [running]:\n"
+            "\tmain.main()\n"
+            + self._long_clean_tail()
+        )
+        report = m.captured_streams_report(stdout, "")
+        self.assertIn(
+            "stdout failure lines (showing 1 of 1):\npanic: nil map write",
+            report,
+        )
+        self.assertNotIn("goroutine 1", report)
 
     def test_panic_and_fatal_error_lines_are_extracted(self):
         # A test-binary crash may print no "--- FAIL: " verdict at all

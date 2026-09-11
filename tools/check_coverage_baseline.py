@@ -128,7 +128,12 @@ What a breach means and how to respond
     -- the intended signal ("write the tests"). The
     same failure prints the module's largest uncovered blocks and its
     total uncovered statements, so a breach names where the gap sits,
-    not only how large it is.
+    not only how large it is. A suite that does not merely measure low
+    but goes red raises instead, with both captured streams and the
+    whole-stream failure extract -- each "--- FAIL: " verdict line
+    with the indented test output beneath it -- so the failing test
+    and the assertion that says why stay readable from CI even when a
+    long tail buries them.
   * A change that deliberately lowers coverage (removing a test whose
     scenario is obsolete, restructuring) fails the decline comparison
     and must say so: re-run with --update to record the new baseline in
@@ -267,10 +272,24 @@ STREAM_TAIL_LIMIT = 2000
 # reaches the report.
 STREAM_FAILURE_PREFIXES = ("--- FAIL: ", "panic: ", "fatal error: ")
 
+# The prefix among STREAM_FAILURE_PREFIXES whose following indented
+# lines are the failed test's own output: go test prints a failing
+# test's buffered log -- the "file_test.go:123: ..." lines carrying
+# the assertion text -- beneath its "--- FAIL: TestName" verdict line,
+# which is exactly what a coverage red must show (the verdict names
+# the test, the indented lines say why it failed) and exactly what a
+# long clean tail can push past the retained window. The crash
+# prefixes open no such block: "panic: " / "fatal error: " carry their
+# message on the same line, and what follows is a goroutine dump, not
+# the failing test's log.
+STREAM_FAILURE_DETAIL_PREFIX = "--- FAIL: "
+
 # The cap on extracted failure lines per captured stream
 # (captured_streams_report): a pathological run (one "panic:" line per
-# test in a crash loop) could otherwise fill the failure message with
-# matches. The extract's header names the true match count, so the cap
+# test in a crash loop, or a failing test logging one message per loop
+# iteration) could otherwise fill the failure message with matches.
+# The cap governs verdict lines and the detail lines beneath them
+# alike. The extract's header names the true match count, so the cap
 # hides volume, never the failure set's size.
 STREAM_FAILURE_LINE_LIMIT = 40
 
@@ -517,14 +536,28 @@ def failure_lines_from_stream(text: str) -> list[str]:
     """The stream's failure lines, in source order, exact duplicates
     collapsed: every line starting with STREAM_FAILURE_PREFIXES -- the
     go test per-test "--- FAIL: TestName" verdict and the "panic: " /
-    "fatal error: " lines opening a test-binary crash report. Scanning
-    the whole stream is what lets captured_streams_report keep the
-    failure line when a long clean tail pushes it past the retained
-    window."""
+    "fatal error: " lines opening a test-binary crash report -- plus
+    the indented test-output lines that follow a verdict line
+    (STREAM_FAILURE_DETAIL_PREFIX): go test prints the failed test's
+    buffered log there, so the assertion text saying WHY the test
+    failed travels with the verdict line that names it. A detail block
+    ends at the first line that is not indented -- the next verdict or
+    crash line, a package verdict, the stream's trailer. Scanning the
+    whole stream is what lets captured_streams_report keep the failure
+    line when a long clean tail pushes it past the retained window."""
     seen: set[str] = set()
     extracted = []
+    in_detail_block = False
     for line in text.splitlines():
-        if line.startswith(STREAM_FAILURE_PREFIXES) and line not in seen:
+        if line.startswith(STREAM_FAILURE_PREFIXES):
+            in_detail_block = line.startswith(STREAM_FAILURE_DETAIL_PREFIX)
+            keep = True
+        elif in_detail_block and line.startswith((" ", "\t")):
+            keep = True
+        else:
+            in_detail_block = False
+            keep = False
+        if keep and line not in seen:
             seen.add(line)
             extracted.append(line)
     return extracted
@@ -540,17 +573,19 @@ def captured_streams_report(stdout: str, stderr: str) -> str:
     red test run's failure body empty and the failing test unnameable
     from CI. Each stream contributes up to two labeled parts: first its
     failure lines extracted from the whole stream
-    (failure_lines_from_stream, capped at STREAM_FAILURE_LINE_LIMIT
-    with the true match count in the header), then the last
-    STREAM_TAIL_LIMIT characters of the stream itself (a run's verdict
-    lines print at its end). The extract is what guarantees the failure
-    line survives truncation -- go test prints the verdict line at the
-    point the test failed, so a long run's clean tail can push it
-    beyond the tail window -- and the tail keeps showing how the run
-    ended. A stream that captured nothing shows as "empty", and one
-    with no failure line contributes only its tail -- so which stream
-    carried the failure, and how much of it a truncated view shows, is
-    readable from the message alone."""
+    (failure_lines_from_stream -- each verdict line with the indented
+    test output beneath it, so the failing assertion's own text
+    travels with the test's name -- capped at
+    STREAM_FAILURE_LINE_LIMIT with the true match count in the
+    header), then the last STREAM_TAIL_LIMIT characters of the stream
+    itself (a run's verdict lines print at its end). The extract is
+    what guarantees the failure line survives truncation -- go test
+    prints the verdict line at the point the test failed, so a long
+    run's clean tail can push it beyond the tail window -- and the
+    tail keeps showing how the run ended. A stream that captured
+    nothing shows as "empty", and one with no failure line contributes
+    only its tail -- so which stream carried the failure, and how much
+    of it a truncated view shows, is readable from the message alone."""
     lines = []
     for name, text in (("stdout", stdout), ("stderr", stderr)):
         if text.strip() == "":
