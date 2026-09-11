@@ -28,7 +28,7 @@ func TestBuiltinMailerRegistry_ResolvesEveryDocumentedName(t *testing.T) {
 	// mailer.smtp declares Stateless (it holds no cross-call state -- every
 	// Send dials fresh) alongside MultiReplicaSafe, which the distributed
 	// mode's requirement asks of every seam; see the registration comment in
-	// mailer_builtins.go.
+	// mailer_registry.go.
 	if want := MultiReplicaSafe | Stateless; caps != want {
 		t.Errorf("Build(%q) capabilities = %v, want %v", "mailer.smtp", caps, want)
 	}

@@ -6,7 +6,7 @@ import (
 )
 
 // TestBuiltinObjectStoreRegistry_ResolvesEveryDocumentedName pins the name
-// objectstore_builtins.go registers directly, "objectstore.local".
+// objectstore_registry.go registers directly, "objectstore.local".
 // "objectstore.s3" is the objectstore/s3 subpackage's own concern, per the
 // note on TestBuiltinEventBusRegistry_ResolvesEveryDocumentedName.
 func TestBuiltinObjectStoreRegistry_ResolvesEveryDocumentedName(t *testing.T) {
