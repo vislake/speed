@@ -56,6 +56,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -66,9 +67,21 @@ import (
 	"github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/wait"
 
+	"github.com/vislake/speed/go/dbkit"
 	"github.com/vislake/speed/go/saasctl/internal/db"
 	newcmd "github.com/vislake/speed/go/saasctl/internal/new"
 )
+
+// scaffoldLedgerModules are the module keys the schema_migrations ledger of
+// an authn+org+rbac project's database must carry -- exactly the
+// migration-shipping modules the generated go.mod requires (authn+org+rbac
+// plus config and the pki that follows authn), the same set the offline
+// migrate tests pin for this universe. The keys are module names, never the
+// host-prefixed component names the boot selects: a "__APP_NAME__."-prefixed
+// key here would mean the boot replayed -- or, once every migration SQL
+// became idempotent, silently forked -- the log `saasctl db migrate`
+// recorded under module names.
+var scaffoldLedgerModules = []string{"authn", "config", "org", "pki", "rbac"}
 
 // rustfsImage and mailpitImage pin the exact same images
 // examples/reference-app/integration_test/distributed_mode_test.go uses, so
@@ -120,6 +133,7 @@ func TestScaffoldNewProject_AuthnOrgRbac_BootsInBothDeploymentModes(t *testing.T
 	standaloneDB := filepath.Join(target, "standalone.db")
 	runDBMigrate(t, modPath, standaloneDB, nil)
 	smokeBoot(t, binPath, standaloneDB, nil)
+	assertLedgerModules(t, standaloneDB)
 
 	// Distributed leg: real Redis, RustFS (S3-compatible) and Mailpit
 	// containers, the identical trio and image pins
@@ -158,7 +172,62 @@ func TestScaffoldNewProject_AuthnOrgRbac_BootsInBothDeploymentModes(t *testing.T
 	distributedDB := filepath.Join(target, "distributed.db")
 	runDBMigrateWithEnv(t, modPath, distributedDB, distributedEnv)
 	smokeBoot(t, binPath, distributedDB, distributedEnv)
+	assertLedgerModules(t, distributedDB)
 }
+
+// assertLedgerModules pins the migration ledger of the database at dbPath to
+// exactly scaffoldLedgerModules: the migrate step records each set under its
+// module name, and the boot's own ApplyMigrations must find those records
+// rather than write prefixed duplicates, so the key set is unchanged by the
+// boot and contains no host-prefixed name.
+func assertLedgerModules(t *testing.T, dbPath string) {
+	t.Helper()
+	if got := ledgerModules(t, dbPath); !slices.Equal(got, scaffoldLedgerModules) {
+		t.Errorf("%s schema_migrations module keys = %v, want %v", dbPath, got, scaffoldLedgerModules)
+	}
+}
+
+// ledgerModules returns the distinct module keys the schema_migrations
+// ledger of the SQLite database at dbPath carries, sorted.
+func ledgerModules(t *testing.T, dbPath string) []string {
+	t.Helper()
+	db, err := dbkit.Open(context.Background(), dbkit.Options{Dialect: dbkit.DialectSQLite, DSN: dbPath})
+	if err != nil {
+		t.Fatalf("open %s: %v", dbPath, err)
+	}
+	defer func() {
+		if err := dbkit.Close(db); err != nil {
+			t.Errorf("close %s: %v", dbPath, err)
+		}
+	}()
+
+	var rows []scaffoldLedgerRow
+	if err := db.Find(&rows).Error; err != nil {
+		t.Fatalf("read the migration ledger of %s: %v", dbPath, err)
+	}
+	seen := make(map[string]bool, len(rows))
+	for _, row := range rows {
+		seen[row.Module] = true
+	}
+	modules := make([]string, 0, len(seen))
+	for module := range seen {
+		modules = append(modules, module)
+	}
+	slices.Sort(modules)
+	return modules
+}
+
+// scaffoldLedgerRow is one row of dbkit's schema_migrations table, read back
+// to pin the ledger keys after a boot. It mirrors internal/db's ledgerRow:
+// the ledger is queried through a plain struct with a TableName method,
+// never through Table/Model/Raw.
+type scaffoldLedgerRow struct {
+	Module   string `gorm:"column:module"`
+	Filename string `gorm:"column:filename"`
+}
+
+// TableName pins scaffoldLedgerRow to dbkit's schema_migrations table.
+func (scaffoldLedgerRow) TableName() string { return "schema_migrations" }
 
 // runTool runs name with args inside dir, failing the test with its
 // combined output on a non-zero exit -- the shared shape both the `go mod
