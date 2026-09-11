@@ -87,7 +87,7 @@ func TestModule_Locales_ContainBothNotificationTypeTemplates(t *testing.T) {
 // unsubscribable-false contrast).
 func TestModule_Register_DeclaresBothNotificationTypes(t *testing.T) {
 	reg := componenttest.NewRegistry()
-	if err := NewModule().Register(reg); err != nil {
+	if err := componenttest.DeclareInto(reg, NewModule()); err != nil {
 		t.Fatalf("Register() error = %v", err)
 	}
 

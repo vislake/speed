@@ -106,9 +106,6 @@ func TestS3ObjectStoreConfig_CarriesTheConfiguredValuesAndResolves(t *testing.T)
 			reg.Put(pkgcore.NewComponentConfig(nil).
 				With("components", pkgcore.ComponentConfig{}.With("objectstore.s3", s3ObjectStoreConfig(tc.cfg))).
 				With("strict", true))
-			if err := reg.Register(descriptor); err != nil {
-				t.Fatalf("register the %q component: %v", descriptor.Name, err)
-			}
 			ctx := context.Background()
 			if err := reg.Prepare(ctx); err != nil {
 				t.Fatalf("the configured block does not plan through %q: %v", "objectstore.s3", err)
@@ -144,16 +141,12 @@ func TestS3ObjectStoreConfig_UnrecognizedBucketLookupFailsResolution(t *testing.
 		S3BucketLookup: "dns",
 	}
 	reg := pkgcore.NewComponentRegistry()
-	descriptor, ok := registeredComponent(reg, "objectstore.s3")
-	if !ok {
+	if _, ok := registeredComponent(reg, "objectstore.s3"); !ok {
 		t.Fatal("the \"objectstore.s3\" component is not registered")
 	}
 	reg.Put(pkgcore.NewComponentConfig(nil).
 		With("components", pkgcore.ComponentConfig{}.With("objectstore.s3", s3ObjectStoreConfig(cfg))).
 		With("strict", true))
-	if err := reg.Register(descriptor); err != nil {
-		t.Fatalf("register the %q component: %v", descriptor.Name, err)
-	}
 	ctx := context.Background()
 	if err := reg.Prepare(ctx); err != nil {
 		t.Fatalf("the plan refused the block before construction: %v", err)

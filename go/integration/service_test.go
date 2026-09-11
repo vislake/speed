@@ -97,7 +97,9 @@ func attachedService(t *testing.T, opts ...Option) *Service {
 func testService(t *testing.T, permissions PermissionLister, membership MembershipChecker, now time.Time) *Service {
 	t.Helper()
 	reg := componenttest.NewRegistry()
-	if err := reg.AuditActions.Add(auditActionDecls...); err != nil {
+	if err := componenttest.Declare(reg, func(r *pkgcore.ComponentRegistry) error {
+		return r.AuditActions.Add(auditActionDecls...)
+	}); err != nil {
 		t.Fatalf("register audit actions: %v", err)
 	}
 	return &Service{

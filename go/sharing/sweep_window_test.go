@@ -283,7 +283,9 @@ func TestModule_EnqueueExpirySweep_LaterWindowSweepRefundsAnOverageReservation(t
 	// (newTestService's own body), so Create's rate-limit read and the
 	// sweep's event publish have the host seams they read at call time.
 	reg := componenttest.NewRegistry()
-	if err := reg.AuditActions.Add(AuditActionSensitiveShareCreate); err != nil {
+	if err := componenttest.Declare(reg, func(r *pkgcore.ComponentRegistry) error {
+		return r.AuditActions.Add(AuditActionSensitiveShareCreate)
+	}); err != nil {
 		t.Fatalf("AuditActions.Add: %v", err)
 	}
 	svc.attach(reg)

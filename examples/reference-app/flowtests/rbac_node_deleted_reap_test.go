@@ -104,13 +104,22 @@ func newOrgRBACReapHarness(t *testing.T) (*org.TreeService, *org.MemberService, 
 		t.Fatalf("applying migrations: %v", applyErr)
 	}
 
-	reg, err := componenttest.DeclareModules(orgModule, rbacModule)
-	if err != nil {
-		t.Fatalf("Bootstrap: %v", err)
-	}
-	rbacService, err := rbacModule.Attach(reg)
-	if err != nil {
-		t.Fatalf("rbacModule.Attach: %v", err)
+	// The modules' Register calls and rbac's Attach share the registry's
+	// one Init window: Attach subscribes on the Events seat, and the seats
+	// accept writes only during Init.
+	reg := componenttest.NewRegistry()
+	var rbacService *rbac.Service
+	if err := componenttest.DeclareAll(reg, orgModule.Register, rbacModule.Register,
+		func(r *pkgcore.ComponentRegistry) error {
+			attached, attachErr := rbacModule.Attach(r)
+			if attachErr != nil {
+				return attachErr
+			}
+			rbacService = attached
+			return nil
+		},
+	); err != nil {
+		t.Fatalf("declare and attach: %v", err)
 	}
 	t.Cleanup(func() {
 		if closeErr := rbacService.Close(); closeErr != nil {

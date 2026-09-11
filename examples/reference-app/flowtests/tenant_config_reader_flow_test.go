@@ -113,14 +113,24 @@ func newTenantConfigReaderHarness(t *testing.T) tenantConfigReaderHarness {
 		t.Fatalf("apply migrations: %v", err)
 	}
 
-	reg, err := componenttest.DeclareModules(configModule, sharingModule, complianceModule, auditModule)
-	if err != nil {
-		t.Fatalf("bootstrap kernel: %v", err)
-	}
-
-	configService, err = configModule.Attach(reg)
-	if err != nil {
-		t.Fatalf("attach config module: %v", err)
+	// The modules' Register calls and config's Attach share the registry's
+	// one Init window: the seats accept writes only during Init. The
+	// registry carries a local object store, the host-assembled value
+	// compliance's export path writes its manifest through.
+	reg := componenttest.NewRegistry()
+	reg.Put(pkgcore.NewLocalObjectStore(t.TempDir()))
+	if err := componenttest.DeclareAll(reg,
+		configModule.Register, sharingModule.Register, complianceModule.Register, auditModule.Register,
+		func(r *pkgcore.ComponentRegistry) error {
+			attached, attachErr := configModule.Attach(r)
+			if attachErr != nil {
+				return attachErr
+			}
+			configService = attached
+			return nil
+		},
+	); err != nil {
+		t.Fatalf("declare and attach config: %v", err)
 	}
 	t.Cleanup(func() {
 		if closeErr := configService.Close(); closeErr != nil {

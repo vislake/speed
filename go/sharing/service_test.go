@@ -30,9 +30,14 @@ func newTestService(t *testing.T, cfg TenantConfigReader) (*Service, pkgcore.Eve
 	t.Helper()
 	svc := NewService(newTestDB(t), cfg)
 	bus := pkgcore.NewMemoryEventBus()
-	reg := componenttest.NewRegistry()
-	reg.Put(bus)
-	if err := reg.AuditActions.Add(AuditActionSensitiveShareCreate); err != nil {
+	// The registry carries this test's bus as its one EventBus value --
+	// the seam svc.attach and the sweep's publish read back -- and the
+	// audit action declares inside the registry's one Init window, the
+	// only turn in which the seats accept writes.
+	reg := componenttest.NewRegistryWithBus(bus)
+	if err := componenttest.Declare(reg, func(r *pkgcore.ComponentRegistry) error {
+		return r.AuditActions.Add(AuditActionSensitiveShareCreate)
+	}); err != nil {
 		t.Fatalf("AuditActions.Add: %v", err)
 	}
 	svc.attach(reg)

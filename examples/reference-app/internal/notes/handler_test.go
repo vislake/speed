@@ -61,9 +61,13 @@ func newTestHandlerWithSubject(t *testing.T, subject SubjectResolver) (*Handler,
 	t.Helper()
 	repo := newMigratedRepository(t)
 	bus := pkgcore.NewMemoryEventBus()
-	reg := componenttest.NewRegistry()
-	reg.Put(bus)
-	if err := reg.AuditActions.Add(AuditActionNoteCreate); err != nil {
+	// The registry carries this test's bus as its one EventBus value, and
+	// the audit action declares inside the registry's one Init window: the
+	// seats accept writes only during Init.
+	reg := componenttest.NewRegistryWithBus(bus)
+	if err := componenttest.Declare(reg, func(r *pkgcore.ComponentRegistry) error {
+		return r.AuditActions.Add(AuditActionNoteCreate)
+	}); err != nil {
 		t.Fatalf("declare %q on a fresh AuditActionRegistrar: %v", AuditActionNoteCreate, err)
 	}
 	return NewHandler(repo, bus, reg.AuditActions, subject), bus

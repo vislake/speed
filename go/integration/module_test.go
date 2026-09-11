@@ -140,7 +140,10 @@ func TestModule_Register_SubscribesEveryDeclaredEventMapping(t *testing.T) {
 		t.Fatalf("Register: %v", err)
 	}
 
-	reg.Events.Subscribe(mapping.InternalType, func(context.Context, pkgcore.Event) error {
+	// The test's own observer subscribes on the registry's bus value: an
+	// observation of the finished assembly, not a declaration, so it needs
+	// no Init window.
+	reg.EventBus().Subscribe(mapping.InternalType, func(context.Context, pkgcore.Event) error {
 		published <- struct{}{}
 		return nil
 	})
