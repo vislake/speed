@@ -207,11 +207,13 @@ func (c *deleteEventCapture) nodeDeleted(tenant pkgcore.TenantID, nodeID string)
 // the tree to go through this module rather than org.NewTreeService(db)
 // directly: an unwired tree has no host, and publishEvent is a silent no-op
 // without one (events.go), which would make the event assertions vacuous.
+// The registry carries the caller's bus as its ONE EventBus value
+// (NewRegistryWithBus): the Events seat refuses a registry holding two, and
+// the module's subscription must land on the same bus the capture reads.
 func wiredOrgTree(t *testing.T, db *gorm.DB) (*org.TreeService, *org.MemberService, *deleteEventCapture) {
 	t.Helper()
 	bus := pkgcore.NewMemoryEventBus()
-	reg := componenttest.NewRegistry()
-	reg.Put(bus)
+	reg := componenttest.NewRegistryWithBus(bus)
 	m := org.NewModule(db, org.WithEmailIndexer(newIndexer(t)), org.WithInvitationEmailDisabled())
 	if err := componenttest.DeclareInto(reg, m); err != nil {
 		t.Fatalf("module Register: %v", err)
