@@ -142,12 +142,17 @@ func WithResolver(r Resolver) Option {
 }
 
 // WithTimeout bounds a whole request made through Client. A non-positive
-// duration is ignored.
+// duration removes the bound: the client then carries no overall timeout of
+// its own, for a caller whose destinations are reached through requests
+// that may legitimately outlast any fixed bound (a stream) and which are
+// bounded per request through the request context instead. The connect-time
+// address check is unaffected either way.
 func WithTimeout(d time.Duration) Option {
 	return func(c *config) {
-		if d > 0 {
-			c.timeout = d
+		if d < 0 {
+			d = 0
 		}
+		c.timeout = d
 	}
 }
 

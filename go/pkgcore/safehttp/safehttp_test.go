@@ -12,6 +12,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 )
 
 // TestCheckAddr_RefusesEverythingNotPubliclyRoutable is the range table. Each
@@ -294,6 +295,42 @@ func TestGuard_ClientUsesNoProxy(t *testing.T) {
 	}
 	if transport.DialContext == nil {
 		t.Fatal("the guarded transport has no DialContext, so nothing enforces the address check")
+	}
+}
+
+// TestGuard_WithTimeout_NonPositiveDisablesTheOverallBound pins both paths
+// of WithTimeout: a positive duration bounds the whole request made through
+// Client, and a non-positive one removes the bound outright
+// (Client().Timeout == 0), for callers whose destinations are reached
+// through legitimately long-lived requests -- a stream that may outlast any
+// fixed bound -- and which bound each request through its own context
+// instead. Removing the overall bound must not remove the connect-time
+// address check, so the unbounded client still refuses a loopback dial.
+func TestGuard_WithTimeout_NonPositiveDisablesTheOverallBound(t *testing.T) {
+	t.Parallel()
+
+	if got := NewGuard(WithTimeout(7 * time.Second)).Client().Timeout; got != 7*time.Second {
+		t.Errorf("WithTimeout(7s) client Timeout = %v, want 7s", got)
+	}
+
+	for _, d := range []time.Duration{0, -time.Second} {
+		client := NewGuard(WithTimeout(d)).Client()
+		if client.Timeout != 0 {
+			t.Errorf("WithTimeout(%v) client Timeout = %v, want 0 (no overall bound)", d, client.Timeout)
+		}
+
+		req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, "https://127.0.0.1:1/", nil)
+		if err != nil {
+			t.Fatalf("build the request: %v", err)
+		}
+		resp, err := client.Do(req) //nolint:bodyclose // the request must fail, so there is no body to close.
+		if err == nil {
+			_ = resp.Body.Close()
+			t.Fatalf("WithTimeout(%v) client reached a loopback address; an unbounded client must keep the address check", d)
+		}
+		if !errors.Is(err, ErrBlockedAddress) {
+			t.Errorf("Do() error = %v, want it to wrap ErrBlockedAddress", err)
+		}
 	}
 }
 
