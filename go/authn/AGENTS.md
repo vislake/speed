@@ -40,7 +40,7 @@ import in the other direction is a merge blocker rather than a style note.
 | `WithMembershipReader` | The seam through which membership is asked. Absent means "refuse", not "allow". |
 | `WithFeatureGate` | Makes this module's declared feature flags (`authn.password_login`, `authn.sms_login`, the five `authn.social.*` channels, `authn.sso.oidc`) effective at request time. `*config.Service` satisfies the `FeatureGate` interface structurally, and `FeatureGateFunc` adapts a closure or a method value to the seam. See "Feature flags are enforced through a host-supplied gate" below. |
 | `WithClock`, `WithIssuer`, `WithAccessTokenTTL`, `WithRefreshTokenTTL`, `WithSessionTTL`, `WithRevocationMode`, `WithPasswordParams`, `WithPasswordPolicy` | Everything else. A nil or non-positive value leaves the default in place. `WithRevocationMode(RevocationModeImmediate)` needs no companion middleware wiring — enforcement is default — see "Immediate revocation is enforced by default, not by host ceremony". |
-| `WithSMSSender`, `the composition's deployment field`, `WithSMSCodeTTL`, `WithSMSCodeMaxAttempts` | The phone-login transport and its lifetime/attempt budget. See "A distributed deployment must wire an `SMSSender`" below for what `the composition's deployment field` is for. |
+| `WithSMSSender`, `WithDeploymentMode`, `WithSMSCodeTTL`, `WithSMSCodeMaxAttempts` | The phone-login transport and its lifetime/attempt budget. See "A distributed deployment must wire an `SMSSender`" below for what `WithDeploymentMode` is for. |
 | `WithTrustedProxies(proxies ...string)` | The IP addresses and CIDR prefixes of the reverse proxies requests arrive through, so `Handler.clientIP` recovers the real client address from the `X-Forwarded-For` chain those proxies append instead of recording the proxy itself -- see "Every recorded address is the client's, gated on host-declared trusted proxies" below. Empty (the default) keeps every request recording its direct connection address. |
 | `WithVendorClientIPHeaders(headers ...VendorClientIPHeader)` | The per-header opt-in that authorizes reading a single-hop vendor client-address header (`VendorClientIPHeaderFlyClientIP`, wire value `Fly-Client-IP`) for a request whose peer is a declared trusted proxy. The `VendorClientIPHeader` set is closed -- any other value is refused at wiring time -- and the default is none. See "Every recorded address is the client's, gated on host-declared trusted proxies" below for why the trusted-proxy declaration alone must never authorize such a header. |
 
@@ -149,7 +149,7 @@ there is no intent for the module to enforce.
 |---|---|
 | The SMS seam is pkgcore's: `pkgcore.SMS`, `pkgcore.SMSSender`, `pkgcore.NewConsoleSMSSender(w)`, `pkgcore.NewHTTPSMSSender(endpoint, opts...)`, carriers under `pkgcore/sms/` | The message, the delivery seam and every implementation live on the dependency floor, shared with go/notification's sms channel — see "The SMS seam is pkgcore's" below. This module contributes only the wiring option `WithSMSSender` and the wiring-time sentinel below; its former in-package `SMS`/`SMSSender`/constructors are gone, a deliberate breaking change under lockstep versioning. |
 | `Service.RequestSMSCode`, `Service.LoginWithSMSCode` | Issue-and-deliver, then verify-and-sign-in. Both never disclose whether a phone number is registered. |
-| `ErrMissingDistributedSMSSender` | What `NewModule`/`NewService` fail with when `the composition's deployment field(pkgcore.DeploymentModeDistributed)` was given and no `SMSSender` was wired (see "A distributed deployment must wire an `SMSSender`" below). |
+| `ErrMissingDistributedSMSSender` | What `NewModule`/`NewService` fail with when `WithDeploymentMode(pkgcore.DeploymentModeDistributed)` was given and no `SMSSender` was wired (see "A distributed deployment must wire an `SMSSender`" below). |
 
 ### TOTP, recovery codes, step-up
 
@@ -555,19 +555,22 @@ configuration change rather than a migration: existing hashes keep verifying, an
 
 ### A distributed deployment must wire an `SMSSender`
 
-`the composition's deployment field(pkgcore.DeploymentModeDistributed)` is how a host tells
+`WithDeploymentMode(pkgcore.DeploymentModeDistributed)` is how a host tells
 `NewModule`/`NewService` which deployment mode it is being wired for, solely
 so construction can enforce that a distributed deployment supplies an
 explicit SMS sender (`WithSMSSender`) rather than silently defaulting to
 `pkgcore.NewConsoleSMSSender`, which prints to a writer nobody in a
 distributed replica pool is reading. It is the ONE piece of deployment-mode
 awareness this module carries, and it lives in `newOptions`' validation —
-never in `Service`'s business logic — because the pkgcore SMS seam has no
-assembly seat that could enforce the requirement (see `pkgcore.SMSSender`'s
-doc comment): the assembly resolves no SMS sender, so the module that needs a
-real one in a distributed deployment says so at wiring time, the same
+never in `Service`'s business logic — because the fallback it refuses is this
+module's own: the assembly resolves the sender the composition selected (this
+module's component descriptor reads it with `pkgcore.Get` and hands it to
+`WithSMSSender`; see `pkgcore.SMSSender`'s doc comment), while a module that
+receives none falls back to `pkgcore.NewConsoleSMSSender`, a fallback no
+assembly mechanism sees — only this module's wiring-time validation refuses
+it under a distributed deployment — at the same
 moment `newOptions` validates `WithKeySource` and `WithBlindIndexKey`.
-Omitting `the composition's deployment field` — every standalone deployment — is equivalent
+Omitting `WithDeploymentMode` — every standalone deployment — is equivalent
 to standalone and keeps working with the console default.
 
 ### The SMS seam is pkgcore's
@@ -582,9 +585,11 @@ pkgcore's too: `pkgcore.NewConsoleSMSSender(w)` (the standalone console
 transport, which doubles as the test double), `pkgcore.NewHTTPSMSSender`
 (an operator-run JSON gateway, SSRF-guarded through `pkgcore/safehttp`),
 and the three real carrier adapters under `pkgcore/sms/` (next section).
-The seam deliberately has no registry, composition entry or capability seat
-in pkgcore's assembly machinery — every consumer resolves its sender through its
-own module option, so registration machinery would serve nobody, and this
+The seam registers two component descriptors of its own in pkgcore's assembly
+machinery — `sms.console` and `sms.http`, each carrying its capability bits —
+and a composition that selects one resolves the sender through the registry,
+each consumer's own component descriptor reading it with `pkgcore.Get` into
+its module option (`WithSMSSender` here and in go/notification); this
 module's distributed-mode requirement above is the wiring-time enforcement
 that stays here.
 

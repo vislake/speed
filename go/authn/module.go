@@ -622,12 +622,14 @@ func WithFederationHTTPClient(client *http.Client) Option {
 // prints to a writer nobody in a distributed deployment's replica pool is
 // reading, so silently defaulting to it there would look like phone sign-in
 // works right up until the first person tries to use the code that was never
-// actually delivered. The SMS seam is pkgcore's, but it deliberately has no
-// assembly seat (see pkgcore.SMSSender's doc comment) -- the assembly resolves
-// no SMS sender for this module, which receives it through this option -- so
-// the enforcement happens here, at the same wiring-time moment newOptions
-// already validates WithKeySource and WithBlindIndexKey, against the
-// deployment mode WithDeploymentMode records.
+// actually delivered. The SMS seam is pkgcore's and assembly-resolved (see
+// pkgcore.SMSSender's doc comment): this module's component descriptor reads
+// the sender the composition selected with pkgcore.Get and hands it to
+// WithSMSSender. What the assembly does not carry is this module's fallback
+// -- with no sender supplied, newOptions would default to
+// pkgcore.NewConsoleSMSSender -- so the enforcement happens here, at the same
+// wiring-time moment newOptions already validates WithKeySource and
+// WithBlindIndexKey, against the deployment mode WithDeploymentMode records.
 var ErrMissingDistributedSMSSender = errors.New("authn: distributed deployment mode requires an explicit SMS sender")
 
 // WithSMSSender wires the transport phone-login verification codes are
