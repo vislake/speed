@@ -195,10 +195,10 @@ func (r *TenantRepository) Update(ctx context.Context, tenantID string, patch Te
 // map-shaped Updates call would otherwise have to name the table
 // explicitly through the raw-GORM-bypass entry points.
 //
-// Split out from Update as its own step purely so a test can force the
-// exact race deterministically -- two callers sharing one Get'd snapshot,
-// racing their writes -- rather than relying on incidental goroutine
-// timing to reproduce two real overlapping Update calls.
+// applyGuardedPatch is Update's own apply step, a separate method so a test
+// can force the exact race deterministically -- two callers sharing one
+// Get'd snapshot, racing their writes -- rather than relying on incidental
+// goroutine timing.
 func (r *TenantRepository) applyGuardedPatch(ctx context.Context, tenantID string, observed Tenant, patch TenantPatch) (*Tenant, error) {
 	t := observed
 	wasSuspended := t.Status == tenancy.TenantStatusSuspended

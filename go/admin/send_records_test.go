@@ -156,7 +156,7 @@ func TestSendRecordSearchService_CrossTenant_SearchesEveryLedgerTenant(t *testin
 }
 
 // TestHandler_AdminListSendRecords_FiltersLimitAndWireShape_OverHTTP
-// drives the send-record search through its real route (D10): a status
+// drives the send-record search through its real route: a status
 // filter narrows to the one failed external-contact delivery (whose wire
 // shape carries the contact id and the error text, with no recipient
 // user id), a channel+status+limit+offset combination narrows to the
