@@ -26,9 +26,15 @@ var openAPISpecYAML []byte
 // dbkit.MigrationRegistry.Register builds its dependency graph on.
 const moduleName = "admin"
 
-// apiPath is the common prefix admin's HTTP routes are mounted at. It must
+// APIPath is the common prefix admin's HTTP routes are mounted at. It must
 // agree with the "paths:" keys of api/openapi.yaml.
-const apiPath = "/api/v1/admin"
+//
+// It is exported because a host composing the platform middleware chain
+// splits admin's subtree out by this prefix: admin's surface must not sit
+// behind ordinary tenancy resolution or identity substitution, so the
+// router that partitions the mounted routes needs the module's own
+// mount-point constant rather than a copy that can drift from it.
+const APIPath = "/api/v1/admin"
 
 // The resource:action permissions admin contributes to the platform's
 // permission catalog, the vocabulary admin's own routes are evaluated
@@ -496,7 +502,7 @@ func (m *Module) Register(reg *pkgcore.Registry) error {
 	// time). A handler built directly (no Register) keeps a nil host and
 	// skips the tier.
 	m.handler.host = reg
-	reg.Routes.Mount(apiPath, m.handler)
+	reg.Routes.Mount(APIPath, m.handler)
 	return nil
 }
 
