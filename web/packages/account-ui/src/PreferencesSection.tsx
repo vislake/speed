@@ -51,7 +51,6 @@
 import { useMemo, useState } from 'react'
 import Alert from '@mui/material/Alert'
 import Box from '@mui/material/Box'
-import Button from '@mui/material/Button'
 import MenuItem from '@mui/material/MenuItem'
 import Skeleton from '@mui/material/Skeleton'
 import TextField from '@mui/material/TextField'
@@ -63,9 +62,9 @@ import {
   useAuthnUpdatePreferences,
 } from '@speed/api-sdk'
 import { readSupportedLanguages, switchLanguage } from '@speed/i18n'
-import { EmptyState } from '@speed/ui-kit'
+import { AsyncSection, errorCodeOf } from '@speed/ui-kit'
 import { useAccountUiErrorText } from './internal/error-text.js'
-import { errorCodeOf } from './internal/inline-error.js'
+
 import { useAccountUiTranslation } from './internal/translation.js'
 
 /** The language name to show for a tag, in the current UI language; the
@@ -170,98 +169,98 @@ export function PreferencesSection() {
         {t('preferences.title')}
       </Typography>
 
-      {pending ? (
-        <Box role="status" aria-label={t('preferences.loading')} aria-busy="true">
-          <Skeleton variant="text" width="42%" />
-          <Skeleton variant="text" width="58%" />
-        </Box>
-      ) : data === undefined ? (
-        // A settled load that delivered no data: the load failed (the
-        // successful case always carries a JSON object, empty fields
-        // included). Same shape as the sessions surface: the error copy
-        // claims no account content and its Retry is the exit, rendered
-        // at the section header's own level.
-        <EmptyState
-          variant="error"
-          title={t('preferences.error.title')}
-          description={t('preferences.error.description')}
-          action={
-            <Button onClick={() => void refetch()}>
-              {t('preferences.retry')}
-            </Button>
-          }
-          headingLevel="h2"
-        />
-      ) : (
-        <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2.5 }}>
-          {failureCode !== null && (
-            <Alert severity="error">
-              {/* The two-line failure alert: what happened, then the
-                  server's own code text (the whitelist resolves
-                  authn.invalid_locale / authn.invalid_timezone and the
-                  transport codes; anything else reads the generic line). */}
-              <Typography variant="body2">
-                {t('preferences.saveFailed')}
-              </Typography>
-              <Typography variant="body2">
-                {errorText(failureCode)}
-              </Typography>
-            </Alert>
-          )}
-
-          <TextField
-            select
-            fullWidth
-            // displayEmpty rides the Select slot (MUI 9's slotProps
-            // architecture): the "not chosen" choice carries the empty
-            // string, and without this the control renders blank instead
-            // of the option's own label.
-            slotProps={{ select: { displayEmpty: true } }}
-            label={t('preferences.language.label')}
-            value={storedLocale}
-            disabled={saving}
-            onChange={(event) => {
-              void saveLocale(event.target.value)
-            }}
-            helperText={t('preferences.language.helper')}
+      <AsyncSection
+        pending={pending}
+        payload={data}
+        empty={false}
+        loading={
+          <Box
+            role="status"
+            aria-label={t('preferences.loading')}
+            aria-busy="true"
           >
-            {/* The "not chosen" choice first: an empty stored locale is
-             * the account's real initial state, and the chain's device
-             * and default tiers are what actually apply until one is
-             * chosen. */}
-            <MenuItem value="">
-              {t('preferences.language.notChosen')}
-            </MenuItem>
-            {languageOptions.map((option) => (
-              <MenuItem key={option} value={option}>
-                {languageDisplayName(option, i18n.language)}
-              </MenuItem>
-            ))}
-          </TextField>
+            <Skeleton variant="text" width="42%" />
+            <Skeleton variant="text" width="58%" />
+          </Box>
+        }
+        errorState={{
+          title: t('preferences.error.title'),
+          description: t('preferences.error.description'),
+          retryLabel: t('preferences.retry'),
+          onRetry: () => void refetch(),
+        }}
+      >
+        {() => (
+          <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2.5 }}>
+            {failureCode !== null && (
+              <Alert severity="error">
+                {/* The two-line failure alert: what happened, then the
+                    server's own code text (the whitelist resolves
+                    authn.invalid_locale / authn.invalid_timezone and the
+                    transport codes; anything else reads the generic line). */}
+                <Typography variant="body2">
+                  {t('preferences.saveFailed')}
+                </Typography>
+                <Typography variant="body2">
+                  {errorText(failureCode)}
+                </Typography>
+              </Alert>
+            )}
 
-          <TextField
-            select
-            fullWidth
-            slotProps={{ select: { displayEmpty: true } }}
-            label={t('preferences.timezone.label')}
-            value={storedTimezone}
-            disabled={saving}
-            onChange={(event) => {
-              void saveTimezone(event.target.value)
-            }}
-            helperText={t('preferences.timezone.helper')}
-          >
-            <MenuItem value="">
-              {t('preferences.timezone.notChosen')}
-            </MenuItem>
-            {timeZoneChoices.map((option) => (
-              <MenuItem key={option} value={option}>
-                {option}
+            <TextField
+              select
+              fullWidth
+              // displayEmpty rides the Select slot (MUI 9's slotProps
+              // architecture): the "not chosen" choice carries the empty
+              // string, and without this the control renders blank instead
+              // of the option's own label.
+              slotProps={{ select: { displayEmpty: true } }}
+              label={t('preferences.language.label')}
+              value={storedLocale}
+              disabled={saving}
+              onChange={(event) => {
+                void saveLocale(event.target.value)
+              }}
+              helperText={t('preferences.language.helper')}
+            >
+              {/* The "not chosen" choice first: an empty stored locale is
+               * the account's real initial state, and the chain's device
+               * and default tiers are what actually apply until one is
+               * chosen. */}
+              <MenuItem value="">
+                {t('preferences.language.notChosen')}
               </MenuItem>
-            ))}
-          </TextField>
-        </Box>
-      )}
+              {languageOptions.map((option) => (
+                <MenuItem key={option} value={option}>
+                  {languageDisplayName(option, i18n.language)}
+                </MenuItem>
+              ))}
+            </TextField>
+
+            <TextField
+              select
+              fullWidth
+              slotProps={{ select: { displayEmpty: true } }}
+              label={t('preferences.timezone.label')}
+              value={storedTimezone}
+              disabled={saving}
+              onChange={(event) => {
+                void saveTimezone(event.target.value)
+              }}
+              helperText={t('preferences.timezone.helper')}
+            >
+              <MenuItem value="">
+                {t('preferences.timezone.notChosen')}
+              </MenuItem>
+              {timeZoneChoices.map((option) => (
+                <MenuItem key={option} value={option}>
+                  {option}
+                </MenuItem>
+              ))}
+            </TextField>
+          </Box>
+        )}
+      </AsyncSection>
     </Box>
   )
 }

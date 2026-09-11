@@ -19,6 +19,12 @@
  * bundle can never render a raw key and a missing translation never
  * leaks another language's text or an English fallback.
  *
+ * The whitelist composes the shared families every protected surface
+ * can be answered with -- the session-lifecycle and client-transport
+ * codes exported by @speed/i18n -- with this surface's own codes; the
+ * key construction and the unknown fallback are the shared resolver's
+ * (see @speed/i18n's error-text module).
+ *
  * Wording policy: the eight codes whose failure context is identical to
  * the sign-in surface's (the session-lifecycle family, authn.rate_limited,
  * authn.identity_already_bound and authn.identity_requires_binding) reuse
@@ -29,6 +35,11 @@
  * importing the auth-ui bundles as test data, so the copies cannot drift.
  */
 
+import {
+  CLIENT_TRANSPORT_ERROR_CODES,
+  SESSION_LIFECYCLE_ERROR_CODES,
+  createErrorTextResolver,
+} from '@speed/i18n'
 import { useAccountUiTranslation } from './translation.js'
 
 /**
@@ -38,14 +49,11 @@ import { useAccountUiTranslation } from './translation.js'
  * pairing test beside inline-error.tsx.
  */
 export const ERROR_TEXT_CODES = [
-  // authn: session lifecycle -- the session list's revoke operation and
-  // the login-history surface can answer with these, and a host renders
-  // them for its own protected operations.
-  'authn.session_not_found',
-  'authn.session_revoked',
-  'authn.token_expired',
-  'authn.refresh_token_invalid',
-  'authn.refresh_token_reused',
+  // The shared families (see @speed/i18n): the session list's revoke
+  // operation and the login-history surface can answer with the
+  // session-lifecycle codes when a session dies mid-flight, and every
+  // caller here talks through the api-client's transport.
+  ...SESSION_LIFECYCLE_ERROR_CODES,
   // authn: shared rate limiter -- any operation behind it.
   'authn.rate_limited',
   // authn: social bindings -- the add area's authorize request passes
@@ -85,10 +93,8 @@ export const ERROR_TEXT_CODES = [
   // line rather than inventing wording per refusal.
   'authn.invalid_locale',
   'authn.invalid_timezone',
-  // Transport-level failures of the api-client contract.
-  'client.network',
-  'client.timeout',
-  'client.protocol',
+  // Transport-level failures of the api-client contract (see @speed/i18n).
+  ...CLIENT_TRANSPORT_ERROR_CODES,
 ] as const
 
 const KNOWN_CODES = new Set<string>(ERROR_TEXT_CODES)
@@ -99,6 +105,5 @@ const KNOWN_CODES = new Set<string>(ERROR_TEXT_CODES)
  */
 export function useAccountUiErrorText(): (code: string) => string {
   const { t } = useAccountUiTranslation()
-  return (code: string) =>
-    t(KNOWN_CODES.has(code) ? `errors.${code}` : 'errors.unknown')
+  return createErrorTextResolver(t, KNOWN_CODES)
 }

@@ -87,7 +87,8 @@ import {
 } from '@speed/api-sdk'
 import type { AuthSession } from '@speed/auth-core'
 import { useAccountUiErrorText } from './internal/error-text.js'
-import { errorCodeOf, InlineError } from './internal/inline-error.js'
+import { errorCodeOf } from '@speed/ui-kit'
+import { InlineError } from './internal/inline-error.js'
 import { StepUpChallenge } from './internal/step-up-challenge.js'
 import { useAccountUiTranslation } from './internal/translation.js'
 

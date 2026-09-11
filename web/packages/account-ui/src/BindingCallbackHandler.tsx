@@ -39,7 +39,8 @@ import {
   getAuthnListIdentitiesQueryKey,
 } from '@speed/api-sdk'
 import { useAccountUiTranslation } from './internal/translation.js'
-import { InlineError, errorCodeOf } from './internal/inline-error.js'
+import { errorCodeOf } from '@speed/ui-kit'
+import { InlineError } from './internal/inline-error.js'
 import type { SocialProvider } from './SocialBindingsSection.js'
 
 export interface BindingCallbackHandlerProps {

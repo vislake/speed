@@ -66,8 +66,9 @@ import TextField from '@mui/material/TextField'
 import Typography from '@mui/material/Typography'
 import type { AuthSession } from '@speed/auth-core'
 import { isOperationSuperseded } from '@speed/auth-core'
+import { errorCodeOf } from '@speed/ui-kit'
 import { useAccountUiErrorText } from './error-text.js'
-import { errorCodeOf, InlineError } from './inline-error.js'
+import { InlineError } from './inline-error.js'
 import { useAccountUiTranslation } from './translation.js'
 
 export interface StepUpChallengeProps {

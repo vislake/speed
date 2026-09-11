@@ -57,7 +57,6 @@ import CircularProgress from '@mui/material/CircularProgress'
 import IconButton from '@mui/material/IconButton'
 import Skeleton from '@mui/material/Skeleton'
 import Typography from '@mui/material/Typography'
-import type { SxProps, Theme } from '@mui/material'
 import { useQueryClient } from '@tanstack/react-query'
 import {
   getAuthnListSessionsQueryKey,
@@ -66,8 +65,14 @@ import {
   useAuthnRevokeOtherSessions,
   useAuthnRevokeSession,
 } from '@speed/api-sdk'
-import { ConfirmDialog, EmptyState } from '@speed/ui-kit'
-import { errorCodeOf, InlineError } from './internal/inline-error.js'
+import {
+  AsyncSection,
+  ConfirmDialog,
+  errorCodeOf,
+  ListSkeleton,
+  visuallyHiddenSx,
+} from '@speed/ui-kit'
+import { InlineError } from './internal/inline-error.js'
 import { resolveTimeZone } from './internal/time-format.js'
 import { useAccountUiTranslation } from './internal/translation.js'
 import { summarizeUserAgent } from './internal/ua-summary.js'
@@ -121,23 +126,6 @@ function isExpired(expiresAtIso: string | undefined, now = Date.now()): boolean 
   return expiresAt !== null && expiresAt.getTime() <= now
 }
 
-/** The visually-hidden recipe for the success live region while there is
- * nothing to announce (the clip technique, the family's shape -- see
- * product-shell's sr-only region and ui-kit's ConfirmDialog arming
- * region): the region must stay in the accessibility tree to announce,
- * so it is clipped, never display:none -- a hidden region would not be
- * live. */
-const srOnlyRegionSx: SxProps<Theme> = {
-  clip: 'rect(0 0 0 0)',
-  clipPath: 'inset(50%)',
-  height: 1,
-  margin: 0,
-  overflow: 'hidden',
-  position: 'absolute',
-  whiteSpace: 'nowrap',
-  width: 1,
-}
-
 /** The pending-state placeholder: rows shaped like the content rows, read
  * aloud as one loading announcement, never a fake heading. */
 function SessionListSkeleton({ label }: { readonly label: string }) {
@@ -147,17 +135,10 @@ function SessionListSkeleton({ label }: { readonly label: string }) {
     { primary: '38%', secondary: '68%', tertiary: '30%' },
   ]
   return (
-    <Box role="status" aria-label={label} aria-busy="true">
-      {widths.map((width, index) => (
-        <Box
-          key={String(index)}
-          sx={{
-            py: 1.5,
-            ...(index > 0
-              ? { borderTop: '1px solid', borderColor: 'divider' }
-              : {}),
-          }}
-        >
+    <ListSkeleton
+      label={label}
+      rows={widths.map((width) => (
+        <>
           <Box
             sx={{
               display: 'flex',
@@ -170,9 +151,9 @@ function SessionListSkeleton({ label }: { readonly label: string }) {
           </Box>
           <Skeleton variant="text" width={width.secondary} />
           <Skeleton variant="text" width={width.tertiary} />
-        </Box>
+        </>
       ))}
-    </Box>
+    />
   )
 }
 
@@ -296,293 +277,265 @@ export function SessionsSection() {
         </Box>
       )}
 
-      {pending ? (
-        <SessionListSkeleton label={t('sessions.loading')} />
-      ) : sessions === undefined ? (
-        // This guard tests the absent list field with the loading
-        // branch already excluded above: pending is false here, so no
-        // sessions means the query settled without delivering a list.
-        // Two shapes settle that way: a load that failed with no data
-        // (isError), and a successful answer whose body omits the
-        // optional sessions key -- AuthnListSessionsResponse marks
-        // `.sessions` optional, so a type-legal 200 `{}` carries data
-        // yet no list, and nothing would re-arm the loading branch for
-        // it (isPending is false and stays false). Both land on the
-        // error state, never the loading skeleton, which nothing could
-        // resolve: the error copy claims no account content, where
-        // reading the field-less answer as "no sessions" would fabricate
-        // a statement the answer never made, and its Retry is the exit.
-        <EmptyState
-          variant="error"
-          title={t('sessions.error.title')}
-          description={t('sessions.error.description')}
-          // The retry is the exit for both shapes this state covers. A
-          // refetch of a data-less failed load moves the query back to
-          // the pending state, so the section re-enters the loading
-          // branch above -- that loading announcement is the retry's
-          // progress feedback; a refetch of a settled field-less answer
-          // keeps the query's own data, so this state holds until the
-          // refetched answer changes it. Either way react-query dedupes
-          // the per-query fetches, so a click can never overlap a
-          // request already in flight.
-          action={
-            <Button onClick={() => void refetch()}>{t('sessions.retry')}</Button>
-          }
-          // showHeader is false here (see its definition above): this
-          // EmptyState's title stands in for the hidden h2 section
-          // header, so it must render at that same level or the page's
-          // heading order skips straight from h1 to h6.
-          headingLevel="h2"
-        />
-      ) : sessions.length === 0 ? (
-        <EmptyState
-          variant="empty"
-          title={t('sessions.empty.title')}
-          description={t('sessions.empty.description')}
-          headingLevel="h2"
-        />
-      ) : (
-        <Box>
-          {notice?.kind === 'revoke-failed' && (
-            <InlineError code={notice.code} />
-          )}
-          {/* The revoke-others success live region. It must never mount
-              together with its text: a role="status" region announces
-              only content changes that follow its own insertion, so a
-              success notice born in the same commit as the region would
-              be silent. The region therefore stands here for the whole
-              list phase -- mounted empty and visually silent (clipped,
-              never display:none) while there is nothing to announce --
-              and the notice commit fills the text into a region the
-              screen reader already knows, which is what makes the
-              announcement fire. The clip and the notice never coexist:
-              the same node shows the full success banner exactly while
-              it carries the text. */}
-          <Alert
-            severity="success"
-            role="status"
-            sx={
-              notice?.kind === 'others-done'
-                ? { width: '100%', mb: 1.5 }
-                : srOnlyRegionSx
-            }
-          >
-            {notice?.kind === 'others-done'
-              ? t('sessions.revokeOthers.done', { count: notice.count })
-              : ''}
-          </Alert>
-          {/* The rows are one real list: a screen-reader user hears each
-              session as one item of a numbered set with a boundary
-              between rows, never a flat div stack. The notices above are
-              page-level messages and stay outside the list. role="list"
-              keeps the list semantics under WebKit, which strips them
-              from a list-style-none ul. */}
-          <Box component="ul" role="list" sx={{ m: 0, p: 0, listStyle: 'none' }}>
-            {sessions.map((session, index) => {
-              const id = session.id ?? null
-              const revoked = session.status === 'revoked'
-              // The server answers only active/revoked (expiry is
-              // checked at use time, never written back), so a row
-              // whose stored expires_at lies in the past is a dead
-              // session: render it expired, never as a live device.
-              const expired = !revoked && isExpired(session.expires_at)
-              const current = session.is_current === true
-              const revocable = id !== null && !current && !revoked && !expired
-              const dead = revoked || expired
-              const metaColor = dead ? 'text.disabled' : 'text.secondary'
-              // Line 1 carries the friendliest label the answer offers:
-              // the client-named device string when the sign-in carried
-              // one, else the readable summary the user agent parses to
-              // ("Chrome · macOS", never the raw UA -- the raw string is
-              // the defect this surface exists to spare its reader). The
-              // summary repeats as a muted detail line only under a row
-              // line 1 already names with a device string.
-              const device =
-                session.device != null && session.device !== ''
-                  ? session.device
-                  : null
-              const agent =
-                session.user_agent != null && session.user_agent !== ''
-                  ? session.user_agent
-                  : null
-              const summary =
-                agent !== null ? summarizeUserAgent(agent) : null
-              const deviceLabel =
-                device ?? summary ?? t('sessions.deviceUnknown')
-              const agentLine =
-                device !== null && summary !== null ? summary : null
-              const created = parseDate(session.created_at)
-              const lastSeen = parseDate(session.last_seen_at)
-              const showLastSeen =
-                lastSeen !== null &&
-                session.last_seen_at !== session.created_at
-              return (
-                <Box
-                  component="li"
-                  key={id ?? String(index)}
-                  sx={{
-                    py: 1.5,
-                    minWidth: 0,
-                    ...(index > 0
-                      ? { borderTop: '1px solid', borderColor: 'divider' }
-                      : {}),
-                  }}
-                >
+      <AsyncSection
+        pending={pending}
+        payload={sessions}
+        empty={sessions !== undefined && sessions.length === 0}
+        loading={<SessionListSkeleton label={t('sessions.loading')} />}
+        errorState={{
+          title: t('sessions.error.title'),
+          description: t('sessions.error.description'),
+          retryLabel: t('sessions.retry'),
+          onRetry: () => void refetch(),
+        }}
+        emptyState={{
+          title: t('sessions.empty.title'),
+          description: t('sessions.empty.description'),
+        }}
+      >
+        {(settledSessions) => (
+          <Box>
+            {notice?.kind === 'revoke-failed' && (
+              <InlineError code={notice.code} />
+            )}
+            {/* The revoke-others success live region. It must never mount
+                together with its text: a role="status" region announces
+                only content changes that follow its own insertion, so a
+                success notice born in the same commit as the region would
+                be silent. The region therefore stands here for the whole
+                list phase -- mounted empty and visually silent (clipped,
+                never display:none) while there is nothing to announce --
+                and the notice commit fills the text into a region the
+                screen reader already knows, which is what makes the
+                announcement fire. The clip and the notice never coexist:
+                the same node shows the full success banner exactly while
+                it carries the text. */}
+            <Alert
+              severity="success"
+              role="status"
+              sx={
+                notice?.kind === 'others-done'
+                  ? { width: '100%', mb: 1.5 }
+                  : visuallyHiddenSx
+              }
+            >
+              {notice?.kind === 'others-done'
+                ? t('sessions.revokeOthers.done', { count: notice.count })
+                : ''}
+            </Alert>
+            {/* The rows are one real list: a screen-reader user hears each
+                session as one item of a numbered set with a boundary
+                between rows, never a flat div stack. The notices above are
+                page-level messages and stay outside the list. role="list"
+                keeps the list semantics under WebKit, which strips them
+                from a list-style-none ul. */}
+            <Box component="ul" role="list" sx={{ m: 0, p: 0, listStyle: 'none' }}>
+              {settledSessions.map((session, index) => {
+                const id = session.id ?? null
+                const revoked = session.status === 'revoked'
+                // The server answers only active/revoked (expiry is
+                // checked at use time, never written back), so a row
+                // whose stored expires_at lies in the past is a dead
+                // session: render it expired, never as a live device.
+                const expired = !revoked && isExpired(session.expires_at)
+                const current = session.is_current === true
+                const revocable = id !== null && !current && !revoked && !expired
+                const dead = revoked || expired
+                const metaColor = dead ? 'text.disabled' : 'text.secondary'
+                // Line 1 carries the friendliest label the answer offers:
+                // the client-named device string when the sign-in carried
+                // one, else the readable summary the user agent parses to
+                // ("Chrome · macOS", never the raw UA -- the raw string is
+                // the defect this surface exists to spare its reader). The
+                // summary repeats as a muted detail line only under a row
+                // line 1 already names with a device string.
+                const device =
+                  session.device != null && session.device !== ''
+                    ? session.device
+                    : null
+                const agent =
+                  session.user_agent != null && session.user_agent !== ''
+                    ? session.user_agent
+                    : null
+                const summary =
+                  agent !== null ? summarizeUserAgent(agent) : null
+                const deviceLabel =
+                  device ?? summary ?? t('sessions.deviceUnknown')
+                const agentLine =
+                  device !== null && summary !== null ? summary : null
+                const created = parseDate(session.created_at)
+                const lastSeen = parseDate(session.last_seen_at)
+                const showLastSeen =
+                  lastSeen !== null &&
+                  session.last_seen_at !== session.created_at
+                return (
                   <Box
+                    component="li"
+                    key={id ?? String(index)}
                     sx={{
-                      display: 'flex',
-                      alignItems: 'center',
-                      gap: 1.5,
+                      py: 1.5,
+                      minWidth: 0,
+                      ...(index > 0
+                        ? { borderTop: '1px solid', borderColor: 'divider' }
+                        : {}),
                     }}
                   >
-                    <Typography
-                      variant="body1"
-                      noWrap
-                      sx={{
-                        minWidth: 0,
-                        fontWeight: 500,
-                        color: dead ? 'text.disabled' : 'text.primary',
-                      }}
-                    >
-                      {deviceLabel}
-                    </Typography>
                     <Box
                       sx={{
-                        marginLeft: 'auto',
-                        flexShrink: 0,
                         display: 'flex',
                         alignItems: 'center',
+                        gap: 1.5,
                       }}
                     >
-                      {current && (
-                        <Chip
-                          size="small"
-                          color="primary"
-                          variant="outlined"
-                          label={t('sessions.current')}
-                        />
-                      )}
-                      {revoked && (
-                        <Chip
-                          size="small"
-                          variant="outlined"
-                          label={t('sessions.status.revoked')}
-                          sx={{ color: 'text.disabled' }}
-                        />
-                      )}
-                      {expired && (
-                        <Chip
-                          size="small"
-                          variant="outlined"
-                          label={t('sessions.status.expired')}
-                          sx={{ color: 'text.disabled' }}
-                        />
-                      )}
-                      {revocable && (
-                        <IconButton
-                          aria-label={t('sessions.revokeAriaWithDevice', {
-                            device: deviceLabel,
-                            // The label is an aria-label, not HTML: the
-                            // device string must reach the accessibility
-                            // tree verbatim (i18next's default value
-                            // escaping would embed a literal `&#x2F;`
-                            // for a free-text device label's slashes).
-                            interpolation: { escapeValue: false },
-                          })}
-                          size="small"
-                          disabled={busy || revokingId === id}
-                          onClick={() => {
-                            if (id !== null) {
-                              void handleRevokeSession(id)
-                            }
-                          }}
-                          sx={{ color: 'text.secondary' }}
-                        >
-                          {revokingId === id ? (
-                            <CircularProgress
-                              size={18}
-                              thickness={5}
-                              aria-hidden="true"
-                            />
-                          ) : (
-                            <SignOutIcon />
-                          )}
-                        </IconButton>
-                      )}
+                      <Typography
+                        variant="body1"
+                        noWrap
+                        sx={{
+                          minWidth: 0,
+                          fontWeight: 500,
+                          color: dead ? 'text.disabled' : 'text.primary',
+                        }}
+                      >
+                        {deviceLabel}
+                      </Typography>
+                      <Box
+                        sx={{
+                          marginLeft: 'auto',
+                          flexShrink: 0,
+                          display: 'flex',
+                          alignItems: 'center',
+                        }}
+                      >
+                        {current && (
+                          <Chip
+                            size="small"
+                            color="primary"
+                            variant="outlined"
+                            label={t('sessions.current')}
+                          />
+                        )}
+                        {revoked && (
+                          <Chip
+                            size="small"
+                            variant="outlined"
+                            label={t('sessions.status.revoked')}
+                            sx={{ color: 'text.disabled' }}
+                          />
+                        )}
+                        {expired && (
+                          <Chip
+                            size="small"
+                            variant="outlined"
+                            label={t('sessions.status.expired')}
+                            sx={{ color: 'text.disabled' }}
+                          />
+                        )}
+                        {revocable && (
+                          <IconButton
+                            aria-label={t('sessions.revokeAriaWithDevice', {
+                              device: deviceLabel,
+                              // The label is an aria-label, not HTML: the
+                              // device string must reach the accessibility
+                              // tree verbatim (i18next's default value
+                              // escaping would embed a literal `&#x2F;`
+                              // for a free-text device label's slashes).
+                              interpolation: { escapeValue: false },
+                            })}
+                            size="small"
+                            disabled={busy || revokingId === id}
+                            onClick={() => {
+                              if (id !== null) {
+                                void handleRevokeSession(id)
+                              }
+                            }}
+                            sx={{ color: 'text.secondary' }}
+                          >
+                            {revokingId === id ? (
+                              <CircularProgress
+                                size={18}
+                                thickness={5}
+                                aria-hidden="true"
+                              />
+                            ) : (
+                              <SignOutIcon />
+                            )}
+                          </IconButton>
+                        )}
+                      </Box>
                     </Box>
+
+                    {agentLine !== null && (
+                      <Typography
+                        variant="body2"
+                        noWrap
+                        color={metaColor}
+                        sx={{ minWidth: 0 }}
+                      >
+                        {agentLine}
+                      </Typography>
+                    )}
+
+                    {session.amr != null && session.amr.length > 0 && (
+                      <Box
+                        sx={{
+                          display: 'flex',
+                          flexWrap: 'wrap',
+                          gap: 0.75,
+                          mt: 0.5,
+                        }}
+                      >
+                        {session.amr.map((amr) => (
+                          <Chip
+                            key={amr}
+                            size="small"
+                            variant="outlined"
+                            label={amr}
+                            sx={dead ? { color: 'text.disabled' } : undefined}
+                          />
+                        ))}
+                      </Box>
+                    )}
+
+                    {(session.ip != null ||
+                      created !== null ||
+                      showLastSeen) && (
+                      <Box
+                        sx={{
+                          display: 'flex',
+                          flexWrap: 'wrap',
+                          columnGap: 2.5,
+                          rowGap: 0.5,
+                          mt: 0.5,
+                        }}
+                      >
+                        {session.ip != null && (
+                          <Typography variant="body2" color={metaColor}>
+                            {session.ip}
+                          </Typography>
+                        )}
+                        {created !== null && (
+                          <Typography variant="body2" color={metaColor}>
+                            {t('sessions.signedIn', {
+                              time: formatTime.format(created),
+                            })}
+                          </Typography>
+                        )}
+                        {showLastSeen && lastSeen !== null && (
+                          <Typography variant="body2" color={metaColor}>
+                            {t('sessions.lastSeen', {
+                              time: formatTime.format(lastSeen),
+                            })}
+                          </Typography>
+                        )}
+                      </Box>
+                    )}
                   </Box>
-
-                  {agentLine !== null && (
-                    <Typography
-                      variant="body2"
-                      noWrap
-                      color={metaColor}
-                      sx={{ minWidth: 0 }}
-                    >
-                      {agentLine}
-                    </Typography>
-                  )}
-
-                  {session.amr != null && session.amr.length > 0 && (
-                    <Box
-                      sx={{
-                        display: 'flex',
-                        flexWrap: 'wrap',
-                        gap: 0.75,
-                        mt: 0.5,
-                      }}
-                    >
-                      {session.amr.map((amr) => (
-                        <Chip
-                          key={amr}
-                          size="small"
-                          variant="outlined"
-                          label={amr}
-                          sx={dead ? { color: 'text.disabled' } : undefined}
-                        />
-                      ))}
-                    </Box>
-                  )}
-
-                  {(session.ip != null ||
-                    created !== null ||
-                    showLastSeen) && (
-                    <Box
-                      sx={{
-                        display: 'flex',
-                        flexWrap: 'wrap',
-                        columnGap: 2.5,
-                        rowGap: 0.5,
-                        mt: 0.5,
-                      }}
-                    >
-                      {session.ip != null && (
-                        <Typography variant="body2" color={metaColor}>
-                          {session.ip}
-                        </Typography>
-                      )}
-                      {created !== null && (
-                        <Typography variant="body2" color={metaColor}>
-                          {t('sessions.signedIn', {
-                            time: formatTime.format(created),
-                          })}
-                        </Typography>
-                      )}
-                      {showLastSeen && lastSeen !== null && (
-                        <Typography variant="body2" color={metaColor}>
-                          {t('sessions.lastSeen', {
-                            time: formatTime.format(lastSeen),
-                          })}
-                        </Typography>
-                      )}
-                    </Box>
-                  )}
-                </Box>
-              )
-            })}
+                )
+              })}
+            </Box>
           </Box>
-        </Box>
-      )}
+        )}
+      </AsyncSection>
 
       <ConfirmDialog
         open={othersConfirmOpen}

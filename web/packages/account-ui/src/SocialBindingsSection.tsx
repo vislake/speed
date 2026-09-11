@@ -73,8 +73,13 @@ import {
   useAuthnUnbindIdentity,
 } from '@speed/api-sdk'
 import type { AuthSession } from '@speed/auth-core'
-import { ConfirmDialog, EmptyState } from '@speed/ui-kit'
-import { errorCodeOf, InlineError } from './internal/inline-error.js'
+import {
+  AsyncSection,
+  ConfirmDialog,
+  errorCodeOf,
+  ListSkeleton,
+} from '@speed/ui-kit'
+import { InlineError } from './internal/inline-error.js'
 import { useAccountUiTranslation } from './internal/translation.js'
 
 /**
@@ -151,17 +156,10 @@ function BindingListSkeleton({ label }: { readonly label: string }) {
     { primary: '34%', secondary: '58%' },
   ]
   return (
-    <Box role="status" aria-label={label} aria-busy="true">
-      {widths.map((width, index) => (
-        <Box
-          key={String(index)}
-          sx={{
-            py: 1.5,
-            ...(index > 0
-              ? { borderTop: '1px solid', borderColor: 'divider' }
-              : {}),
-          }}
-        >
+    <ListSkeleton
+      label={label}
+      rows={widths.map((width) => (
+        <>
           <Box
             sx={{
               display: 'flex',
@@ -173,9 +171,9 @@ function BindingListSkeleton({ label }: { readonly label: string }) {
             <Skeleton variant="text" width="22%" />
           </Box>
           <Skeleton variant="text" width={width.secondary} />
-        </Box>
+        </>
       ))}
-    </Box>
+    />
   )
 }
 
@@ -286,174 +284,145 @@ export function SocialBindingsSection({
         </Box>
       )}
 
-      {pending ? (
-        <BindingListSkeleton label={t('bindings.loading')} />
-      ) : rows === undefined ? (
-        // This guard tests the absent list field with the loading
-        // branch already excluded above: pending is false here, so no
-        // rows means the query settled without delivering a list. Two
-        // shapes settle that way: a load that failed with no data
-        // (isError), and a successful answer whose body omits the
-        // optional identities key -- AuthnListIdentitiesResponse marks
-        // `.identities` optional, so a type-legal 200 `{}` carries data
-        // yet no list, and nothing would re-arm the loading branch for
-        // it (isPending is false and stays false). Both land on the
-        // error state, never the loading skeleton, which nothing could
-        // resolve: the error copy claims no account content, where
-        // reading the field-less answer as "no linked accounts" would
-        // fabricate a statement the answer never made -- and would arm
-        // the add area's binding offers on that fabrication -- and its
-        // Retry is the exit.
-        <EmptyState
-          variant="error"
-          title={t('bindings.error.title')}
-          description={t('bindings.error.description')}
-          // The retry is the exit for both shapes this state covers. A
-          // refetch of a data-less failed load moves the query back to
-          // the pending state, so the section re-enters the loading
-          // branch above -- that loading announcement is the retry's
-          // progress feedback; a refetch of a settled field-less answer
-          // keeps the query's own data, so this state holds until the
-          // refetched answer changes it. Either way react-query dedupes
-          // the per-query fetches, so a click can never overlap a
-          // request already in flight.
-          action={
-            <Button onClick={() => void refetch()}>{t('bindings.retry')}</Button>
-          }
-          // The section header is hidden whenever this renders (see the
-          // `showHeader` derivation above), so this EmptyState's title
-          // takes over the section's own heading level.
-          headingLevel="h2"
-        />
-      ) : showEmptyState ? (
-        <EmptyState
-          variant="empty"
-          title={t('bindings.empty.title')}
-          description={t('bindings.empty.description')}
-          headingLevel="h2"
-        />
-      ) : (
-        <Box>
-          {notice?.kind === 'unbind-failed' && <InlineError code={notice.code} />}
-          {/* The identity rows are one real list, as the sessions rows
-              are: a screen-reader user hears each binding as one item
-              of a numbered set. The notice above and the add area
-              below are page-level content and stay outside the list.
-              role="list" keeps the list semantics under WebKit, which
-              strips them from a list-style-none ul. */}
-          <Box component="ul" role="list" sx={{ m: 0, p: 0, listStyle: 'none' }}>
-            {rows.map((identity, index) => {
-              const id = identity.id ?? null
-              const provider = identity.provider ?? null
-              // Enterprise-SSO bindings arrive under the dynamic
-              // per-tenant provider name "oidc:<tenant>": the family
-              // label renders for the prefix, and the raw value stays
-              // in the row as its reference line, so two SSO bindings
-              // in two tenants never read as one identical row.
-              const oidcProvider =
-                provider !== null &&
-                provider.startsWith(OIDC_PROVIDER_PREFIX)
-                  ? provider
-                  : null
-              const providerLabel =
-                provider !== null && KNOWN_PROVIDERS.has(provider)
-                  ? t(`bindings.provider.${provider}`)
-                  : oidcProvider !== null
-                    ? t('bindings.provider.oidc')
-                    : t('bindings.provider.other')
-              // The row identity the unbind action is named after (the
-              // sessions twin names its revoke action after the row's
-              // device label): the raw provider value when the label
-              // is a shared family label, the label itself otherwise.
-              const unbindIdentity = oidcProvider ?? providerLabel
-              const email =
-                identity.email != null && identity.email !== ''
-                  ? identity.email
-                  : null
-              return (
-                <Box
-                  component="li"
-                  key={id ?? String(index)}
-                  sx={{
-                    py: 1.5,
-                    minWidth: 0,
-                    ...(index > 0
-                      ? { borderTop: '1px solid', borderColor: 'divider' }
-                      : {}),
-                  }}
-                >
+      <AsyncSection
+        pending={pending}
+        payload={rows}
+        empty={showEmptyState}
+        loading={<BindingListSkeleton label={t('bindings.loading')} />}
+        errorState={{
+          title: t('bindings.error.title'),
+          description: t('bindings.error.description'),
+          retryLabel: t('bindings.retry'),
+          onRetry: () => void refetch(),
+        }}
+        emptyState={{
+          title: t('bindings.empty.title'),
+          description: t('bindings.empty.description'),
+        }}
+      >
+        {(settledRows) => (
+          <Box>
+            {notice?.kind === 'unbind-failed' && <InlineError code={notice.code} />}
+            {/* The identity rows are one real list, as the sessions rows
+                are: a screen-reader user hears each binding as one item
+                of a numbered set. The notice above and the add area
+                below are page-level content and stay outside the list.
+                role="list" keeps the list semantics under WebKit, which
+                strips them from a list-style-none ul. */}
+            <Box component="ul" role="list" sx={{ m: 0, p: 0, listStyle: 'none' }}>
+              {settledRows.map((identity, index) => {
+                const id = identity.id ?? null
+                const provider = identity.provider ?? null
+                // Enterprise-SSO bindings arrive under the dynamic
+                // per-tenant provider name "oidc:<tenant>": the family
+                // label renders for the prefix, and the raw value stays
+                // in the row as its reference line, so two SSO bindings
+                // in two tenants never read as one identical row.
+                const oidcProvider =
+                  provider !== null &&
+                  provider.startsWith(OIDC_PROVIDER_PREFIX)
+                    ? provider
+                    : null
+                const providerLabel =
+                  provider !== null && KNOWN_PROVIDERS.has(provider)
+                    ? t(`bindings.provider.${provider}`)
+                    : oidcProvider !== null
+                      ? t('bindings.provider.oidc')
+                      : t('bindings.provider.other')
+                // The row identity the unbind action is named after (the
+                // sessions twin names its revoke action after the row's
+                // device label): the raw provider value when the label
+                // is a shared family label, the label itself otherwise.
+                const unbindIdentity = oidcProvider ?? providerLabel
+                const email =
+                  identity.email != null && identity.email !== ''
+                    ? identity.email
+                    : null
+                return (
                   <Box
+                    component="li"
+                    key={id ?? String(index)}
                     sx={{
-                      display: 'flex',
-                      alignItems: 'center',
-                      gap: 1.5,
+                      py: 1.5,
+                      minWidth: 0,
+                      ...(index > 0
+                        ? { borderTop: '1px solid', borderColor: 'divider' }
+                        : {}),
                     }}
                   >
-                    <Box sx={{ minWidth: 0 }}>
-                      <Typography variant="body1" sx={{ fontWeight: 500 }}>
-                        {providerLabel}
-                      </Typography>
-                      {oidcProvider !== null && (
-                        <Typography
-                          variant="body2"
-                          color="text.secondary"
-                          noWrap
-                          title={oidcProvider}
-                          sx={{ minWidth: 0 }}
-                        >
-                          {oidcProvider}
+                    <Box
+                      sx={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: 1.5,
+                      }}
+                    >
+                      <Box sx={{ minWidth: 0 }}>
+                        <Typography variant="body1" sx={{ fontWeight: 500 }}>
+                          {providerLabel}
                         </Typography>
-                      )}
-                      {email !== null && (
-                        <Typography
-                          variant="body2"
-                          color="text.secondary"
-                          noWrap
-                        >
-                          {email}
-                        </Typography>
+                        {oidcProvider !== null && (
+                          <Typography
+                            variant="body2"
+                            color="text.secondary"
+                            noWrap
+                            title={oidcProvider}
+                            sx={{ minWidth: 0 }}
+                          >
+                            {oidcProvider}
+                          </Typography>
+                        )}
+                        {email !== null && (
+                          <Typography
+                            variant="body2"
+                            color="text.secondary"
+                            noWrap
+                          >
+                            {email}
+                          </Typography>
+                        )}
+                      </Box>
+                      {id !== null && (
+                        <Box sx={{ marginLeft: 'auto', flexShrink: 0 }}>
+                          <Button
+                            variant="outlined"
+                            color="error"
+                            size="small"
+                            disabled={unbindBusy}
+                            aria-label={t('bindings.unbindAriaWithProvider', {
+                              provider: unbindIdentity,
+                              // The label is an aria-label, not HTML: the
+                              // row identity (an oidc:<tenant> raw value
+                              // included) must reach the accessibility
+                              // tree verbatim (i18next's default value
+                              // escaping would embed a literal `&#x2F;`).
+                              interpolation: { escapeValue: false },
+                            })}
+                            onClick={() => setUnbindTarget(id)}
+                          >
+                            {t('bindings.unbind')}
+                          </Button>
+                        </Box>
                       )}
                     </Box>
-                    {id !== null && (
-                      <Box sx={{ marginLeft: 'auto', flexShrink: 0 }}>
-                        <Button
-                          variant="outlined"
-                          color="error"
-                          size="small"
-                          disabled={unbindBusy}
-                          aria-label={t('bindings.unbindAriaWithProvider', {
-                            provider: unbindIdentity,
-                            // The label is an aria-label, not HTML: the
-                            // row identity (an oidc:<tenant> raw value
-                            // included) must reach the accessibility
-                            // tree verbatim (i18next's default value
-                            // escaping would embed a literal `&#x2F;`).
-                            interpolation: { escapeValue: false },
-                          })}
-                          onClick={() => setUnbindTarget(id)}
-                        >
-                          {t('bindings.unbind')}
-                        </Button>
-                      </Box>
-                    )}
                   </Box>
-                </Box>
-              )
-            })}
-          </Box>
+                )
+              })}
+            </Box>
 
-          {hasAddArea && (
-            <AddArea
-              available={available}
-              busy={busyProvider !== null}
-              authorizeError={authorizeError}
-              sectionLabel={t('bindings.addSectionTitle')}
-              providerLabel={(provider) => t(`bindings.provider.${provider}`)}
-              onAuthorize={handleAuthorize}
-            />
-          )}
-        </Box>
-      )}
+            {hasAddArea && (
+              <AddArea
+                available={available}
+                busy={busyProvider !== null}
+                authorizeError={authorizeError}
+                sectionLabel={t('bindings.addSectionTitle')}
+                providerLabel={(provider) => t(`bindings.provider.${provider}`)}
+                onAuthorize={handleAuthorize}
+              />
+            )}
+          </Box>
+        )}
+      </AsyncSection>
 
       <ConfirmDialog
         open={unbindTarget !== null}

@@ -40,14 +40,13 @@
 
 import { useMemo } from 'react'
 import Box from '@mui/material/Box'
-import Button from '@mui/material/Button'
 import Skeleton from '@mui/material/Skeleton'
 import Typography from '@mui/material/Typography'
 import {
   useAuthnGetPreferences,
   useAuthnListLoginHistory,
 } from '@speed/api-sdk'
-import { EmptyState } from '@speed/ui-kit'
+import { AsyncSection, ListSkeleton } from '@speed/ui-kit'
 import { resolveTimeZone } from './internal/time-format.js'
 import { useAccountUiTranslation } from './internal/translation.js'
 
@@ -105,17 +104,10 @@ function HistoryListSkeleton({ label }: { readonly label: string }) {
     { primary: '26%', secondary: '52%' },
   ]
   return (
-    <Box role="status" aria-label={label} aria-busy="true">
-      {widths.map((width, index) => (
-        <Box
-          key={String(index)}
-          sx={{
-            py: 1.5,
-            ...(index > 0
-              ? { borderTop: '1px solid', borderColor: 'divider' }
-              : {}),
-          }}
-        >
+    <ListSkeleton
+      label={label}
+      rows={widths.map((width) => (
+        <>
           <Box
             sx={{
               display: 'flex',
@@ -127,9 +119,9 @@ function HistoryListSkeleton({ label }: { readonly label: string }) {
             <Skeleton variant="text" width="14%" />
           </Box>
           <Skeleton variant="text" width={width.secondary} />
-        </Box>
+        </>
       ))}
-    </Box>
+    />
   )
 }
 
@@ -177,133 +169,104 @@ export function LoginHistorySection() {
         </Box>
       )}
 
-      {pending ? (
-        <HistoryListSkeleton label={t('history.loading')} />
-      ) : attempts === undefined ? (
-        // This guard tests the absent list field with the loading
-        // branch already excluded above: pending is false here, so no
-        // attempts means the query settled without delivering a list.
-        // Two shapes settle that way: a load that failed with no data
-        // (isError), and a successful answer whose body omits the
-        // optional attempts key -- AuthnListLoginHistoryResponse marks
-        // `.attempts` optional, so a type-legal 200 `{}` carries data
-        // yet no list, and nothing would re-arm the loading branch for
-        // it (isPending is false and stays false). Both land on the
-        // error state, never the loading skeleton, which nothing could
-        // resolve: the error copy claims no account content, where
-        // reading the field-less answer as "no sign-in history" would
-        // fabricate a statement the answer never made, and its Retry is
-        // the exit.
-        <EmptyState
-          variant="error"
-          title={t('history.error.title')}
-          description={t('history.error.description')}
-          // The retry is the exit for both shapes this state covers. A
-          // refetch of a data-less failed load moves the query back to
-          // the pending state, so the section re-enters the loading
-          // branch above -- that loading announcement is the retry's
-          // progress feedback; a refetch of a settled field-less answer
-          // keeps the query's own data, so this state holds until the
-          // refetched answer changes it. Either way react-query dedupes
-          // the per-query fetches, so a click can never overlap a
-          // request already in flight.
-          action={
-            <Button onClick={() => void refetch()}>{t('history.retry')}</Button>
-          }
-          // The section header above (h2) is hidden whenever this
-          // renders (see the `pending || hasRows` guard), so this
-          // EmptyState's title takes over the section's own heading
-          // level rather than skipping to h6.
-          headingLevel="h2"
-        />
-      ) : attempts.length === 0 ? (
-        <EmptyState
-          variant="empty"
-          title={t('history.empty.title')}
-          description={t('history.empty.description')}
-          headingLevel="h2"
-        />
-      ) : (
-        <Box>
-          {attempts.map((attempt, index) => {
-            const method =
-              attempt.method != null &&
-              KNOWN_METHOD_TOKENS.has(attempt.method)
-                ? attempt.method
-                : null
-            const methodLabel =
-              method !== null
-                ? t(`history.method.${method}`)
-                : t('history.method.other')
-            const success = attempt.result === 'success'
-            const statusColor = success ? 'success.main' : 'error.main'
-            const reason =
-              attempt.failure_reason != null &&
-              KNOWN_REASON_TOKENS.has(attempt.failure_reason)
-                ? attempt.failure_reason
-                : null
-            const statusText = success
-              ? t('history.result.success')
-              : reason !== null
-                ? t(`history.reason.${reason}`)
-                : t('history.reason.other')
-            const created = parseDate(attempt.created_at)
-            return (
-              <Box
-                key={attempt.id ?? String(index)}
-                sx={{
-                  py: 1.5,
-                  minWidth: 0,
-                  ...(index > 0
-                    ? { borderTop: '1px solid', borderColor: 'divider' }
-                    : {}),
-                }}
-              >
+      <AsyncSection
+        pending={pending}
+        payload={attempts}
+        empty={attempts !== undefined && attempts.length === 0}
+        loading={<HistoryListSkeleton label={t('history.loading')} />}
+        errorState={{
+          title: t('history.error.title'),
+          description: t('history.error.description'),
+          retryLabel: t('history.retry'),
+          onRetry: () => void refetch(),
+        }}
+        emptyState={{
+          title: t('history.empty.title'),
+          description: t('history.empty.description'),
+        }}
+      >
+        {(settledAttempts) => (
+          <Box>
+            {settledAttempts.map((attempt, index) => {
+              const method =
+                attempt.method != null &&
+                KNOWN_METHOD_TOKENS.has(attempt.method)
+                  ? attempt.method
+                  : null
+              const methodLabel =
+                method !== null
+                  ? t(`history.method.${method}`)
+                  : t('history.method.other')
+              const success = attempt.result === 'success'
+              const statusColor = success ? 'success.main' : 'error.main'
+              const reason =
+                attempt.failure_reason != null &&
+                KNOWN_REASON_TOKENS.has(attempt.failure_reason)
+                  ? attempt.failure_reason
+                  : null
+              const statusText = success
+                ? t('history.result.success')
+                : reason !== null
+                  ? t(`history.reason.${reason}`)
+                  : t('history.reason.other')
+              const created = parseDate(attempt.created_at)
+              return (
                 <Box
+                  key={attempt.id ?? String(index)}
                   sx={{
-                    display: 'flex',
-                    alignItems: 'baseline',
-                    gap: 1.5,
+                    py: 1.5,
+                    minWidth: 0,
+                    ...(index > 0
+                      ? { borderTop: '1px solid', borderColor: 'divider' }
+                      : {}),
                   }}
                 >
-                  <Typography variant="body1" sx={{ fontWeight: 500 }}>
-                    {methodLabel}
-                  </Typography>
-                  <Typography
-                    variant="body2"
-                    color={statusColor}
-                    sx={{ marginLeft: 'auto', flexShrink: 0 }}
-                  >
-                    {statusText}
-                  </Typography>
-                </Box>
-                {(created !== null || attempt.ip != null) && (
                   <Box
                     sx={{
                       display: 'flex',
-                      flexWrap: 'wrap',
-                      columnGap: 2.5,
-                      rowGap: 0.5,
-                      mt: 0.5,
+                      alignItems: 'baseline',
+                      gap: 1.5,
                     }}
                   >
-                    {created !== null && (
-                      <Typography variant="body2" color="text.secondary">
-                        {formatTime.format(created)}
-                      </Typography>
-                    )}
-                    {attempt.ip != null && (
-                      <Typography variant="body2" color="text.secondary">
-                        {attempt.ip}
-                      </Typography>
-                    )}
+                    <Typography variant="body1" sx={{ fontWeight: 500 }}>
+                      {methodLabel}
+                    </Typography>
+                    <Typography
+                      variant="body2"
+                      color={statusColor}
+                      sx={{ marginLeft: 'auto', flexShrink: 0 }}
+                    >
+                      {statusText}
+                    </Typography>
                   </Box>
-                )}
-              </Box>
-            )
-          })}
-        </Box>
-      )}
+                  {(created !== null || attempt.ip != null) && (
+                    <Box
+                      sx={{
+                        display: 'flex',
+                        flexWrap: 'wrap',
+                        columnGap: 2.5,
+                        rowGap: 0.5,
+                        mt: 0.5,
+                      }}
+                    >
+                      {created !== null && (
+                        <Typography variant="body2" color="text.secondary">
+                          {formatTime.format(created)}
+                        </Typography>
+                      )}
+                      {attempt.ip != null && (
+                        <Typography variant="body2" color="text.secondary">
+                          {attempt.ip}
+                        </Typography>
+                      )}
+                    </Box>
+                  )}
+                </Box>
+              )
+            })}
+          </Box>
+        )}
+      </AsyncSection>
     </Box>
   )
 }
