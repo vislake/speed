@@ -61,7 +61,7 @@ func TestService_EnsureBuiltinRoles_OwnerHoldsEveryDeclaredPermission(t *testing
 		t.Fatalf("EnsureBuiltinRoles: %v", err)
 	}
 
-	want := svc.catalog.permissions()
+	want := svc.catalog.Load().permissions()
 	if got := permissionsOf(t, svc, ctx, BuiltinRoleOwner); !reflect.DeepEqual(got, want) {
 		t.Fatalf("owner holds %v, want the whole catalog %v", got, want)
 	}
@@ -84,7 +84,7 @@ func TestService_EnsureBuiltinRoles_AdminHoldsEverythingExceptGrantAuthority(t *
 		}
 	}
 	want := make([]string, 0)
-	for _, perm := range svc.catalog.permissions() {
+	for _, perm := range svc.catalog.Load().permissions() {
 		if perm != PermissionManage {
 			want = append(want, perm)
 		}
@@ -113,7 +113,7 @@ func TestService_EnsureBuiltinRoles_MemberHoldsNothing(t *testing.T) {
 	if err := svc.AssignRole(ctx, sub, BuiltinRoleMember, Scope{}); err != nil {
 		t.Fatalf("AssignRole(member): %v", err)
 	}
-	for _, perm := range svc.catalog.permissions() {
+	for _, perm := range svc.catalog.Load().permissions() {
 		ok, err := svc.Can(context.Background(), sub, "read", perm)
 		if err != nil {
 			t.Fatalf("Can: %v", err)
@@ -225,8 +225,9 @@ func TestService_EnsureBuiltinRoles_WidensOwnerWhenTheCatalogGrows(t *testing.T)
 
 	// Simulate the next release's catalog by re-freezing it with one more
 	// permission, exactly as a new module's Register would produce.
-	grown := append(svc.catalog.permissions(), "storage:manage")
-	svc.catalog = newCatalog(grown)
+	grown := append(svc.catalog.Load().permissions(), "storage:manage")
+	grownCatalog := newCatalog(grown)
+	svc.catalog.Store(&grownCatalog)
 
 	rec := recordEvents(reg)
 	if err := svc.EnsureBuiltinRoles(ctx); err != nil {
@@ -255,12 +256,13 @@ func TestService_EnsureBuiltinRoles_NarrowsWhenAPermissionDisappears(t *testing.
 	}
 
 	shrunk := make([]string, 0)
-	for _, perm := range svc.catalog.permissions() {
+	for _, perm := range svc.catalog.Load().permissions() {
 		if perm != "billing:manage" {
 			shrunk = append(shrunk, perm)
 		}
 	}
-	svc.catalog = newCatalog(shrunk)
+	shrunkCatalog := newCatalog(shrunk)
+	svc.catalog.Store(&shrunkCatalog)
 
 	if err := svc.EnsureBuiltinRoles(ctx); err != nil {
 		t.Fatalf("reconciling EnsureBuiltinRoles: %v", err)
@@ -343,8 +345,8 @@ func TestService_EnsureBuiltinRoles_ThenOwnerCanEverything(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ListPermissions: %v", err)
 	}
-	if !reflect.DeepEqual(got, svc.catalog.permissions()) {
-		t.Fatalf("owner holds %v, want the whole catalog %v", got, svc.catalog.permissions())
+	if !reflect.DeepEqual(got, svc.catalog.Load().permissions()) {
+		t.Fatalf("owner holds %v, want the whole catalog %v", got, svc.catalog.Load().permissions())
 	}
 	scope, err := svc.DataScope(context.Background(), owner, "write", "notes")
 	if err != nil {

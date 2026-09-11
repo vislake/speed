@@ -114,7 +114,7 @@ func (s *Service) EnsureBuiltinRoles(ctx context.Context) error {
 	}
 
 	for _, definition := range builtinRoles {
-		want, err := s.validatePermissions(definition.permissions(s.catalog))
+		want, err := s.validatePermissions(definition.permissions(*s.catalog.Load()))
 		if err != nil {
 			// The catalog is where these came from, so this is
 			// unreachable in practice; returning rather than ignoring

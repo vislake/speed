@@ -3,19 +3,20 @@ package config
 // component.go carries config's descriptor for the config-driven component
 // assembly: the selection key a composition configuration names, the assets
 // the module brings, the contracts it consumes, and the callbacks that
-// construct and declare it. Its Init runs the module's one declaration entry
-// point, Register, and then Attach -- the schema snapshot that publishes the
-// runtime *Service -- inside the assembly's Init stage, the one stage whose
-// seats accept writes: Attach installs the Service's own subscription and
-// the poller, so it can run nowhere else. The *Service is put into the
-// by-type context, where a consumer requires and reads it. The snapshot
-// therefore covers the declarations made before this component's Init turn
-// in plan order, not the full catalog: the design's full-catalog freeze
-// (docs/internal/29 §7, the component's Start callback) is not implemented.
+// construct, declare and serve it. Its Init runs the module's one
+// declaration entry point, Register, inside the assembly's Init stage -- the
+// one stage whose seats accept writes. Its Start takes the schema snapshot
+// (docs/internal/29 §5.2): by then every component's Init turn has run, so
+// the declaration set the schema folds together is structurally complete,
+// and the runtime *Service is built (or completed) and published from
+// there. A host that needs the service during Init -- before every
+// component has declared -- attaches earlier itself and publishes; the
+// Start step then completes that snapshot rather than building a second
+// service.
 //
 // The module's own system purpose moves with it: the descriptor's
 // SystemPurposes carries the system-write purpose Register used to register
-// itself, and the assembly registers it when its Init stage closes.
+// itself, and the assembly registers it at the Init stage's entry.
 
 import (
 	"context"
@@ -67,10 +68,15 @@ func component() pkgcore.Component {
 			// documented display decision for the unauthenticated case.
 			{Token: (*tenancy.Resolver)(nil), Optional: true},
 		},
-		// The construction product is the *Module; the *Service Attach
+		// The construction product is the *Module. The *Service Attach
 		// builds from it is the runtime configuration and feature-flag
-		// reader consumers take, put into the by-type context during Init.
-		Provides:     []any{(*Module)(nil), (*Service)(nil)},
+		// reader consumers take; it is a runtime service published from the
+		// Start callback (a host may publish it earlier), so it stays out
+		// of Provides -- a service never resolves a token requirement.
+		Provides: []any{(*Module)(nil)},
+		// config's state is its rows in the deployment's shared database
+		// and the shared event bus, so several replicas may run it at once.
+		Capabilities: pkgcore.MultiReplicaSafe,
 		ConfigSchema: (*componentConfig)(nil),
 		// The one system context this module takes -- the system-scope
 		// configuration write -- is descriptor data the assembly registers
@@ -127,14 +133,25 @@ func component() pkgcore.Component {
 			if !ok {
 				return fmt.Errorf("config: component init got a %T instance, want *config.Module", instance)
 			}
-			if err := m.Register(reg); err != nil {
-				return err
+			return m.Register(reg)
+		},
+		// Start takes the full-catalog snapshot: every Init callback has
+		// run, so the seats hold the complete declaration set. A host that
+		// attached earlier (its own Init-stage consumer needed the
+		// service) already published the Service and this step completes
+		// its schema to the same complete set.
+		Start: func(_ context.Context, reg *pkgcore.ComponentRegistry, instance any) error {
+			m, ok := instance.(*Module)
+			if !ok {
+				return fmt.Errorf("config: component start got a %T instance, want *config.Module", instance)
 			}
-			svc, err := m.Attach(reg)
+			svc, attached, err := m.CompleteSnapshot(reg)
 			if err != nil {
 				return err
 			}
-			reg.Put(svc)
+			if attached {
+				reg.Put(svc)
+			}
 			return nil
 		},
 	}

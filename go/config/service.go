@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"sort"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/vislake/speed/go/dbkit"
@@ -68,8 +69,13 @@ const fullReconcileEvery = 20
 // encrypted at rest through the injected dbkit.Cipher. The Service is safe
 // for concurrent use.
 type Service struct {
-	// schema is the frozen runtime snapshot; immutable after Attach.
-	schema *schema
+	// schema is the frozen runtime snapshot. Attach installs the first
+	// snapshot; the descriptor's Start callback completes it once every
+	// component's Init turn has declared (Module.CompleteSnapshot), so a
+	// snapshot taken before a later declaration is superseded, never
+	// served -- the atomic pointer is the publication point the swap
+	// happens under, and every reader takes one consistent snapshot.
+	schema atomic.Pointer[schema]
 
 	// st is the configs table accessor.
 	st *store
@@ -156,7 +162,7 @@ var now = time.Now
 // item -- but only the flag's plain effective value: whether a flag counts
 // as "enabled" (its dependencies all enabled) is IsEnabled's question.
 func (s *Service) Get(ctx context.Context, key string) (Value, error) {
-	item, ok := s.schema.lookup(key)
+	item, ok := s.schema.Load().lookup(key)
 	if !ok {
 		return Value{}, ErrUnknownKey.WithParam("key", key)
 	}
@@ -270,7 +276,7 @@ func (s *Service) TenantDuration(ctx context.Context, key string, tenant pkgcore
 // the event and the audit row the compliance module persists for the
 // set (when a host composes it) all attribute the write to.
 func (s *Service) Set(ctx context.Context, scope Scope, key string, v Value, by Actor) error {
-	item, ok := s.schema.lookup(key)
+	item, ok := s.schema.Load().lookup(key)
 	if !ok {
 		return ErrUnknownKey.WithParam("key", key)
 	}
@@ -407,7 +413,7 @@ func (s *Service) Set(ctx context.Context, scope Scope, key string, v Value, by 
 // return value reports only whether key is a declared schema key, so an
 // undeclared key fails before a useless callback is installed.
 func (s *Service) Watch(key string, fn func(Value)) error {
-	if _, ok := s.schema.lookup(key); !ok {
+	if _, ok := s.schema.Load().lookup(key); !ok {
 		return ErrUnknownKey.WithParam("key", key)
 	}
 	s.watchers.add(key, fn)
@@ -424,14 +430,14 @@ func (s *Service) Watch(key string, fn func(Value)) error {
 // for a key that is not a declared FeatureFlag; the dependency graph is
 // acyclic by Attach-time proof, so the walk always terminates.
 func (s *Service) IsEnabled(ctx context.Context, key string) (bool, error) {
-	item, ok := s.schema.lookup(key)
+	item, ok := s.schema.Load().lookup(key)
 	if !ok || !item.isFlag {
 		return false, ErrUnknownFlag.WithParam("key", key)
 	}
 	seen := make(map[string]bool)
 	var enabled func(k string) (bool, error)
 	enabled = func(k string) (bool, error) {
-		entry, ok := s.schema.lookup(k)
+		entry, ok := s.schema.Load().lookup(k)
 		if !ok || !entry.isFlag {
 			return false, ErrUnknownFlag.WithParam("key", k)
 		}
@@ -477,7 +483,7 @@ func (s *Service) IsEnabled(ctx context.Context, key string) (bool, error) {
 // endpoint documents -- not as null.
 func (s *Service) EnabledFlags(ctx context.Context) ([]string, error) {
 	out := make([]string, 0)
-	for _, item := range s.schema.items {
+	for _, item := range s.schema.Load().items {
 		if !item.isFlag {
 			continue
 		}
@@ -508,15 +514,15 @@ func (s *Service) EnabledFlags(ctx context.Context) ([]string, error) {
 // keys, keeping responses deterministic.
 func (s *Service) PublicSnapshot(ctx context.Context) (map[string]any, []string, error) {
 	values := make(map[string]any)
-	keys := make([]string, 0, len(s.schema.items))
-	for _, item := range s.schema.items {
+	keys := make([]string, 0, len(s.schema.Load().items))
+	for _, item := range s.schema.Load().items {
 		if item.public {
 			keys = append(keys, item.key)
 		}
 	}
 	sort.Strings(keys)
 	for _, key := range keys {
-		item := s.schema.items[key]
+		item := s.schema.Load().items[key]
 		canonical, scope, err := s.resolve(ctx, item)
 		if err != nil {
 			// An item the resolve walk cannot serve is skipped -- that key
@@ -834,7 +840,7 @@ func (s *Service) onItemChanged(ctx context.Context, evt pkgcore.Event) error {
 	// apart and an operator should know. It is deliberately not an error:
 	// returning one would misreport a remote Set as failed (see the
 	// handler's doc comment).
-	item, known := s.schema.lookup(payload.Key)
+	item, known := s.schema.Load().lookup(payload.Key)
 	sensitive := known && item.sensitive
 	if sensitive != payload.Sensitive {
 		obs.FromContext(ctx).Warn("config: remote change-event sensitivity flag disagrees with the local schema; the local judgment governs", "item", payload.Key, "scope", string(payload.Scope), "payload_sensitive", payload.Sensitive, "schema_sensitive", sensitive)

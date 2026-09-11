@@ -155,11 +155,11 @@ func TestModule_Attach_FreezesEveryModulesPermissions(t *testing.T) {
 	t.Cleanup(func() { _ = svc.Close() })
 
 	for _, perm := range []string{"notes:read", "notes:write", PermissionRead, PermissionManage} {
-		if !svc.catalog.Has(perm) {
+		if !svc.catalog.Load().Has(perm) {
 			t.Fatalf("the frozen catalog does not know %q, which a module declared", perm)
 		}
 	}
-	if svc.catalog.Has("notes:delete") {
+	if svc.catalog.Load().Has("notes:delete") {
 		t.Fatal("the frozen catalog knows a permission no module declared")
 	}
 }

@@ -59,18 +59,26 @@ func TestComponentWellFormed(t *testing.T) {
 	componenttest.AssertWellFormed(t, component())
 }
 
-// TestComponent_InitDeclaresAndPublishesTheService drives the descriptor's
-// Init through a real assembly: Register runs inside the one stage whose
-// seats accept writes, so its declarations land in the assembly's own
-// seats; Attach then runs in the same stage -- the only stage that can carry
-// its seat writes -- and the runtime *Service it builds is put into the
-// by-type context, where a consumer reads it after the assembly.
-func TestComponent_InitDeclaresAndPublishesTheService(t *testing.T) {
+// TestComponent_StartDeclaresAndPublishesTheService drives the descriptor
+// through a real assembly: Register runs inside the one stage whose seats
+// accept writes, so its declarations land in the assembly's own seats; the
+// Start callback then takes the full-catalog schema snapshot -- every
+// component's Init turn has run by then -- and publishes the runtime
+// *Service into the by-type context, where a consumer reads it.
+func TestComponent_StartDeclaresAndPublishesTheService(t *testing.T) {
 	db := openModuleTestDB(t)
 	reg := pkgcore.NewComponentRegistry()
 	bus := pkgcore.NewMemoryEventBus()
 	if err := componenttest.RunInit(t, reg, component(), db, bus, pkgcore.NewMemoryKVStore()); err != nil {
 		t.Fatalf("RunInit: %v", err)
+	}
+	// No service is published before Start: the snapshot must not be taken
+	// over a declaration set that is still growing.
+	if _, err := pkgcore.Get[*Service](reg); err == nil {
+		t.Error("a service is published before the Start stage; the snapshot must wait for the complete declaration set")
+	}
+	if err := reg.Start(context.Background()); err != nil {
+		t.Fatalf("Start: %v", err)
 	}
 	if actions := reg.AuditActions.Actions(); !slices.Contains(actions, AuditActionConfigSet) {
 		t.Errorf("AuditActions seat = %v, want the config-set action", actions)
@@ -90,14 +98,14 @@ func TestComponent_InitDeclaresAndPublishesTheService(t *testing.T) {
 		t.Errorf("Routes seat = %v, want the two pre-auth mounts", paths)
 	}
 
-	// The Service is the Init stage's publication: reachable from the
+	// The Service is the Start stage's publication: reachable from the
 	// assembly's by-type context, carrying the schema frozen over the
 	// declarations above and the assembly's own bus and store.
 	svc, err := pkgcore.Get[*Service](reg)
 	if err != nil {
 		t.Fatalf("the published service is not reachable: %v", err)
 	}
-	if svc.schema == nil {
+	if svc.schema.Load() == nil {
 		t.Error("the published service carries no schema snapshot")
 	}
 	if svc.bus != pkgcore.EventBus(bus) {
@@ -105,6 +113,74 @@ func TestComponent_InitDeclaresAndPublishesTheService(t *testing.T) {
 	}
 	if svc.kv == nil {
 		t.Error("the service did not take the assembly's key-value store")
+	}
+}
+
+// TestComponent_StartCompletesTheSnapshotOverEveryDeclaration pins the
+// stage boundary the schema snapshot needs. A module that declares its
+// configuration item in its own Init callback, planned AFTER config's turn,
+// must still land in the runtime schema: the snapshot is taken at Start --
+// after every Init callback has run -- not at config's Init turn, so plan
+// order cannot silently shrink the schema.
+func TestComponent_StartCompletesTheSnapshotOverEveryDeclaration(t *testing.T) {
+	ctx := context.Background()
+	reg := pkgcore.NewComponentRegistry()
+	if err := reg.Register(testDBComponent(openModuleTestDB(t))); err != nil {
+		t.Fatalf("registering the database stand-in: %v", err)
+	}
+	// The late declarer runs after config (it is listed after it in the
+	// composition) and declares its one item only when its own Init
+	// callback runs.
+	late := pkgcore.Component{
+		Name:   "test.late",
+		Module: "test",
+		New: func(context.Context, *pkgcore.ComponentRegistry, pkgcore.ComponentConfig) (any, error) {
+			return &struct{}{}, nil
+		},
+		Init: func(_ context.Context, reg *pkgcore.ComponentRegistry, _ any) error {
+			return reg.ConfigSeat().Add(pkgcore.ConfigItem{Key: "test.late.key", Type: "string", Description: "declared after config's own Init turn"})
+		},
+	}
+	if err := reg.Register(late); err != nil {
+		t.Fatalf("registering the late declarer: %v", err)
+	}
+	reg.Put(pkgcore.NewMemoryEventBus())
+	reg.Put(pkgcore.NewMemoryKVStore())
+	reg.Put(pkgcore.NewComponentConfig(map[string]any{
+		"deployment": "standalone",
+		"strict":     true,
+		"components": map[string]any{
+			"config":    nil,
+			"test.db":   nil,
+			"test.late": nil,
+		},
+	}))
+
+	for _, stage := range []struct {
+		name string
+		run  func(context.Context) error
+	}{
+		{"prepare", reg.Prepare},
+		{"construct", reg.Construct},
+		{"verify", reg.Verify},
+		{"init", reg.Init},
+		{"start", reg.Start},
+	} {
+		if err := stage.run(ctx); err != nil {
+			t.Fatalf("%s: %v", stage.name, err)
+		}
+	}
+
+	svc, err := pkgcore.Get[*Service](reg)
+	if err != nil {
+		t.Fatalf("the published service is not reachable: %v", err)
+	}
+	var keys []string
+	for _, item := range svc.Describe() {
+		keys = append(keys, item.Key)
+	}
+	if !slices.Contains(keys, "test.late.key") {
+		t.Errorf("the runtime schema %v misses the declaration made after config's own Init turn; the snapshot must be taken at Start, when every Init callback has run", keys)
 	}
 }
 

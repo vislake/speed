@@ -3,6 +3,7 @@ package rbac
 import (
 	"context"
 	"sort"
+	"sync/atomic"
 	"time"
 
 	"github.com/vislake/speed/go/jobs"
@@ -29,10 +30,16 @@ import (
 //
 // Every method is safe for concurrent use.
 type Service struct {
-	// catalog is the frozen snapshot of every permission every module
-	// declared, taken in Attach. It is what makes a grant of a permission
-	// nobody declared a rejected write rather than a silently dead row.
-	catalog catalog
+	// catalog is the snapshot of every permission every module declared.
+	// Attach installs the first one; the descriptor's Start callback
+	// completes it once every component's Init turn has declared
+	// (Module.CompleteSnapshot), so a snapshot taken while declarations
+	// were still arriving is superseded, never relied on. The atomic
+	// pointer is the publication point the completion swaps under, and
+	// every reader takes one consistent snapshot. It is what makes a grant
+	// of a permission nobody declared a rejected write rather than a
+	// silently dead row.
+	catalog atomic.Pointer[catalog]
 
 	// The three repositories are this module's only data access; see
 	// repository.go for why each embeds dbkit.Repository[T].
@@ -185,7 +192,7 @@ func (s *Service) ListPermissions(ctx context.Context, sub Subject) ([]string, e
 // computed once, at Attach, and never touched again for the life of the
 // process.
 func (s *Service) DeclaredPermissions() []string {
-	return s.catalog.permissions()
+	return s.catalog.Load().permissions()
 }
 
 // DataScope implements Authorizer.

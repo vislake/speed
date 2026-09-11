@@ -96,8 +96,8 @@ type ConfigItemDescriptor struct {
 // for hand-built descriptor slices; the marker is idempotent, so the
 // double application is harmless.
 func (s *Service) Describe() []ConfigItemDescriptor {
-	out := make([]ConfigItemDescriptor, 0, len(s.schema.items))
-	for _, item := range s.schema.items {
+	out := make([]ConfigItemDescriptor, 0, len(s.schema.Load().items))
+	for _, item := range s.schema.Load().items {
 		out = append(out, ConfigItemDescriptor{
 			Key:           item.key,
 			Type:          item.typ,

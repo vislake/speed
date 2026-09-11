@@ -68,11 +68,76 @@ func TestComponent_InitDeclaresAndPublishesTheService(t *testing.T) {
 	}
 	// The catalog is the Init stage's snapshot: it carries the permissions
 	// declared before this component's turn, rbac's own included.
-	if !svc.catalog.Has(PermissionRead) || !svc.catalog.Has(PermissionManage) {
-		t.Errorf("the published service's catalog lacks the module's own permissions: %v", svc.catalog.permissions())
+	if !svc.catalog.Load().Has(PermissionRead) || !svc.catalog.Load().Has(PermissionManage) {
+		t.Errorf("the published service's catalog lacks the module's own permissions: %v", svc.catalog.Load().permissions())
 	}
 	if svc.bus != pkgcore.EventBus(bus) {
 		t.Error("the service did not take the assembly's bus")
+	}
+}
+
+// TestComponent_StartCompletesTheSnapshotOverEveryDeclaration pins the stage
+// boundary the catalog snapshot needs. A module that declares its permission
+// in its own Init callback, planned AFTER rbac's turn, must still land in
+// the service's catalog: the snapshot is completed at Start -- after every
+// Init callback has run -- so a snapshot taken at rbac's own Init turn
+// cannot silently shrink the catalog the grants validate against.
+func TestComponent_StartCompletesTheSnapshotOverEveryDeclaration(t *testing.T) {
+	ctx := context.Background()
+	reg := pkgcore.NewComponentRegistry()
+	if err := reg.Register(testDBComponent(newRBACTestDB(t))); err != nil {
+		t.Fatalf("registering the database stand-in: %v", err)
+	}
+	// The late declarer runs after rbac (it is listed after it in the
+	// composition) and declares its permission only when its own Init
+	// callback runs.
+	const latePermission = "test.late:read"
+	late := pkgcore.Component{
+		Name:   "test.late",
+		Module: "test",
+		New: func(context.Context, *pkgcore.ComponentRegistry, pkgcore.ComponentConfig) (any, error) {
+			return &struct{}{}, nil
+		},
+		Init: func(_ context.Context, reg *pkgcore.ComponentRegistry, _ any) error {
+			return reg.PermissionsSeat().Add(latePermission)
+		},
+	}
+	if err := reg.Register(late); err != nil {
+		t.Fatalf("registering the late declarer: %v", err)
+	}
+	reg.Put(pkgcore.NewMemoryEventBus())
+	reg.Put(pkgcore.NewComponentConfig(map[string]any{
+		"deployment": "standalone",
+		"strict":     true,
+		"components": map[string]any{
+			"rbac":      map[string]any{},
+			"test.db":   nil,
+			"test.late": nil,
+		},
+	}))
+
+	for _, stage := range []struct {
+		name string
+		run  func(context.Context) error
+	}{
+		{"prepare", reg.Prepare},
+		{"construct", reg.Construct},
+		{"verify", reg.Verify},
+		{"init", reg.Init},
+		{"start", reg.Start},
+	} {
+		if err := stage.run(ctx); err != nil {
+			t.Fatalf("%s: %v", stage.name, err)
+		}
+	}
+
+	svc, err := pkgcore.Get[*Service](reg)
+	if err != nil {
+		t.Fatalf("the published service is not reachable: %v", err)
+	}
+	declared := svc.DeclaredPermissions()
+	if !slices.Contains(declared, latePermission) {
+		t.Errorf("the service's catalog %v misses the declaration made after rbac's own Init turn; the snapshot must be completed at Start, when every Init callback has run", declared)
 	}
 }
 

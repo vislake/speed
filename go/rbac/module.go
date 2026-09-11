@@ -211,7 +211,6 @@ func (m *Module) Attach(reg *pkgcore.ComponentRegistry) (*Service, error) {
 	}
 
 	svc := &Service{
-		catalog:         newCatalog(reg.PermissionsSeat().Permissions()),
 		roles:           NewRoleRepository(m.db),
 		rolePermissions: NewRolePermissionRepository(m.db),
 		bindings:        NewRoleBindingRepository(m.db),
@@ -223,6 +222,8 @@ func (m *Module) Attach(reg *pkgcore.ComponentRegistry) (*Service, error) {
 		cache:           newGrantCache(m.cacheTTL),
 		now:             time.Now,
 	}
+	catalog := newCatalog(reg.PermissionsSeat().Permissions())
+	svc.catalog.Store(&catalog)
 
 	// The Service subscribes to its OWN events. That is not a loop: it is
 	// how a replica learns about a grant change written by a different
@@ -280,4 +281,26 @@ func (m *Module) Attach(reg *pkgcore.ComponentRegistry) (*Service, error) {
 
 	m.service = svc
 	return svc, nil
+}
+
+// CompleteSnapshot makes the Service's catalog snapshot the complete one:
+// it re-reads the permission seat -- whose set is final once every
+// component's Init turn has run, which is exactly the Start stage's
+// precondition -- and installs that catalog, superseding a snapshot Attach
+// took before some module had declared. The descriptor's Start callback
+// calls it (docs/internal/29 §5.2: a full-catalog snapshot belongs where
+// completeness is structural, not a function of plan order); a host that
+// attached during Init for its own Init-stage consumers keeps working, and
+// an Attach that already ran late completes to the same set. A Module that
+// has not attached at all fails closed, naming the missing Attach: the
+// seat-bound wiring Attach installs (subscriptions, job handlers) can only
+// land during the Init stage, so the descriptor attaches there and this
+// step only completes.
+func (m *Module) CompleteSnapshot(reg *pkgcore.ComponentRegistry) error {
+	if m.service == nil {
+		return errors.New("rbac: the Service was never attached; the component's Init callback attaches it (its seat-bound wiring can run nowhere but the Init stage) and its Start callback completes the snapshot")
+	}
+	complete := newCatalog(reg.PermissionsSeat().Permissions())
+	m.service.catalog.Store(&complete)
+	return nil
 }

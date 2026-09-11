@@ -430,7 +430,7 @@ func (s *Service) validatePermissions(permissions []string) ([]string, error) {
 	seen := make(map[string]struct{}, len(permissions))
 	out := make([]string, 0, len(permissions))
 	for _, perm := range permissions {
-		if !s.catalog.Has(perm) {
+		if !s.catalog.Load().Has(perm) {
 			return nil, ErrUnknownPermission.WithParam("permission", perm)
 		}
 		if _, dup := seen[perm]; dup {

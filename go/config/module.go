@@ -250,31 +250,31 @@ func (m *Module) Register(reg *pkgcore.ComponentRegistry) error {
 	return nil
 }
 
-// Attach freezes the schema snapshot and hands the caller the runtime
-// Service. It must be called exactly once, with the registry the modules
-// declared into: the host calls it after Kernel.Bootstrap has returned
-// (only then has every module registered, so reg.Config.Items() and
-// reg.Features.Flags() are the complete declarations the runtime schema
-// folds together, see buildSchema), and the component descriptor calls it
-// from its Init callback, which publishes the returned *Service into the
-// assembly's by-type context.
+// Attach builds the runtime Service over a first schema snapshot and hands
+// it to the caller. It must be called exactly once, with the registry the
+// modules declared into. The descriptor's Start callback calls it -- but
+// only when nothing attached earlier (see CompleteSnapshot); a host that
+// needs the service during the Init stage, before every component has
+// declared, calls it itself and publishes the returned *Service, and the
+// descriptor's Start callback then completes the snapshot to the
+// declaration set the Start stage guarantees.
 //
 // Attach wires the Service's store to the Module's db, captures the
 // registry's KVStore as the backend of the pre-auth endpoints' rate
 // limiting, validates the cipher against the schema's Sensitive items
 // (ErrCipherRequired when a Sensitive item exists without one), subscribes
 // the Service to config.item.changed on the registry's bus, and starts the
-// anti-loss poller. Routes mounted at Register resolve the Service lazily, so a
-// request served between Register and Attach reports ErrServiceNotAttached;
-// a host wires Attach immediately after Bootstrap, before serving.
+// anti-loss poller. Routes mounted at Register resolve the Service lazily, so
+// a request served between Register and Attach reports
+// ErrServiceNotAttached; a host wires Attach before serving.
 //
 // A second Attach on the same Module fails with ErrAlreadyAttached: the
-// schema snapshot freezes at the first call, and a second snapshot could
-// silently diverge from the first. The guard is atomic -- Attach holds an
+// wiring happens at the first call, and a second one would build a second
+// poller and bus subscription. The guard is atomic -- Attach holds an
 // internal lock for its whole body -- so the same holds under concurrent
-// callers: exactly one Attach succeeds and every other call fails with
-// ErrAlreadyAttached, never a second Service with its own poller and bus
-// subscription.
+// callers. The schema snapshot itself is not frozen by this guard: it is
+// the Service's own atomic field, and CompleteSnapshot legitimately
+// supersedes it once.
 func (m *Module) Attach(reg *pkgcore.ComponentRegistry) (*Service, error) {
 	m.attachMu.Lock()
 	defer m.attachMu.Unlock()
@@ -292,21 +292,17 @@ func (m *Module) Attach(reg *pkgcore.ComponentRegistry) (*Service, error) {
 	if err != nil {
 		return nil, err
 	}
-	needsCipher := false
-	for _, item := range schema.items {
-		if item.sensitive {
-			needsCipher = true
-			break
-		}
-	}
-	if needsCipher && m.cipher == nil {
-		return nil, ErrCipherRequired
+	if err := m.validateCipherFor(schema); err != nil {
+		return nil, err
 	}
 
+	bus := reg.EventBus()
+	if bus == nil {
+		return nil, errors.New("config: Attach requires the assembled pkgcore.EventBus value; the item-changed subscription has no bus to land on otherwise")
+	}
 	svc := &Service{
-		schema:           schema,
 		st:               &store{db: m.db},
-		bus:              reg.EventBus(),
+		bus:              bus,
 		kv:               reg.KVStore(),
 		cipher:           m.cipher,
 		cache:            newValueCache(),
@@ -314,8 +310,66 @@ func (m *Module) Attach(reg *pkgcore.ComponentRegistry) (*Service, error) {
 		pollInterval:     m.pollInterval,
 		afterRefreshLock: m.afterRefreshLock,
 	}
-	reg.EventsSeat().Subscribe(EventConfigItemChanged, svc.onItemChanged)
+	svc.schema.Store(schema)
+	// The subscription is installed on the bus value directly: the Events
+	// seat's Subscribe admits writes only while the Init stage runs, and
+	// the descriptor's Start callback attaches there when no host did so
+	// earlier, where the seat is closed.
+	bus.Subscribe(EventConfigItemChanged, svc.onItemChanged)
 	svc.startPoller()
 	m.service = svc
 	return svc, nil
+}
+
+// CompleteSnapshot makes the Service's schema snapshot the complete one:
+// it re-reads the declaration seats -- whose set is final once every
+// component's Init turn has run, which is exactly the Start stage's
+// precondition -- and installs that schema, superseding any earlier
+// snapshot an Init-time Attach took before some module had declared. A
+// Module that has not attached yet attaches here instead, so the first
+// snapshot is the complete one; the returned Service must be published
+// into the by-type context in that case (the caller publishes it exactly
+// when attached is true).
+//
+// It is the descriptor's Start callback step (docs/internal/29 §5.2: a
+// full-catalog snapshot belongs where completeness is structural, not a
+// function of plan order). A completion that grows the schema into a
+// Sensitive item the earlier snapshot had not seen re-checks the cipher,
+// refusing with ErrCipherRequired exactly as Attach would have.
+func (m *Module) CompleteSnapshot(reg *pkgcore.ComponentRegistry) (svc *Service, attached bool, err error) {
+	m.attachMu.Lock()
+	if m.service == nil {
+		m.attachMu.Unlock()
+		service, attachErr := m.Attach(reg)
+		if attachErr != nil {
+			return nil, false, attachErr
+		}
+		return service, true, nil
+	}
+	service := m.service
+	m.attachMu.Unlock()
+
+	schema, err := buildSchema(reg.ConfigSeat().Items(), reg.FeaturesSeat().Flags())
+	if err != nil {
+		return nil, false, err
+	}
+	if err := m.validateCipherFor(schema); err != nil {
+		return nil, false, err
+	}
+	service.schema.Store(schema)
+	return service, false, nil
+}
+
+// validateCipherFor refuses a schema whose Sensitive items have no cipher
+// to seal them with.
+func (m *Module) validateCipherFor(schema *schema) error {
+	if m.cipher != nil {
+		return nil
+	}
+	for _, item := range schema.items {
+		if item.sensitive {
+			return ErrCipherRequired
+		}
+	}
+	return nil
 }

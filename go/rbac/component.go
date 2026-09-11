@@ -3,14 +3,16 @@ package rbac
 // component.go carries rbac's descriptor for the config-driven component
 // assembly: the selection key a composition configuration names, the assets
 // the module brings, the contracts it consumes, and the callbacks that
-// construct and declare it. Its Init runs the module's one declaration entry
-// point, Register, and then Attach -- the permission-catalog snapshot that
-// publishes the runtime *Service -- inside the assembly's Init stage, the
-// one stage whose seats accept writes: Attach installs the Service's own
-// subscriptions and job handlers, so it can run nowhere else. The *Service
-// is put into the by-type context, where a consumer requires and reads it.
-// The snapshot therefore covers the declarations made before this
-// component's Init turn in plan order, not the full catalog.
+// construct, declare and serve it. Its Init runs the module's one
+// declaration entry point, Register, and then Attach, inside the assembly's
+// Init stage -- the one stage whose seats accept writes: Attach installs
+// the Service's own subscriptions and job handlers against a first catalog
+// snapshot, so it can run nowhere else. Its Start callback then completes
+// the snapshot (docs/internal/29 §5.2): every component's Init turn has run
+// by then, so the permission catalog folded in is structurally complete,
+// and a host that attached during Init for its own consumers is upgraded to
+// the same complete set rather than left with whatever had been declared by
+// its turn in plan order.
 
 import (
 	"context"
@@ -59,9 +61,15 @@ func component() pkgcore.Component {
 			// shape WithSubtreeResolver documents.
 			{Token: (*SubtreeResolver)(nil), Optional: true},
 		},
-		// The construction product is the *Module; the *Service Attach
-		// builds from it is the runtime evaluation surface host steps take.
-		Provides:     []any{(*Module)(nil), (*Service)(nil)},
+		// The construction product is the *Module. The *Service Attach
+		// builds from it is the runtime evaluation surface host steps take;
+		// it is a runtime service published during Init (and completed at
+		// Start), so it stays out of Provides -- a service never resolves a
+		// token requirement.
+		Provides: []any{(*Module)(nil)},
+		// rbac's state is its rows in the deployment's shared database and
+		// the shared event bus, so several replicas may run it at once.
+		Capabilities: pkgcore.MultiReplicaSafe,
 		ConfigSchema: (*componentConfig)(nil),
 		Migrations:   migrations.FS,
 		Locales:      locales.FS,
@@ -115,6 +123,17 @@ func component() pkgcore.Component {
 			}
 			reg.Put(svc)
 			return nil
+		},
+		// Start completes the permission-catalog snapshot: every Init
+		// callback has run, so the seat holds the complete declaration set,
+		// and a snapshot taken at an earlier Init turn (a host attach, or
+		// this component's own) is superseded by the complete one.
+		Start: func(_ context.Context, reg *pkgcore.ComponentRegistry, instance any) error {
+			m, ok := instance.(*Module)
+			if !ok {
+				return fmt.Errorf("rbac: component start got a %T instance, want *rbac.Module", instance)
+			}
+			return m.CompleteSnapshot(reg)
 		},
 	}
 }
