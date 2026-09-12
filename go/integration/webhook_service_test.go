@@ -277,7 +277,7 @@ func TestService_UpdateWebhookSubscription_ConcurrentDelete_DeletionWins(t *test
 // webhook_repository_test.go's direct repository calls
 // (TestWebhookSubscriptionRepository_updateFields_PartialAndLiveOnly-style)
 // and in this test's sibling
-// TestWebhookSubscriptionRepository_RestoreTail_RestoreReadThenDeleteThenSave.
+// TestWebhookSubscriptionRepository_GuardedFlip_CannotResurrectADeleteThatLandedAfterTheRestoreRead.
 // This test's own role is the invariant under real scheduling pressure: no
 // interleaving of the two service calls may resurrect, ever.
 func TestService_RestoreWebhookSubscription_ConcurrentDelete_DeletionWins(t *testing.T) {
