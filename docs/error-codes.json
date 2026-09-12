@@ -132,7 +132,7 @@
       "file": "go/admin/handler.go",
       "ident": "errInternal",
       "kind": "declared",
-      "line": 26,
+      "line": 24,
       "module": "admin",
       "status": 500
     },
@@ -1680,7 +1680,7 @@
       "file": "go/dbkit/open.go",
       "ident": "",
       "kind": "inline",
-      "line": 189,
+      "line": 190,
       "module": "dbkit",
       "status": 500
     },
@@ -1698,7 +1698,7 @@
       "file": "go/dbkit/open.go",
       "ident": "",
       "kind": "inline",
-      "line": 263,
+      "line": 264,
       "module": "dbkit",
       "status": 500
     },
@@ -1725,7 +1725,7 @@
       "file": "go/dbkit/open.go",
       "ident": "",
       "kind": "inline",
-      "line": 242,
+      "line": 243,
       "module": "dbkit",
       "status": 400
     },
@@ -1761,7 +1761,7 @@
       "file": "go/dbkit/open.go",
       "ident": "",
       "kind": "inline",
-      "line": 178,
+      "line": 179,
       "module": "dbkit",
       "status": 500
     },
@@ -1788,7 +1788,7 @@
       "file": "go/dbkit/open.go",
       "ident": "",
       "kind": "inline",
-      "line": 172,
+      "line": 173,
       "module": "dbkit",
       "status": 500
     },
@@ -2337,7 +2337,7 @@
       "file": "examples/reference-app/internal/notes/handler.go",
       "ident": "errInternal",
       "kind": "declared",
-      "line": 85,
+      "line": 80,
       "module": "notes",
       "status": 500
     },
@@ -2346,7 +2346,7 @@
       "file": "examples/reference-app/internal/notes/handler.go",
       "ident": "",
       "kind": "inline",
-      "line": 230,
+      "line": 225,
       "module": "notes",
       "status": 400
     },
@@ -2355,7 +2355,7 @@
       "file": "examples/reference-app/internal/notes/handler.go",
       "ident": "ErrNoteNotFound",
       "kind": "declared",
-      "line": 115,
+      "line": 110,
       "module": "notes",
       "status": 404
     },
@@ -2364,7 +2364,7 @@
       "file": "examples/reference-app/internal/notes/handler.go",
       "ident": "ErrSubjectUnresolved",
       "kind": "declared",
-      "line": 100,
+      "line": 95,
       "module": "notes",
       "status": 401
     },
@@ -2373,7 +2373,7 @@
       "file": "examples/reference-app/internal/notes/handler.go",
       "ident": "ErrTextRequired",
       "kind": "declared",
-      "line": 32,
+      "line": 27,
       "module": "notes",
       "status": 400
     },
@@ -2382,7 +2382,7 @@
       "file": "examples/reference-app/internal/notes/handler.go",
       "ident": "ErrTextTooLong",
       "kind": "declared",
-      "line": 81,
+      "line": 76,
       "module": "notes",
       "status": 400
     },
@@ -3363,7 +3363,7 @@
       "file": "go/storage/errors.go",
       "ident": "ErrAllowedTypeUnsupported",
       "kind": "declared",
-      "line": 145,
+      "line": 146,
       "module": "storage",
       "status": 500
     },
@@ -3372,7 +3372,7 @@
       "file": "go/storage/errors.go",
       "ident": "ErrChecksumMismatch",
       "kind": "declared",
-      "line": 72,
+      "line": 73,
       "module": "storage",
       "status": 409
     },
@@ -3381,7 +3381,7 @@
       "file": "go/storage/errors.go",
       "ident": "ErrContentLengthMismatch",
       "kind": "declared",
-      "line": 82,
+      "line": 83,
       "module": "storage",
       "status": 400
     },
@@ -3390,7 +3390,7 @@
       "file": "go/storage/errors.go",
       "ident": "ErrContentMissing",
       "kind": "declared",
-      "line": 86,
+      "line": 87,
       "module": "storage",
       "status": 409
     },
@@ -3399,7 +3399,7 @@
       "file": "go/storage/errors.go",
       "ident": "ErrImageUnreadable",
       "kind": "declared",
-      "line": 108,
+      "line": 109,
       "module": "storage",
       "status": 400
     },
@@ -3408,7 +3408,7 @@
       "file": "go/storage/errors.go",
       "ident": "ErrInternal",
       "kind": "declared",
-      "line": 167,
+      "line": 168,
       "module": "storage",
       "status": 500
     },
@@ -3417,7 +3417,7 @@
       "file": "go/storage/errors.go",
       "ident": "ErrInvalidChecksum",
       "kind": "declared",
-      "line": 67,
+      "line": 68,
       "module": "storage",
       "status": 400
     },
@@ -3426,7 +3426,7 @@
       "file": "go/storage/errors.go",
       "ident": "ErrInvalidExpiry",
       "kind": "declared",
-      "line": 113,
+      "line": 114,
       "module": "storage",
       "status": 400
     },
@@ -3435,7 +3435,7 @@
       "file": "go/storage/errors.go",
       "ident": "ErrInvalidLimit",
       "kind": "declared",
-      "line": 199,
+      "line": 200,
       "module": "storage",
       "status": 400
     },
@@ -3444,7 +3444,7 @@
       "file": "go/storage/errors.go",
       "ident": "ErrInvalidRequestBody",
       "kind": "declared",
-      "line": 193,
+      "line": 194,
       "module": "storage",
       "status": 400
     },
@@ -3453,7 +3453,7 @@
       "file": "go/storage/errors.go",
       "ident": "ErrInvalidSize",
       "kind": "declared",
-      "line": 161,
+      "line": 162,
       "module": "storage",
       "status": 400
     },
@@ -3462,7 +3462,7 @@
       "file": "go/storage/errors.go",
       "ident": "ErrNoExpiryNotAllowed",
       "kind": "declared",
-      "line": 122,
+      "line": 123,
       "module": "storage",
       "status": 400
     },
@@ -3471,7 +3471,7 @@
       "file": "go/storage/errors.go",
       "ident": "ErrObjectNotFound",
       "kind": "declared",
-      "line": 38,
+      "line": 39,
       "module": "storage",
       "status": 404
     },
@@ -3480,7 +3480,7 @@
       "file": "go/storage/errors.go",
       "ident": "ErrObjectNotUploading",
       "kind": "declared",
-      "line": 43,
+      "line": 44,
       "module": "storage",
       "status": 409
     },
@@ -3489,7 +3489,7 @@
       "file": "go/storage/errors.go",
       "ident": "ErrObjectTooLarge",
       "kind": "declared",
-      "line": 61,
+      "line": 62,
       "module": "storage",
       "status": 400
     },
@@ -3498,7 +3498,7 @@
       "file": "go/storage/errors.go",
       "ident": "ErrObjectUploading",
       "kind": "declared",
-      "line": 54,
+      "line": 55,
       "module": "storage",
       "status": 409
     },
@@ -3507,7 +3507,7 @@
       "file": "go/storage/errors.go",
       "ident": "ErrPixelLimitExceeded",
       "kind": "declared",
-      "line": 103,
+      "line": 104,
       "module": "storage",
       "status": 400
     },
@@ -3516,7 +3516,7 @@
       "file": "go/storage/errors.go",
       "ident": "ErrQueueRequired",
       "kind": "declared",
-      "line": 177,
+      "line": 178,
       "module": "storage",
       "status": 500
     },
@@ -3525,7 +3525,7 @@
       "file": "go/storage/errors.go",
       "ident": "ErrSizeMismatch",
       "kind": "declared",
-      "line": 76,
+      "line": 77,
       "module": "storage",
       "status": 409
     },
@@ -3534,7 +3534,7 @@
       "file": "go/storage/errors.go",
       "ident": "ErrStoreError",
       "kind": "declared",
-      "line": 157,
+      "line": 158,
       "module": "storage",
       "status": 500
     },
@@ -3543,7 +3543,7 @@
       "file": "go/storage/errors.go",
       "ident": "ErrStoreUnavailable",
       "kind": "declared",
-      "line": 152,
+      "line": 153,
       "module": "storage",
       "status": 500
     },
@@ -3552,7 +3552,7 @@
       "file": "go/storage/errors.go",
       "ident": "ErrSweepPartialFailure",
       "kind": "declared",
-      "line": 131,
+      "line": 132,
       "module": "storage",
       "status": 500
     },
@@ -3561,7 +3561,7 @@
       "file": "go/storage/errors.go",
       "ident": "ErrTypeMismatch",
       "kind": "declared",
-      "line": 97,
+      "line": 98,
       "module": "storage",
       "status": 400
     },
@@ -3570,7 +3570,7 @@
       "file": "go/storage/errors.go",
       "ident": "ErrTypeNotAllowed",
       "kind": "declared",
-      "line": 92,
+      "line": 93,
       "module": "storage",
       "status": 400
     },
