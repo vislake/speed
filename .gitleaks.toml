@@ -11,10 +11,10 @@
 # in plaintext"). Those literals are the point of the code, so the three
 # files are exempted by path -- the allowlists block below lists them.
 #
-# Every exemption below is scoped to exact, named files -- the single
-# exception being the regex-scoped saasctl appconfig block, which
-# matches two exact Go identifier spellings rather than a file -- and
-# the scan keeps
+# Every exemption below is scoped to exact, named files -- the two
+# exceptions being the regex-scoped blocks (the saasctl appconfig
+# identifier spellings and the pki wiring-test fixture key), each
+# matching an exact literal rather than a file -- and the scan keeps
 # firing on every other file in the tree and in the commit history (the
 # security pipeline's secrets job checks out the full history -- see
 # .github/workflows/security.yml). Real credentials must never enter
@@ -55,6 +55,18 @@
 # rule firing on genuine secret-shaped values everywhere else, this file
 # included, and was re-verified against the same pinned gitleaks 8.30.1
 # over the full history.
+#
+# A second regex-scoped exemption covers a planted fixture value rather
+# than identifier references: go/pki/unittest/settings_wiring_test.go's
+# wiringTestCipherKey is the fixed 32-hex key its suite registers the
+# pki_local_key_enc GORM serializer under -- the same fixed literal
+# pki's in-package tests use -- so the suite can create authorities
+# whose generated private keys are stored through that serializer in its
+# own throwaway database. The literal is a sequential hex run
+# ("0123456789abcdef" twice), never random key material. Scoping to the
+# exact value rather than to the file keeps generic-api-key firing on
+# every other secret-shaped value in that file and in every other file,
+# the same posture the saasctl block above records.
 
 title = "speed gitleaks config"
 
@@ -78,6 +90,12 @@ paths = [
   "go/notification/contact_test.go",
   "go/notification/integration_test/postgres_leg_test.go",
   "examples/reference-app/internal/attestation/service_test.go",
+]
+
+[[allowlists]]
+description = "go/pki/unittest/settings_wiring_test.go: the wiring suite's wiringTestCipherKey is the fixed 32-hex fixture key under which the suite registers the pki_local_key_enc GORM serializer, so its end-to-end configuration cases can create authorities whose generated private keys are stored through that serializer in the suite's own throwaway SQLite database -- the same fixed literal pki's in-package tests use (go/pki/repository_test.go's testLocalKeyCipherKey). The literal is a sequential hex run (0123456789abcdef twice), never random key material and never a credential to anything; the allowlist is scoped to this exact value rather than to the file, so generic-api-key keeps firing on every other secret-shaped value in this file and in every other file"
+regexes = [
+  '''0123456789abcdef0123456789abcdef''',
 ]
 
 [[allowlists]]
