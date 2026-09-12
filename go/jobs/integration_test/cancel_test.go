@@ -40,8 +40,8 @@ import (
 // unreadable -> refuse, fail closed) is pinned at the unit tier against a
 // bare Queue by queue/asynq's marker_fail_closed_test.go's
 // TestQueue_DispatchAfterMarkerRead_FailsClosedOnUnreadableMarker. What
-// this file proves on asynq's own delivery path -- scheduler, forwarder
-// and processor -- is the skip half: a marker present suppresses the run.
+// this file proves on asynq's own delivery path -- forwarder and
+// processor -- is the skip half: a marker present suppresses the run.
 // The refuse half on that same path is the sibling
 // marker_read_fail_closed_test.go's.
 
