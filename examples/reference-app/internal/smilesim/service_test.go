@@ -18,6 +18,8 @@ import (
 	"github.com/vislake/speed/go/pkgcore"
 	"github.com/vislake/speed/go/pkgcore/apperr"
 	"github.com/vislake/speed/go/storage"
+
+	"github.com/vislake/speed/examples/reference-app/internal/testutil/assemblytest"
 )
 
 // testCredentialCipherKey is a fixed, recognizable 32-byte AES-GCM key for
@@ -46,10 +48,9 @@ func registerCredentialSerializer() {
 	})
 }
 
-// fakeImageProviderName is the ImageProviderRegistry name fakeImageProvider
-// below self-registers under, isolated from the real, process-global
-// aigateway.ImageProviderRegistry through the per-test registry
-// newTestService builds.
+// fakeImageProviderName is the component name fakeImageProvider is selected
+// under, isolated from the process-global component set
+// through the per-test registry newTestService assembles.
 const fakeImageProviderName = "image.fake-smilesim-provider"
 
 // testSystemPurpose is the SystemPurpose newTestService's platform-
@@ -193,8 +194,9 @@ func newTestCreditService(t *testing.T) *billing.CreditService {
 }
 
 // newTestService returns a Service backed by a fresh, per-test SQLite
-// database carrying ai-gateway's real migrations, with provider registered
-// as the sole ImageProviderRegistry entry LogicalModel routes to. queue
+// database carrying ai-gateway's real migrations, with provider attached as
+// the sole selected member of the registry's "image" directory LogicalModel
+// routes to. queue
 // records what Service.Simulate causes Gateway.GenerateImage to enqueue,
 // and credits (nil is legal -- see Service's own doc comment on its
 // credits field) is the CreditService Simulate reserves against and
@@ -234,35 +236,6 @@ func newTestServiceWithDB(t *testing.T, db *gorm.DB, provider aigateway.ImagePro
 	}
 	registerCredentialSerializer()
 
-	migrations := dbkit.NewMigrationRegistry()
-	if err := migrations.Register(aigateway.NewModule(db)); err != nil {
-		t.Fatalf("register ai-gateway migrations: %v", err)
-	}
-	if err := migrations.Apply(context.Background(), db, dbkit.DialectSQLite); err != nil {
-		t.Fatalf("apply migrations: %v", err)
-	}
-
-	registry := pkgcore.NewSeamRegistry[aigateway.ImageProvider]()
-	if err := registry.Register(pkgcore.Registration[aigateway.ImageProvider]{
-		Name:         fakeImageProviderName,
-		Capabilities: pkgcore.Stateless,
-		New:          func(pkgcore.Config) (aigateway.ImageProvider, error) { return provider, nil },
-	}); err != nil {
-		t.Fatalf("register fake image provider: %v", err)
-	}
-
-	credentials := aigateway.NewCredentialService(db)
-	pkgcore.RegisterSystemPurpose(testSystemPurpose)
-	sysCtx, err := pkgcore.WithSystemContext(context.Background(), pkgcore.SystemReason{
-		Actor: "test-actor", Purpose: testSystemPurpose,
-	})
-	if err != nil {
-		t.Fatalf("WithSystemContext: %v", err)
-	}
-	if err := credentials.SetPlatformCredential(sysCtx, fakeImageProviderName, "sk-test", ""); err != nil {
-		t.Fatalf("SetPlatformCredential: %v", err)
-	}
-
 	// storageModule is never driven through the real assembly here --
 	// this file's tests never reach a job handler that would need a real
 	// ObjectStore -- so ObjectService() is real but inert (its host seams
@@ -271,20 +244,50 @@ func newTestServiceWithDB(t *testing.T, db *gorm.DB, provider aigateway.ImagePro
 
 	gatewayOptions := []aigateway.GatewayOption{
 		aigateway.WithModelRoute(LogicalModel, fakeImageProviderName, "vendor-model-x"),
-		aigateway.WithImageProviderRegistry(registry),
 		aigateway.WithImageGeneration(queue, storageModule.ObjectService()),
 	}
 	if entitlementSeam != nil {
 		gatewayOptions = append(gatewayOptions, aigateway.WithEntitlements(entitlementSeam))
 	}
-	gateway := aigateway.NewGateway(credentials, gatewayOptions...)
+	module := aigateway.NewModule(db, gatewayOptions...)
+
+	migrations := dbkit.NewMigrationRegistry()
+	if err := migrations.Register(module); err != nil {
+		t.Fatalf("register ai-gateway migrations: %v", err)
+	}
+	if err := migrations.Apply(context.Background(), db, dbkit.DialectSQLite); err != nil {
+		t.Fatalf("apply migrations: %v", err)
+	}
+
+	// The fake provider is the sole selected member of the registry's
+	// "image" directory, attached to the module's Gateway through the same
+	// Module.Register declaration turn the production assembly drives.
+	assemblytest.AssembleWithProviders(t, module, pkgcore.Component{
+		Name:     fakeImageProviderName,
+		Module:   "image",
+		Provides: []any{(*aigateway.ImageProvider)(nil)},
+		New: func(context.Context, *pkgcore.ComponentRegistry, pkgcore.ComponentConfig) (any, error) {
+			return provider, nil
+		},
+	})
+
+	pkgcore.RegisterSystemPurpose(testSystemPurpose)
+	sysCtx, err := pkgcore.WithSystemContext(context.Background(), pkgcore.SystemReason{
+		Actor: "test-actor", Purpose: testSystemPurpose,
+	})
+	if err != nil {
+		t.Fatalf("WithSystemContext: %v", err)
+	}
+	if err := module.Credentials().SetPlatformCredential(sysCtx, fakeImageProviderName, "sk-test", ""); err != nil {
+		t.Fatalf("SetPlatformCredential: %v", err)
+	}
 
 	applyMigrations(t, db)
 
 	store := NewReservationStore(db)
 	simulations := NewSimulationStore(db)
 
-	return NewService(gateway, credits, pkgcore.NewMemoryEventBus(), queue, store, simulations, entitlementSeam)
+	return NewService(module.Gateway(), credits, pkgcore.NewMemoryEventBus(), queue, store, simulations, entitlementSeam)
 }
 
 func TestService_Simulate_EnqueuesImageToImageUnderTheLogicalModel(t *testing.T) {

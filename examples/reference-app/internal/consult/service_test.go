@@ -14,6 +14,7 @@ import (
 	"github.com/vislake/speed/go/pkgcore"
 
 	"github.com/vislake/speed/examples/reference-app/internal/notes"
+	"github.com/vislake/speed/examples/reference-app/internal/testutil/assemblytest"
 )
 
 // testCredentialCipherKey is a fixed, recognizable 32-byte AES-GCM key for
@@ -44,10 +45,9 @@ func registerCredentialSerializer() {
 	})
 }
 
-// fakeProviderName is the ChatProviderRegistry name fakeChatProvider below
-// self-registers under for these tests, isolated from the real, process-
-// global aigateway.ChatProviderRegistry through the per-test registry
-// newTestService builds.
+// fakeProviderName is the component name fakeChatProvider is selected
+// under for these tests, isolated from the process-global component set
+// through the per-test registry newTestService assembles.
 const fakeProviderName = "chat.fake-consult-provider"
 
 // testSystemPurpose is the SystemPurpose newTestService's platform-
@@ -96,9 +96,9 @@ var _ aigateway.ChatProvider = (*fakeChatProvider)(nil)
 // newTestService returns a Service backed by a fresh, per-test SQLite
 // database carrying BOTH notes' and ai-gateway's real migrations, sharing
 // one connection -- exactly as internal/app/server.go's BuildServer wires the
-// two in production -- with provider registered as the sole
-// ChatProviderRegistry entry LogicalModel routes to (isolated from the
-// real, process-global aigateway.ChatProviderRegistry). It also returns the
+// two in production -- with provider attached as the sole selected member
+// of the registry's "chat" directory LogicalModel routes to (isolated from
+// the process-global component set). It also returns the
 // notes.Repository, so a test can seed a note directly.
 func newTestService(t *testing.T, provider aigateway.ChatProvider) (*Service, *notes.Repository) {
 	t.Helper()
@@ -106,28 +106,34 @@ func newTestService(t *testing.T, provider aigateway.ChatProvider) (*Service, *n
 
 	db := dbtest.NewSQLite(t)
 
+	module := aigateway.NewModule(db,
+		aigateway.WithModelRoute(LogicalModel, fakeProviderName, "vendor-model-x"),
+	)
+
 	migrations := dbkit.NewMigrationRegistry()
 	if err := migrations.Register(notes.NewModule(db)); err != nil {
 		t.Fatalf("register notes migrations: %v", err)
 	}
-	if err := migrations.Register(aigateway.NewModule(db)); err != nil {
+	if err := migrations.Register(module); err != nil {
 		t.Fatalf("register ai-gateway migrations: %v", err)
 	}
 	if err := migrations.Apply(context.Background(), db, dbkit.DialectSQLite); err != nil {
 		t.Fatalf("apply migrations: %v", err)
 	}
 
-	registry := pkgcore.NewSeamRegistry[aigateway.ChatProvider]()
-	if err := registry.Register(pkgcore.Registration[aigateway.ChatProvider]{
-		Name:         fakeProviderName,
-		Capabilities: pkgcore.Stateless,
-		New:          func(pkgcore.Config) (aigateway.ChatProvider, error) { return provider, nil },
-	}); err != nil {
-		t.Fatalf("register fake provider: %v", err)
-	}
+	// The fake provider is the sole selected member of the registry's
+	// "chat" directory, attached to the module's Gateway through the same
+	// Module.Register declaration turn the production assembly drives.
+	assemblytest.AssembleWithProviders(t, module, pkgcore.Component{
+		Name:     fakeProviderName,
+		Module:   "chat",
+		Provides: []any{(*aigateway.ChatProvider)(nil)},
+		New: func(context.Context, *pkgcore.ComponentRegistry, pkgcore.ComponentConfig) (any, error) {
+			return provider, nil
+		},
+	})
 
 	notesRepo := notes.NewRepository(db)
-	credentials := aigateway.NewCredentialService(db)
 
 	pkgcore.RegisterSystemPurpose(testSystemPurpose)
 	sysCtx, err := pkgcore.WithSystemContext(context.Background(), pkgcore.SystemReason{
@@ -136,16 +142,11 @@ func newTestService(t *testing.T, provider aigateway.ChatProvider) (*Service, *n
 	if err != nil {
 		t.Fatalf("WithSystemContext: %v", err)
 	}
-	if err := credentials.SetPlatformCredential(sysCtx, fakeProviderName, "sk-test", ""); err != nil {
+	if err := module.Credentials().SetPlatformCredential(sysCtx, fakeProviderName, "sk-test", ""); err != nil {
 		t.Fatalf("SetPlatformCredential: %v", err)
 	}
 
-	gateway := aigateway.NewGateway(credentials,
-		aigateway.WithModelRoute(LogicalModel, fakeProviderName, "vendor-model-x"),
-		aigateway.WithChatProviderRegistry(registry),
-	)
-
-	return NewService(notesRepo, gateway), notesRepo
+	return NewService(notesRepo, module.Gateway()), notesRepo
 }
 
 func TestService_Suggest_ReadsNoteAndReturnsGatewayReply(t *testing.T) {

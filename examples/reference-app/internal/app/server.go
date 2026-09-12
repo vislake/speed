@@ -851,18 +851,17 @@ func (b *serverBuild) composition(live bool) pkgcore.ComponentConfig {
 	// this boot will write (setPlatformCredentials' own condition) has its
 	// component selected here, carrying the same base_url/api_key pair the
 	// credential row carries. Selecting the member is what lands ai-gateway's
-	// per-request resolution on the component face -- the member's own
-	// construction with the resolved credential as the per-call override,
-	// preferred over the package-level ChatProviderRegistry /
-	// ImageProviderRegistry -- so this app reaches its providers through the
-	// composition it declares. A provider without a configured key is not
+	// per-request resolution on the selected member -- the member's own
+	// construction with the resolved credential as the per-call override --
+	// so this app reaches its providers through the
+	// composition it declares, and an unselected provider name does not
+	// resolve at all. A provider without a configured key is not
 	// selected: no request could resolve a credential for it in the first
-	// place, and were one written later (a tenant BYOK row), the name would
-	// keep resolving through the package-level registry -- the module's
-	// documented fallback to the same implementation under the same name.
+	// place, and a tenant BYOK row written later resolves only once the
+	// provider's member is selected.
 	// The block must carry both values or neither: the descriptor refuses a
-	// half-configured provider at construction, the same coded refusal the
-	// registry Build answers (the boot's own credential write refuses a
+	// half-configured provider at construction, the same coded refusal a
+	// direct construction answers (the boot's own credential write refuses a
 	// key-without-URL pair the same way, naming the provider).
 	if b.cfg.AIGatewayAPIKey != "" {
 		components = components.With("chat.openai-compatible", pkgcore.ComponentConfig{}.
