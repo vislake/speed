@@ -17,7 +17,7 @@ type AiGatewayCredential struct {
 	// BaseURL The credential's configured base URL; empty when the provider's own constructor supplies a default and none was set here.
 	BaseURL *string `json:"baseUrl,omitempty"`
 
-	// Provider The ChatProviderRegistry or ImageProviderRegistry name.
+	// Provider The provider's component name.
 	Provider string `json:"provider"`
 
 	// Scope "system" or "tenant" -- which scope this metadata describes. On aiGateway_getCredential this is whichever scope actually answered (CredentialService.Resolve's own fallback order); on the two write operations it is always the scope that operation just wrote.

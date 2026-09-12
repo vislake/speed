@@ -18,12 +18,12 @@ package aigateway
 //   - ImageProvider's own three methods (image_types.go) trade in
 //     ImageBytes -- raw content plus a MIME type -- mirroring ChatProvider,
 //     which trades in ChatMessage content rather than a storage reference
-//     of its own. This is a deliberate choice, not an oversight: pkgcore.
-//     SeamRegistry[T].Build's Config is a flat map[string]string (the same
-//     shape ChatProviderRegistry.Build already uses for base_url/api_key),
-//     which cannot carry a live go/storage handle, so an ImageProvider
-//     resolved fresh per job the way ChatProviderRegistry resolves fresh
-//     per chat call could not reach a storage accessor even if its
+//     of its own. This is a deliberate choice, not an oversight: the
+//     per-call construction's configuration is a flat map[string]string
+//     (the same shape the chat side's per-call resolution already uses for
+//     base_url/api_key), which cannot carry a live go/storage handle, so an
+//     ImageProvider resolved fresh per job the way the chat side resolves
+//     fresh per call could not reach a storage accessor even if its
 //     signature named one. Making every ImageProvider implementation --
 //     including every future third-party one -- responsible for its own
 //     storage reads and writes would also needlessly couple simple vendor
@@ -112,19 +112,6 @@ type imageGenerateTaskPayload struct {
 	InputObjectID string         `json:"input_object_id,omitempty"`
 	MaskObjectID  string         `json:"mask_object_id,omitempty"`
 	Params        map[string]any `json:"params,omitempty"`
-}
-
-// WithImageProviderRegistry overrides the package-level
-// ImageProviderRegistry a Gateway resolves ImageProvider implementations
-// from. Tests use this to isolate a Gateway under test from the
-// process-global registry's real registrations, mirroring
-// WithChatProviderRegistry exactly.
-func WithImageProviderRegistry(registry *pkgcore.SeamRegistry[ImageProvider]) GatewayOption {
-	return func(g *Gateway) {
-		if registry != nil {
-			g.imageRegistry = registry
-		}
-	}
 }
 
 // WithImageGeneration wires the two seams Gateway.GenerateImage needs to

@@ -5,26 +5,23 @@ package aigateway
 // "image.openai-compatible", the descriptors a composition configuration
 // selects as the "chat" and "image" modules' members. They live beside the
 // implementations they adapt, the same file-locality the module's other
-// component descriptors keep. Both faces carry the identical names -- the
-// components and the seam registrations (registry.go, image_registry.go)
-// are two resolution paths to the same implementations, and the
-// registrations stay the name-based paths a Preset-shaped caller resolves
-// through.
+// component descriptors keep.
 //
 // # The route's logical name is the component name
 //
-// A model route's Provider field is a provider's logical name: the string
+// A model route's Provider field is a provider's name: the string
 // a host writes in WithModelRoute, the key CredentialService.Resolve looks
-// a credential up under, and the registry key the provider registers under.
+// a credential up under, and the component name the provider carries.
 // The components declared here carry exactly those names, so the
 // resolution from a route's logical name to the component that carries the
 // provider is the identity -- owned entirely inside this module, where a
 // host's existing route strings, credential rows and composition selections
 // need no translation and gain no new configuration obligation.
 // TestProviderComponentNames_MatchProviderNamesAndCapabilities pins the
-// identity against both registries, so a rename on either side fails a test
-// instead of silently breaking a host's routes; should the two name spaces
-// ever diverge, this file is where the mapping belongs.
+// identity against the descriptors' own name, module and capability
+// declarations, so a rename or redeclaration fails a test instead of
+// silently breaking a host's routes; should the names ever diverge, this
+// file is where the mapping belongs.
 
 import (
 	"context"

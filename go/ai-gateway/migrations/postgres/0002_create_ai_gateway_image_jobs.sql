@@ -43,7 +43,7 @@
 -- temporarily, in exchange for closing the ordering window a marker
 -- written only after the storage write could not.
 --
--- provider records which ImageProviderRegistry name actually answered, so
+-- provider records which provider name actually answered, so
 -- an attempt that skips the vendor call (because status is already
 -- "generated") can still log which provider generated the image, without
 -- re-resolving a credential it no longer needs.

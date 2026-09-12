@@ -85,7 +85,7 @@ func RegisterCredentialAPIKeySerializer(cipher *dbkit.Cipher) error {
 // NULL, where the empty-string sentinel collapses them into the single row
 // the primary key promises.
 type credentialRow struct {
-	// Provider is the ChatProviderRegistry name this credential is for
+	// Provider is the provider name this credential is for
 	// (for example "chat.openai-compatible").
 	Provider string `gorm:"column:provider;primaryKey;size:100"`
 	// Scope is CredentialScopeSystem or CredentialScopeTenant.
@@ -118,7 +118,7 @@ func (credentialRow) TableName() string { return "ai_gateway_credentials" }
 // Credential is one resolved credential -- CredentialService.Resolve's
 // result.
 type Credential struct {
-	// Provider is the ChatProviderRegistry name this credential resolves.
+	// Provider is the provider name this credential resolves.
 	Provider string
 	// Scope reports which tier actually answered: CredentialScopeTenant
 	// when the caller's own tenant had a BYOK row, CredentialScopeSystem

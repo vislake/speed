@@ -231,6 +231,7 @@ func TestGateway_Resolve_TenantScopeCredential_GetsGuardedHTTPClient(t *testing.
 	g := NewGateway(credentials,
 		WithModelRoute("chat:default", ProviderOpenAICompatible, "gpt-4o-mini"),
 	)
+	g.components = selectRealChat(t)
 
 	provider, route, err := g.resolve(tenantCtx, "chat:default")
 	if err != nil {
@@ -280,6 +281,7 @@ func TestGateway_ResolveImage_TenantScopeCredential_GetsGuardedHTTPClient(t *tes
 		WithModelRoute("image:default", ProviderOpenAICompatibleImage, "dall-e-3"),
 		WithImageGeneration(queue, newTestStorageObjectService(t)),
 	)
+	g.components = selectRealImage(t)
 
 	provider, _, err := g.resolveImage(tenantCtx, "image:default")
 	if err != nil {
@@ -327,8 +329,8 @@ func TestGateway_Resolve_TenantScopeCredential_UnguardableProvider_Refused(t *te
 	}
 	g := NewGateway(credentials,
 		WithModelRoute("chat:default", fakeProviderName, "vendor-model-x"),
-		WithChatProviderRegistry(newFakeGatewayRegistry(t, provider)),
 	)
+	g.components = selectOnly(t, context.Background(), fakeChatComponent(fakeProviderName, provider))
 
 	// fakeChatProvider deliberately implements no setHTTPClient, so the
 	// tenant-tier combination must be refused with the coded error naming
@@ -374,8 +376,8 @@ func TestGateway_ResolveImage_TenantScopeCredential_UnguardableProvider_Refused(
 	}
 	g := NewGateway(credentials,
 		WithModelRoute("image:default", fakeImageProviderName, "dall-e-3"),
-		WithImageProviderRegistry(newFakeImageRegistry(t, provider)),
 	)
+	g.components = selectOnly(t, context.Background(), fakeImageComponent(fakeImageProviderName, provider))
 
 	_, _, err = g.resolveImage(tenantCtx, "image:default")
 	if err == nil {

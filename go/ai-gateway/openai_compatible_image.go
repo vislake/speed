@@ -10,6 +10,8 @@ import (
 	"net/http"
 	"net/textproto"
 	"strings"
+
+	"github.com/vislake/speed/go/pkgcore"
 )
 
 // imagesGenerationsPath is the OpenAI-compatible text-to-image endpoint
@@ -88,6 +90,34 @@ func NewOpenAICompatibleImageProvider(baseURL, apiKey string, opts ...OpenAIComp
 		opt(p)
 	}
 	return p
+}
+
+// ProviderOpenAICompatibleImage is this provider's name: the component name
+// the "image" directory carries it under (provider_components.go), the
+// string a route's Provider field holds, and the key a credential row is
+// stored under -- one identity across all three, mirroring
+// ProviderOpenAICompatible's naming for the chat side ("chat." vs "image."
+// prefix).
+const ProviderOpenAICompatibleImage = "image.openai-compatible"
+
+// openaiCompatibleImageFromConfig adapts a flat pkgcore.Config onto
+// NewOpenAICompatibleImageProvider, mirroring openaiCompatibleFromConfig's
+// identical shape for the chat side -- including its coded
+// ErrProviderConfigInvalid refusal of a config without base_url (or
+// api_key), with pkgcore.ErrMissingSeamConfig attached as the cause for
+// errors.Is-based callers: the imageProviderComponent descriptor's New
+// callback bridges its structured block onto this map, and
+// Gateway.buildImage passes the credential it just resolved for the current
+// job execution through the per-call construction override.
+func openaiCompatibleImageFromConfig(cfg pkgcore.Config) (ImageProvider, error) {
+	baseURL := cfg["base_url"]
+	apiKey := cfg["api_key"]
+	if baseURL == "" || apiKey == "" {
+		return nil, ErrProviderConfigInvalid.
+			WithParam("provider", ProviderOpenAICompatibleImage).
+			WithParam("reason", "credential carries no base_url or api_key")
+	}
+	return NewOpenAICompatibleImageProvider(baseURL, apiKey), nil
 }
 
 // setHTTPClient implements httpClientSettable (provider_guard.go): Gateway's

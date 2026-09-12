@@ -46,26 +46,27 @@ var _ ChatProvider = (*fakeChatProvider)(nil)
 
 const fakeProviderName = "chat.fake-test-provider"
 
-// newFakeGatewayRegistry returns a *pkgcore.SeamRegistry[ChatProvider]
-// containing only provider, registered under fakeProviderName -- isolating
-// a test from the process-global ChatProviderRegistry's real registrations.
-func newFakeGatewayRegistry(t *testing.T, provider ChatProvider) *pkgcore.SeamRegistry[ChatProvider] {
-	t.Helper()
-	reg := pkgcore.NewSeamRegistry[ChatProvider]()
-	if err := reg.Register(pkgcore.Registration[ChatProvider]{
-		Name:         fakeProviderName,
-		Capabilities: pkgcore.Stateless,
-		New:          func(pkgcore.Config) (ChatProvider, error) { return provider, nil },
-	}); err != nil {
-		t.Fatalf("register fake provider: %v", err)
+// fakeChatComponent returns a component descriptor serving provider
+// verbatim under name in the "chat" directory -- the fake every Gateway
+// pipeline test selects, isolating it from the process-global component
+// set the way a real assembly's selection does.
+func fakeChatComponent(name string, provider ChatProvider) pkgcore.Component {
+	return pkgcore.Component{
+		Name:     name,
+		Module:   "chat",
+		Provides: []any{(*ChatProvider)(nil)},
+		New: func(context.Context, *pkgcore.ComponentRegistry, pkgcore.ComponentConfig) (any, error) {
+			return provider, nil
+		},
 	}
-	return reg
 }
 
 // gatewayTestFixture builds a Gateway wired to a fake provider (routed
-// under "chat:default"), a real CredentialService over a fresh test
-// database, and a stored platform credential -- the common setup every
-// pipeline test below starts from.
+// under "chat:default") attached through a registry selecting only that
+// fake -- the component-face shape every pipeline call resolves through --
+// a real CredentialService over a fresh test database, and a stored
+// platform credential: the common setup every pipeline test below starts
+// from.
 func gatewayTestFixture(t *testing.T, provider *fakeChatProvider, opts ...GatewayOption) *Gateway {
 	t.Helper()
 	credentials := NewCredentialService(newTestDB(t))
@@ -79,9 +80,10 @@ func gatewayTestFixture(t *testing.T, provider *fakeChatProvider, opts ...Gatewa
 
 	allOpts := append([]GatewayOption{
 		WithModelRoute("chat:default", fakeProviderName, "vendor-model-x"),
-		WithChatProviderRegistry(newFakeGatewayRegistry(t, provider)),
 	}, opts...)
-	return NewGateway(credentials, allOpts...)
+	g := NewGateway(credentials, allOpts...)
+	g.components = selectOnly(t, context.Background(), fakeChatComponent(fakeProviderName, provider))
+	return g
 }
 
 func chatReq() ChatRequest {
@@ -435,12 +437,15 @@ func TestGateway_Chat_EmptyBaseURLCredential_RefusedWithCodedError(t *testing.T)
 	if setErr := credentials.SetPlatformCredential(sysCtx, ProviderOpenAICompatible, "sk-test", ""); setErr != nil {
 		t.Fatalf("SetPlatformCredential: %v", setErr)
 	}
-	// No WithChatProviderRegistry: the package-level registry's real
-	// registered constructor (openaiCompatibleFromConfig) is what must
-	// classify the empty base_url.
+	// The real provider component is what must classify the empty base_url:
+	// it is selected with a placeholder block, and the per-call override
+	// carries the credential just resolved (empty base_url and all), so the
+	// refusal comes from openaiCompatibleFromConfig exactly as in
+	// production.
 	g := NewGateway(credentials,
 		WithModelRoute("chat:default", ProviderOpenAICompatible, "gpt-4o-mini"),
 	)
+	g.components = selectRealChat(t)
 
 	tenantCtx := pkgcore.WithTenant(context.Background(), "tenant-acme")
 	_, err = g.Chat(tenantCtx, chatReq())
@@ -451,8 +456,8 @@ func TestGateway_Chat_EmptyBaseURLCredential_RefusedWithCodedError(t *testing.T)
 
 // TestGateway_GenerateImage_EmptyBaseURLCredential_RefusedWithCodedError is
 // the image-side twin of the Chat test above: resolveImage builds through
-// the image registry's own real constructor, which must classify an empty
-// base_url identically, before anything is enqueued.
+// the image provider component's own real constructor, which must classify
+// an empty base_url identically, before anything is enqueued.
 func TestGateway_GenerateImage_EmptyBaseURLCredential_RefusedWithCodedError(t *testing.T) {
 	credentials := NewCredentialService(newTestDB(t))
 	sysCtx, err := pkgcore.WithSystemContext(context.Background(), systemTestCtx(t))
@@ -467,6 +472,7 @@ func TestGateway_GenerateImage_EmptyBaseURLCredential_RefusedWithCodedError(t *t
 		WithModelRoute("image:default", ProviderOpenAICompatibleImage, "dall-e-3"),
 		WithImageGeneration(queue, newTestStorageObjectService(t)),
 	)
+	g.components = selectRealImage(t)
 
 	tenantCtx := pkgcore.WithTenant(context.Background(), "tenant-acme")
 	_, err = g.GenerateImage(tenantCtx, imageReq())
@@ -537,6 +543,7 @@ func TestGateway_Resolve_BuildFailure_WrapsWithTheFamilyLabel(t *testing.T) {
 		t.Fatalf("SetPlatformCredential: %v", setErr)
 	}
 	g := NewGateway(credentials, WithModelRoute("chat:default", ProviderOpenAICompatible, "gpt-4o-mini"))
+	g.components = selectRealChat(t)
 
 	_, _, resolveErr := g.resolve(context.Background(), "chat:default")
 	if code, ok := apperrCode(resolveErr); !ok || code != ErrProviderConfigInvalid.Code {
@@ -562,6 +569,7 @@ func TestGateway_ResolveImage_BuildFailure_WrapsWithTheFamilyLabel(t *testing.T)
 		t.Fatalf("SetPlatformCredential: %v", setErr)
 	}
 	g := NewGateway(credentials, WithModelRoute("image:default", ProviderOpenAICompatibleImage, "dall-e-3"))
+	g.components = selectRealImage(t)
 
 	_, _, resolveErr := g.resolveImage(context.Background(), "image:default")
 	if code, ok := apperrCode(resolveErr); !ok || code != ErrProviderConfigInvalid.Code {

@@ -749,7 +749,7 @@ export interface AdminError {
  * A resolved or just-written credential's metadata. Never carries the api key.
  */
 export interface AiGatewayCredential {
-  /** The ChatProviderRegistry or ImageProviderRegistry name. */
+  /** The provider's component name. */
   provider: string;
   /** "system" or "tenant" -- which scope this metadata describes. On aiGateway_getCredential this is whichever scope actually answered (CredentialService.Resolve's own fallback order); on the two write operations it is always the scope that operation just wrote. */
   scope: string;

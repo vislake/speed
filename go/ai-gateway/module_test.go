@@ -46,8 +46,8 @@ func TestModule_GatewayAndCredentials_EndToEnd(t *testing.T) {
 	provider := &fakeChatProvider{chatResp: ChatResponse{Message: ChatMessage{Role: RoleAssistant, Content: "hi there"}}}
 	m := NewModule(db,
 		WithModelRoute("chat:default", fakeProviderName, "vendor-model-x"),
-		WithChatProviderRegistry(newFakeGatewayRegistry(t, provider)),
 	)
+	m.Gateway().components = selectOnly(t, context.Background(), fakeChatComponent(fakeProviderName, provider))
 
 	sysCtx, err := pkgcore.WithSystemContext(context.Background(), systemTestCtx(t))
 	if err != nil {

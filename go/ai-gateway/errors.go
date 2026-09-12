@@ -124,12 +124,12 @@ var (
 	// omitted baseUrl as "leave the provider's own default in effect", a
 	// contract no provider in this module actually offers -- is a
 	// misconfiguration no call can ever succeed with. The refusal is
-	// declared at registry-constructor time, where the provider's own
+	// declared at constructor time, where the provider's own
 	// config needs are known, and classified Invalid with this code so a
 	// caller can tell "fix the stored credential" apart from a genuine
 	// provider/vendor failure -- never an uncoded error a transport layer
 	// must fold into a bare internal failure. The cause is
-	// pkgcore.ErrMissingSeamConfig, so errors.Is-based registry callers keep
+	// pkgcore.ErrMissingSeamConfig, so errors.Is-based callers keep
 	// recognizing the refusal.
 	ErrProviderConfigInvalid = apperr.Invalid("aigateway.provider_config_invalid").
 					WithCause(pkgcore.ErrMissingSeamConfig)
@@ -137,9 +137,9 @@ var (
 	// ErrProviderNotSSRFGuardable reports Gateway.Chat/ChatStream/GenerateImage
 	// resolving a TENANT-tier credential to a provider that cannot be
 	// SSRF-guarded -- a provider not implementing this module's unexported
-	// httpClientSettable, which today means a third-party registration into
-	// ChatProviderRegistry/ImageProviderRegistry rather than one of the two
-	// module-native OpenAI-compatible built-ins. A tenant-scope credential
+	// httpClientSettable, which today means a third-party provider component
+	// rather than one of the two module-native OpenAI-compatible built-ins.
+	// A tenant-scope credential
 	// is the caller's own influence over where the platform dials (provider_guard.go's
 	// file header), and only a provider carrying the guarded client has the
 	// dial-time re-check that defeats DNS rebinding; the alternative --

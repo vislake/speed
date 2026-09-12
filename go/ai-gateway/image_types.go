@@ -38,8 +38,8 @@ const (
 type ImageRequest struct {
 	// Model is the logical model key at the Gateway boundary, exactly like
 	// ChatRequest.Model -- resolved through the same WithModelRoute
-	// mechanism (a route's Provider names an ImageProviderRegistry entry,
-	// never a ChatProviderRegistry one) and the same CredentialService
+	// mechanism (a route's Provider names an "image" component,
+	// never a "chat" one) and the same CredentialService
 	// table, keyed by that Provider name.
 	Model string
 

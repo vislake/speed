@@ -12,6 +12,7 @@ import (
 	"time"
 
 	obs "github.com/vislake/speed/go/observability"
+	"github.com/vislake/speed/go/pkgcore"
 )
 
 // chatCompletionsPath is the OpenAI-compatible chat-completions endpoint
@@ -101,6 +102,39 @@ func NewOpenAICompatibleProvider(baseURL, apiKey string, opts ...OpenAICompatibl
 		opt(p)
 	}
 	return p
+}
+
+// ProviderOpenAICompatible is this provider's name: the component name the
+// "chat" directory carries it under (provider_components.go), the string a
+// route's Provider field holds, and the key a credential row is stored
+// under -- one identity across all three.
+const ProviderOpenAICompatible = "chat.openai-compatible"
+
+// openaiCompatibleFromConfig adapts a flat pkgcore.Config onto
+// NewOpenAICompatibleProvider: the chatProviderComponent descriptor's New
+// callback bridges its structured configuration block onto this map, and
+// Gateway.buildChat feeds the credential it just resolved for the current
+// call (base_url, api_key) through the per-call construction override, so
+// this constructor performs no I/O at all; it only validates and assigns
+// fields.
+//
+// The refusal of a config without base_url (or api_key) is this
+// constructor's own declaration that OpenAICompatibleProvider has no
+// default endpoint of its own: it comes back as the coded, Invalid-
+// classified ErrProviderConfigInvalid, so a caller resolving a route onto
+// a credential stored without a base URL sees a distinguishable
+// configuration error rather than an uncoded one. pkgcore.ErrMissingSeamConfig
+// stays attached as the cause, so errors.Is-based callers keep
+// recognizing the refusal unchanged.
+func openaiCompatibleFromConfig(cfg pkgcore.Config) (ChatProvider, error) {
+	baseURL := cfg["base_url"]
+	apiKey := cfg["api_key"]
+	if baseURL == "" || apiKey == "" {
+		return nil, ErrProviderConfigInvalid.
+			WithParam("provider", ProviderOpenAICompatible).
+			WithParam("reason", "credential carries no base_url or api_key")
+	}
+	return NewOpenAICompatibleProvider(baseURL, apiKey), nil
 }
 
 // setHTTPClient implements httpClientSettable (provider_guard.go): Gateway.resolve

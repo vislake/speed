@@ -5077,7 +5077,7 @@ components:
       properties:
         provider:
           type: string
-          description: The ChatProviderRegistry or ImageProviderRegistry name.
+          description: The provider's component name.
         scope:
           type: string
           description: >-
@@ -6117,9 +6117,9 @@ components:
       in: path
       required: true
       description: >-
-        A ChatProviderRegistry or ImageProviderRegistry name, for example
-        "chat.openai-compatible" or "image.openai-compatible" -- the same
-        provider string CredentialService's methods already take.
+        A provider's component name -- the "chat" or "image" member that serves
+        it, for example "chat.openai-compatible" or "image.openai-compatible" --
+        the same provider string CredentialService's methods already take.
       schema:
         type: string
     KeyID:

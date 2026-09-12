@@ -186,7 +186,7 @@ type imageJobRow struct {
 	// imageJobStatusCompleted.
 	Status string `gorm:"column:status;size:16;not null"`
 
-	// Provider is the ImageProviderRegistry name that actually answered,
+	// Provider is the provider name that actually answered,
 	// recorded so an attempt that skips the vendor call (Status is already
 	// imageJobStatusGenerated) can still log which provider generated the
 	// image without re-resolving a credential it no longer needs. Empty
@@ -337,7 +337,7 @@ func (r *imageJobRepository) releaseClaim(ctx context.Context, jobID string) err
 
 // markGenerated transitions jobID's marker from imageJobStatusPending to
 // imageJobStatusGenerated, storing the vendor's answer -- provider is the
-// ImageProviderRegistry name that actually answered, img/usage its raw
+// provider name that actually answered, img/usage its raw
 // result. imageGenerateHandler.Handle calls this immediately after a
 // provider call returns success, before attempting anything else that
 // could still fail (writeImageObject) -- see this file's own doc comment

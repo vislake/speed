@@ -80,6 +80,56 @@ func Example() {
 		aigateway.WithModelRoute("chat:default", aigateway.ProviderOpenAICompatible, "gpt-4o-mini"),
 	)
 
+	// The host assembles the registry the pipeline resolves providers
+	// through: a composition selecting the module's real
+	// chat.openai-compatible component, driven through the assembly's four
+	// stages. The declaration component's Init is where Module.Register runs
+	// (the Init stage is the declaration window), which is what attaches the
+	// registry to the Gateway as its provider resolution source; the
+	// assembly-time instance of the provider is one construction of the same
+	// constructor every request builds its own from through the credential
+	// override.
+	reg := componenttest.NewRegistry()
+	if err = reg.Register(pkgcore.Component{
+		Name: "example.declare",
+		New: func(context.Context, *pkgcore.ComponentRegistry, pkgcore.ComponentConfig) (any, error) {
+			return new(int), nil
+		},
+		Init: func(_ context.Context, reg *pkgcore.ComponentRegistry, _ any) error {
+			return module.Register(reg)
+		},
+	}); err != nil {
+		fmt.Println("register declaration component:", err)
+		return
+	}
+	reg.Put(pkgcore.NewComponentConfig(map[string]any{
+		"components": map[string]any{
+			"example.declare": nil,
+			aigateway.ProviderOpenAICompatible: map[string]any{
+				"base_url": srv.URL,
+				"api_key":  "sk-example-key",
+			},
+		},
+		"strict": true,
+	}))
+	if err = reg.Prepare(ctx); err != nil {
+		fmt.Println("prepare:", err)
+		return
+	}
+	if err = reg.Construct(ctx); err != nil {
+		fmt.Println("construct:", err)
+		return
+	}
+	if err = reg.Verify(ctx); err != nil {
+		fmt.Println("verify:", err)
+		return
+	}
+	if err = reg.Init(ctx); err != nil {
+		fmt.Println("register module:", err)
+		return
+	}
+	defer func() { _ = reg.Close(ctx) }()
+
 	migrations := dbkit.NewMigrationRegistry()
 	if err = migrations.Register(module); err != nil {
 		fmt.Println("register migrations:", err)
@@ -250,9 +300,14 @@ func Example_generateImage() {
 
 	// The host assembles the registry the job handlers read: a local object
 	// store over a directory of its own (storage's service writes the
-	// generated image through it) plus the in-process event bus
-	// componenttest.NewRegistry puts. DeclareInto then runs both modules'
-	// Register inside the assembly's one Init window.
+	// generated image through it), the in-process values
+	// componenttest.NewRegistry puts, and the image provider component every
+	// route resolves through. The three stages below are the same ones
+	// componenttest.DeclareInto runs -- a declaration component whose Init
+	// drives both modules' Register inside the assembly's one Init window,
+	// under a strict composition -- written out here because the composition
+	// must also select the provider component, which is what makes the
+	// route's provider name resolvable.
 	dir, err := os.MkdirTemp("", "aigateway-image-example-")
 	if err != nil {
 		fmt.Println("temp dir:", err)
@@ -261,7 +316,44 @@ func Example_generateImage() {
 	defer func() { _ = os.RemoveAll(dir) }()
 	reg := componenttest.NewRegistry()
 	reg.Put(pkgcore.NewLocalObjectStore(dir))
-	if err = componenttest.DeclareInto(reg, storageModule, module); err != nil {
+	if err = reg.Register(pkgcore.Component{
+		Name: "example.declare",
+		New: func(context.Context, *pkgcore.ComponentRegistry, pkgcore.ComponentConfig) (any, error) {
+			return new(int), nil
+		},
+		Init: func(_ context.Context, reg *pkgcore.ComponentRegistry, _ any) error {
+			if declareErr := storageModule.Register(reg); declareErr != nil {
+				return declareErr
+			}
+			return module.Register(reg)
+		},
+	}); err != nil {
+		fmt.Println("register declaration component:", err)
+		return
+	}
+	reg.Put(pkgcore.NewComponentConfig(map[string]any{
+		"components": map[string]any{
+			"example.declare": nil,
+			aigateway.ProviderOpenAICompatibleImage: map[string]any{
+				"base_url": imgSrv.URL,
+				"api_key":  "sk-example-image-key",
+			},
+		},
+		"strict": true,
+	}))
+	if err = reg.Prepare(ctx); err != nil {
+		fmt.Println("prepare:", err)
+		return
+	}
+	if err = reg.Construct(ctx); err != nil {
+		fmt.Println("construct:", err)
+		return
+	}
+	if err = reg.Verify(ctx); err != nil {
+		fmt.Println("verify:", err)
+		return
+	}
+	if err = reg.Init(ctx); err != nil {
 		fmt.Println("declare:", err)
 		return
 	}

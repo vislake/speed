@@ -27,9 +27,9 @@
 //     no refund path to run on failure.
 //  3. Resolve the credential for the route's Provider: a tenant's own BYOK
 //     row if one exists, the platform-wide row otherwise (CredentialService.Resolve).
-//  4. Resolve the named ChatProvider from ChatProviderRegistry, built fresh
-//     from the resolved credential -- never a vendor model id a caller
-//     supplied.
+//  4. Resolve the named ChatProvider through the component face, built
+//     fresh from the resolved credential -- never a vendor model id a
+//     caller supplied.
 //  5. Call the provider. For Chat, usage is reported once the call returns.
 //     For ChatStream, usage is reported only once the LAST chunk (the one
 //     carrying real Usage) is observed -- never speculatively at the start
@@ -79,10 +79,11 @@
 // DeepSeek, many self-hosted gateways) directly against stdlib net/http and
 // encoding/json -- no vendor SDK, zero third-party dependencies for this
 // module's default path, the same posture go/pki's LocalSigner and
-// pkgcore's in-process EventBus keep for their own defaults. It registers
-// itself into the package-level ChatProviderRegistry under the name
-// ProviderOpenAICompatible from this package's own init(). The registry is
-// open to further registrations: an additional vendor-SDK provider
-// (a hypothetical go/ai-gateway/provider/anthropic subpackage) self-registers
-// the same way and needs no change to this package's own code.
+// pkgcore's in-process EventBus keep for their own defaults. It is a
+// component, registered under the name ProviderOpenAICompatible from
+// provider_components.go's own init() (see chatProviderComponent). The
+// component set is open to further additions: an additional vendor-SDK
+// provider (a hypothetical go/ai-gateway/provider/anthropic subpackage)
+// registers its own component descriptor the same way and needs no change
+// to this package's own code.
 package aigateway

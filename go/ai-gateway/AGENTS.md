@@ -2,10 +2,10 @@
 
 ai-gateway is a vendor-agnostic LLM and image-generation gateway. The chat
 surface is one abstraction layer over every vendor integration:
-`ChatProvider`, its zero-dependency default `OpenAICompatibleProvider`, a
-`ChatProviderRegistry`, scope-tiered encrypted-at-rest BYOK credential
+`ChatProvider`, its zero-dependency default `OpenAICompatibleProvider` (a
+component), scope-tiered encrypted-at-rest BYOK credential
 storage, and the `Gateway` facade. The image surface adds `ImageProvider`
-(TextToImage/ImageToImage/Inpaint, with its own default and registry) and
+(TextToImage/ImageToImage/Inpaint, with its own default component) and
 the async-only `Gateway.GenerateImage` pipeline, whose storage and queue
 integration this module itself provides. A spec-generated HTTP surface
 reads and writes platform and tenant BYOK credentials, serving chat and
@@ -62,13 +62,15 @@ tenantless calls explicitly.
   terminator, `stream_options.include_usage` requested automatically --
   overriding a same-named `Params` entry -- so the final chunk carries
   real token usage).
-- `ChatProviderRegistry` (`registry.go`): a package-level
-  `pkgcore.SeamRegistry[ChatProvider]`, with `OpenAICompatibleProvider`
-  self-registered under `ProviderOpenAICompatible` ("chat.openai-compatible")
-  from this package's own `init()`. `Gateway` calls `Build` fresh on every
-  request -- the resolved credential (base_url, api_key) is the
-  `pkgcore.Config` -- since constructing an `OpenAICompatibleProvider`
-  performs no I/O.
+- `ProviderOpenAICompatible` (`openai_compatible.go`): the name constant
+  ("chat.openai-compatible") this provider carries as its component name --
+  through `chatProviderComponent` (`provider_components.go`), its
+  descriptor, self-registered from this package's own `init()`. `Gateway`
+  builds a provider fresh on every request through the descriptor's
+  `pkgcore.Build` override, carrying the resolved credential (base_url,
+  api_key), since constructing an `OpenAICompatibleProvider` performs no
+  I/O; `openaiCompatibleFromConfig` is the one construction path the
+  descriptor's `New` funnels through.
 - `Gateway` (`gateway.go`): the facade -- `Chat`/`ChatStream` are the only
   entry points business code calls. Pipeline: validate the request -> check
   `Entitlements` (if wired) BEFORE any credential/provider resolution, so a
@@ -111,9 +113,9 @@ tenantless calls explicitly.
   `ImageJobResult` (what a caller polls back) carry
   `InputObjectID`/`MaskObjectID`/`OutputObjectID` as the only image-shaped
   fields, never a byte. `ImageProvider`'s own three methods, deliberately,
-  do not carry object references: `pkgcore.SeamRegistry[ImageProvider].Build`'s
-  `Config` is a flat `map[string]string` (the same shape
-  `ChatProviderRegistry.Build` uses for `base_url`/`api_key`), which cannot
+  do not carry object references: the per-call construction's configuration
+  is a flat `map[string]string` (the same shape the chat side's per-call
+  resolution uses for `base_url`/`api_key`), which cannot
   carry a live go/storage handle to a provider resolved fresh per job --
   and forcing every future third-party `ImageProvider` implementation to
   embed its own storage plumbing would needlessly couple simple vendor
@@ -170,45 +172,42 @@ tenantless calls explicitly.
   for an image call, and vice versa: `image_gateway_test.go`'s own
   `TestImageGenerateHandler_TextToImage_WritesNewObjectAndReportsUsage`
   pins that the two dimensions never cross-contaminate.
-- `ImageProviderRegistry` (`image_registry.go`): a package-level
-  `pkgcore.SeamRegistry[ImageProvider]` -- the same `Build`-fresh-per-call
-  reasoning and the same flat `pkgcore.Config{"base_url", "api_key"}`
-  shape as the chat registry -- with `OpenAICompatibleImageProvider`
-  self-registered under `ProviderOpenAICompatibleImage`
-  ("image.openai-compatible") from this package's own `init()`.
-- Both built-ins are also `pkgcore.Component`s (`provider_components.go`):
+- `ProviderOpenAICompatibleImage` (`openai_compatible_image.go`): the name
+  constant ("image.openai-compatible") the image provider carries as its
+  component name, through `imageProviderComponent`, its descriptor,
+  self-registered from this package's own `init()` -- the same
+  `Build`-fresh-per-call reasoning and the same flat two-key
+  (`base_url`, `api_key`) shape as the chat side;
+  `openaiCompatibleImageFromConfig` is its one construction path.
+- Both built-ins are `pkgcore.Component`s (`provider_components.go`):
   `chat.openai-compatible` (module `"chat"`) and
   `image.openai-compatible` (module `"image"`), each `Providing` its
   contract type, declaring the same
-  `MultiReplicaSafe|SurvivesRestart|Stateless` bits its registration
-  declares, and taking the same two-key block (`base_url`, `api_key`) the
-  flat registration reads. The component name IS the route's logical
-  provider name -- the string `WithModelRoute` takes, credential rows are
-  keyed by and the registries register under -- so the route-to-component
+  `MultiReplicaSafe|SurvivesRestart|Stateless` bits, and taking the same
+  two-key block (`base_url`, `api_key`) the flat construction path reads.
+  The component name IS the route's logical provider name -- the string
+  `WithModelRoute` takes, credential rows are keyed by and the descriptors
+  carry -- so the route-to-component
   resolution is the module's own identity, pinned by
   `TestProviderComponentNames_MatchProviderNamesAndCapabilities`: a host's
   existing routes, credential rows and composition selections need no
   translation and gain no new configuration obligation. The per-request
-  shape of the component face is `pkgcore.Build` with an override carrying
+  shape is `pkgcore.Build` with an override carrying
   the credential just resolved (`TestProviderComponentsAssembleAndBuildPerCall`),
-  and both faces funnel through the same constructors
+  and each descriptor's `New` funnels through the same constructor its
+  adapter has always used
   (`openaiCompatibleFromConfig` / `openaiCompatibleImageFromConfig`), so
-  neither can diverge on validation or on the coded config refusal.
-  **Resolution prefers the component face**: a Gateway attached to an
-  assembly (`Module.Register` hands it the registry) resolves a route's
-  provider through the selected member that carries the route's name first
-  and falls back to the package-level `ChatProviderRegistry` /
-  `ImageProviderRegistry` for a name the composition did not select -- so a
-  composition selecting a provider component serves every request through
-  the component face, an unselected name (or a Gateway built outside any
-  assembly) behaves exactly as before, and
-  `WithChatProviderRegistry` / `WithImageProviderRegistry` are the overrides
-  of that fallback face. The two faces build the same implementation under
-  the same name, which is what makes the preference behavior-preserving;
-  the preference itself is pinned by
-  `provider_resolution_test.go` (a route naming a selected component is
-  served by its own instance; a route naming an unselected name keeps the
-  registry path).
+  validation and the coded config refusal cannot diverge between the
+  assembly-time and per-call shapes.
+  **Resolution runs entirely through the component face**:
+  `Module.Register` hands the Gateway its registry, and a route's
+  provider name resolves as a selected member of the `"chat"`/`"image"`
+  directory that carries it -- a Gateway no assembly attached, or a route
+  naming a name the selection does not carry, refuses at resolution, before
+  any provider call. Both refusals are pinned by `provider_resolution_test.go`;
+  `TestGateway_Resolve_TenantScopeCredential_GetsGuardedHTTPClient` (and its
+  image-side twin) pins that the per-call
+  construction still stamps the guarded client for tenant-tier credentials.
 - `OpenAICompatibleImageProvider` (`openai_compatible_image.go`): the
   default, zero-vendor-SDK `ImageProvider`, implemented directly against
   the OpenAI-compatible images wire schema with stdlib `net/http` +
@@ -260,8 +259,8 @@ tenantless calls explicitly.
   `WithModelRoute` and `Gateway.routes` are ONE shared
   `map[string]ModelRoute` namespace for both chat and image logical keys
   (a host picks non-colliding prefixes, e.g. `"chat:default"` vs
-  `"image:default"`), resolved through `ChatProviderRegistry` or
-  `ImageProviderRegistry` depending on which pipeline is asking -- reuse,
+  `"image:default"`), resolved through the selected `"chat"` or `"image"`
+  member depending on which pipeline is asking -- reuse,
   not extension.
 - Conditional job-handler registration (`module.go`): `Register` claims
   the image-generation job handler on `reg.JobsSeat()` whenever the module's
@@ -586,9 +585,8 @@ guarded-client wiring proofs.
 - The dial-time SSRF pin (`guardedProviderHTTPClient`) only reaches
   providers that implement this module's unexported `httpClientSettable`
   -- its two OpenAI-compatible built-ins, which are the ones its own
-  registry factories construct. A third-party provider subpackage that
-  registers into `ChatProviderRegistry`/`ImageProviderRegistry` builds
-  its own HTTP client and cannot carry the guarded one, so a TENANT-tier
+  descriptor constructors build. A third-party provider component
+  builds its own HTTP client and cannot carry the guarded one, so a TENANT-tier
   credential resolving to such a provider is refused at resolve time --
   chat and image resolve alike -- with the coded, Invalid-classified
   `ErrProviderNotSSRFGuardable`, decorated with the provider and model
@@ -629,8 +627,8 @@ guarded-client wiring proofs.
   "an OpenAI-compatible LLM gateway on the operator's own intranet" as the
   legitimate platform default the guard must not break. The day a
   self-hosted host diverges from the OpenAI protocol, or an operator
-  wants a vendor SDK, it becomes one more registration in
-  `ChatProviderRegistry`/`ImageProviderRegistry` -- no interface change.
+  wants a vendor SDK, it becomes one more provider component in the
+  composition -- no interface change.
   No self-hosted image inference backend is shipped either (the design's
   own MVP-does-not-build-a-self-hosted-inference-service deferral): the
   module is the client of an inference endpoint, never the inference

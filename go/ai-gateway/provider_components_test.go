@@ -3,16 +3,15 @@ package aigateway
 import (
 	"context"
 	"errors"
-	"reflect"
 	"testing"
 
 	"github.com/vislake/speed/go/pkgcore"
 	"github.com/vislake/speed/go/pkgcore/componenttest"
 )
 
-// providerComponentSettings returns the settings both resolution paths are
-// fed from: the component's composition block and the seam registration's
-// flat pkgcore.Config carry the identical key set and values.
+// providerComponentSettings returns the settings the provider components'
+// composition blocks carry: the same key set and values the construction
+// path reads from a flat pkgcore.Config.
 func providerComponentSettings() pkgcore.Config {
 	return pkgcore.Config{
 		"base_url": "https://upstream.example.test/v1",
@@ -39,10 +38,11 @@ func TestProviderComponentsWellFormed(t *testing.T) {
 
 // TestProviderComponentNames_MatchProviderNamesAndCapabilities pins the
 // module-internal mapping the route resolution rests on: each component
-// carries its registry's name verbatim -- the same string a route's
-// Provider field holds and a credential row is keyed by -- and declares the
-// same capabilities its registration declares. A rename on either side
-// fails here instead of silently breaking a host's route strings.
+// carries the name constant verbatim -- the same string a route's Provider
+// field holds and a credential row is keyed by -- under its own module
+// directory, and declares the three capability bits. A rename or
+// redeclaration fails here instead of silently breaking a host's route
+// strings.
 func TestProviderComponentNames_MatchProviderNamesAndCapabilities(t *testing.T) {
 	reg := pkgcore.NewComponentRegistry()
 	registered := make(map[string]pkgcore.Component)
@@ -50,18 +50,14 @@ func TestProviderComponentNames_MatchProviderNamesAndCapabilities(t *testing.T) 
 		registered[c.Name] = c
 	}
 
-	settings := providerComponentSettings()
+	want := pkgcore.MultiReplicaSafe | pkgcore.SurvivesRestart | pkgcore.Stateless
 
 	chat, ok := registered[ProviderOpenAICompatible]
 	if !ok {
 		t.Fatalf("component %q is not globally registered; the provider component's init registration is missing", ProviderOpenAICompatible)
 	}
-	_, chatCaps, err := ChatProviderRegistry.Build(ProviderOpenAICompatible, settings)
-	if err != nil {
-		t.Fatalf("ChatProviderRegistry.Build(%s) error = %v", ProviderOpenAICompatible, err)
-	}
-	if chat.Capabilities != chatCaps {
-		t.Errorf("component %q declares %v, the seam registration declares %v", ProviderOpenAICompatible, chat.Capabilities, chatCaps)
+	if chat.Capabilities != want {
+		t.Errorf("component %q declares %v, want %v", ProviderOpenAICompatible, chat.Capabilities, want)
 	}
 	if chat.Module != "chat" {
 		t.Errorf("component %q module = %q, want %q", ProviderOpenAICompatible, chat.Module, "chat")
@@ -71,12 +67,8 @@ func TestProviderComponentNames_MatchProviderNamesAndCapabilities(t *testing.T) 
 	if !ok {
 		t.Fatalf("component %q is not globally registered; the provider component's init registration is missing", ProviderOpenAICompatibleImage)
 	}
-	_, imageCaps, err := ImageProviderRegistry.Build(ProviderOpenAICompatibleImage, settings)
-	if err != nil {
-		t.Fatalf("ImageProviderRegistry.Build(%s) error = %v", ProviderOpenAICompatibleImage, err)
-	}
-	if image.Capabilities != imageCaps {
-		t.Errorf("component %q declares %v, the seam registration declares %v", ProviderOpenAICompatibleImage, image.Capabilities, imageCaps)
+	if image.Capabilities != want {
+		t.Errorf("component %q declares %v, want %v", ProviderOpenAICompatibleImage, image.Capabilities, want)
 	}
 	if image.Module != "image" {
 		t.Errorf("component %q module = %q, want %q", ProviderOpenAICompatibleImage, image.Module, "image")
@@ -144,29 +136,15 @@ func TestProviderComponentsAssembleAndBuildPerCall(t *testing.T) {
 	if perCall == chat {
 		t.Error("Build(override) returned the assembly-time product; a per-call construction must produce a fresh instance")
 	}
-
-	// The seam registration stays the second resolution path: the same
-	// settings build the same implementation through it.
-	seamProvider, _, err := ChatProviderRegistry.Build(ProviderOpenAICompatible, settings)
-	if err != nil {
-		t.Fatalf("ChatProviderRegistry.Build(%s) error = %v", ProviderOpenAICompatible, err)
-	}
-	if reflect.TypeOf(seamProvider) != reflect.TypeOf(chat) {
-		t.Errorf("seam registration built %T, component built %T; the two faces must resolve the same implementation", seamProvider, chat)
-	}
 }
 
-// TestProviderComponents_EmptyConfigRefusalMatchesTheRegistry pins the
-// refusal parity for a credential carrying no base_url or api_key: both
-// faces refuse through the same coded error, the registry at Build and the
-// component at Construct.
-func TestProviderComponents_EmptyConfigRefusalMatchesTheRegistry(t *testing.T) {
+// TestProviderComponents_EmptyConfigRefused pins the refusal for a
+// credential carrying no base_url or api_key: the component's construction
+// fails with pkgcore.ErrMissingSeamConfig attached as the cause, so a
+// caller resolving a route onto such a credential sees a distinguishable,
+// coded configuration error rather than an uncoded one.
+func TestProviderComponents_EmptyConfigRefused(t *testing.T) {
 	ctx := context.Background()
-
-	_, _, err := ChatProviderRegistry.Build(ProviderOpenAICompatible, pkgcore.Config{})
-	if !errors.Is(err, pkgcore.ErrMissingSeamConfig) {
-		t.Errorf("ChatProviderRegistry.Build with an empty Config = %v, want it to wrap ErrMissingSeamConfig", err)
-	}
 
 	reg := pkgcore.NewComponentRegistry()
 	reg.Put(pkgcore.NewComponentConfig(map[string]any{
@@ -175,7 +153,7 @@ func TestProviderComponents_EmptyConfigRefusalMatchesTheRegistry(t *testing.T) {
 	if prepareErr := reg.Prepare(ctx); prepareErr != nil {
 		t.Fatalf("Prepare() error = %v", prepareErr)
 	}
-	err = reg.Construct(ctx)
+	err := reg.Construct(ctx)
 	if !errors.Is(err, pkgcore.ErrMissingSeamConfig) {
 		t.Errorf("Construct with a base_url-only block = %v, want it to wrap ErrMissingSeamConfig", err)
 	}

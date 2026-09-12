@@ -1,11 +1,11 @@
 package aigateway
 
-// ModelRoute is what a logical model key resolves to: a named ChatProvider
-// implementation (a ChatProviderRegistry key, for example
+// ModelRoute is what a logical model key resolves to: a named provider
+// implementation (a component name in the "chat" directory, for example
 // "chat.openai-compatible") plus the concrete vendor model id that provider
 // should call (for example "gpt-4o-mini").
 type ModelRoute struct {
-	// Provider is the ChatProviderRegistry name to resolve.
+	// Provider is the provider's component name to resolve.
 	Provider string
 	// VendorModel is the vendor-specific model id, opaque to this package,
 	// passed through to the provider verbatim.

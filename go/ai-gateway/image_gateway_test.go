@@ -54,22 +54,20 @@ var _ ImageProvider = (*fakeImageProvider)(nil)
 
 const fakeImageProviderName = "image.fake-test-provider"
 
-// newFakeImageRegistry returns a *pkgcore.SeamRegistry[ImageProvider]
-// containing only provider, registered under fakeImageProviderName --
-// isolating a test from the process-global ImageProviderRegistry's real
-// registrations, mirroring newFakeGatewayRegistry's identical role for
-// chat.
-func newFakeImageRegistry(t *testing.T, provider ImageProvider) *pkgcore.SeamRegistry[ImageProvider] {
-	t.Helper()
-	reg := pkgcore.NewSeamRegistry[ImageProvider]()
-	if err := reg.Register(pkgcore.Registration[ImageProvider]{
-		Name:         fakeImageProviderName,
-		Capabilities: pkgcore.Stateless,
-		New:          func(pkgcore.Config) (ImageProvider, error) { return provider, nil },
-	}); err != nil {
-		t.Fatalf("register fake image provider: %v", err)
+// fakeImageComponent returns a component descriptor serving provider
+// verbatim under name in the "image" directory -- the fake every image
+// pipeline test selects, isolating it from the process-global component
+// set the way a real assembly's selection does, mirroring
+// fakeChatComponent's identical role for chat.
+func fakeImageComponent(name string, provider ImageProvider) pkgcore.Component {
+	return pkgcore.Component{
+		Name:     name,
+		Module:   "image",
+		Provides: []any{(*ImageProvider)(nil)},
+		New: func(context.Context, *pkgcore.ComponentRegistry, pkgcore.ComponentConfig) (any, error) {
+			return provider, nil
+		},
 	}
-	return reg
 }
 
 // recordingImageQueue is a jobs.Queue test double recording the last Task
@@ -214,10 +212,11 @@ func imageGatewayTestFixtureWithObjects(t *testing.T, provider *fakeImageProvide
 
 	allOpts := append([]GatewayOption{
 		WithModelRoute("image:default", fakeImageProviderName, "vendor-model-x"),
-		WithImageProviderRegistry(newFakeImageRegistry(t, provider)),
 		WithImageGeneration(queue, objects),
 	}, opts...)
-	return NewGateway(credentials, allOpts...), queue, objects
+	g := NewGateway(credentials, allOpts...)
+	g.components = selectOnly(t, context.Background(), fakeImageComponent(fakeImageProviderName, provider))
+	return g, queue, objects
 }
 
 func imageReq() ImageRequest {
@@ -280,8 +279,8 @@ func TestGateway_GenerateImage_NoImageGenerationWired_Refused(t *testing.T) {
 	// No WithImageGeneration: a Gateway built for chat-only use.
 	g := NewGateway(credentials,
 		WithModelRoute("image:default", fakeImageProviderName, "vendor-model-x"),
-		WithImageProviderRegistry(newFakeImageRegistry(t, provider)),
 	)
+	g.components = selectOnly(t, context.Background(), fakeImageComponent(fakeImageProviderName, provider))
 
 	tenantCtx := pkgcore.WithTenant(context.Background(), "tenant-acme")
 	_, err = g.GenerateImage(tenantCtx, imageReq())
@@ -870,7 +869,8 @@ var _ ImageProvider = (*concurrentImageProvider)(nil)
 // marker yet" read to race through.
 func TestImageGenerateHandler_ConcurrentHandleForSameJob_OnlyOneVendorCall(t *testing.T) {
 	provider := &concurrentImageProvider{release: make(chan struct{})}
-	g, _, _ := imageGatewayTestFixture(t, &fakeImageProvider{}, WithImageProviderRegistry(newFakeImageRegistry(t, provider)))
+	g, _, _ := imageGatewayTestFixture(t, &fakeImageProvider{})
+	g.components = selectOnly(t, context.Background(), fakeImageComponent(fakeImageProviderName, provider))
 
 	handler, ok := g.imageJobHandler()
 	if !ok {

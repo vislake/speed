@@ -4,7 +4,7 @@
 -- dbkit.TenantScoped -- see model.go's own doc comment for the full
 -- reasoning, the identical shape go/config's own configs table follows.
 --
--- provider is the ChatProviderRegistry name this row is a credential for
+-- provider is the provider name this row is a credential for
 -- (for example "chat.openai-compatible").
 --
 -- scope holds "system" (the platform-wide default credential, resolved
