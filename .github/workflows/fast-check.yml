@@ -131,8 +131,10 @@ name: fast-check
 #         .env.example drift gate: the env variables the host's loader
 #         target declares (internal/app/bootstrap.go's config:"env=NAME"
 #         pins, the derive option included, plus the APP_ROOT_KEY the
-#         loader reads through WithRootKeyEnv, its argument a string
-#         literal or a same-file constant) must equal the key set
+#         loader reads through WithRootKeyEnv and the prefix it is built
+#         with through WithEnvPrefix, each argument a string literal or
+#         a same-file constant, plus the declared key materials' derived
+#         names under that prefix) must equal the key set
 #         examples/reference-app/.env.example documents -- its active
 #         KEY= entries and its commented-out examples alike. Its
 #         planted-drift suite

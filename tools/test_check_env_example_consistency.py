@@ -172,6 +172,16 @@ APP_AUTHN__BLIND_INDEX_KEY=
 APP_AUTHN__PII_CIPHER_KEY=
 '''
 
+# The same declaration surface with the prefix constant renamed and
+# exported -- the shape examples/reference-app/internal/app/bootstrap.go
+# itself carries, where the constant is exported for the --help
+# renderer. The derived names must stay readable: the anchor is the
+# WithEnvPrefix call the loader is built with, never the identifier's
+# spelling.
+BOOTSTRAP_DECLARED_EXPORTED_PREFIX = BOOTSTRAP_DECLARED.replace(
+    "envPrefix", "EnvPrefix"
+)
+
 
 def base_files(bootstrap: str = BOOTSTRAP, example: str = EXAMPLE,
                reference: str | None = CONFIG_REFERENCE):
@@ -298,11 +308,55 @@ class DeclaredKeyPaths(unittest.TestCase):
 
     def test_derived_names_are_read_and_match(self):
         # The positive side: the reference's declared key paths plus the
-        # envPrefix const spell the three derived names, which the
-        # example documents.
+        # prefix the WithEnvPrefix call names (here through the envPrefix
+        # const) spell the three derived names, which the example
+        # documents.
         self.assertEqual(
             m.scan(make_tree(self.declared_files())), []
         )
+
+    def test_exported_prefix_constant_still_derives(self):
+        # The identifier's own spelling is not the anchor: the prefix is
+        # read from the WithEnvPrefix call the loader is built with, so
+        # renaming (and exporting) the constant behind the argument keeps
+        # the derived names declared and the gate silent.
+        self.assertEqual(
+            m.scan(
+                make_tree(
+                    self.declared_files(
+                        bootstrap=BOOTSTRAP_DECLARED_EXPORTED_PREFIX
+                    )
+                )
+            ),
+            [],
+        )
+
+    def test_prefix_literal_form_derives(self):
+        # A prefix spelled inline on the call derives the names with the
+        # same authority: no constant is needed anywhere in the file.
+        bootstrap = BOOTSTRAP_DECLARED.replace(
+            "config.WithEnvPrefix(envPrefix),",
+            'config.WithEnvPrefix("APP_"),',
+        ).replace('const envPrefix = "APP_"\n', "")
+        self.assertEqual(
+            m.scan(make_tree(self.declared_files(bootstrap=bootstrap))),
+            [],
+        )
+
+    def test_unresolved_prefix_identifier_derives_nothing(self):
+        # An argument no same-file constant resolves names no prefix, so
+        # the example's derived-spelling entries read as variables the
+        # host never declares -- the fail-loud direction.
+        bootstrap = BOOTSTRAP_DECLARED.replace(
+            'const envPrefix = "APP_"\n', ""
+        )
+        findings = m.scan(
+            make_tree(self.declared_files(bootstrap=bootstrap))
+        )
+        self.assertEqual(len(findings), 3)
+        for finding in findings:
+            self.assertIn(m.ENV_EXAMPLE_REL_PATH, finding)
+            self.assertIn("never declares", finding)
 
     def test_derived_name_missing_from_the_example_fires(self):
         example = EXAMPLE_DECLARED.replace(

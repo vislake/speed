@@ -24,9 +24,13 @@ host side of that surface is declared in three forms:
     under the host's prefix: config.EnvName's rule, the prefix then the
     key uppercased with each level of nesting spelled as a double
     underscore, so config.cipher_key reads APP_CONFIG__CIPHER_KEY under
-    APP_. The declared key paths are read from
-    docs/config-reference.json's bootstrap_keys entries, the generated
-    reference of exactly the declarations the components carry.
+    APP_. The prefix is read from the loadHostConfig call's
+    WithEnvPrefix option, its argument the same two forms the
+    WithRootKeyEnv argument takes (a string literal, or an identifier a
+    same-file const declaration binds to one). The declared key paths
+    are read from docs/config-reference.json's bootstrap_keys entries,
+    the generated reference of exactly the declarations the components
+    carry.
 
 Nothing else in the app's executable code reads the environment (the
 app's own unit suite pins that surface, unittest/
@@ -65,17 +69,23 @@ ROOT_KEY_ENV = re.compile(
     r'\s*\)'
 )
 
-# One same-file const binding the root-key call may name through its
-# argument, and the environment-prefix constant the derived key names
-# carry: const NAME = "STRING", the value an environment variable name
-# or the prefix.
+# The loader-prefix read: WithEnvPrefix(NAME), the prefix spelled in
+# the same two forms ROOT_KEY_ENV reads. The anchor is the call the
+# loader is actually built with, never the constant's identifier name:
+# the prefix stays derivable however the same-file constant behind the
+# argument is named or exported.
+ENV_PREFIX_CALL = re.compile(
+    r'WithEnvPrefix\(\s*'
+    r'(?:"([A-Za-z_][A-Za-z0-9_]*)"|([A-Za-z_][A-Za-z0-9_]*))'
+    r'\s*\)'
+)
+
+# One same-file const binding a call argument -- the root-key name or
+# the loader prefix -- may name: const NAME = "STRING", the value an
+# environment variable name or the prefix.
 ROOT_KEY_CONST = re.compile(
     r'\bconst\s+([A-Za-z_][A-Za-z0-9_]*)\s*=\s*"([A-Za-z_][A-Za-z0-9_]*)"'
 )
-
-# The name of the const the enclosing file spells the environment
-# prefix in.
-ENV_PREFIX_CONST = "envPrefix"
 
 # A documented key: NAME= at the head of a line's content (the value
 # may be empty), once any leading whitespace and the comment marker of
@@ -118,12 +128,16 @@ def declared_host_keys(text: str, key_paths: list[str]) -> dict[str, int]:
     no such constant in the file declares nothing, and the line
     reported for the resolved identifier form is the constant's
     declaration line), and the declared key paths' derived names --
-    one per path in key_paths, reported at the envPrefix const's
-    declaration line, where the prefix the derivation reads is
-    spelled. Full-line ``//`` comments are skipped -- a comment may
-    state a variable's name, but only the pins, the call site and the
-    declarations name one, and the line numbers reported for the
-    findings point at code."""
+    one per path in key_paths, reported at the line spelling the
+    prefix: the WithEnvPrefix argument's call line for the literal
+    form, the bound constant's declaration line for the identifier
+    form. A WithEnvPrefix argument the file's own constants do not
+    resolve derives nothing, and the example's derived-spelling
+    entries then read as variables the host never declares. Full-line
+    ``//`` comments are skipped -- a comment may state a variable's
+    name, but only the pins, the call sites and the declarations name
+    one, and the line numbers reported for the findings point at
+    code."""
     lines = text.splitlines()
     consts: dict[str, tuple[str, int]] = {}
     for line_no, line in enumerate(lines, start=1):
@@ -134,6 +148,7 @@ def declared_host_keys(text: str, key_paths: list[str]) -> dict[str, int]:
             consts[match.group(1)] = (match.group(2), line_no)
 
     keys: dict[str, int] = {}
+    prefix: tuple[str, int] | None = None
     for line_no, line in enumerate(lines, start=1):
         if line.strip().startswith("//"):
             continue
@@ -143,23 +158,29 @@ def declared_host_keys(text: str, key_paths: list[str]) -> dict[str, int]:
                     name = option[len("env="):].strip()
                     if name and name not in keys:
                         keys[name] = line_no
-        match = ROOT_KEY_ENV.search(line)
-        if not match:
-            continue
-        if match.group(1) is not None:
-            name, decl_line = match.group(1), line_no
-        elif match.group(2) in consts:
-            name, decl_line = consts[match.group(2)]
-        else:
-            continue
-        if name not in keys:
-            keys[name] = decl_line
+        root_key = ROOT_KEY_ENV.search(line)
+        if root_key is not None:
+            if root_key.group(1) is not None:
+                name, decl_line = root_key.group(1), line_no
+            elif root_key.group(2) in consts:
+                name, decl_line = consts[root_key.group(2)]
+            else:
+                name = None
+            if name is not None and name not in keys:
+                keys[name] = decl_line
+        if prefix is None:
+            prefix_call = ENV_PREFIX_CALL.search(line)
+            if prefix_call is not None:
+                if prefix_call.group(1) is not None:
+                    prefix = (prefix_call.group(1), line_no)
+                elif prefix_call.group(2) in consts:
+                    prefix = consts[prefix_call.group(2)]
 
     # The declared key materials' derived names: one per declared key
-    # path, reported at the prefix const's line. A file without the
-    # prefix const derives nothing, and the example's entries then read
-    # as variables the host never declares.
-    prefix = consts.get(ENV_PREFIX_CONST)
+    # path, reported at the line spelling the prefix. A WithEnvPrefix
+    # argument the file's constants do not resolve derives nothing, and
+    # the example's entries then read as variables the host never
+    # declares.
     if prefix is None:
         return keys
     for path in key_paths:
