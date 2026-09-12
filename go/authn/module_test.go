@@ -554,11 +554,13 @@ func TestNewOptions_StandaloneModeWithoutSMSSender_DefaultsToConsole(t *testing.
 	}
 }
 
-// TestModule_RegisterDeclaresItsBootstrapKeys pins the process-start key
-// material authn's contract names: two hex keys, both Sensitive (their values
-// are material a real deployment feeds from a secret store), each separate from
-// the other and from the runtime schema's keys.
-func TestModule_RegisterDeclaresItsBootstrapKeys(t *testing.T) {
+// TestComponent_SchemaDeclaresItsKeyMaterial pins the process-start key
+// material authn's contract names: two derive-tagged []byte fields under the
+// component's own namespace, both Sensitive (their values are material a real
+// deployment feeds from a secret store) with a documented fallback, resolving
+// at exactly the platform key paths the component exports -- so a schema
+// rename cannot silently rotate a key.
+func TestComponent_SchemaDeclaresItsKeyMaterial(t *testing.T) {
 	t.Parallel()
 
 	module := newTestModule(t)
@@ -567,38 +569,45 @@ func TestModule_RegisterDeclaresItsBootstrapKeys(t *testing.T) {
 		t.Fatalf("Register() error = %v", err)
 	}
 
-	declared := component().BootstrapKeys
-	byKey := make(map[string]pkgcore.BootstrapKey, len(declared))
-	for _, key := range declared {
-		byKey[key.Key] = key
+	descriptors, err := pkgcore.DescribeComponentSchema(moduleName, component().ConfigSchema)
+	if err != nil {
+		t.Fatalf("DescribeComponentSchema() error = %v", err)
 	}
-	if len(declared) != 2 {
-		t.Fatalf("the authn component declared %d bootstrap keys (%v), want exactly the two key materials", len(declared), declared)
+	byKey := make(map[string]pkgcore.FieldDescriptor, len(descriptors))
+	for _, d := range descriptors {
+		byKey[d.Key] = d
 	}
-	for _, want := range []string{"authn.pii_cipher_key", "authn.blind_index_key"} {
-		key, ok := byKey[want]
+	for _, want := range []string{PIICipherKeyPath, BlindIndexKeyPath} {
+		field, ok := byKey[want]
 		if !ok {
-			t.Errorf("the authn component did not declare %q", want)
+			t.Errorf("the authn component did not declare key material at %q", want)
 			continue
 		}
-		if key.Format != "hexkey" {
-			t.Errorf("%s format = %q, want hexkey", want, key.Format)
+		if !field.Derive {
+			t.Errorf("%s is not marked derive, want key material resolved through the derivation chain", want)
 		}
-		if !key.Sensitive {
+		if field.Type != "[]byte" {
+			t.Errorf("%s type = %q, want []byte", want, field.Type)
+		}
+		if !field.Sensitive {
 			t.Errorf("%s is not marked Sensitive, want a key material", want)
 		}
-		if key.Group != moduleName {
-			t.Errorf("%s group = %q, want the module name %q", want, key.Group, moduleName)
+		if field.Group != moduleName {
+			t.Errorf("%s group = %q, want the module name %q", want, field.Group, moduleName)
 		}
-		if key.Default == "" || key.Description == "" || key.Example != "" {
-			t.Errorf("%s = %+v, want a documented fallback and contract text, and no suggested value", want, key)
+		if field.Doc.Default == "" || field.Doc.Description == "" || field.Doc.Example != "" {
+			t.Errorf("%s doc = %+v, want a documented fallback and contract text, and no suggested value", want, field.Doc)
 		}
 	}
-	// The two layers must stay disjoint: no declared bootstrap key may also be
-	// a runtime configuration item of this module's own schema.
+	// The key-material fields must stay disjoint from the runtime layer: an
+	// ordinary field may share its path with a runtime item -- several of this
+	// schema's knobs deliberately do, as the construction-time value their own
+	// runtime reads fall back to -- but key material has no fallback chain to
+	// bridge the layers (pkgcore's one-key-one-layer validation refuses it at
+	// the assembly).
 	for _, item := range reg.Config.Items() {
-		if _, clash := byKey[item.Key]; clash {
-			t.Errorf("key %q is declared on both the bootstrap seat and the runtime schema", item.Key)
+		if field, clash := byKey[item.Key]; clash && field.Derive {
+			t.Errorf("key %q is declared on both the key-material layer and the runtime schema", item.Key)
 		}
 	}
 }

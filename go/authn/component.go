@@ -5,15 +5,15 @@ package authn
 // the module brings, the contracts it consumes, and the callbacks that
 // prepare, construct and declare it.
 //
-// Both process-start keys the module declares (bootstrapKeyDecls) come from
-// the assembly's own material source. Prepare builds the PII cipher from the
-// authn.pii_cipher_key material and registers the serializer there -- the
-// registration must precede the connection that parses the module's models,
-// which is why it is a Prepare callback and not part of New. New reads the
-// authn.blind_index_key material to build the blind indexers its service
-// refuses to run without. The module's one declaration entry point, Register,
-// runs as the descriptor's Init callback: inside the assembly's Init stage,
-// the one stage whose seats accept writes.
+// Both process-start keys the module declares (componentConfig's derive
+// fields) come from the assembly's own material source. Prepare builds the
+// PII cipher from the authn.pii_cipher_key material and registers the
+// serializer there -- the registration must precede the connection that
+// parses the module's models, which is why it is a Prepare callback and not
+// part of New. New reads the authn.blind_index_key material to build the
+// blind indexers its service refuses to run without. The module's one
+// declaration entry point, Register, runs as the descriptor's Init callback:
+// inside the assembly's Init stage, the one stage whose seats accept writes.
 
 import (
 	"context"
@@ -31,15 +31,43 @@ import (
 	"github.com/vislake/speed/go/authn/migrations"
 )
 
+// The two key paths authn's process-start key material resolves at, named
+// once so the schema fields, the descriptor's namespace and every material
+// read cannot drift apart. Each path is part of its key's derivation
+// identity: renaming one is a key rotation
+// (pkgcore.BootstrapKeyPurpose embeds the path).
+const (
+	// PIICipherKeyPath is the key path of the AES key sealing authn's
+	// encrypted PII columns (email, phone, TOTP secrets), deliberately
+	// separate from every other module's key material and from authn's own
+	// blind-index key below.
+	PIICipherKeyPath = "authn.pii_cipher_key"
+	// BlindIndexKeyPath is the key path of the HMAC key authn indexes its
+	// users.email_index and phone_index blind-index columns with; it must
+	// stay identical across restarts or every already-stored email and phone
+	// index becomes unfindable, and an HMAC key never doubles as a cipher
+	// key.
+	BlindIndexKeyPath = "authn.blind_index_key"
+)
+
 // componentConfig is authn's configuration schema in the assembly: the
-// construction-time knobs NewModule's options carry that are not key
-// material. The PII cipher key and the blind-index key are process-start key
-// material and stay in the descriptor's BootstrapKeys (bootstrapKeyDecls),
-// never in configuration. The argon2id cost parameters are bootstrap configuration
+// construction-time knobs NewModule's options carry, and the two process-start
+// keys as derive fields. The component's namespace is "authn", so each key
+// resolves at the platform key path it has always carried
+// (PIICipherKeyPath, BlindIndexKeyPath) rather than under the default
+// components.<name> prefix. The argon2id cost parameters are bootstrap configuration
 // rather than runtime items -- a deployment's fixed hashing budget -- which
 // is why they live here and not beside authn.password_min_length on the
 // runtime configuration seat.
 type componentConfig struct {
+	// PIICipherKey seals the PII columns; the derive option resolves it
+	// through the five-source chain (an explicit flag/environment/file value,
+	// the root-key derivation, the declared defaults table) and the assembly
+	// publishes the resolved material at PIICipherKeyPath.
+	PIICipherKey []byte `json:"pii_cipher_key" config:"derive,sensitive,group=authn"`
+	// BlindIndexKey indexes the two blind-index columns; same resolution as
+	// PIICipherKey, published at BlindIndexKeyPath.
+	BlindIndexKey   []byte                `json:"blind_index_key" config:"derive,sensitive,group=authn"`
 	RevocationMode  string                `json:"revocation_mode"`
 	TrustedProxies  []string              `json:"trusted_proxies"`
 	SMSCodeTTL      time.Duration         `json:"sms_code_ttl"`
@@ -48,6 +76,27 @@ type componentConfig struct {
 	RefreshTokenTTL time.Duration         `json:"refresh_token_ttl"`
 	SessionTTL      time.Duration         `json:"session_ttl"`
 	Password        *passwordParamsConfig `json:"password"`
+}
+
+// ConfigDocs implements pkgcore.Documented: the operator-facing contract of
+// the schema's sensitive key-material fields.
+//
+// Both keys are separate secrets on purpose. The cipher key seals the PII
+// columns (email, phone, TOTP secrets) and the blind-index key is the HMAC key
+// over users.email_index/phone_index; dbkit's rule that an AES key never
+// doubles as an HMAC key is what keeps them apart, and the same rule separates
+// them from every other module's key material.
+func (*componentConfig) ConfigDocs() map[string]pkgcore.FieldDoc {
+	return map[string]pkgcore.FieldDoc{
+		"pii_cipher_key": {
+			Description: "AES key sealing authn's encrypted PII columns (email, phone, TOTP secrets), deliberately separate from every other module's key material and from authn's own blind-index key.",
+			Default:     "documented non-secret development default",
+		},
+		"blind_index_key": {
+			Description: "HMAC key authn indexes its users.email_index and phone_index blind-index columns with; it must stay identical across restarts or every already-stored email and phone index becomes unfindable, and an HMAC key never doubles as a cipher key.",
+			Default:     "documented non-secret development default",
+		},
+	}
 }
 
 // passwordParamsConfig is the argon2id cost parameter block: the same five
@@ -111,29 +160,33 @@ func component() pkgcore.Component {
 		// every other selected component's purposes.
 		SystemPurposes: []pkgcore.SystemPurpose{SystemPurposeSignInTenantEnumeration},
 		ConfigSchema:   (*componentConfig)(nil),
-		BootstrapKeys:  bootstrapKeyDecls,
-		Migrations:     migrations.FS,
-		Locales:        locales.FS,
-		OpenAPISpec:    openAPISpecYAML,
+		// The "authn" namespace keeps the schema's key-material fields at the
+		// platform key paths the module's keys have always carried
+		// (PIICipherKeyPath, BlindIndexKeyPath) instead of the default
+		// components.authn. prefix, so a rename cannot silently rotate a key.
+		ConfigNamespace: "authn",
+		Migrations:      migrations.FS,
+		Locales:         locales.FS,
+		OpenAPISpec:     openAPISpecYAML,
 		// Prepare builds and registers the PII serializer: GORM resolves a
 		// named serializer while it parses a model's schema, so the
 		// registration must land before the connection that parses this
 		// module's models opens -- which is the Construct stage, after every
-		// Prepare callback. The cipher is built from the material this
-		// descriptor declared (bootstrapKeyDecls), never from a second
-		// source.
+		// Prepare callback. The cipher is built from the material the
+		// schema's pii_cipher_key field resolved (PIICipherKeyPath), never
+		// from a second source.
 		Prepare: func(_ context.Context, reg *pkgcore.ComponentRegistry) error {
 			material, err := pkgcore.BootstrapMaterialOf(reg)
 			if err != nil {
 				return err
 			}
-			cipherKey, ok := material.Material(piiCipherKeyPath)
+			cipherKey, ok := material.Material(PIICipherKeyPath)
 			if !ok {
-				return fmt.Errorf("authn: the assembly resolved no material for the declared bootstrap key %q", piiCipherKeyPath)
+				return fmt.Errorf("authn: the assembly resolved no material for the declared bootstrap key %q", PIICipherKeyPath)
 			}
 			cipher, err := dbkit.NewCipher(cipherKey)
 			if err != nil {
-				return fmt.Errorf("authn: build the PII cipher from %q: %w", piiCipherKeyPath, err)
+				return fmt.Errorf("authn: build the PII cipher from %q: %w", PIICipherKeyPath, err)
 			}
 			return RegisterPIISerializer(cipher)
 		},
@@ -159,9 +212,9 @@ func component() pkgcore.Component {
 			if err != nil {
 				return nil, err
 			}
-			blindIndexKey, ok := material.Material(blindIndexKeyPath)
+			blindIndexKey, ok := material.Material(BlindIndexKeyPath)
 			if !ok {
-				return nil, fmt.Errorf("authn: the assembly resolved no material for the declared bootstrap key %q", blindIndexKeyPath)
+				return nil, fmt.Errorf("authn: the assembly resolved no material for the declared bootstrap key %q", BlindIndexKeyPath)
 			}
 			opts = append(opts, WithBlindIndexKey(blindIndexKey))
 			switch c.RevocationMode {

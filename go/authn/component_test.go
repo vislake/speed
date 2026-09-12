@@ -82,8 +82,8 @@ func TestComponent_InitDeclaresThroughTheGate(t *testing.T) {
 func testBootstrapMaterial(t *testing.T) *pkgcore.BootstrapMaterial {
 	t.Helper()
 	return pkgcore.NewBootstrapMaterial([]pkgcore.BootstrapMaterialEntry{
-		{KeyPath: piiCipherKeyPath, Value: bytes.Repeat([]byte{0x11}, 32)},
-		{KeyPath: blindIndexKeyPath, Value: bytes.Repeat([]byte{0x22}, 32)},
+		{KeyPath: PIICipherKeyPath, Value: bytes.Repeat([]byte{0x11}, 32)},
+		{KeyPath: BlindIndexKeyPath, Value: bytes.Repeat([]byte{0x22}, 32)},
 	})
 }
 
@@ -178,8 +178,8 @@ func TestComponentConstructionCoversTheOptionSurface(t *testing.T) {
 		reg.Put(testutil.NewKeySource(t, "component-test"))
 		reg.Put(pkgcore.NewBootstrapMaterial(nil))
 		_, err := component().New(ctx, reg, pkgcore.NewComponentConfig(nil))
-		if err == nil || !strings.Contains(err.Error(), blindIndexKeyPath) {
-			t.Fatalf("construction error = %v, want the refusal naming %q", err, blindIndexKeyPath)
+		if err == nil || !strings.Contains(err.Error(), BlindIndexKeyPath) {
+			t.Fatalf("construction error = %v, want the refusal naming %q", err, BlindIndexKeyPath)
 		}
 	})
 
