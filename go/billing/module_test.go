@@ -194,7 +194,7 @@ func TestModule_Register_DeclaresItsSurface(t *testing.T) {
 	})
 
 	t.Run("the HTTP surface is mounted at apiPath", func(t *testing.T) {
-		routes := reg.RoutesSeat().Routes()
+		routes := componenttest.FaceOf(reg).Routes()
 		if len(routes) != 1 {
 			t.Fatalf("Register mounted %d route(s), want exactly 1 (the module's fragment surface at %s)", len(routes), apiPath)
 		}

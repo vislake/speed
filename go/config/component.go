@@ -96,6 +96,12 @@ func component() pkgcore.Component {
 			// Optional: without one, requests read platform defaults, the
 			// documented display decision for the unauthenticated case.
 			{Token: (*tenancy.Resolver)(nil), Optional: true},
+			// The http component's route face (go/app/httpserve), where the
+			// module's two pre-auth display endpoints are mounted when the
+			// composition serves HTTP. Optional: a pure-background
+			// composition carries no http component and the module
+			// constructs without mounting.
+			{Token: (*pkgcore.RouteRegistrar)(nil), Optional: true},
 		},
 		// The construction product is the *Module. The *Service Attach
 		// builds from it is the runtime configuration and feature-flag

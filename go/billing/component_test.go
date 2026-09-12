@@ -68,7 +68,7 @@ func TestComponent_InitDeclaresThroughTheGate(t *testing.T) {
 		types = append(types, decl.Type)
 	}
 	assertContainsAll(t, types, []string{EventPlanChanged, EventSubscriptionStatusChanged})
-	if routes := reg.Routes.Routes(); len(routes) != 1 || routes[0].Path != apiPath {
+	if routes := componenttest.FaceOf(reg).Routes(); len(routes) != 1 || routes[0].Path != apiPath {
 		t.Fatalf("Init mounted %v, want exactly the %s mount", routes, apiPath)
 	}
 	// No queue was wired: Init must claim neither the poll handler nor its

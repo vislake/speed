@@ -82,7 +82,7 @@ func (r staticHostResolver) Resolve(req *http.Request) (pkgcore.TenantID, error)
 // mountModuleRoutes).
 func mountRoutes(reg *pkgcore.ComponentRegistry) *http.ServeMux {
 	mux := http.NewServeMux()
-	for _, route := range reg.Routes.Routes() {
+	for _, route := range componenttest.FaceOf(reg).Routes() {
 		mux.Handle(route.Path, route.Handler)
 		if !strings.HasSuffix(route.Path, "/") {
 			mux.Handle(route.Path+"/", route.Handler)

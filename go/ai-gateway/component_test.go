@@ -117,7 +117,7 @@ func TestComponent_InitDeclaresThroughTheGate(t *testing.T) {
 			t.Errorf("Permissions seat = %v, want the %q declaration", perms, want)
 		}
 	}
-	if routes := reg.Routes.Routes(); len(routes) != 1 || routes[0].Path != apiPath {
+	if routes := componenttest.FaceOf(reg).Routes(); len(routes) != 1 || routes[0].Path != apiPath {
 		t.Fatalf("Init mounted %v, want exactly the %s mount", routes, apiPath)
 	}
 	// No queue and no storage product were provided: Init must claim no

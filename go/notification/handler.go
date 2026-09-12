@@ -22,7 +22,7 @@ import (
 // fragment deliberately omits. It implements the api.ServerInterface the
 // fragment's generated code declares (the compile-time assertion at the
 // bottom of this file), mounted by Module.Register at apiPath through
-// reg.Routes.Mount, and it is the module's own surface -- nothing here is
+// the route face (pkgcore.MountRoute), and it is the module's own surface -- nothing here is
 // shared with another module, unlike the services it reads, whose identity
 // this comment keeps straight:
 //
@@ -193,7 +193,7 @@ func (h *Handler) attachHost(reg *pkgcore.ComponentRegistry) {
 	h.host = reg
 }
 
-// ServeHTTP is what reg.Routes.Mount(apiPath, h.mux) mounts: every request
+// ServeHTTP is what the module's route-face mount at apiPath serves: every request
 // under apiPath is handed to the inner mux, which routes by method and the
 // absolute spec path.
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {

@@ -105,6 +105,11 @@ func component() pkgcore.Component {
 			// a composition that delivers invitations elsewhere disables
 			// the module's own leg instead.
 			{Token: (*InvitationLinkBuilder)(nil), Optional: true},
+			// The http component's route face (go/app/httpserve), where the
+			// module's HTTP surface is mounted when the composition serves
+			// HTTP. Optional: a pure-background composition carries no http
+			// component and the module constructs without mounting.
+			{Token: (*pkgcore.RouteRegistrar)(nil), Optional: true},
 		},
 		// The construction product is the *Module; the Scope it exposes is
 		// what authorization consumers are adapted to.

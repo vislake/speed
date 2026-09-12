@@ -118,7 +118,7 @@ func TestComponent_InitDeclaresThroughTheGate(t *testing.T) {
 	if decls := reg.Schedules.Declarations(); len(decls) != 1 || decls[0].Type != taskTypeExpirySweep {
 		t.Errorf("Schedules seat = %v, want the expiry-sweep schedule", decls)
 	}
-	if routes := reg.Routes.Routes(); len(routes) != 1 || routes[0].Path != apiPath {
+	if routes := componenttest.FaceOf(reg).Routes(); len(routes) != 1 || routes[0].Path != apiPath {
 		t.Fatalf("Init mounted %v, want exactly the %s mount", routes, apiPath)
 	}
 

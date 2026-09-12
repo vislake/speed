@@ -143,7 +143,7 @@ func TestModule_Register_MountsNoRoutes(t *testing.T) {
 	if err := componenttest.DeclareInto(reg, NewModule(nil)); err != nil {
 		t.Fatalf("Register: %v", err)
 	}
-	if got := reg.RoutesSeat().Routes(); len(got) != 0 {
+	if got := componenttest.FaceOf(reg).Routes(); len(got) != 0 {
 		t.Fatalf("Register mounted %d routes, want none", len(got))
 	}
 	if spec := NewModule(nil).OpenAPISpec(); spec != nil {

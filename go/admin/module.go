@@ -40,7 +40,7 @@ const APIPath = "/api/v1/admin"
 // permission catalog, the vocabulary admin's own routes are evaluated
 // against in rbac.SystemDomain -- "who may enter the admin console" is a
 // permission like any other, so enforcement is rbac's job (the host's own
-// reg.Routes gate, mirroring how it gates notes and storage) and never
+// admin route guard, mirroring how it gates notes and storage) and never
 // this module's.
 const (
 	// PermissionAccess gates reading the tenant ledger -- the coarse
@@ -515,6 +515,8 @@ func (m *Module) Register(reg *pkgcore.ComponentRegistry) error {
 	// time). A handler built directly (no Register) keeps a nil host and
 	// skips the tier.
 	m.handler.host = reg
-	reg.RoutesSeat().Mount(APIPath, m.handler)
+	if err := pkgcore.MountRoute(reg, APIPath, m.handler); err != nil {
+		return err
+	}
 	return nil
 }

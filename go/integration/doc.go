@@ -19,7 +19,7 @@
 //
 // The module's HTTP surface (api/openapi.yaml) covers both halves -- the
 // API-key operations and the webhook-subscription CRUD under /webhooks --
-// mounted through reg.Routes and implemented by handler.go's Handler
+// mounted through the http component's route face and implemented by handler.go's Handler
 // behind a generated api.ServerInterface. The reference app wires the
 // module end to end behind its own permission gates. What is deliberately
 // not shipped -- no manual-redelivery endpoint, no frontend consumer of

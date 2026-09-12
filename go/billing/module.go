@@ -60,7 +60,7 @@ const (
 // consequence). Register builds Handler -- serving the fragment's four
 // GET operations, balance and recent transactions over CreditService and
 // the invoice list/detail pair over InvoiceRepository -- and mounts it
-// on the host's router at apiPath, the same reg.Routes.Mount
+// on the host's router at apiPath, the same route-face mount
 // registration every other fragment-shipping module makes.
 type Module struct {
 	db *gorm.DB
@@ -295,7 +295,9 @@ func (m *Module) Register(reg *pkgcore.ComponentRegistry) error {
 	// doc comment for why the handler is built here rather than in
 	// NewModule.
 	m.handler = NewHandler(m.credits, m.invoices)
-	reg.RoutesSeat().Mount(apiPath, m.handler)
+	if err := pkgcore.MountRoute(reg, apiPath, m.handler); err != nil {
+		return err
+	}
 	return nil
 }
 

@@ -91,11 +91,11 @@ func TestComponent_StartDeclaresAndPublishesTheService(t *testing.T) {
 		t.Errorf("Events seat = %v, want the item-changed event declaration", types)
 	}
 	paths := make([]string, 0, 2)
-	for _, route := range reg.Routes.Routes() {
+	for _, route := range componenttest.FaceOf(reg).Routes() {
 		paths = append(paths, route.Path)
 	}
 	if !slices.Contains(paths, PathPublic) || !slices.Contains(paths, PathSystemFeatures) {
-		t.Errorf("Routes seat = %v, want the two pre-auth mounts", paths)
+		t.Errorf("route face = %v, want the two pre-auth mounts", paths)
 	}
 
 	// The Service is the Start stage's publication: reachable from the

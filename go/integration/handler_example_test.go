@@ -78,13 +78,13 @@ func ExampleHandler() {
 		return
 	}
 
-	// reg.Routes.Routes() is exactly what a real host copies onto its own
+	// componenttest.FaceOf(reg).Routes() is exactly what a real host copies onto its own
 	// mux (examples/reference-app/internal/app's mountModuleRoutes); this
 	// example dispatches straight to the one route this module mounts,
 	// since api.HandlerFromMux (handler.go's NewHandler) already routes
 	// every operation this fragment declares.
 	var handler http.Handler
-	for _, route := range reg.Routes.Routes() {
+	for _, route := range componenttest.FaceOf(reg).Routes() {
 		handler = route.Handler
 	}
 	if handler == nil {

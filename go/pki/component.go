@@ -144,6 +144,11 @@ func component() pkgcore.Component {
 			// before construction, the binding contract enforced by
 			// selection rather than by luck of ordering.
 			{Token: (*Signer)(nil), Optional: true},
+			// The http component's route face (go/app/httpserve), where the
+			// module's HTTP surface is mounted when the composition serves
+			// HTTP. Optional: a pure-background composition carries no http
+			// component and the module constructs without mounting.
+			{Token: (*pkgcore.RouteRegistrar)(nil), Optional: true},
 		},
 		// The construction deliveries are the *Module plus the *Service
 		// baked into it -- the signing-key lifecycle authn's own

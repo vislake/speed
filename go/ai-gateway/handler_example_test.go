@@ -80,7 +80,7 @@ func ExampleHandler() {
 		return
 	}
 
-	// reg.Routes.Routes() is exactly what a real host copies onto its own
+	// componenttest.FaceOf(reg).Routes() is exactly what a real host copies onto its own
 	// mux (examples/reference-app/internal/app's mountModuleRoutes, gated
 	// there on rbac's PermissionRead/PermissionWrite/
 	// PermissionManagePlatform per module.go's own doc comment); this
@@ -90,7 +90,7 @@ func ExampleHandler() {
 	// here at all -- that enforcement is the HOST's router-level concern
 	// (see Handler's own doc comment), never this package's.
 	var handler http.Handler
-	for _, route := range reg.Routes.Routes() {
+	for _, route := range componenttest.FaceOf(reg).Routes() {
 		handler = route.Handler
 	}
 	if handler == nil {

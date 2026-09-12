@@ -211,7 +211,7 @@ func TestModule_Register_DeclaresItsSurface(t *testing.T) {
 	})
 
 	t.Run("no routes are mounted", func(t *testing.T) {
-		if got := reg.RoutesSeat().Routes(); len(got) != 0 {
+		if got := componenttest.FaceOf(reg).Routes(); len(got) != 0 {
 			t.Errorf("Register mounted %d route(s), want 0 -- metering has no HTTP surface this round", len(got))
 		}
 	})

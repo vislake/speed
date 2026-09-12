@@ -480,7 +480,7 @@ func (m *Module) OpenAPISpec() []byte { return openAPISpecYAML }
 // modules build their Service in NewModule, not Attach. go/integration's own
 // Service is built in Attach instead (this module's own established
 // shape), which runs strictly after the assembly returns --
-// too late to build a route reg.Routes.Mount needs NOW, during Register.
+// too late to build a route the route-face mount needs NOW, during Register.
 // Handler is therefore built here holding a reference to m itself (never to
 // m.service, which does not exist yet) and reads m.service AT CALL TIME,
 // exactly the forwarding-wrapper technique handleDomainEvent and
@@ -522,7 +522,9 @@ func (m *Module) Register(reg *pkgcore.ComponentRegistry) error {
 	}
 
 	m.handler = NewHandler(m, m.subject)
-	reg.RoutesSeat().Mount(apiPath, m.handler)
+	if err := pkgcore.MountRoute(reg, apiPath, m.handler); err != nil {
+		return err
+	}
 	return nil
 }
 

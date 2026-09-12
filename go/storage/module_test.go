@@ -140,7 +140,7 @@ func TestModule_Register_DeclaresItsSurface(t *testing.T) {
 		// apiPath the fragment's paths already promise -- a drift between
 		// the two would hand the host's outer mux a prefix that serves
 		// nothing (or routes that nothing forwards).
-		routes := reg.RoutesSeat().Routes()
+		routes := componenttest.FaceOf(reg).Routes()
 		if len(routes) != 1 {
 			t.Fatalf("Register mounted %d route(s), want exactly 1 (apiPath)", len(routes))
 		}

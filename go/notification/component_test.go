@@ -176,7 +176,7 @@ func TestComponent_InitDeclaresThroughTheGate(t *testing.T) {
 	if _, claimed := reg.Jobs.Handlers()[jobTypeDeliver]; !claimed {
 		t.Errorf("Jobs seat = %v, want the delivery handler", reg.Jobs.Handlers())
 	}
-	if routes := reg.Routes.Routes(); len(routes) != 1 || routes[0].Path != apiPath {
+	if routes := componenttest.FaceOf(reg).Routes(); len(routes) != 1 || routes[0].Path != apiPath {
 		t.Fatalf("Init mounted %v, want exactly the %s mount", routes, apiPath)
 	}
 	if m.handler == nil {

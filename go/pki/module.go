@@ -542,6 +542,8 @@ func (m *Module) Register(reg *pkgcore.ComponentRegistry) error {
 	}
 
 	m.handler = NewHandler(m.service, m.ca, reg.EventBus(), reg.AuditActionsSeat())
-	reg.RoutesSeat().Mount(apiPath, m.handler)
+	if err := pkgcore.MountRoute(reg, apiPath, m.handler); err != nil {
+		return err
+	}
 	return nil
 }

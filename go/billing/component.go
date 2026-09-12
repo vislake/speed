@@ -43,6 +43,11 @@ func component() pkgcore.Component {
 			// Optional: without one only the periodic re-query of stuck
 			// payment events is unavailable, the shape WithQueue documents.
 			{Token: (*jobs.Queue)(nil), Optional: true},
+			// The http component's route face (go/app/httpserve), where the
+			// module's HTTP surface is mounted when the composition serves
+			// HTTP. Optional: a pure-background composition carries no http
+			// component and the module constructs without mounting.
+			{Token: (*pkgcore.RouteRegistrar)(nil), Optional: true},
 		},
 		// The construction product is the *Module; the Entitlements it
 		// exposes is the judgment entry point business code calls.

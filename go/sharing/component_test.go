@@ -123,7 +123,7 @@ func TestComponent_InitDeclaresThroughTheGate(t *testing.T) {
 	if participants := reg.Retention.Participants(); len(participants) != 1 {
 		t.Errorf("Retention seat = %v, want the access-log retention participant", participants)
 	}
-	if routes := reg.Routes.Routes(); len(routes) != 2 {
+	if routes := componenttest.FaceOf(reg).Routes(); len(routes) != 2 {
 		t.Fatalf("Init mounted %v, want the access and tenant-scoped share mounts", routes)
 	}
 

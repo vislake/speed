@@ -219,8 +219,12 @@ func (m *Module) Register(reg *pkgcore.ComponentRegistry) error {
 	// therefore only ever wraps the requests it is meant to, because a
 	// request for one path never matches the other's pattern.
 	fragment := m.preAuthHandler()
-	reg.RoutesSeat().Mount(PathPublic, fragment)
-	reg.RoutesSeat().Mount(PathSystemFeatures, fragment)
+	if err := pkgcore.MountRoute(reg, PathPublic, fragment); err != nil {
+		return err
+	}
+	if err := pkgcore.MountRoute(reg, PathSystemFeatures, fragment); err != nil {
+		return err
+	}
 
 	if err := reg.EventsSeat().Publishes(eventDecl); err != nil {
 		return err

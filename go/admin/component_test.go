@@ -40,6 +40,7 @@ func TestComponent_RequiresPinsTheTokenSet(t *testing.T) {
 		{"*rbac.Module", false},
 		{"*metering.Module", true},
 		{"*billing.Module", true},
+		{"*pkgcore.RouteRegistrar", true},
 	}
 	if len(adminComponent.Requires) != len(want) {
 		t.Fatalf("Requires has %d entries, want %d", len(adminComponent.Requires), len(want))
@@ -183,7 +184,7 @@ func TestComponent_InitDeclaresThroughTheGate(t *testing.T) {
 	if _, claimed := reg.Jobs.Handlers()[jobTypeAuditExport]; !claimed {
 		t.Errorf("Jobs seat = %v, want the audit-export handler", reg.Jobs.Handlers())
 	}
-	if routes := reg.Routes.Routes(); len(routes) != 1 || routes[0].Path != APIPath {
+	if routes := componenttest.FaceOf(reg).Routes(); len(routes) != 1 || routes[0].Path != APIPath {
 		t.Fatalf("Init mounted %v, want exactly the %s mount", routes, APIPath)
 	}
 

@@ -126,7 +126,7 @@ func TestModule_Register_DeclaresItsSurface(t *testing.T) {
 	})
 
 	t.Run("both HTTP routes are mounted", func(t *testing.T) {
-		routes := reg.RoutesSeat().Routes()
+		routes := componenttest.FaceOf(reg).Routes()
 		if len(routes) != 2 {
 			t.Fatalf("Register mounted %d route(s), want exactly 2 (PathAccess, PathShares)", len(routes))
 		}

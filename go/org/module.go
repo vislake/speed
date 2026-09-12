@@ -572,7 +572,9 @@ func (m *Module) Register(reg *pkgcore.ComponentRegistry) error {
 	// is whichever one the host actually configured, never a nil one
 	// captured before the option ran.
 	m.handler = NewHandler(m.tree, m.members, m.invites, m.subject)
-	reg.RoutesSeat().Mount(apiPath, m.handler)
+	if err := pkgcore.MountRoute(reg, apiPath, m.handler); err != nil {
+		return err
+	}
 	return nil
 }
 

@@ -104,6 +104,11 @@ var notificationComponent = pkgcore.Component{
 		{Token: (*pkgcore.KVStore)(nil), Optional: true},
 		{Token: (*SubjectResolver)(nil), Optional: true},
 		{Token: (*UserLocaleResolver)(nil), Optional: true},
+		// The http component's route face (go/app/httpserve), where the
+		// module's HTTP surface is mounted when the composition serves
+		// HTTP. Optional: a pure-background composition carries no http
+		// component and the module constructs without mounting.
+		{Token: (*pkgcore.RouteRegistrar)(nil), Optional: true},
 	},
 	// The "notification" namespace keeps the schema's contact_index_key
 	// field at the platform key path the key has always carried

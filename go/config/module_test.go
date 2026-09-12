@@ -111,7 +111,7 @@ func TestModule_Register_MountsBothConfigRoutesInOrder(t *testing.T) {
 		t.Fatalf("Register: %v", err)
 	}
 
-	routes := reg.RoutesSeat().Routes()
+	routes := componenttest.FaceOf(reg).Routes()
 	if len(routes) != 2 {
 		t.Fatalf("the module mounted %d routes, want 2", len(routes))
 	}

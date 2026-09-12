@@ -352,7 +352,7 @@ func ExampleGuardRoutes() {
 		return
 	}
 
-	// What the modules mounted (reg.Routes.Routes() in a real host)...
+	// What the modules mounted (componenttest.FaceOf(reg).Routes() in a real host)...
 	mounted := []pkgcore.MountedRoute{
 		{Path: "/api/v1/notes", Handler: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 			w.WriteHeader(http.StatusOK)

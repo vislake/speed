@@ -65,6 +65,10 @@ func TestComponentAssemblesThroughRegistry(t *testing.T) {
 	if err := reg.Register(testDBComponent(testutil.NewSQLite(t, moduleName, migrations.FS))); err != nil {
 		t.Fatalf("registering the database stand-in: %v", err)
 	}
+	// The http component's declaration faces, stood in for by the recorder:
+	// the module's Init turn mounts its route on it (the optional
+	// dependency real compositions satisfy with the http component).
+	reg.Put(componenttest.NewFaceRecorder())
 	reg.Put(FeatureGateFunc(func(context.Context, string) (bool, error) { return true, nil }))
 	reg.Put(SubjectResolverFunc(func(*http.Request) (string, bool) { return "user-1", true }))
 	// The Init callback installs the module's UserCreated subscription
@@ -124,7 +128,7 @@ func TestComponentAssemblesThroughRegistry(t *testing.T) {
 		types = append(types, decl.Type)
 	}
 	assertContainsAll(t, types, []string{EventNodeCreated, EventMemberInvited, EventMemberJoined, EventMemberRemoved})
-	if routes := reg.Routes.Routes(); len(routes) != 1 || routes[0].Path != apiPath {
+	if routes := componenttest.FaceOf(reg).Routes(); len(routes) != 1 || routes[0].Path != apiPath {
 		t.Fatalf("Init mounted %v, want exactly the %s mount", routes, apiPath)
 	}
 

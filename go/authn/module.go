@@ -900,7 +900,9 @@ func (m *Module) Register(reg *pkgcore.ComponentRegistry) error {
 	// declaration above to run before this line, matching notes.Module's
 	// identical ordering for its own single audit action.
 	m.handler = NewHandler(svc, reg.EventBus(), reg.AuditActionsSeat())
-	reg.RoutesSeat().Mount(apiPath, m.handler)
+	if err := pkgcore.MountRoute(reg, apiPath, m.handler); err != nil {
+		return err
+	}
 
 	if err := reg.EventsSeat().Publishes(eventDecls...); err != nil {
 		return err

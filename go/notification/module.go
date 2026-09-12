@@ -475,6 +475,8 @@ func (m *Module) Register(reg *pkgcore.ComponentRegistry) error {
 	// reg.Locales() is still nil.
 	m.handler = NewHandler(m.inbox, m.prefs, m.contacts, m.hub, m.subject, m.userLocale)
 	m.handler.attachHost(reg)
-	reg.RoutesSeat().Mount(apiPath, m.handler)
+	if err := pkgcore.MountRoute(reg, apiPath, m.handler); err != nil {
+		return err
+	}
 	return nil
 }

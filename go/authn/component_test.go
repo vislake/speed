@@ -64,7 +64,7 @@ func TestComponent_InitDeclaresThroughTheGate(t *testing.T) {
 	if !slices.Contains(flags, FeatureFlagPasswordLogin) {
 		t.Errorf("Features seat = %v, want the password-login flag", flags)
 	}
-	if routes := reg.Routes.Routes(); len(routes) != 1 || routes[0].Path != apiPath {
+	if routes := componenttest.FaceOf(reg).Routes(); len(routes) != 1 || routes[0].Path != apiPath {
 		t.Fatalf("Init mounted %v, want exactly the %s mount", routes, apiPath)
 	}
 

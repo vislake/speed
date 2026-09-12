@@ -36,7 +36,7 @@ func TestModule_Register_DeclaresTheSurface(t *testing.T) {
 			t.Errorf("Permissions = %v, want the %q declaration", reg.Permissions.Permissions(), want)
 		}
 	}
-	if routes := reg.Routes.Routes(); len(routes) != 1 || routes[0].Path != apiPath {
+	if routes := componenttest.FaceOf(reg).Routes(); len(routes) != 1 || routes[0].Path != apiPath {
 		t.Fatalf("Register mounted %v, want exactly the %s mount", routes, apiPath)
 	}
 }

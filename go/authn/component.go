@@ -144,6 +144,11 @@ func component() pkgcore.Component {
 			// before the seam existed -- which is why the read sites all
 			// carry documented fallbacks (settings.go).
 			{Token: (*config.Module)(nil), Optional: true},
+			// The http component's route face (go/app/httpserve), where the
+			// module's HTTP surface is mounted when the composition serves
+			// HTTP. Optional: a pure-background composition carries no http
+			// component and the module constructs without mounting.
+			{Token: (*pkgcore.RouteRegistrar)(nil), Optional: true},
 		},
 		// The construction product is the *Module. The *Service it exposes
 		// is built inside Register -- it needs the event bus and key-value

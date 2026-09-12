@@ -215,7 +215,7 @@ func (m *Module) Service() *Service { return m.svc }
 
 // Handler returns the module's HTTP Handler, once Register has built it
 // (nil before then). Exposed for a host that needs to reach it directly
-// rather than through reg.Routes.Routes() -- e.g. to mount it under a
+// rather than through the http component's route face -- e.g. to mount it under a
 // different outer path, or to wrap it in additional host-specific
 // middleware before it reaches Register's own mount.
 func (m *Module) Handler() *Handler { return m.handler }
@@ -389,7 +389,11 @@ func (m *Module) Register(reg *pkgcore.ComponentRegistry) error {
 	// the host actually configured -- the same reasoning go/storage's
 	// identical Register-time Handler construction documents.
 	m.handler = NewHandler(m.svc, m.resolver)
-	reg.RoutesSeat().Mount(PathAccess, m.handler)
-	reg.RoutesSeat().Mount(PathShares, m.handler)
+	if err := pkgcore.MountRoute(reg, PathAccess, m.handler); err != nil {
+		return err
+	}
+	if err := pkgcore.MountRoute(reg, PathShares, m.handler); err != nil {
+		return err
+	}
 	return nil
 }

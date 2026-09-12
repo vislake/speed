@@ -500,6 +500,8 @@ func (m *Module) Register(reg *pkgcore.ComponentRegistry) error {
 	// Routes.Mount is a plain registration: no I/O, exactly as the
 	// no-I/O contract this doc comment promises requires.
 	m.handler = NewHandler(m.svc, m.life, m.objects, m.derivatives)
-	reg.RoutesSeat().Mount(apiPath, m.handler)
+	if err := pkgcore.MountRoute(reg, apiPath, m.handler); err != nil {
+		return err
+	}
 	return nil
 }

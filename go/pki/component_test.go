@@ -142,7 +142,7 @@ func TestComponent_InitDeclaresThroughTheGate(t *testing.T) {
 	}
 	assertContainsAll(t, types, []string{EventSigningKeyStaged, EventSigningKeyActivated, EventSigningKeyRevoked, EventSigningKeyRetired, EventCertificateRevoked})
 
-	routes := reg.Routes.Routes()
+	routes := componenttest.FaceOf(reg).Routes()
 	if len(routes) != 1 || routes[0].Path != apiPath {
 		t.Fatalf("Init mounted %v, want exactly the %s mount", routes, apiPath)
 	}

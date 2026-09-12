@@ -170,7 +170,7 @@ func (m *Module) OpenAPISpec() []byte { return openAPISpecYAML }
 // are declared on reg.Permissions, and the module's HTTP surface --
 // Handler, built here so it always serves the m.credentials instance
 // NewModule's options configured -- is mounted at apiPath.
-// reg.Routes.Mount is a plain registration, no I/O, so Register's no-I/O
+// MountRoute is a plain registration, no I/O, so Register's no-I/O
 // contract stands.
 func (m *Module) Register(reg *pkgcore.ComponentRegistry) error {
 	if err := reg.PermissionsSeat().Add(PermissionRead, PermissionWrite, PermissionManagePlatform); err != nil {
@@ -197,6 +197,8 @@ func (m *Module) Register(reg *pkgcore.ComponentRegistry) error {
 	// (handler.go's tenancy.WithSystemContext call) has a bus to publish
 	// on.
 	m.handler = NewHandler(m.credentials, reg.EventBus())
-	reg.RoutesSeat().Mount(apiPath, m.handler)
+	if err := pkgcore.MountRoute(reg, apiPath, m.handler); err != nil {
+		return err
+	}
 	return nil
 }
