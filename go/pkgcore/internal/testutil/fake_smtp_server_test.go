@@ -191,7 +191,7 @@ func TestFakeSMTPServer_Reject_Answers550AndStillRecordsTheAttempt(t *testing.T)
 	}
 }
 
-// TestFakeSMTPServer_DotUnstuffing_RoundTripsPins the relay's DATA handling:
+// TestFakeSMTPServer_DotUnstuffing_RoundTrips pins the relay's DATA handling:
 // lines the client dot-stuffed (a body line beginning with ".") arrive at
 // the record unstuffed, byte for byte.
 func TestFakeSMTPServer_DotUnstuffing_RoundTrips(t *testing.T) {

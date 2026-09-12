@@ -187,7 +187,7 @@ func TestExpiryInterval_NonPositiveTTLIsNil(t *testing.T) {
 	}
 }
 
-// TestExpiryInterval_PositiveTTLIsTheDurationItself pins that a positive ttl
+// TestExpiryInterval_PositiveTTLIsTheDuration pins that a positive ttl
 // travels as a time.Duration parameter -- the value pgx encodes as a
 // PostgreSQL interval of exactly that length, which the database adds to its
 // own now() (see expiryInterval's own doc comment). Returning the duration
