@@ -20,16 +20,44 @@ import (
 	"github.com/vislake/speed/go/notification/migrations"
 )
 
+// ContactIndexKeyPath is the key path of the HMAC key notification's blind
+// indexers are built from: the derive field "contact_index_key" under the
+// component's own "notification" namespace, so the key resolves at the
+// platform key path it has always carried (pkgcore.BootstrapKeyPurpose
+// embeds the path, and a rename would silently rotate the key). It is also
+// the material address a host's wiring reads the key from.
+const ContactIndexKeyPath = "notification.contact_index_key"
+
 // notificationComponentConfig is the "notification" component's
-// configuration schema: one field per key a composition block may carry.
-// Decoding is strict, so a block naming any other key fails before anything
-// is constructed.
+// configuration schema: one field per key a composition block may carry,
+// plus the process-start key material as a derive field. The component's
+// namespace is "notification", so the key resolves at ContactIndexKeyPath
+// rather than under the default components.notification. prefix. Decoding is
+// strict, so a block naming any other key fails before anything is
+// constructed.
 //
-//	mail_from   string   From address of every composed mail (Register requires it)
-//	reply_to    string   Reply-To address, omitted on the wire when empty
+//	contact_index_key  []byte  HMAC key the contact-address blind indexers are built from
+//	mail_from          string  From address of every composed mail (Register requires it)
+//	reply_to           string  Reply-To address, omitted on the wire when empty
 type notificationComponentConfig struct {
-	MailFrom string `json:"mail_from"`
-	ReplyTo  string `json:"reply_to"`
+	// ContactIndexKey indexes the encrypted contact addresses; one key
+	// serves both the email and phone indexer. The derive option resolves
+	// it through the five-source chain (an explicit flag/environment/file
+	// value, the root-key derivation, the declared defaults table).
+	ContactIndexKey []byte `json:"contact_index_key" config:"derive,sensitive,group=notification"`
+	MailFrom        string `json:"mail_from"`
+	ReplyTo         string `json:"reply_to"`
+}
+
+// ConfigDocs implements pkgcore.Documented: the operator-facing contract of
+// the schema's sensitive key-material field.
+func (*notificationComponentConfig) ConfigDocs() map[string]pkgcore.FieldDoc {
+	return map[string]pkgcore.FieldDoc{
+		"contact_index_key": {
+			Description: "HMAC key the notification module's blind indexers index its encrypted contact addresses with; one key serves the email and phone indexers, whose canonical forms are disjoint, and it stays separate from every cipher key.",
+			Default:     "documented non-secret development default",
+		},
+	}
 }
 
 // notificationComponent is the component descriptor for "notification". It
@@ -46,9 +74,9 @@ type notificationComponentConfig struct {
 // profile-locale resolvers, whose absence every endpoint documents as a
 // legal, if reduced, wiring.
 //
-// BootstrapKeys declares the contact index key (notification.contact_index_key):
-// the HMAC key the blind indexers over the module's encrypted contact
-// addresses are built from.
+// The schema's derive field declares the contact index key
+// (ContactIndexKeyPath): the HMAC key the blind indexers over the module's
+// encrypted contact addresses are built from.
 //
 // Prepare is deliberately not declared: the contact-address serializer and
 // the two blind indexers it needs are registered today by the host's
@@ -77,10 +105,14 @@ var notificationComponent = pkgcore.Component{
 		{Token: (*SubjectResolver)(nil), Optional: true},
 		{Token: (*UserLocaleResolver)(nil), Optional: true},
 	},
-	BootstrapKeys: []pkgcore.BootstrapKey{bootstrapKeyDecl},
-	Migrations:    migrations.FS,
-	Locales:       locales.FS,
-	OpenAPISpec:   openAPISpecYAML,
+	// The "notification" namespace keeps the schema's contact_index_key
+	// field at the platform key path the key has always carried
+	// (ContactIndexKeyPath) instead of the default components.notification.
+	// prefix.
+	ConfigNamespace: "notification",
+	Migrations:      migrations.FS,
+	Locales:         locales.FS,
+	OpenAPISpec:     openAPISpecYAML,
 	New: func(_ context.Context, reg *pkgcore.ComponentRegistry, cfg pkgcore.ComponentConfig) (any, error) {
 		var c notificationComponentConfig
 		if err := cfg.Decode(&c); err != nil {

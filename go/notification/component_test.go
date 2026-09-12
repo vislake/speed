@@ -22,16 +22,25 @@ func TestComponent_WellFormed(t *testing.T) {
 	componenttest.AssertWellFormed(t, notificationComponent)
 }
 
-// TestComponent_DeclaresTheContactIndexKey pins the bootstrap key
-// declaration to the module's own single key material: one secret, the HMAC
-// key both contact indexers are built from.
+// TestComponent_DeclaresTheContactIndexKey pins the schema's key-material
+// field to the module's own single key: one secret, the HMAC key both
+// contact indexers are built from, resolving at exactly the platform key
+// path the component exports.
 func TestComponent_DeclaresTheContactIndexKey(t *testing.T) {
-	keys := notificationComponent.BootstrapKeys
-	if len(keys) != 1 || keys[0].Key != "notification.contact_index_key" {
-		t.Fatalf("BootstrapKeys = %v, want the single notification.contact_index_key declaration", keys)
+	descriptors, err := pkgcore.DescribeComponentSchema(moduleName, notificationComponent.ConfigSchema)
+	if err != nil {
+		t.Fatalf("DescribeComponentSchema() error = %v", err)
 	}
-	if !keys[0].Sensitive {
-		t.Error("contact index key is not marked Sensitive, want the key-material marking")
+	byKey := make(map[string]pkgcore.FieldDescriptor, len(descriptors))
+	for _, d := range descriptors {
+		byKey[d.Key] = d
+	}
+	field, ok := byKey[ContactIndexKeyPath]
+	if !ok {
+		t.Fatalf("the notification component did not declare key material at %q", ContactIndexKeyPath)
+	}
+	if !field.Derive || field.Type != "[]byte" || !field.Sensitive {
+		t.Errorf("field = %+v, want a Sensitive derive-tagged []byte key", field)
 	}
 }
 

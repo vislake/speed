@@ -472,30 +472,41 @@ func mapKeys(m map[string]any) []string {
 	return out
 }
 
-// TestModule_Register_DeclaresItsBootstrapKey pins the one process-start key
-// this module's contract names: the HMAC key both contact-address blind
-// indexers are built from, one Sensitive hex key that stays separate from every
-// cipher key.
-func TestModule_Register_DeclaresItsBootstrapKey(t *testing.T) {
+// TestComponent_SchemaDeclaresItsContactIndexKey pins the one process-start
+// key this module's contract names: the HMAC key both contact-address blind
+// indexers are built from, one Sensitive derive-tagged []byte field that
+// stays separate from every cipher key and resolves at exactly the platform
+// key path the component exports -- a schema rename cannot silently rotate
+// the key.
+func TestComponent_SchemaDeclaresItsContactIndexKey(t *testing.T) {
 	db := newTestDB(t)
 	module := NewModule(db, testModuleOptions(t)...)
-	newHostRegistry(t, module.Register)
+	reg := newHostRegistry(t, module.Register)
 
-	declared := notificationComponent.BootstrapKeys
-	if len(declared) != 1 {
-		t.Fatalf("the notification component declared %d bootstrap keys (%v), want exactly the contact index key", len(declared), declared)
+	descriptors, err := pkgcore.DescribeComponentSchema(moduleName, notificationComponent.ConfigSchema)
+	if err != nil {
+		t.Fatalf("DescribeComponentSchema() error = %v", err)
 	}
-	key := declared[0]
-	if key.Key != "notification.contact_index_key" {
-		t.Errorf("declared key = %q, want notification.contact_index_key", key.Key)
+	byKey := make(map[string]pkgcore.FieldDescriptor, len(descriptors))
+	for _, d := range descriptors {
+		byKey[d.Key] = d
 	}
-	if key.Format != "hexkey" || !key.Sensitive {
-		t.Errorf("declaration = %+v, want a Sensitive hexkey", key)
+	field, ok := byKey[ContactIndexKeyPath]
+	if !ok {
+		t.Fatalf("the notification component did not declare key material at %q", ContactIndexKeyPath)
 	}
-	if key.Group != moduleName {
-		t.Errorf("declaration group = %q, want the module name %q", key.Group, moduleName)
+	if !field.Derive || field.Type != "[]byte" || !field.Sensitive {
+		t.Errorf("field = %+v, want a Sensitive derive-tagged []byte key", field)
 	}
-	if key.Default == "" || key.Description == "" || key.Example != "" {
-		t.Errorf("declaration = %+v, want a documented fallback and contract text, and no suggested value", key)
+	if field.Group != moduleName {
+		t.Errorf("field group = %q, want the module name %q", field.Group, moduleName)
+	}
+	if field.Doc.Default == "" || field.Doc.Description == "" || field.Doc.Example != "" {
+		t.Errorf("field doc = %+v, want a documented fallback and contract text, and no suggested value", field.Doc)
+	}
+	for _, item := range reg.Config.Items() {
+		if item.Key == ContactIndexKeyPath {
+			t.Errorf("key %q is declared on both the key-material layer and the runtime schema", item.Key)
+		}
 	}
 }
