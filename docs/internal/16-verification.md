@@ -21,7 +21,7 @@
 - Playwright 覆盖：注册/登录/SSO、组织与成员、套餐订阅与两种支付、用量与超额、AI 调用、运营后台
 - 每个里程碑出口条件对应一组 e2e 用例，只增不减
 
-> **实施状态注记：** 上面两条是设计意图，尚未落地——仓库里没有任何 Playwright 配置或 spec 文件，`.github/workflows/e2e.yml` 是 gated stub（guard step 直接失败，不在任何 PR 上触发），端到端浏览器测试仍未实现（计划见 [15 里程碑路线图](15-roadmap.md) M4 行的 e2e 条目）。reference-app 目前的验证方式是 Go 侧的组合 HTTP 测试（`*_flow_test.go` 系列：notes、org、authn、storage、notification 等，跑在 `full-ci` 标签的 `full-check.yml` 上）加前端各包自己的 `usage-example.test.tsx`（真实机制见第 6/8 节的注记），浏览器页面本身（挂载、渲染、真实点击）没有任何自动化覆盖。
+> **实施状态注记：** 上面两条是设计意图；浏览器 e2e 已落地——`examples/reference-app/web/e2e` 的 Playwright 套件（chromium/webkit/ipad 三个项目）驱动真实宿主与真实启动的服务器，`.github/workflows/e2e.yml` 为真实流水线（按需触发加每日定时运行，加上每次推送到 main；不在任何 PR 上触发），未建表面的验收门留在 `@pending` 层（当前选零，计划见 [15 里程碑路线图](15-roadmap.md) M4 行的 e2e 条目）。reference-app 的验证方式随之是三层：Go 侧的组合 HTTP 测试（`*_flow_test.go` 系列：notes、org、authn、storage、notification 等，跑在 `full-ci` 标签的 `full-check.yml` 上）、前端各包自己的 `usage-example.test.tsx`（真实机制见第 6/8 节的注记），以及浏览器页面本身（挂载、渲染、真实点击）由前述 e2e 套件覆盖。
 
 **5. 脚手架生成验证（防止模板腐化）**
 - CI 定时任务：`saasctl new tmpapp` + `create-saas-app tmpapp-web` → `go build` / `pnpm build` → 先 `docker compose -f docker-compose.standalone.yml up`（应在数十秒内就绪）再 `docker compose up` → 两次都跑冒烟脚本打健康检查与登录接口

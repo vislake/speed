@@ -91,7 +91,7 @@ graph BT
 > - **ui-kit `DataTable`**：横向溢出由 `TableContainer` 自带的 `overflow-x: auto` 处理，列数或列宽如何都会在容器内横向滚动而非撑破页面——该契约声明在组件文档注释并有回归测试钉住。按优先级隐藏/重排列的响应式布局未实现（README 的 Deferrals 记录）。
 > - **reference-app 三个页面视图**（home-view.tsx、notes-view.tsx、account-view.tsx）：移动视口边距 16px（`p: { xs: 2, sm: 3 }`）；sign-in-view 用 `width: 1` + `maxWidth` 写法（其外层容器的固定 `p: 3` 边距与三处视图是同一类遗留问题，尚未一并处理）。
 >
-> 测试方法：本仓库没有 Playwright/真实视口渲染基建（真实 e2e/视口测试是已规划的 M4 事项，`.github/workflows/e2e.yml` 是待启用的 gated stub）。JS 分支断点逻辑沿用 `AppShell.test.tsx` 的 `window.matchMedia` 布尔替身模式；纯 CSS sx 断点值（FormLayout 的 grid 列、AppShell 移动抽屉宽度上限）——jsdom 既不布局也不求值 `@media` 条件——改读 emotion 注入进文档的实际 CSS 文本（`emittedStyleText()`，`test-utils/emitted-css.ts`，ui-kit 与 layout-kit 两包各有一份）做属性/快照式断言，证明"预期的声明确实被写进了渲染结果"，而不是证明"某个断点侧的布局在真实设备上看起来正确"——这条局限性在测试文件自身的注释与两包的 README/AGENTS.md 里都逐处写明。
+> 测试方法：本仓库的 Playwright/真实视口基建在 reference-app 的 e2e 套件（`examples/reference-app/web/e2e`，由 `.github/workflows/e2e.yml` 真实流水线驱动，跑 app 级页面旅程）；组件级断点断言仍走本节的替身/emitted-CSS 层。JS 分支断点逻辑沿用 `AppShell.test.tsx` 的 `window.matchMedia` 布尔替身模式；纯 CSS sx 断点值（FormLayout 的 grid 列、AppShell 移动抽屉宽度上限）——jsdom 既不布局也不求值 `@media` 条件——改读 emotion 注入进文档的实际 CSS 文本（`emittedStyleText()`，`test-utils/emitted-css.ts`，ui-kit 与 layout-kit 两包各有一份）做属性/快照式断言，证明"预期的声明确实被写进了渲染结果"，而不是证明"某个断点侧的布局在真实设备上看起来正确"——这条局限性在测试文件自身的注释与两包的 README/AGENTS.md 里都逐处写明。
 
 ## 跨领域 hooks 的归属
 

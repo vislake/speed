@@ -16,7 +16,7 @@
 ### 前端测试
 Vitest + Testing Library 做组件与 hook 测试；Playwright 做 e2e。UI 包的每个公开组件需有 Storybook story（同时充当文档与视觉回归基线）。
 
-> **实施状态注记（本轮核实）：** Playwright 与 Storybook 两者目前都不存在于仓库——没有任何 Playwright 配置/spec 文件，也没有 `.stories.*` 文件或 Storybook 依赖/配置；`.github/workflows/reusable-npm-package-ci.yml` 自己的 header 明确把"Storybook component previews"列进未接线清单（"ui-kit shipped without a preview harness; the round that introduces one wires it here"）。真实的组件/hook 测试确实是 Vitest + Testing Library；e2e 与视觉回归目前都靠各包自己的 `src/usage-example.test.tsx`（真实机制见 [13 文档规范](13-documentation-standards.md)、[16 验证方式](16-verification.md) 的同一处注记——这一缺口在多份文档里重复出现，均按此注记读）。
+> **实施状态注记（本轮核实）：** Storybook 目前不存在于仓库——没有 `.stories.*` 文件或 Storybook 依赖/配置；`.github/workflows/reusable-npm-package-ci.yml` 自己的 header 明确把"Storybook component previews"列进未接线清单（"no package ships a preview harness"）。Playwright e2e 已落地——`examples/reference-app/web/e2e` 的 Playwright 套件（chromium/webkit/ipad 三个项目）由 `.github/workflows/e2e.yml` 真实流水线驱动（按需触发加每日定时运行，加上每次推送到 main）。真实的组件/hook 测试确实是 Vitest + Testing Library；视觉回归目前靠各包自己的 `src/usage-example.test.tsx`（真实机制见 [13 文档规范](13-documentation-standards.md)、[16 验证方式](16-verification.md) 的同一处注记——Storybook 缺口在多份文档里重复出现，均按此注记读）。
 
 ### 文件与目录布局
 

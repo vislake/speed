@@ -307,7 +307,7 @@
 
 ## 7. E 组：e2e stub 缺口（状态登记）
 
-- **状态**：e2e CI 腿已由 stub 改为真腿（`.github/workflows/e2e.yml`，含诚实门），原文"e2e 仍是 stub"的表述已清扫。
+- **状态**：e2e CI 腿已由 stub 改为真腿（`.github/workflows/e2e.yml`，含诚实门）；"e2e 仍是 stub" 类过时表述已清扫——四个工作流文件（fast-check、reusable-docker-build、docker-image-ci、reusable-npm-package-ci）随该轮改写，docs/internal 同族句一并对齐。
 - **出处**：e2e 轮提交 `e5ec05b9`（及同轮 §2.1 的四句表述清扫）。
 - **说明**：本轮只登记状态、不改其文件；若该轮先于本清单落地，此条即为已闭记录。
 
