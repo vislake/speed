@@ -13,16 +13,18 @@ import (
 const ProviderOpenAICompatibleImage = "image.openai-compatible"
 
 // ImageProviderRegistry is the package-level
-// pkgcore.SeamRegistry[ImageProvider] every host resolves a named
-// ImageProvider implementation through -- the image-generation counterpart
-// of ChatProviderRegistry (see ChatProviderRegistry's own doc comment for
-// the registration mechanism): an additional vendor-SDK-backed provider
+// pkgcore.SeamRegistry[ImageProvider] a Gateway resolves a named
+// ImageProvider implementation through whenever the assembly's own
+// selection carries no component of that name -- the image-generation
+// counterpart of ChatProviderRegistry (see ChatProviderRegistry's own doc
+// comment for the registration mechanism) and of buildChat's
+// component-face preference: an additional vendor-SDK-backed provider
 // self-registers into this registry from its own init(), and
-// Gateway.resolveImage calls Build fresh on every job execution, passing
-// the credential CredentialService.Resolve just looked up as the Config --
-// OpenAICompatibleImageProvider, like its chat sibling, performs no I/O at
-// construction, so building one fresh per job has no caching problem to
-// solve.
+// Gateway.resolveImage builds a provider fresh on every job execution,
+// passing the credential CredentialService.Resolve just looked up as the
+// Config -- OpenAICompatibleImageProvider, like its chat sibling, performs
+// no I/O at construction, so building one fresh per job has no caching
+// problem to solve.
 //
 // ProviderOpenAICompatibleImage is registered below, in this package's own
 // init(), for the identical reason ProviderOpenAICompatible is: it is this

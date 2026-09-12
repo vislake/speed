@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"time"
 
@@ -35,6 +36,17 @@ type Gateway struct {
 	credentials *CredentialService
 	registry    *pkgcore.SeamRegistry[ChatProvider]
 	routes      map[string]ModelRoute
+
+	// components is the assembly's component registry, attached by
+	// Module.Register when the module runs under an assembly. A route's
+	// provider name resolves as a selected member of the "chat"/"image"
+	// directories through it -- the component face's per-call construction
+	// (pkgcore.Build with the resolved credential as the override), the
+	// same names the seam registrations carry. Nil outside an assembly,
+	// and the resolution falls back to the package-level registries above
+	// for any name the assembly did not select, so a composition that
+	// selects nothing keeps the module's pre-assembly behavior.
+	components *pkgcore.ComponentRegistry
 
 	// entitlements and usage are both optional -- see Entitlements' and
 	// UsageRecorder's own doc comments for exactly what shipping without
@@ -106,9 +118,10 @@ func WithUsageRecorder(r UsageRecorder) GatewayOption {
 }
 
 // WithChatProviderRegistry overrides the package-level ChatProviderRegistry
-// a Gateway resolves providers from. Tests use this to isolate a Gateway
-// under test from the process-global registry's real registrations;
-// production code has no reason to call it.
+// a Gateway resolves providers from when the assembly's own selection does
+// not carry the requested name. Tests use this to isolate a Gateway under
+// test (typically a directly constructed one, outside any assembly) from
+// the process-global registry's real registrations.
 func WithChatProviderRegistry(registry *pkgcore.SeamRegistry[ChatProvider]) GatewayOption {
 	return func(g *Gateway) {
 		if registry != nil {
@@ -146,13 +159,59 @@ func NewGateway(credentials *CredentialService, opts ...GatewayOption) *Gateway 
 // shared by Chat and ChatStream -- the chat-family instantiation of
 // resolveProvider.
 func (g *Gateway) resolve(ctx context.Context, logicalModel string) (ChatProvider, ModelRoute, error) {
-	return resolveProvider(ctx, g, g.registry, "provider", logicalModel)
+	return resolveProvider(ctx, g, g.buildChat, "provider", logicalModel)
+}
+
+// buildChat constructs the chat provider named name from cfg: through the
+// assembly's component face when the name is a selected member (the
+// per-call construction form, the override carrying the credential just
+// resolved), through the package-level ChatProviderRegistry otherwise --
+// including for a Gateway built outside any assembly. The two faces are
+// two construction paths to the same implementations under the same names
+// (see provider_components.go), so which one serves a request changes
+// nothing observable about the provider built.
+func (g *Gateway) buildChat(ctx context.Context, name string, cfg pkgcore.Config) (ChatProvider, error) {
+	if g.components != nil {
+		provider, err := buildSelected[ChatProvider](ctx, g.components, name, cfg)
+		if err == nil || !errors.Is(err, pkgcore.ErrUnknownComponent) {
+			return provider, err
+		}
+	}
+	provider, _, err := g.registry.Build(name, cfg)
+	return provider, err
+}
+
+// buildImage is buildChat's image-family counterpart, over the "image"
+// directory and ImageProviderRegistry.
+func (g *Gateway) buildImage(ctx context.Context, name string, cfg pkgcore.Config) (ImageProvider, error) {
+	if g.components != nil {
+		provider, err := buildSelected[ImageProvider](ctx, g.components, name, cfg)
+		if err == nil || !errors.Is(err, pkgcore.ErrUnknownComponent) {
+			return provider, err
+		}
+	}
+	provider, _, err := g.imageRegistry.Build(name, cfg)
+	return provider, err
+}
+
+// buildSelected constructs the assembly-selected component named name with
+// cfg as the per-call override -- doc 29 §9's per-call construction shape.
+// A name no selected component carries comes back wrapping
+// pkgcore.ErrUnknownComponent, the callers' signal to fall back to the
+// package-level registry; every other error is the component face's own and
+// is returned unchanged.
+func buildSelected[T any](ctx context.Context, reg *pkgcore.ComponentRegistry, name string, cfg pkgcore.Config) (T, error) {
+	override := pkgcore.NewComponentConfig(map[string]any{})
+	for key, value := range cfg {
+		override = override.With(key, value)
+	}
+	return pkgcore.Build[T](ctx, reg, name, &override)
 }
 
 // resolveProvider runs the routing and credential-resolution legs shared by
 // the chat and image pipelines: look up logicalModel's ModelRoute in the
 // gateway's routes, resolve its credential, build a fresh provider of T
-// through registry from the two, and, for a credential that resolved at
+// through build from the two, and, for a credential that resolved at
 // the tenant tier, install the SSRF-guarded client on it. family names the
 // provider family inside the build-failure wrap ("provider" for chat,
 // "image provider" for images), so each family keeps its own error
@@ -168,7 +227,7 @@ func (g *Gateway) resolve(ctx context.Context, logicalModel string) (ChatProvide
 // unguarded -- the failure mode guardTenantScopeDial's own doc comment
 // describes. A platform-tier row is the operator's own default and is left
 // on the provider's ordinary client.
-func resolveProvider[T any](ctx context.Context, g *Gateway, registry *pkgcore.SeamRegistry[T], family, logicalModel string) (T, ModelRoute, error) {
+func resolveProvider[T any](ctx context.Context, g *Gateway, build func(context.Context, string, pkgcore.Config) (T, error), family, logicalModel string) (T, ModelRoute, error) {
 	var zero T
 	route, ok := g.routes[logicalModel]
 	if !ok {
@@ -180,7 +239,7 @@ func resolveProvider[T any](ctx context.Context, g *Gateway, registry *pkgcore.S
 		return zero, route, err
 	}
 
-	provider, _, err := registry.Build(route.Provider, pkgcore.Config{
+	provider, err := build(ctx, route.Provider, pkgcore.Config{
 		"base_url": cred.BaseURL,
 		"api_key":  cred.APIKey,
 	})

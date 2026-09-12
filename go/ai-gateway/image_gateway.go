@@ -159,7 +159,7 @@ func WithImageGeneration(queue jobs.Queue, objects *storage.ObjectService) Gatew
 // Re-resolving fresh in the job worker keeps a tenant BYOK image credential
 // dial-guarded wherever the job executes, on whichever replica.
 func (g *Gateway) resolveImage(ctx context.Context, logicalModel string) (ImageProvider, ModelRoute, error) {
-	return resolveProvider(ctx, g, g.imageRegistry, "image provider", logicalModel)
+	return resolveProvider(ctx, g, g.buildImage, "image provider", logicalModel)
 }
 
 // GenerateImage validates req, checks Entitlements (if wired) and resolves

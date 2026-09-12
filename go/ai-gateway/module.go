@@ -180,6 +180,11 @@ func (m *Module) Register(reg *pkgcore.ComponentRegistry) error {
 	// (ratelimit.go) can build a go/ratelimit.Limiter over the deployment
 	// mode's resolved KVStore.
 	m.gateway.host = reg
+	// Attaches the registry as the Gateway's component face: a route's
+	// provider name resolves as a selected member of the "chat"/"image"
+	// directories through it from here on (gateway.go's buildChat/
+	// buildImage), the same names the seam registrations carry.
+	m.gateway.components = reg
 	if handler, ok := m.gateway.imageJobHandler(); ok {
 		if err := reg.JobsSeat().Handle(TaskTypeImageGenerate, handler); err != nil {
 			return err

@@ -11,14 +11,18 @@ import (
 const ProviderOpenAICompatible = "chat.openai-compatible"
 
 // ChatProviderRegistry is the package-level pkgcore.SeamRegistry[ChatProvider]
-// every host resolves a named ChatProvider implementation through, after
+// a Gateway resolves a named ChatProvider implementation through whenever
+// the assembly's own selection carries no component of that name, after
 // the database/sql driver-registration pattern: an additional vendor-SDK-
 // backed provider (a hypothetical go/ai-gateway/provider/anthropic
 // subpackage using a real SDK) self-registers into this same registry from
 // its own init(), and a host that never imports that subpackage never
 // resolves its name -- resolving an unimported one at Gateway.Chat time
 // fails with an error wrapping pkgcore.ErrUnknownImplementation naming it,
-// the same "unknown driver" cost database/sql's own drivers accept.
+// the same "unknown driver" cost database/sql's own drivers accept. Under
+// an assembly, a name the composition selected resolves through the
+// component face instead (Gateway's buildChat, gateway.go), which is the
+// same implementation under the same name -- see provider_components.go.
 //
 // Unlike pkgcore's own seam values, resolved once per assembly, resolving
 // a ChatProvider is not a one-shot,
