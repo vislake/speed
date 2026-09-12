@@ -48,7 +48,6 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
-	"encoding/json"
 	"io"
 	"net/http"
 	"strings"
@@ -179,9 +178,7 @@ func (h *casesHandler) CasesUploadPhoto(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	w.Header().Set("Content-Type", "application/json; charset=utf-8")
-	w.WriteHeader(http.StatusCreated)
-	_ = json.NewEncoder(w).Encode(casesapi.CasesUploadPhotoResponse{ObjectID: obj.ID})
+	httpapi.WriteJSON(w, http.StatusCreated, casesapi.CasesUploadPhotoResponse{ObjectID: obj.ID})
 }
 
 // CasesGetPhotoContent implements casesapi.ServerInterface: it handles
@@ -238,9 +235,7 @@ func (h *casesHandler) CasesGetPhotoContent(w http.ResponseWriter, r *http.Reque
 	if obj.MIME != nil && *obj.MIME != "" {
 		mediaType = *obj.MIME
 	}
-	w.Header().Set("Content-Type", "application/json; charset=utf-8")
-	w.WriteHeader(http.StatusOK)
-	_ = json.NewEncoder(w).Encode(casesapi.CasesPhotoContent{
+	httpapi.WriteJSON(w, http.StatusOK, casesapi.CasesPhotoContent{
 		MediaType:     mediaType,
 		ContentBase64: base64.StdEncoding.EncodeToString(raw),
 	})

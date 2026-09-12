@@ -1,7 +1,6 @@
 package app
 
 import (
-	"encoding/json"
 	"net/http"
 	"strings"
 	"time"
@@ -136,17 +135,16 @@ func WriteTeamMemberError(w http.ResponseWriter, err error) {
 	httpapi.WriteError(w, err, teamMemberErrInternal)
 }
 
-// WriteTeamMembersJSON writes the 200 answer. A nil slice answers the
-// empty array, never a null -- the wire shape org's own list answers
-// promise, which a roster reader treats as "no members", the same
-// convention the frontend's `?? []` relies on.
+// WriteTeamMembersJSON writes the 200 answer through the shared JSON write
+// (see pkgcore/httpapi). A nil slice answers the empty array, never a
+// null -- the wire shape org's own list answers promise, which a roster
+// reader treats as "no members", the same convention the frontend's
+// `?? []` relies on.
 func WriteTeamMembersJSON(w http.ResponseWriter, members []TeamMemberRow) {
 	if members == nil {
 		members = []TeamMemberRow{}
 	}
-	w.Header().Set("Content-Type", "application/json; charset=utf-8")
-	w.WriteHeader(http.StatusOK)
-	_ = json.NewEncoder(w).Encode(TeamMembersResponse{Members: members})
+	httpapi.WriteJSON(w, http.StatusOK, TeamMembersResponse{Members: members})
 }
 
 // teamMembersDeps bundles the org-module and authn state serveTeamMembers

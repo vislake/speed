@@ -237,9 +237,7 @@ func (h *smilesimHandler) SmilesimSimulate(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	w.Header().Set("Content-Type", "application/json; charset=utf-8")
-	w.WriteHeader(http.StatusAccepted)
-	_ = json.NewEncoder(w).Encode(smilesimapi.SmilesimJobRef{JobID: string(jobID)})
+	httpapi.WriteJSON(w, http.StatusAccepted, smilesimapi.SmilesimJobRef{JobID: string(jobID)})
 }
 
 // SmilesimGetJob implements smilesimapi.ServerInterface: it handles GET
@@ -315,9 +313,7 @@ func (h *smilesimHandler) SmilesimGetJob(w http.ResponseWriter, r *http.Request,
 		resp.Error = &job.Error
 	}
 
-	w.Header().Set("Content-Type", "application/json; charset=utf-8")
-	w.WriteHeader(http.StatusOK)
-	_ = json.NewEncoder(w).Encode(resp)
+	httpapi.WriteJSON(w, http.StatusOK, resp)
 }
 
 // SmilesimListPhotoSimulations implements smilesimapi.ServerInterface: it
@@ -367,9 +363,7 @@ func (h *smilesimHandler) SmilesimListPhotoSimulations(w http.ResponseWriter, r 
 		simulations = append(simulations, entry)
 	}
 
-	w.Header().Set("Content-Type", "application/json; charset=utf-8")
-	w.WriteHeader(http.StatusOK)
-	_ = json.NewEncoder(w).Encode(smilesimapi.SmilesimPhotoSimulations{Simulations: simulations})
+	httpapi.WriteJSON(w, http.StatusOK, smilesimapi.SmilesimPhotoSimulations{Simulations: simulations})
 }
 
 // SmilesimGetSimulationContent implements smilesimapi.ServerInterface: it
@@ -452,9 +446,7 @@ func (h *smilesimHandler) SmilesimGetSimulationContent(w http.ResponseWriter, r 
 	if obj.MIME != nil && *obj.MIME != "" {
 		mediaType = *obj.MIME
 	}
-	w.Header().Set("Content-Type", "application/json; charset=utf-8")
-	w.WriteHeader(http.StatusOK)
-	_ = json.NewEncoder(w).Encode(smilesimapi.SmilesimSimulationContent{
+	httpapi.WriteJSON(w, http.StatusOK, smilesimapi.SmilesimSimulationContent{
 		MediaType:     mediaType,
 		ContentBase64: base64.StdEncoding.EncodeToString(raw),
 	})

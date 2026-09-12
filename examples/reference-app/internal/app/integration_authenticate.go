@@ -23,13 +23,13 @@
 package app
 
 import (
-	"encoding/json"
 	"net/http"
 	"time"
 
 	"github.com/vislake/speed/go/integration"
 	"github.com/vislake/speed/go/pkgcore"
 	"github.com/vislake/speed/go/pkgcore/apperr"
+	"github.com/vislake/speed/go/pkgcore/httpapi"
 	"github.com/vislake/speed/go/ratelimit"
 	"github.com/vislake/speed/go/rbac"
 )
@@ -146,9 +146,7 @@ func wireIntegrationAuthenticated(mux *http.ServeMux, m *integration.Module, kv 
 			rbac.WriteAuthzError(w, integrationErrInternal)
 			return
 		}
-		w.Header().Set("Content-Type", "application/json; charset=utf-8")
-		w.WriteHeader(http.StatusOK)
-		_ = json.NewEncoder(w).Encode(integrationWhoamiResponse{
+		httpapi.WriteJSON(w, http.StatusOK, integrationWhoamiResponse{
 			TenantID:  authenticated.TenantID,
 			KeyID:     authenticated.KeyID,
 			CreatedBy: authenticated.CreatedBy,

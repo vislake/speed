@@ -14,6 +14,7 @@ import (
 	"github.com/vislake/speed/examples/reference-app/internal/app"
 
 	"github.com/vislake/speed/go/pkgcore"
+	"github.com/vislake/speed/go/pkgcore/httpapi"
 )
 
 // registerFreshAccountNamed registers email with an explicit
@@ -55,7 +56,7 @@ func registerFreshAccountNamed(t *testing.T, srv *httptest.Server, email, passwo
 // clinicNameAs GETs the app's own tenant-identity answer
 // (/api/reference-app/clinic-name, internal/app/clinic_name.go) with
 // token's bearer and decodes the {name} answer, failing the test on
-// anything but a 200 carrying the field.
+// anything but a 200 carrying the shared JSON content type and the field.
 func clinicNameAs(t *testing.T, srv *httptest.Server, token string) (name string) {
 	t.Helper()
 
@@ -72,6 +73,9 @@ func clinicNameAs(t *testing.T, srv *httptest.Server, token string) (name string
 	if resp.StatusCode != http.StatusOK {
 		raw, _ := io.ReadAll(resp.Body)
 		t.Fatalf("GET %s: status = %d, want %d; body = %s", app.ClinicNamePath, resp.StatusCode, http.StatusOK, raw)
+	}
+	if got := resp.Header.Get("Content-Type"); got != httpapi.JSONContentType {
+		t.Fatalf("GET %s: Content-Type = %q, want the shared %q", app.ClinicNamePath, got, httpapi.JSONContentType)
 	}
 	var answer struct {
 		Name string `json:"name"`

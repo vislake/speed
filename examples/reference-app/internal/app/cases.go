@@ -41,7 +41,6 @@
 package app
 
 import (
-	"encoding/json"
 	"net/http"
 	"time"
 
@@ -157,9 +156,7 @@ func (h *casesHandler) CasesCreateCase(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	w.Header().Set("Content-Type", "application/json; charset=utf-8")
-	w.WriteHeader(http.StatusCreated)
-	_ = json.NewEncoder(w).Encode(toCasesCase(created, photos))
+	httpapi.WriteJSON(w, http.StatusCreated, toCasesCase(created, photos))
 }
 
 // CasesListCases implements casesapi.ServerInterface: it handles GET
@@ -179,9 +176,7 @@ func (h *casesHandler) CasesListCases(w http.ResponseWriter, r *http.Request) {
 	for _, c := range list {
 		entries = append(entries, toCasesCase(c, nil))
 	}
-	w.Header().Set("Content-Type", "application/json; charset=utf-8")
-	w.WriteHeader(http.StatusOK)
-	_ = json.NewEncoder(w).Encode(casesapi.CasesListResponse{Cases: entries})
+	httpapi.WriteJSON(w, http.StatusOK, casesapi.CasesListResponse{Cases: entries})
 }
 
 // CasesGetCase implements casesapi.ServerInterface: it handles GET
@@ -196,9 +191,7 @@ func (h *casesHandler) CasesGetCase(w http.ResponseWriter, r *http.Request, case
 		writeCasesError(w, err)
 		return
 	}
-	w.Header().Set("Content-Type", "application/json; charset=utf-8")
-	w.WriteHeader(http.StatusOK)
-	_ = json.NewEncoder(w).Encode(toCasesCase(record, photos))
+	httpapi.WriteJSON(w, http.StatusOK, toCasesCase(record, photos))
 }
 
 // resolveCasesSubject resolves the acting user through the host's

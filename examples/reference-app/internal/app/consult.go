@@ -15,7 +15,6 @@
 package app
 
 import (
-	"encoding/json"
 	"net/http"
 
 	"github.com/vislake/speed/go/pkgcore/apperr"
@@ -82,9 +81,7 @@ func wireConsult(mux *http.ServeMux, svc *consult.Service) {
 			return
 		}
 
-		w.Header().Set("Content-Type", "application/json; charset=utf-8")
-		w.WriteHeader(http.StatusOK)
-		_ = json.NewEncoder(w).Encode(map[string]string{"suggestion": suggestion})
+		httpapi.WriteJSON(w, http.StatusOK, map[string]string{"suggestion": suggestion})
 	})
 }
 

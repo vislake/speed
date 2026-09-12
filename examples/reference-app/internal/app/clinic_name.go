@@ -1,7 +1,6 @@
 package app
 
 import (
-	"encoding/json"
 	"net/http"
 
 	"github.com/vislake/speed/go/org"
@@ -84,17 +83,13 @@ func WireClinicName(mux *http.ServeMux, tree *org.TreeService) {
 		case err == nil:
 			// A tenant with a tree answers its root's name; the empty
 			// name is reserved for the no-tree case below.
-			w.Header().Set("Content-Type", "application/json; charset=utf-8")
-			w.WriteHeader(http.StatusOK)
-			_ = json.NewEncoder(w).Encode(ClinicNameResponse{Name: root.Name})
+			httpapi.WriteJSON(w, http.StatusOK, ClinicNameResponse{Name: root.Name})
 		case apperr.HasCode(err, org.ErrNodeNotFound.Code):
 			// The tenant context is real but no org tree exists in it
 			// yet (a tenant between provisioning steps, or a context
 			// that is not a customer tenant at all). There is no name to
 			// serve -- never an identifier invented to fill the slot.
-			w.Header().Set("Content-Type", "application/json; charset=utf-8")
-			w.WriteHeader(http.StatusOK)
-			_ = json.NewEncoder(w).Encode(ClinicNameResponse{Name: ""})
+			httpapi.WriteJSON(w, http.StatusOK, ClinicNameResponse{Name: ""})
 		default:
 			// A genuine failure (a missing tenant context, a storage
 			// error) is a coded error, never a fabricated empty name:
