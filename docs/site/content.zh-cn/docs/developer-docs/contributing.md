@@ -140,7 +140,7 @@ scope 指明被改动的单元:Go module 或 npm 包名(`pkgcore`、`billing`、
 
 `nightly.yml` 是刻意门控的 stub,不会在任何 pull request 上触发;
 `e2e.yml` 在每日定时与手动触发之外,推送到 `main` 时也会运行——
-推送触发器已在首次手动运行全绿后开启。
+推送触发器已在首次全绿的手动运行后开启(2026-09-11 第三次手动运行)。
 
 ```mermaid
 flowchart LR
