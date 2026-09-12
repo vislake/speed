@@ -45,8 +45,7 @@ const InvitationEmailIndexKeyPath = "org.invitation_email_index_key"
 // construction-time knobs NewModule's options carry, as structured
 // configuration, and the process-start blind-index key as a derive field.
 // The component's namespace is "org", so the key resolves at
-// InvitationEmailIndexKeyPath rather than under the default components.org.
-// prefix.
+// InvitationEmailIndexKeyPath rather than at the field's bare local path.
 type componentConfig struct {
 	// InvitationEmailIndexKey indexes invitation email addresses; it is a
 	// separate secret from the host's configuration cipher key on purpose.
@@ -116,8 +115,8 @@ func component() pkgcore.Component {
 		ConfigSchema: (*componentConfig)(nil),
 		// The "org" namespace keeps the schema's invitation_email_index_key
 		// field at the platform key path the key has always carried
-		// (InvitationEmailIndexKeyPath) instead of the default components.org.
-		// prefix.
+		// (InvitationEmailIndexKeyPath) instead of the field's bare local
+		// path.
 		ConfigNamespace: "org",
 		Migrations:      migrations.FS,
 		Locales:         locales.FS,

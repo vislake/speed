@@ -32,7 +32,7 @@ const ContactIndexKeyPath = "notification.contact_index_key"
 // configuration schema: one field per key a composition block may carry,
 // plus the process-start key material as a derive field. The component's
 // namespace is "notification", so the key resolves at ContactIndexKeyPath
-// rather than under the default components.notification. prefix. Decoding is
+// rather than at the field's bare local path. Decoding is
 // strict, so a block naming any other key fails before anything is
 // constructed.
 //
@@ -107,8 +107,7 @@ var notificationComponent = pkgcore.Component{
 	},
 	// The "notification" namespace keeps the schema's contact_index_key
 	// field at the platform key path the key has always carried
-	// (ContactIndexKeyPath) instead of the default components.notification.
-	// prefix.
+	// (ContactIndexKeyPath) instead of the field's bare local path.
 	ConfigNamespace: "notification",
 	Migrations:      migrations.FS,
 	Locales:         locales.FS,

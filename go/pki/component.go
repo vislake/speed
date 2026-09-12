@@ -71,8 +71,8 @@ const LocalKeyCipherKeyPath = "pki.local_key_cipher_key"
 // construction-time knobs NewModule's options carry, as structured
 // configuration, and the process-start local-key cipher as a derive field.
 // The component's namespace is "pki", so the key resolves at
-// LocalKeyCipherKeyPath rather than under the default components.pki.
-// prefix. Every other field is a pointer, so an omitted key leaves the
+// LocalKeyCipherKeyPath rather than at the field's bare local path. Every
+// other field is a pointer, so an omitted key leaves the
 // module's own default in place while a present key is applied verbatim --
 // including an explicit zero, which WithCacheTTL documents as disabling the
 // key-set cache outright.
@@ -158,8 +158,7 @@ func component() pkgcore.Component {
 		ConfigSchema: (*componentConfig)(nil),
 		// The "pki" namespace keeps the schema's local_key_cipher_key field
 		// at the platform key path the key has always carried
-		// (LocalKeyCipherKeyPath) instead of the default components.pki.
-		// prefix.
+		// (LocalKeyCipherKeyPath) instead of the field's bare local path.
 		ConfigNamespace: "pki",
 		Migrations:      migrations.FS,
 		Locales:         locales.FS,

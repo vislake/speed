@@ -44,8 +44,8 @@ const CipherKeyPath = "config.cipher_key"
 // componentConfig is config's configuration schema in the assembly: the
 // construction-time knobs NewModule's options carry, and the process-start
 // cipher key as a derive field. The component's namespace is "config", so the
-// key resolves at CipherKeyPath rather than under the default
-// components.config. prefix. PollInterval is a pointer because an explicit
+// key resolves at CipherKeyPath rather than at the field's bare local path.
+// PollInterval is a pointer because an explicit
 // zero is meaningful -- it disables the anti-loss poller outright
 // (WithPollInterval's documented contract) -- and the omitted key must leave
 // the module's own default in place.
@@ -113,7 +113,7 @@ func component() pkgcore.Component {
 		SystemPurposes: []pkgcore.SystemPurpose{SystemPurposeSystemWrite},
 		// The "config" namespace keeps the schema's cipher_key field at the
 		// platform key path the key has always carried (CipherKeyPath)
-		// instead of the default components.config. prefix.
+		// instead of the field's bare local path.
 		ConfigNamespace: "config",
 		// config ships no user-facing messages: its endpoints return
 		// structured codes, and the copy of any console rendering its items

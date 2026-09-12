@@ -54,8 +54,8 @@ const (
 // construction-time knobs NewModule's options carry, and the two process-start
 // keys as derive fields. The component's namespace is "authn", so each key
 // resolves at the platform key path it has always carried
-// (PIICipherKeyPath, BlindIndexKeyPath) rather than under the default
-// components.<name> prefix. The argon2id cost parameters are bootstrap configuration
+// (PIICipherKeyPath, BlindIndexKeyPath) rather than at the field's bare
+// local path. The argon2id cost parameters are bootstrap configuration
 // rather than runtime items -- a deployment's fixed hashing budget -- which
 // is why they live here and not beside authn.password_min_length on the
 // runtime configuration seat.
@@ -162,8 +162,8 @@ func component() pkgcore.Component {
 		ConfigSchema:   (*componentConfig)(nil),
 		// The "authn" namespace keeps the schema's key-material fields at the
 		// platform key paths the module's keys have always carried
-		// (PIICipherKeyPath, BlindIndexKeyPath) instead of the default
-		// components.authn. prefix, so a rename cannot silently rotate a key.
+		// (PIICipherKeyPath, BlindIndexKeyPath) instead of the fields' bare
+		// local paths, so a rename cannot silently rotate a key.
 		ConfigNamespace: "authn",
 		Migrations:      migrations.FS,
 		Locales:         locales.FS,
