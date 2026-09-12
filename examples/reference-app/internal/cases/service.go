@@ -122,19 +122,20 @@ var (
 	ErrSubjectUnresolved = apperr.Unauthorized("cases.subject_unresolved")
 )
 
-// SubjectResolver is the seam through which the HTTP surface attributes
-// a create request to the user who made it -- the answer becomes the
-// case row's CreatorUserID (recorded attribution; the clinic's case
-// list is tenant-scoped and reads no creator). It is cases' own copy of the
-// identical declaration notes' handler.go carries: this package imports no
-// other app-internal package (see the package doc comment's "Shape
-// decision" section -- the case layer is deliberately free of the
-// simulation layer and of notes' module machinery), so each independent
-// package declares the seam, and one host type (internal/app/server.go's
-// DemoNotesSubjectResolver) satisfies both -- compile-time-checked at the
-// bottom of internal/app/cases.go. A resolver that returns ok=false -- or is
-// not wired at all -- fails every create and list request closed with
-// ErrSubjectUnresolved, never an invented or empty creator.
+// SubjectResolver is the module interface through which the HTTP surface
+// attributes a create request to the user who made it -- the answer
+// becomes the case row's CreatorUserID (recorded attribution; the
+// clinic's case list is tenant-scoped and reads no creator). It is cases'
+// own copy of the identical declaration notes' handler.go carries: this
+// package imports no other app-internal package (see the package doc
+// comment's "Shape decision" section -- the case layer is deliberately
+// free of the simulation layer and of notes' module machinery), so each
+// independent package declares its own module interface, and one host
+// type (internal/app/server.go's DemoNotesSubjectResolver) satisfies both
+// -- compile-time-checked at the bottom of internal/app/cases.go. A
+// resolver that returns ok=false -- or is not wired at all -- fails every
+// create and list request closed with ErrSubjectUnresolved, never an
+// invented or empty creator.
 type SubjectResolver interface {
 	Subject(r *http.Request) (string, bool)
 }
@@ -155,7 +156,7 @@ type Case struct {
 	PatientRef string
 
 	// CreatorUserID is the user id of the staff member who created the
-	// case, as the host's SubjectResolver seam attributed the create
+	// case, as the host's SubjectResolver module attributed the create
 	// request. It is the row's recorded attribution -- never a list key:
 	// the clinic's case list is tenant-scoped, so every member of the
 	// tenant sees every case of the tenant.
@@ -199,7 +200,7 @@ func NewService(repo *Repository) *Service {
 // and the creator never travel in here: the tenant comes from ctx (the
 // repository resolves it, per every Repository write's
 // overwrite-the-caller guarantee) and the creator comes from the host's
-// SubjectResolver seam at the HTTP layer, never from a body the caller
+// SubjectResolver module at the HTTP layer, never from a body the caller
 // controls.
 type CreateInput struct {
 	// PatientName is the patient's display name, required.
@@ -209,7 +210,7 @@ type CreateInput struct {
 	PatientRef string
 
 	// CreatorUserID is the creating user's id, as the SubjectResolver
-	// seam attributed it. An empty value is legal at this layer (tests and
+	// module attributed it. An empty value is legal at this layer (tests and
 	// seed code create unattributed cases; the row's DEFAULT '' sentinel
 	// exists for exactly that) -- the HTTP surface is what refuses an
 	// unattributable request, with ErrSubjectUnresolved, before Service

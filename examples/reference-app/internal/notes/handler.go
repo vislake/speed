@@ -218,7 +218,7 @@ func (h *Handler) NotesCreateNote(w http.ResponseWriter, r *http.Request) {
 	// no resolver can attribute is refused with 401 here -- before any
 	// validation, before any side effect -- never half-processed. Like the
 	// tenant, the creator never comes from the request body: it is resolved
-	// exclusively through the host's SubjectResolver seam (see its
+	// exclusively through the host's SubjectResolver module (see its
 	// declaration at the bottom of this file), which in a real deployment
 	// reads the caller's identity from whatever the server itself verified.
 	creatorUserID, ok := h.resolveSubject(w, r)
@@ -263,15 +263,15 @@ func (h *Handler) NotesCreateNote(w http.ResponseWriter, r *http.Request) {
 }
 
 // resolveSubject resolves the HTTP caller's user id through the host's
-// SubjectResolver seam (declared at the bottom of this file), refusing
+// SubjectResolver module (declared at the bottom of this file), refusing
 // with ErrSubjectUnresolved -- a 401 -- when no resolver is wired, when
 // the resolver cannot attribute the request, or when it returns an empty
-// user id: an empty id is treated exactly like no id, so a seam bug can
+// user id: an empty id is treated exactly like no id, so a resolver bug can
 // never smuggle an empty creator into the published event. It is the
 // handler's one and only source of the creator: neither the request body,
 // a header read here, nor the context ever names the creator directly
-// (only the seam -- which the host may of course back with whatever it
-// verifies -- may).
+// (only the module interface -- which the host may of course back with
+// whatever it verifies -- may).
 func (h *Handler) resolveSubject(w http.ResponseWriter, r *http.Request) (string, bool) {
 	if h.subject == nil {
 		writeError(w, ErrSubjectUnresolved)
@@ -299,7 +299,7 @@ func (h *Handler) resolveSubject(w http.ResponseWriter, r *http.Request) (string
 // rather than nesting inside an open one.
 //
 // The recorded event is attributed to the creating user -- the SAME
-// creatorUserID NotesCreateNote resolved through the SubjectResolver seam
+// creatorUserID NotesCreateNote resolved through the SubjectResolver module
 // and stamped on the note and the note-created event -- by layering
 // pkgcore.WithActor onto the ctx audit.Emit reads (audit.Emit copies the
 // Actor from ctx at emit time; see go/dbkit/audit/emit.go), the exact
@@ -308,8 +308,8 @@ func (h *Handler) resolveSubject(w http.ResponseWriter, r *http.Request) (string
 // by a middleware that would change every surface, because no layer in the
 // composed chain populates pkgcore.Actor today (authn's recordAudit doc
 // comment says so explicitly), and this handler is the one place that
-// knows the creator: the value comes from the SubjectResolver seam, never
-// from an ambient context value. An empty creatorUserID -- a seam bug, or
+// knows the creator: the value comes from the SubjectResolver module, never
+// from an ambient context value. An empty creatorUserID -- a resolver bug, or
 // a create that somehow reached the audit call with no resolved creator
 // -- leaves ctx exactly as given, so Emit falls back to its own "no actor
 // set" zero value exactly as authn's recordAudit does for an unknown
@@ -336,18 +336,18 @@ func (h *Handler) recordNoteCreatedAudit(ctx context.Context, note *Note, creato
 		// Actor.DisplayName is deliberately left empty
 		// here because this handler genuinely has no name to record. Its
 		// whole knowledge of the creator is the user id its host's
-		// SubjectResolver seam answered -- the seam's contract is
-		// id-only by documented design (see SubjectResolver at the bottom
-		// of this file), and in this app the creator is frequently not an
-		// account at all: the demo flows attribute creates to
-		// X-Demo-User-Id header values like DemoNotesCreatorUserID, which
-		// have no user row behind them, and even a verified-Principal
+		// SubjectResolver module answered -- the module interface's
+		// contract is id-only by documented design (see SubjectResolver
+		// at the bottom of this file), and in this app the creator is
+		// frequently not an account at all: the demo flows attribute
+		// creates to X-Demo-User-Id header values like DemoNotesCreatorUserID,
+		// which have no user row behind them, and even a verified-Principal
 		// creator (authn.Principal) carries no display name in the token
-		// (go/authn/token.go). Filling the label would require the seam
-		// to carry a display name (and the host to resolve one from
-		// whatever it verifies), a contract change for this single audit
-		// label -- recorded here rather than silently guessed. The row
-		// stays fully attributable by id.
+		// (go/authn/token.go). Filling the label would require the module
+		// interface to carry a display name (and the host to resolve one
+		// from whatever it verifies), a contract change for this single
+		// audit label -- recorded here rather than silently guessed. The
+		// row stays fully attributable by id.
 		ctx = pkgcore.WithActor(ctx, pkgcore.Actor{Type: pkgcore.ActorTypeUser, ID: creatorUserID})
 	}
 	// Resource.DisplayName is deliberately left empty rather than set to
@@ -485,7 +485,7 @@ func (h *Handler) NotesListNotes(w http.ResponseWriter, r *http.Request) {
 // until a retention sweep physically reaps it (see
 // retention_participant.go). The tenant is read from the request context,
 // never from the request -- the same rule NotesCreateNote documents. The
-// caller is resolved through the SubjectResolver seam and installed as the
+// caller is resolved through the SubjectResolver module and installed as the
 // row's deleted_by actor, mirroring how self-service provisioning
 // attributes its own user-scoped writes (internal/app/self_service.go): a
 // deleted_by attribution that names the real actor is the point of the
@@ -527,7 +527,7 @@ func (h *Handler) NotesDeleteNote(w http.ResponseWriter, r *http.Request, noteID
 // note that is not currently deleted under the caller's tenant (live,
 // unknown, or another tenant's) answers the same uniform 404 the delete
 // operation's own refusal answers (notes.note_not_found); the caller
-// resolves through the SubjectResolver seam exactly as on the delete path,
+// resolves through the SubjectResolver module exactly as on the delete path,
 // kept for symmetry of attribution even though restore clears rather than
 // writes an actor.
 func (h *Handler) NotesRestoreNote(w http.ResponseWriter, r *http.Request, noteID string) {
@@ -580,14 +580,14 @@ func writeError(w http.ResponseWriter, err error) {
 	httpapi.WriteError(w, err, errInternal)
 }
 
-// SubjectResolver is the seam that answers "who created this note" for
-// every create request NotesCreateNote serves. It is declared here -- in
-// the file whose only consumer (resolveSubject) reads it -- the way org
-// declares its own seam in org's handler package, and it is structurally
-// identical to org's SubjectResolver (and notification's, which declares
-// the same single method over stdlib types only): any type a host wired
-// for org's seam satisfies notes' too, and none of the modules imports
-// another.
+// SubjectResolver is the module interface that answers "who created this
+// note" for every create request NotesCreateNote serves. It is declared
+// here -- in the file whose only consumer (resolveSubject) reads it --
+// the way org declares its own module interface in org's handler package,
+// and it is structurally identical to org's SubjectResolver (and
+// notification's, which declares the same single method over stdlib types
+// only): any type a host wired for org's SubjectResolver satisfies notes'
+// too, and none of the modules imports another.
 //
 // The implementation is the host's to supply: in the reference app, the
 // demo identity layer reads the demo acting user's id from the request
@@ -595,9 +595,9 @@ func writeError(w http.ResponseWriter, err error) {
 // whatever connects a verified principal to the request answers here. The
 // module itself never reads the creator's identity from a header, the
 // context or the request body, and it never imports an authenticating
-// module's types -- the seam is the whole of its knowledge of who its
-// callers are. NotesCreateNote is the only operation that resolves: notes
-// list without one, because listing needs no creator.
+// module's types -- the module interface is the whole of its knowledge of
+// who its callers are. NotesCreateNote is the only operation that
+// resolves: notes list without one, because listing needs no creator.
 //
 // A resolver that returns ok=false -- or is not wired at all -- fails
 // every create request closed with ErrSubjectUnresolved (see
@@ -605,10 +605,10 @@ func writeError(w http.ResponseWriter, err error) {
 // default user or an empty creator in the published event.
 type SubjectResolver interface {
 	// Subject returns the creating user's id for the request, and whether
-	// the request could be attributed to a user at all. A nil seam, a
-	// failing seam and a seam that cannot attribute the request all answer
-	// ok=false; the handler refuses with ErrSubjectUnresolved in every such
-	// case, and treats an empty user id the same as no user.
+	// the request could be attributed to a user at all. A nil resolver, a
+	// failing resolver and a resolver that cannot attribute the request
+	// all answer ok=false; the handler refuses with ErrSubjectUnresolved
+	// in every such case, and treats an empty user id the same as no user.
 	Subject(r *http.Request) (userID string, ok bool)
 }
 
