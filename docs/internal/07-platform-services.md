@@ -58,7 +58,7 @@ type Object struct {
 - **访问控制**：已落地形态为私有对象经 API 鉴权访问——内容经 `OpenContent` 服务端流式返回，租户取自请求上下文，绝不来自请求参数；**短时效预签名 URL 未落地**；对外分享属 `sharing` 模块，与本节「内部预签名、外部分享令牌、二者不混用」的划分一致。
 - **多套实现**：字节所在的 `ObjectStore` 模块的本地 FS 与 S3 兼容双实现已由 `pkgcore` 落地（见 [03 部署模式](03-deployment-modes.md) 与 `go/pkgcore` 的 census 条目），storage 自身只依赖模块接口；本模块的集成层以 PostgreSQL + RustFS 两条腿验证（`go test -tags=integration`）。
 - **生命周期**：核心已落地——`LifecycleService.Delete` 崩溃收敛删除协议（行标记 `completed`→`deleting` → 删原字节 → 按确定顺序删各派生行的字节 → 单事务删全部行；任一步中断由下一次运行收敛而非重复执行），删除同步清理派生资源；宿主经 `EnqueueExpirySweep` 按租户排程的 `Sweep` 恢复中断删除、回收上传窗口已关闭的 `uploading` 行、删除保留期已到的 `completed` 对象。差异：保留期由调用方逐对象请求、宿主设上限，**按租户的运行时保留策略配置、以及与 `compliance` 数据保留策略的联动尚未实现**。
-- 前端 `ui-kit` 的 `FileUploader` 已落地：完全受控的队列组件——队列就是 host 自己的 `rows` 状态，每行状态与进度按 props 原样渲染，每次 pick/取消/重试/移除经 `onSelectFiles`/`onCancel`/`onRetry`/`onRemove` 回调上报，上传传输（预校验、并发与网络调用）是 host 自己的代码，**组件零网络**，不持有 File 超过接收它的 event handler；本条目标设计点名的拖拽、多文件、进度与失败重试均已交付，**预览不在组件内**。storage 的前端调用（api-sdk 生成的 hooks）尚未落地——合并文档未纳入 storage 片段（与 org 同为只有后端 leg 的片段，见 `go/storage/AGENTS.md` 的 deferral 表）；wire 契约见 `go/storage/api/openapi.yaml`。
+- 前端 `ui-kit` 的 `FileUploader` 已落地：完全受控的队列组件——队列就是 host 自己的 `rows` 状态，每行状态与进度按 props 原样渲染，每次 pick/取消/重试/移除经 `onSelectFiles`/`onCancel`/`onRetry`/`onRemove` 回调上报，上传传输（预校验、并发与网络调用）是 host 自己的代码，**组件零网络**，不持有 File 超过接收它的 event handler；本条目标设计点名的拖拽、多文件、进度与失败重试均已交付，**预览不在组件内**。storage 的前端腿已随模块驱动合并策略落地：storage 片段是合并文档 `contracts/speed.yaml`（十一个平台片段）的一员，`storage_*` 操作已由 orval 生成进 `@speed/api-sdk`；尚未落地的是消费——没有工作区页面把生成的 storage hooks 接上传 UI（缺口记录见 `web/packages/ui-kit/AGENTS.md` 的 deferral 条目）。wire 契约权威仍是 `go/storage/api/openapi.yaml` 本身。
 
 ## 分享链接（sharing）
 
