@@ -40,16 +40,19 @@ import (
 	"github.com/vislake/speed/go/pkgcore/config"
 )
 
-// envPrefix is the prefix every one of this app's own bootstrap variables
+// EnvPrefix is the prefix every one of this app's own bootstrap variables
 // carries (its own naming convention; the loader's default is SPEED_). PORT is
 // the one exception, pinned by name because it is the unprefixed variable
 // hosting platforms inject. APP_ROOT_KEY is the other: it is read by the
 // loader's WithRootKeyEnv exactly as spelled, not through this prefix.
-const envPrefix = "APP_"
+// It is exported for the --help surface (cmd/server's runHelp): the derived
+// environment spellings that rendering prints must be the names this app's
+// loader actually reads, which means deriving them under this very prefix.
+const EnvPrefix = "APP_"
 
 // rootKeyEnv names the variable holding the 32-byte root secret the six key
 // materials derive from when no individual key variable is set. It is
-// pinned by name rather than derived from envPrefix (the loader reads it
+// pinned by name rather than derived from EnvPrefix (the loader reads it
 // through WithRootKeyEnv, outside the prefix's spelling rules), and it is
 // shared with the engine's loader options so both passes read the one
 // variable.
@@ -495,7 +498,7 @@ func hostConfigDefaults() hostConfig {
 func loadHostConfig() (hostConfig, error) {
 	hc := hostConfigDefaults()
 	loader := config.New(
-		config.WithEnvPrefix(envPrefix),
+		config.WithEnvPrefix(EnvPrefix),
 		config.WithRootKeyEnv(rootKeyEnv),
 		config.WithKeyDerivation(dbkit.DeriveBootstrapKey),
 	)

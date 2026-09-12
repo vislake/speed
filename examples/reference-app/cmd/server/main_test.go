@@ -1,7 +1,9 @@
 package main
 
 import (
+	"bytes"
 	"context"
+	"errors"
 	"io"
 	"log/slog"
 	"net"
@@ -302,4 +304,76 @@ func freeTCPPort(t *testing.T) string {
 		t.Fatalf("release the probe listener: %v", err)
 	}
 	return strconv.Itoa(port)
+}
+
+// TestIsHelpArg pins which first arguments divert main into the help
+// surface: the three spellings saasctl accepts, and nothing else -- an
+// argument this branch did not intend to capture would silently turn a
+// mistyped flag into help output.
+func TestIsHelpArg(t *testing.T) {
+	for _, arg := range []string{"help", "-h", "--help"} {
+		if !isHelpArg(arg) {
+			t.Errorf("isHelpArg(%q) = false, want true", arg)
+		}
+	}
+	for _, arg := range []string{"", "healthcheck", "-help", "Help", "config"} {
+		if isHelpArg(arg) {
+			t.Errorf("isHelpArg(%q) = true, want false", arg)
+		}
+	}
+}
+
+// TestRunHelp_PrintsTheSurfaceAndExitsZero drives the help branch's body end
+// to end: exit 0 with nothing on stderr, the usage prose, and the component
+// configuration surface -- the modules' declared keys at their flat paths
+// (authn's two and the other four platform keys), the environment spellings
+// derived under this app's own EnvPrefix (the names its loader reads), and
+// a sensitive key's documentation cells redacted.
+func TestRunHelp_PrintsTheSurfaceAndExitsZero(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	if code := runHelp(&stdout, &stderr); code != 0 {
+		t.Fatalf("runHelp exit code = %d, want 0 (stderr %q)", code, stderr.String())
+	}
+	if stderr.Len() != 0 {
+		t.Errorf("runHelp stderr = %q, want empty", stderr.String())
+	}
+	out := stdout.String()
+	for _, want := range []string{
+		"Usage: server [--help]",
+		"Component configuration surface",
+		"authn.pii_cipher_key",
+		"pki.local_key_cipher_key",
+		"env: APP_AUTHN__PII_CIPHER_KEY",
+		"env: APP_CONFIG__CIPHER_KEY",
+		"default: [redacted]",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("runHelp output lacks %q", want)
+		}
+	}
+	// The masked cells are the point: the declared documentation text of a
+	// sensitive key must not survive into help output.
+	if strings.Contains(out, "documented non-secret development default") {
+		t.Error("runHelp output carries a sensitive key's declared default text")
+	}
+}
+
+// failingWriter refuses every write, the shape a closed pipe produces.
+type failingWriter struct{}
+
+func (failingWriter) Write([]byte) (int, error) {
+	return 0, errors.New("main_test: write refused")
+}
+
+// TestRunHelp_WriteErrorExitsNonzero: a failed write is reported on stderr
+// and the exit code says so -- help is a command line's output, and a
+// failing one must not exit 0 as if it had printed.
+func TestRunHelp_WriteErrorExitsNonzero(t *testing.T) {
+	var stderr bytes.Buffer
+	if code := runHelp(failingWriter{}, &stderr); code != 1 {
+		t.Fatalf("runHelp exit code = %d, want 1", code)
+	}
+	if !strings.Contains(stderr.String(), "help:") {
+		t.Errorf("stderr = %q, want the help write failure", stderr.String())
+	}
 }

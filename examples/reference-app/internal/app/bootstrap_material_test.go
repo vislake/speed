@@ -46,7 +46,7 @@ var declaredKeyPaths = []string{
 func declaredKeyEnvNames() map[string]string {
 	names := make(map[string]string, len(declaredKeyPaths))
 	for _, path := range declaredKeyPaths {
-		names[path] = config.EnvName(envPrefix, path)
+		names[path] = config.EnvName(EnvPrefix, path)
 	}
 	return names
 }

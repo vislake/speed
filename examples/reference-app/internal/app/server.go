@@ -692,7 +692,7 @@ func (b *serverBuild) assemble(ctx context.Context, live bool) (*pkgcore.Compone
 // composed modules' components -- this app declares none on its own.
 func declaredKeyOptions() []speedapp.ConfigOption {
 	return []speedapp.ConfigOption{
-		speedapp.ConfigEnvPrefix(envPrefix),
+		speedapp.ConfigEnvPrefix(EnvPrefix),
 		speedapp.ConfigRootKeyEnv(rootKeyEnv),
 		speedapp.ConfigKeyDerivation(dbkit.DeriveBootstrapKey),
 		speedapp.ConfigDevDefaults(BootstrapDevDefaults()),

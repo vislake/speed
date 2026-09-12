@@ -3,11 +3,14 @@ package main
 import (
 	"context"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"time"
 
+	speedapp "github.com/vislake/speed/go/app"
 	obs "github.com/vislake/speed/go/observability"
+	"github.com/vislake/speed/go/pkgcore"
 	"github.com/vislake/speed/go/pkgcore/probe"
 
 	"github.com/vislake/speed/examples/reference-app/internal/app"
@@ -26,6 +29,42 @@ import (
 // os.Args[1] is exactly this string.
 const healthcheckArg = "healthcheck"
 
+// isHelpArg reports whether the first argument asks for the help surface.
+// The spellings mirror saasctl's (help, -h and --help all print usage), so
+// "how do I ask this binary what it takes" has one answer across the
+// repository's command-line surface.
+func isHelpArg(arg string) bool {
+	return arg == "help" || arg == "-h" || arg == "--help"
+}
+
+// helpUsage is the prose runHelp prints above the component configuration
+// surface. It describes the bootstrap path in the engine's own terms and
+// points at the two documentation homes of this deployment's variables
+// (internal/app/bootstrap.go and the surface below), so the two halves of
+// the help cannot disagree about where configuration comes from.
+const helpUsage = `reference-app server
+
+Bootstrap: this binary boots through the engine's component assembly. The
+composition configuration (its components block, resolved from builtin
+defaults, environment, a project file and this binary's code overrides)
+selects which registered components compose, and every selected component
+whose schema declares a field resolves that field through the loader's
+five-source chain before anything is constructed. This deployment's own
+bootstrap variables are the APP_* surface documented in
+internal/app/bootstrap.go; a component schema field an exposed line below
+names is additionally reachable from the command line as
+--<key path>=<value> and from the environment under the printed spelling.
+
+Usage: server [--help]
+
+The server takes no other arguments (the container healthcheck re-invokes
+the binary with the healthcheck argument). The component configuration
+surface this binary carries follows; it is rendered from the registered
+component declarations -- which components an actual boot selects is the
+composition's decision, resolved from the environment above.
+
+`
+
 // healthcheckTimeout bounds this example's own probe -- generous for a
 // loopback call, but finite so a wedged server makes Docker's HEALTHCHECK
 // report unhealthy rather than hang indefinitely. It is this host's policy
@@ -36,28 +75,34 @@ const healthcheckTimeout = 3 * time.Second
 // sequence, signal handling and observability init all live in the
 // application engine now (internal/app.Run over go/app's RunAssembly), so
 // what remains here is the logger the process attaches at startup and the
-// two seams its own tests cover directly: the healthcheck branch below and
-// runHealthcheck. This file's own end-to-end behavior is additionally proven
-// by literally running it and curling it (see this example's README.md).
+// three seams its own tests cover directly: the healthcheck branch below,
+// the help branch beside it, and runHealthcheck. This file's own end-to-end
+// behavior is additionally proven by literally running it and curling it
+// (see this example's README.md).
 func main() {
-	if len(os.Args) > 1 && os.Args[1] == healthcheckArg {
-		// The probe resolves its port through the same loader-driven
-		// bootstrap the server itself boots from -- ConfigFromEnv, the call
-		// run makes below -- so the two can never disagree about which port
-		// this deployment listens on. The probe therefore also fails on a
-		// bootstrap configuration the server itself would refuse, which is
-		// the honest answer: a container whose configuration cannot load is
-		// not healthy. The one fact this probe requires is cfg.Port.
-		cfg, err := app.ConfigFromEnv()
-		if err != nil {
-			fmt.Fprintln(os.Stderr, "reference-app: healthcheck:", err)
-			os.Exit(1)
+	if len(os.Args) > 1 {
+		switch {
+		case os.Args[1] == healthcheckArg:
+			// The probe resolves its port through the same loader-driven
+			// bootstrap the server itself boots from -- ConfigFromEnv, the call
+			// run makes below -- so the two can never disagree about which port
+			// this deployment listens on. The probe therefore also fails on a
+			// bootstrap configuration the server itself would refuse, which is
+			// the honest answer: a container whose configuration cannot load is
+			// not healthy. The one fact this probe requires is cfg.Port.
+			cfg, err := app.ConfigFromEnv()
+			if err != nil {
+				fmt.Fprintln(os.Stderr, "reference-app: healthcheck:", err)
+				os.Exit(1)
+			}
+			if err := runHealthcheck(context.Background(), cfg.Port); err != nil {
+				fmt.Fprintln(os.Stderr, "reference-app: healthcheck:", err)
+				os.Exit(1)
+			}
+			os.Exit(0)
+		case isHelpArg(os.Args[1]):
+			os.Exit(runHelp(os.Stdout, os.Stderr))
 		}
-		if err := runHealthcheck(context.Background(), cfg.Port); err != nil {
-			fmt.Fprintln(os.Stderr, "reference-app: healthcheck:", err)
-			os.Exit(1)
-		}
-		os.Exit(0)
 	}
 
 	// A JSON *slog.Logger, attached to a base context via obs.WithLogger
@@ -133,4 +178,39 @@ func runHealthcheck(ctx context.Context, port string) error {
 		port = app.DefaultPort
 	}
 	return probe.Check(ctx, port, obs.HealthzPath, probe.WithTimeout(healthcheckTimeout))
+}
+
+// runHelp prints this binary's help: what it serves, how its configuration
+// arrives (helpUsage), and the component configuration surface the binary
+// carries. The surface is the engine's own rendering
+// (speedapp.CollectComponentConfig over pkgcore.GlobalComponents -- what the
+// import set made available, read without building a registry or composing
+// anything -- and speedapp.RenderComponentConfigHelp) over the same
+// FieldDescriptor collection the generated configuration reference reads,
+// with this app's loader prefix (app.EnvPrefix) as the derivation basis of
+// the printed environment spellings -- so what the help lists is the
+// declaration the assembly enforces, not a hand-kept copy, and a sensitive
+// field's documentation cells render redacted.
+//
+// It composes no assembly and reads no configuration: what it lists is
+// every component the binary carries and can compose, while which of them
+// an actual boot selects stays the composition's decision. That is also why
+// --help works even when this deployment's bootstrap configuration would
+// refuse to boot -- the one moment an operator is most likely to reach for
+// it.
+func runHelp(stdout, stderr io.Writer) int {
+	if _, err := fmt.Fprint(stdout, helpUsage); err != nil {
+		fmt.Fprintln(stderr, "reference-app: help:", err)
+		return 1
+	}
+	surfaces, err := speedapp.CollectComponentConfig(pkgcore.GlobalComponents())
+	if err != nil {
+		fmt.Fprintln(stderr, "reference-app: help:", err)
+		return 1
+	}
+	if err := speedapp.RenderComponentConfigHelp(stdout, surfaces, app.EnvPrefix); err != nil {
+		fmt.Fprintln(stderr, "reference-app: help:", err)
+		return 1
+	}
+	return 0
 }

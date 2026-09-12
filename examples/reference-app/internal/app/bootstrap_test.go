@@ -144,7 +144,7 @@ func TestBootstrapEnvCensusMatchesTheTarget(t *testing.T) {
 	collectPins(reflect.TypeOf(hostConfig{}))
 
 	for keyPath := range BootstrapDevDefaults() {
-		want = append(want, config.EnvName(envPrefix, keyPath))
+		want = append(want, config.EnvName(EnvPrefix, keyPath))
 	}
 	want = append(want, rootKeyEnv)
 	sort.Strings(want)
