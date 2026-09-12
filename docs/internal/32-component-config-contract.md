@@ -111,6 +111,8 @@ func Describe(target any) ([]FieldSummary, error)
 | §5 一键一层校验只管密钥材料（普通 schema 字段与同名 runtime item 共存不拒） | `pkgcore/component_registry.go`（`validateOneLayerPerKey`） | `pkgcore/component_registry_test.go` |
 | §5 六平台键逐字保持（path 即派生身份，迁移零轮换） | 五组件 schema：`go/authn/component.go`、`go/config/component.go`、`go/notification/component.go`、`go/org/component.go`、`go/pki/component.go`（`ConfigNamespace` 各取模块名）；导出路径常量 `authn.PIICipherKeyPath` 等 | `examples/reference-app/flowtests/server_config_test.go` 的 `TestDeclaredMaterial_RootKey_DerivesAllSixKeys` |
 
+文档面与上表同行：根包的 `Documented`/`FieldDoc`/`FieldDescriptor`/`DescribeComponentSchema` 作为宿主可见面记在 `go/pkgcore/AGENTS.md` 的组件配置契约一节，`pkgcore/config` 的 `Describe`/`FieldSummary`（含 `Skip`）与 `Declaration`（含 `Env`）/`ResolveDeclarations`/`WithDevDefaults` 记在同文件的 `pkgcore/config` 一节；`--help` 收集与渲染记在 `go/app/AGENTS.md` 的引擎与测试两节；宿主接入（`--help`/`-h`/`help`、`EnvPrefix` 的导出缘由）记在 `examples/reference-app/README.md` 的 Running it 一节。
+
 ### 6.2 六键全链（声明→解析→消费）复核
 
 - **声明**：六键分别是五组件 `ConfigSchema` 的 `derive` 字段（`authn.pii_cipher_key`、`authn.blind_index_key`、`config.cipher_key`、`notification.contact_index_key`、`org.invitation_email_index_key`、`pki.local_key_cipher_key`），在模块名命名空间下取平铺平台路径；`configrefgen` 的 bootstrap 层与上文 `--help` 面从同一收集读出同一组路径，与 `go/saasctl/internal/config` 的 `config print` 变量清单逐字一致。
