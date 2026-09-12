@@ -67,8 +67,8 @@ func deliveryMaterial() *pkgcore.BootstrapMaterial {
 		return b
 	}
 	return pkgcore.NewBootstrapMaterial([]pkgcore.BootstrapMaterialEntry{
-		{KeyPath: "authn.pii_cipher_key", Value: key()},
-		{KeyPath: "authn.blind_index_key", Value: key()},
+		{KeyPath: authn.PIICipherKeyPath, Value: key()},
+		{KeyPath: authn.BlindIndexKeyPath, Value: key()},
 	})
 }
 

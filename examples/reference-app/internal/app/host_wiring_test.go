@@ -91,6 +91,9 @@ func TestOverrideComponents_CarryTheirDeclarations(t *testing.T) {
 		if reflect.TypeOf(override.ConfigSchema) != reflect.TypeOf(base.ConfigSchema) {
 			t.Errorf("override %q ConfigSchema = %T, want the module's own schema", name, override.ConfigSchema)
 		}
+		if override.ConfigNamespace != base.ConfigNamespace {
+			t.Errorf("override %q ConfigNamespace = %q, want the module's own %q -- the namespace is what keeps a schema key's final path (and its derivation identity) unchanged", name, override.ConfigNamespace, base.ConfigNamespace)
+		}
 		if (override.Prepare == nil) != (base.Prepare == nil) {
 			t.Errorf("override %q disagrees with the module's descriptor about declaring a Prepare callback", name)
 		}

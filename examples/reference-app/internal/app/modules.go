@@ -81,7 +81,7 @@ func registerModuleSerializers(cipher *dbkit.Cipher) error {
 // single blind-index key precedent). The keys come from the assembly's
 // published bootstrap material, by the declared paths the modules declare.
 func buildModuleIndexers(reg *pkgcore.ComponentRegistry) (*dbkit.BlindIndexer, *dbkit.BlindIndexer, *dbkit.BlindIndexer, error) {
-	orgIndexKey, err := declaredMaterial(reg, orgInvitationIndexKeyPath)
+	orgIndexKey, err := declaredMaterial(reg, org.InvitationEmailIndexKeyPath)
 	if err != nil {
 		return nil, nil, nil, err
 	}
@@ -89,7 +89,7 @@ func buildModuleIndexers(reg *pkgcore.ComponentRegistry) (*dbkit.BlindIndexer, *
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("reference-app: build the org email indexer: %w", err)
 	}
-	contactIndexKey, err := declaredMaterial(reg, notificationContactIndexKeyPath)
+	contactIndexKey, err := declaredMaterial(reg, notification.ContactIndexKeyPath)
 	if err != nil {
 		return nil, nil, nil, err
 	}

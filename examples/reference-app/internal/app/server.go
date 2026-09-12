@@ -483,11 +483,11 @@ type serverBuild struct {
 	cfg ServerConfig
 
 	// hostConfig is the engine's configuration target: the loader target
-	// whose shape the module components' declared bootstrap keys bind
-	// against, with the platform key materials pre-filled from the resolved
-	// ServerConfig (newServerBuild) so the loader's own pass keeps them
-	// standing when no key environment supplies material (the loader only
-	// writes what a source actually supplied).
+	// carrying this app's own bootstrap surface. The platform key materials
+	// are deliberately absent from it -- the declaring components'
+	// ConfigSchema derive fields carry those keys, and the loader resolves
+	// them into the published material this app's wiring reads by the
+	// modules' exported key paths.
 	hostConfig hostConfig
 
 	// platformCipher is the cipher the crypto component's Prepare builds

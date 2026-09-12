@@ -458,14 +458,15 @@ func hostConfigDefaults() hostConfig {
 // APP_ prefix (PORT pinned by name), no config file, then hostConfigDefaults.
 //
 // The six declared key materials are not resolved here. Each declaring
-// module's component carries its key's declaration, and the engine's loader
-// resolves every declaration on the same chain -- the same APP_ prefix, the
-// same root-key wiring below, plus this app's declared defaults table
-// (BootstrapDevDefaults, handed to the assembly's loader options) -- before
-// anything is constructed; the published material is what this app's wiring
-// reads. This pass exists so the option values that depend on the loaded
-// configuration (the database DSN, the listen address, the assembly's seam
-// composition) are resolved before the engine assembles anything.
+// module's component carries its key as a ConfigSchema derive field, and the
+// engine's loader resolves every such field on the same chain -- the same
+// APP_ prefix, the same root-key wiring below, plus this app's declared
+// defaults table (BootstrapDevDefaults, handed to the assembly's loader
+// options) -- before anything is constructed; the published material is
+// what this app's wiring reads, by the key paths the modules export. This
+// pass exists so the option values that depend on the loaded configuration
+// (the database DSN, the listen address, the assembly's seam composition)
+// are resolved before the engine assembles anything.
 //
 // The two derivation options are this app's whole root-key wiring.
 // WithRootKeyEnv("APP_ROOT_KEY") has the loader read the root secret -- one
@@ -733,9 +734,9 @@ func splitTrustedProxies(raw string) []string {
 // hostBootstrapKeys lists the bootstrap keys this app owns: the deployment
 // shape, connection addresses, switches and demo rigs of its own assembly. The
 // six key materials the platform modules declare are deliberately not listed
-// here -- the declaring components carry those keys, and the assembly's loader
-// resolves them into the published bootstrap material, so a module adding a
-// key needs no edit here. APP_ROOT_KEY is absent for a structural reason
+// here -- the declaring components carry those keys as their ConfigSchema
+// derive fields, and the assembly's loader resolves them into the published
+// bootstrap material, so a module adding a key needs no edit here. APP_ROOT_KEY is absent for a structural reason
 // rather than an omission: it is not a field of the loader target at all, it
 // is the variable loadHostConfig's WithRootKeyEnv option reads inside the same
 // Load (so there is no field for config.Verify to bind).
