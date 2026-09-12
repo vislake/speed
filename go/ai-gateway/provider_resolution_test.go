@@ -64,8 +64,8 @@ func TestGateway_Chat_SelectedComponentServesTheRoute(t *testing.T) {
 	if err != nil {
 		t.Fatalf("WithSystemContext: %v", err)
 	}
-	if err := g.credentials.SetPlatformCredential(sysCtx, faceProbeChatName, "sk-probe", ""); err != nil {
-		t.Fatalf("SetPlatformCredential: %v", err)
+	if credErr := g.credentials.SetPlatformCredential(sysCtx, faceProbeChatName, "sk-probe", ""); credErr != nil {
+		t.Fatalf("SetPlatformCredential: %v", credErr)
 	}
 
 	g.components = selectOnly(t, ctx, pkgcore.Component{
@@ -136,8 +136,8 @@ func TestGateway_Image_SelectedComponentServesTheRoute(t *testing.T) {
 	if err != nil {
 		t.Fatalf("WithSystemContext: %v", err)
 	}
-	if err := g.credentials.SetPlatformCredential(sysCtx, faceProbeImageName, "sk-probe", ""); err != nil {
-		t.Fatalf("SetPlatformCredential: %v", err)
+	if credErr := g.credentials.SetPlatformCredential(sysCtx, faceProbeImageName, "sk-probe", ""); credErr != nil {
+		t.Fatalf("SetPlatformCredential: %v", credErr)
 	}
 
 	g.components = selectOnly(t, ctx, pkgcore.Component{
