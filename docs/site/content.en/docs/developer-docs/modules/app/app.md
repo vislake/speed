@@ -188,8 +188,8 @@ any re-growth of the statements the kernel owns (the serve loop, the
 liveness and authn path literals); and any re-issued engine-owned
 assembly call (`dbkit.Open`, `dbkit.NewMigrationRegistry`,
 `http.NewServeMux`, `jobs.NewStandaloneQueue`/`jobs.Wire`,
-`signal.NotifyContext`, `chain.Chain`, `obs.Init`, `pkgcore.NewKernel`,
-`.Bootstrap(`, `pkgcore.NewComponentRegistry`, and the component
+`signal.NotifyContext`, `chain.Chain`, `obs.Init`, `.Bootstrap(`,
+`pkgcore.NewComponentRegistry`, and the component
 stages) — with the one named-file allowance, where one applies, for the
 host file that legitimately owns the call; the signal overlay and the
 jobs pair carry none, since the engine's `RunAssembly` owns every host's
