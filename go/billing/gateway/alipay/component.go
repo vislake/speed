@@ -31,13 +31,12 @@ type alipayGatewayConfig struct {
 
 // alipayGatewayComponent is the component descriptor for "gateway.alipay":
 // the Alipay channel over the configuration the component's own block
-// spells out, declaring the same 0 capabilities the seam registration
-// declares. Its New funnels through gatewayFromConfig -- the package's one
-// construction path -- so the component face and the seam face cannot
-// diverge on defaults or validation: both build through NewGateway, which
-// parses the RSA keys and owns the required-field checks. Constructing a
-// Gateway dials nothing, so the component owns no closable resource and
-// declares no Close.
+// spells out, declaring 0 capabilities. Its New funnels through
+// gatewayFromConfig -- the package's one construction path -- so a
+// composition block and a flat pkgcore.Config cannot diverge on defaults or
+// validation: both build through NewGateway, which parses the RSA keys and
+// owns the required-field checks. Constructing a Gateway dials nothing, so
+// the component owns no closable resource and declares no Close.
 var alipayGatewayComponent = pkgcore.Component{
 	Name:         "gateway.alipay",
 	Module:       "gateway",
