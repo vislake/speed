@@ -12,9 +12,12 @@ import (
 	"testing"
 
 	"github.com/vislake/speed/go/authn"
+	"github.com/vislake/speed/go/config"
 	"github.com/vislake/speed/go/dbkit"
 	_ "github.com/vislake/speed/go/dbkit/dialect/sqlite" // registers dbkit.DialectSQLite for dbkit.Open
+	"github.com/vislake/speed/go/org"
 	"github.com/vislake/speed/go/pkgcore"
+	"github.com/vislake/speed/go/pkgcore/apperr"
 	"github.com/vislake/speed/go/pkgcore/componenttest"
 	"github.com/vislake/speed/go/pki"
 	"github.com/vislake/speed/go/tenancy"
@@ -665,6 +668,193 @@ func TestOrgSelectionsBuildTheInvitationIndexerOverEmailIndexColumn(t *testing.T
 				t.Errorf("%s wires no org module, so its server.go must register no org serializer and build no org indexer", key)
 			}
 		}
+	}
+}
+
+// TestOrgSelectionsWireTheDeclaredFeatureFlags pins the feature-gate
+// wiring in every org-bearing selection: a declared feature flag is a
+// declaration with no enforcement until the host hands WithFeatureGate a
+// reader, so each org-bearing selection's org override must pass the config
+// module's lazy handle -- the read that makes a tenant whose configuration
+// disables org.invitations refused at the invite endpoint, matching the
+// flag values the config module reports through its features endpoints.
+// The handle read is ordered by the constructor dependency declared on the
+// org override itself, so the config product is in the by-type context
+// when the override constructs; the selections that wire no org module
+// must carry none of it. The reader is the read the reference app's org
+// gate performs (a method value over the identical handle), so both hosts
+// enforce one semantic.
+func TestOrgSelectionsWireTheDeclaredFeatureFlags(t *testing.T) {
+	for _, key := range []string{"authn+org+rbac", "authn+org"} {
+		override := orgOverrideSource(t, key)
+		for _, want := range []string{
+			"org.WithFeatureGate(cfgModule.Handle())",
+			"pkgcore.Requirement{Token: (*config.Module)(nil)}",
+		} {
+			if !strings.Contains(override, want) {
+				t.Errorf("%s: the org override is missing %q; without the handle as the gate's reader, org's declared flags stay declarations with no enforcement", key, want)
+			}
+		}
+	}
+
+	for _, key := range []string{"authn+rbac", "authn", "none"} {
+		path := ProjectRoot + "/selection/" + key + "/server.go"
+		content, err := fs.ReadFile(Project, path)
+		if err != nil {
+			t.Errorf("%s: %v", path, err)
+			continue
+		}
+		if strings.Contains(string(content), "org.WithFeatureGate") {
+			t.Errorf("%s wires no org module, so it must not reference org.WithFeatureGate", key)
+		}
+	}
+}
+
+// orgOverrideSource returns the orgComponent function's own source from a
+// selection's server.go, so that a marker asserted over it cannot be
+// satisfied by a matching line in a different component's override. It
+// fails the test when the selection carries no org override at all.
+func orgOverrideSource(t *testing.T, key string) string {
+	t.Helper()
+	path := ProjectRoot + "/selection/" + key + "/server.go"
+	content, err := fs.ReadFile(Project, path)
+	if err != nil {
+		t.Fatalf("read %s: %v", path, err)
+	}
+	const marker = "func (b *serverBuild) orgComponent("
+	start := strings.Index(string(content), marker)
+	if start < 0 {
+		t.Fatalf("%s: no orgComponent override", path)
+	}
+	rest := string(content)[start:]
+	if end := strings.Index(rest[len(marker):], "\nfunc "); end >= 0 {
+		return rest[:len(marker)+end]
+	}
+	return rest
+}
+
+// TestOrgFeatureGateThroughTheConfigHandle_RefusesDisabledInvitations is
+// the behavioral half of the org gate pin: it composes the real config and
+// org modules in the shape the org-bearing selections' server.go produce --
+// org.WithFeatureGate over configModule.Handle(), the same reader the
+// reference app's org gate wraps -- and disables org.invitations through
+// the real config surface: a system-tier row written through
+// config.Service.Set under the audited system purpose config's own
+// descriptor declares, the write an operator's console action ultimately
+// lands. With the flag off, Invite must refuse with
+// org.invitations_disabled. The comparison leg proves the wire is the
+// enforcement point: the same row with NO gate wired leaves the invite
+// through, because an unwired gate applies the flags' declared defaults --
+// so the row an operator writes changes nothing unless the host hands the
+// module a reader.
+func TestOrgFeatureGateThroughTheConfigHandle_RefusesDisabledInvitations(t *testing.T) {
+	ctx := context.Background()
+	db, err := dbkit.Open(ctx, dbkit.Options{Dialect: dbkit.DialectSQLite, DSN: t.TempDir() + "/org-gate.db"})
+	if err != nil {
+		t.Fatalf("open sqlite: %v", err)
+	}
+	t.Cleanup(func() {
+		if sqlDB, closeErr := db.DB(); closeErr == nil {
+			_ = sqlDB.Close()
+		}
+	})
+
+	cipher, err := dbkit.NewCipher(bytes.Repeat([]byte{0x2a}, 32))
+	if err != nil {
+		t.Fatalf("build the config cipher: %v", err)
+	}
+	indexer, err := org.NewEmailIndexer(bytes.Repeat([]byte{0x51}, 32))
+	if err != nil {
+		t.Fatalf("build the org email indexer: %v", err)
+	}
+	// The host-side registration the org-bearing selections' server.go
+	// performs: org's Invitation.Email column is encrypted at rest under
+	// the platform cipher.
+	if err := org.RegisterEmailSerializer(cipher); err != nil {
+		t.Fatalf("register org's email serializer: %v", err)
+	}
+	configModule := config.NewModule(db, config.WithCipher(cipher), config.WithPollInterval(0))
+
+	// Both modules' real migration sets, the same SQL `saasctl db migrate`
+	// applies to a generated project's database.
+	migrations := dbkit.NewMigrationRegistry()
+	if err := migrations.Register(org.NewModule(db)); err != nil {
+		t.Fatalf("register the org migrations: %v", err)
+	}
+	if err := migrations.Register(configModule); err != nil {
+		t.Fatalf("register the config migrations: %v", err)
+	}
+	if err := migrations.Apply(ctx, db, dbkit.DialectSQLite); err != nil {
+		t.Fatalf("apply the migrations: %v", err)
+	}
+
+	// The gated module, carried through the templates' own reader
+	// expression: the config module's lazy handle IS the gate.
+	gated := org.NewModule(db,
+		org.WithEmailIndexer(indexer),
+		org.WithInvitationEmailDisabled(),
+		org.WithFeatureGate(configModule.Handle()),
+	)
+	reg := componenttest.NewRegistry()
+	var svc *config.Service
+	if err := componenttest.DeclareAll(reg,
+		gated.Register,
+		configModule.Register,
+		func(r *pkgcore.ComponentRegistry) error {
+			attached, attachErr := configModule.Attach(r)
+			svc = attached
+			return attachErr
+		},
+	); err != nil {
+		t.Fatalf("declare the org and config modules and attach config: %v", err)
+	}
+
+	// Disable invitations the way an operator's write would: a system-tier
+	// row through the module's real Set path, under the audited system
+	// purpose config's own descriptor declares. The purpose is descriptor
+	// data the assembly registers when the Init stage closes; the
+	// seat-level declaration window this test drives does not reach that
+	// closing step, so register it directly.
+	pkgcore.RegisterSystemPurpose(config.SystemPurposeSystemWrite)
+	sysCtx, err := pkgcore.WithSystemContext(context.Background(), pkgcore.SystemReason{
+		Actor:   "org-gate-pin",
+		Purpose: config.SystemPurposeSystemWrite,
+	})
+	if err != nil {
+		t.Fatalf("build system context: %v", err)
+	}
+	if err := svc.Set(sysCtx, config.ScopeSystem, org.FeatureInvitations, config.Value{Data: false}, "org-gate-pin"); err != nil {
+		t.Fatalf("disable %s: %v", org.FeatureInvitations, err)
+	}
+
+	tenantCtx := pkgcore.WithTenant(context.Background(), "tenant-gate")
+	root, err := gated.Tree().CreateRoot(tenantCtx, "group", "group")
+	if err != nil {
+		t.Fatalf("CreateRoot: %v", err)
+	}
+	if _, err := gated.Invitations().Invite(tenantCtx, org.InviteRequest{
+		Email:         "ada@example.test",
+		NodeID:        root.ID,
+		InviterUserID: "u-inviter",
+	}); !apperr.HasCode(err, org.ErrInvitationsDisabled.Code) {
+		t.Fatalf("Invite over the config handle with %s off = %v, want %v", org.FeatureInvitations, err, org.ErrInvitationsDisabled)
+	}
+
+	// The comparison leg: with no gate wired the identical row enforces
+	// nothing, because the module falls back to the flag's declared default.
+	ungated := org.NewModule(db,
+		org.WithEmailIndexer(indexer),
+		org.WithInvitationEmailDisabled(),
+	)
+	if _, err := componenttest.DeclareModules(ungated); err != nil {
+		t.Fatalf("declare the ungated org module: %v", err)
+	}
+	if _, err := ungated.Invitations().Invite(tenantCtx, org.InviteRequest{
+		Email:         "grace@example.test",
+		NodeID:        root.ID,
+		InviterUserID: "u-inviter",
+	}); err != nil {
+		t.Fatalf("Invite with no gate wired = %v, want success: an unwired gate applies the flags' declared defaults, so the row alone cannot refuse", err)
 	}
 }
 
