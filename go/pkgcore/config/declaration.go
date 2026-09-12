@@ -30,14 +30,15 @@ import (
 )
 
 // Declaration is one bootstrap key the declaration-driven resolver must
-// produce a value for: the dotted key path and the format naming the
-// value's shape. It is the minimal spelling of a declaring component's
-// bootstrap key that crosses into this package -- this package sits on the
-// dependency floor and must not import the pkgcore root package -- and it
-// mirrors the declaring side's own fields: the key path is the flag name,
-// the base of the environment variable's derived spelling and the identity
-// of the key-material derivation, and the format is what selects the
-// value's shape.
+// produce a value for: the dotted key path, the format naming the value's
+// shape, and the optional pinned environment variable name. It is the
+// minimal spelling of a declaring component's bootstrap key that crosses
+// into this package -- this package sits on the dependency floor and must
+// not import the pkgcore root package -- and it mirrors the declaring side's
+// own fields: the key path is the flag name, the base of the environment
+// variable's derived spelling and the identity of the key-material
+// derivation, the format is what selects the value's shape, and the pinned
+// name is the exact variable a key the declaring side pinned is read from.
 type Declaration struct {
 	// Key is the dotted key path, the same naming surface Load resolves,
 	// for example "authn.pii_cipher_key". It must be lowercase, non-empty
@@ -48,6 +49,16 @@ type Declaration struct {
 	// FormatString, FormatInt, FormatBool or FormatHexKey. The set is
 	// closed; anything else is refused.
 	Format string
+
+	// Env pins the exact environment variable the key is read from. Empty
+	// means the name is derived from the key path by the loader's own
+	// spelling rule, the same default a field without a pin takes; a
+	// non-empty name is read exactly as spelled -- no prefix, no case
+	// folding -- and the derived spelling is not a second way in. Two keys
+	// resolving to one variable name -- both pinning it, or one pinning a
+	// name another derives -- are refused, because a single variable cannot
+	// feed two keys whose values would then depend on traversal order.
+	Env string
 }
 
 // Formats a Declaration may name. The set mirrors the declaring side's own
@@ -145,11 +156,16 @@ func WithDevDefaults(defaults map[string][]byte) Option {
 // name in that list, which reads "the declared defaults table" where
 // Load's reads "the default set on the target struct".
 //
+// A declaration naming a pinned environment variable is read from that name
+// alone, exactly as a config:"env=NAME" field is: the derived spelling its
+// key path would otherwise produce is not a second way in.
+//
 // The declaration set is refused before any source is read when it cannot
 // be resolved as one schema: an empty key path, a key path with an empty
 // segment or an uppercase letter (the loader's key universe is lowercase),
-// a repeated key, an unknown Format, or a declared-defaults entry naming a
-// declared key of another format.
+// a repeated key, an unknown Format, a declared-defaults entry naming a
+// declared key of another format, or two keys resolving to one environment
+// variable name.
 func (l *Loader) ResolveDeclarations(decls []Declaration) (map[string]any, error) {
 	s, err := describeDeclarations(decls)
 	if err != nil {
@@ -179,9 +195,10 @@ func (l *Loader) ResolveDeclarations(decls []Declaration) (map[string]any, error
 
 // describeDeclarations validates a declaration list and flattens it into
 // the schema the shared pipeline consumes: one field per declaration, its
-// key the declared path, its type the Go type the format names, and the
-// derive flag set for a hexkey declaration -- the shape describe() builds
-// for a struct whose fields carried the matching tags.
+// key the declared path, its type the Go type the format names, the derive
+// flag set for a hexkey declaration, and the pinned name the declaration
+// carries -- the shape describe() builds for a struct whose fields carried
+// the matching tags.
 func describeDeclarations(decls []Declaration) (*schema, error) {
 	s := &schema{
 		byKey:         make(map[string]*field, len(decls)),
@@ -208,7 +225,7 @@ func describeDeclarations(decls []Declaration) (*schema, error) {
 		}
 		seen[decl.Key] = struct{}{}
 		derive := decl.Format == FormatHexKey
-		s.fields = append(s.fields, field{key: decl.Key, typ: typ, derive: derive})
+		s.fields = append(s.fields, field{key: decl.Key, typ: typ, derive: derive, pinned: decl.Env})
 		if derive {
 			s.derives++
 		}

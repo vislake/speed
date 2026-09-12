@@ -540,6 +540,63 @@ func TestResolveDeclarations_EmptySetResolvesToAnEmptyMap(t *testing.T) {
 	}
 }
 
+// TestResolveDeclarations_PinnedEnvironmentName pins the pinned name's two
+// rules: a declaration carrying one is read from that exact variable -- the
+// derived spelling its key would otherwise produce is not a second way in --
+// and two declarations resolving to one variable name are refused, whether
+// the collision is between two pins or between a pin and a derived name.
+func TestResolveDeclarations_PinnedEnvironmentName(t *testing.T) {
+	t.Parallel()
+
+	t.Run("the pinned name is read exactly as spelled", func(t *testing.T) {
+		t.Parallel()
+
+		values, err := New(WithArgs(nil), WithEnviron([]string{
+			"PINNED_PORT=8080",
+			"SPEED_SERVER__PORT=9999", // the derived spelling is not a second way in
+		})).ResolveDeclarations([]Declaration{
+			{Key: "server.port", Format: FormatInt, Env: "PINNED_PORT"},
+		})
+		if err != nil {
+			t.Fatalf("ResolveDeclarations() error = %v, want nil", err)
+		}
+		if got := values["server.port"]; got != 8080 {
+			t.Errorf("server.port = %#v, want the pinned variable's 8080", got)
+		}
+	})
+
+	t.Run("the derived spelling alone resolves nothing", func(t *testing.T) {
+		t.Parallel()
+
+		values, err := New(WithArgs(nil), WithEnviron([]string{
+			"SPEED_SERVER__PORT=9999",
+		})).ResolveDeclarations([]Declaration{
+			{Key: "server.port", Format: FormatInt, Env: "PINNED_PORT"},
+		})
+		if err != nil {
+			t.Fatalf("ResolveDeclarations() error = %v, want nil", err)
+		}
+		if _, present := values["server.port"]; present {
+			t.Errorf("server.port = %#v, want the key absent: only the pinned name is a source", values["server.port"])
+		}
+	})
+
+	t.Run("a pin onto another key's derived name is refused", func(t *testing.T) {
+		t.Parallel()
+
+		_, err := New(WithArgs(nil), WithEnviron(nil)).ResolveDeclarations([]Declaration{
+			{Key: "server.port", Format: FormatInt, Env: "SPEED_SERVER__ADDR"},
+			{Key: "server.addr", Format: FormatString},
+		})
+		if !errors.Is(err, ErrInvalidTarget) {
+			t.Fatalf("ResolveDeclarations() error = %v, want ErrInvalidTarget", err)
+		}
+		if !strings.Contains(err.Error(), "SPEED_SERVER__ADDR") {
+			t.Errorf("ResolveDeclarations() error = %v, want it to name the shared variable", err)
+		}
+	})
+}
+
 // TestResolveDeclarations_OutputShapesMatchTheFormat pins the concrete Go
 // shape each format resolves to, so a consumer's type assertion is
 // contract not coincidence.
