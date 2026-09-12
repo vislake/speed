@@ -269,19 +269,25 @@
 
 ### （待编号）（收编阶段 2）pki：模块的签名者改由组合选中的 signer 成员绑定（行为登记）
 
-- **面**：`go/pki` 的模块组件不再无条件使用自身内置的 `LocalSigner` 默认：其描述符新增一条**可选** `(*Signer)(nil)` 依赖，组合中恰好选中一个 `signer.*` 成员时，该成员的构造排到模块自身之前，模块以**该成员的实例**为准签名（成员名去掉族前缀 `signer.` 即模块记录的签名者名——`signer.local` 读作 `local`，与其行内一直记录的签名者名一致；`signer.vault` / `signer.aws-kms` / `signer.vault-direct` 等按各自后缀记录）；选中两个成员在计划期即以歧义提供者失败（绑定式模块由选择强制）。不选任何 signer 成员时模块保持原默认，行为与既有组合一致。导出符号零变化（`WithSigner` 保留）。
+- **面**：`go/pki` 的模块组件不再无条件使用自身内置的 `LocalSigner` 默认：其描述符新增一条**可选** `(*Signer)(nil)` 依赖，组合中恰好选中一个 `signer.*` 成员时，该成员的构造排到模块自身之前，模块以**该成员的实例**为准签名（成员名的**最后一段**即模块记录的签名者名——`signer.local` 读作 `local`，与其行内一直记录的签名者名一致；宿主按 `capabilityComponent` 形状克隆注册名的改名形态——宿主前缀 + 同一注册名，如 `reference-app.signer.local` / `__APP_NAME__.signer.local`，即 reference-app 与 saasctl 模板实际选中的形状——同样读作 `local`，该形状已入钉；`signer.vault` / `signer.aws-kms` / `signer.vault-direct` 等按各自后缀记录）；选中两个成员在计划期即以歧义提供者失败（绑定式模块由选择强制）。不选任何 signer 成员时模块保持原默认，行为与既有组合一致。导出符号零变化（`WithSigner` 保留）。
 - **消费者影响**：对既选 `signer.local`（或任一 `signer.*` 成员）又选 `pki` 的组合，**实现来源变化而结果等价**：`signer.local` 成员与模块默认都构造同一 `LocalSigner`（类型、共享连接、签名者名 `local` 逐项相同），行内容不变；差别只在从此"组合选中什么就签什么"——此前该选中对模块无效果，宿主若想换实现只能走 `SignerRegistry`/`BuildSignerRequiring` 的名字路径 + `WithSigner` 注入。选 `signer.vault` 等成员而不注入的自定义组合，从"静默用本地签名者"改为"用选中的实现"（这正是绑定式组件的语义）。未选 signer 成员的组合零影响。
 - **替代路径**：无（行为修正）；要维持内置默认即不选任何 signer 成员；要指定实现即在组合中选中对应 `signer.*` 成员（或在组装之外自行构造并经 `WithSigner` 注入，二者保留）。
 - **登记理由**：宿主可见面（组合选中的语义由"装饰"变为"生效"、绑定式模块的选中约束）的行为变更，按"宿主可见面变更须带 `!BREAKING` footer 或登记本清单"的纪律登记（非破坏——既有组合结果等价，不带 footer）。
-- **出处**：`03e8b297`（`feat(pki): bind the module's signer to the composition-selected member`）。
+- **出处**：`20988b4a`（`feat(pki): bind the module's signer to the composition-selected member`）+ `eed145df`（`fix(pki): read the signer identity from the member name's last segment`——改名克隆形状的推导修正与入钉）。
 
 ### （待编号）（收编阶段 2）ai-gateway：provider 按调用解析优先走组件面（行为登记，双轨并存）
 
 - **面**：`go/ai-gateway` 的每请求 provider 解析（`Gateway.Chat/ChatStream` 与图像任务处理器共用的 `resolveProvider`）在装配注册表在场时优先按组件面构造——`pkgcore.Build[T](reg, route.Provider, override{base_url, api_key})`，即阶段 1 登记的"每次请求按已解析凭据构造 provider"的组件面形状；名字未被选中（或 Gateway 在组装之外直接构造）时回落到包级 `ChatProviderRegistry` / `ImageProviderRegistry`，行为不变。route 的 provider 逻辑名与组件名逐字同一（阶段 1 的缺口 C 恒等），宿主既有 route 字符串与凭据行零迁移；选中 `chat.openai-compatible` / `image.openai-compatible` 的组合，每请求构造改走组件面，与注册面同实现、同能力位、同拒绝（缺 base_url/api_key 的拒绝同码）。装配接线在 `Module.Register`（Gateway 既有的 host-seams 步骤）把注册表挂到 Gateway 上。
-- **消费者影响**：组合选中 provider 组件的宿主，请求路径经组件面构造（结果等价，无升级动作）；未选中的宿主逐项维持原行为（回落注册表）。`WithChatProviderRegistry` / `WithImageProviderRegistry` 的文档语义收窄为"装配选中缺名时的回落面"，签名与实现保留至本体退役轮。
+- **消费者影响**：组合选中 provider 组件的宿主，请求路径经组件面构造（结果等价，无升级动作）；未选中的宿主逐项维持原行为（回落注册表）。`WithChatProviderRegistry` / `WithImageProviderRegistry` 的文档语义收窄为"装配选中缺名时的回落面"，签名与实现保留至本体退役轮。仓内首个消费者 reference-app 已实落该组合：当 boot 配置了对应平台凭据（与其平台凭据写入同一条件，未配置则该成员不选中，名字维持注册面回落）时，其组合选中 `chat.openai-compatible` / `image.openai-compatible` 成员，组合块携带与凭据行相同的 base_url/api_key 对，每请求构造即走组件面。
 - **替代路径**：不选 provider 组件即维持注册表面；要固定实现即在组合中选中对应 provider 组件。
 - **登记理由**：每请求解析的来源选择变化（组件面优先、注册表回落；既有组合结果等价），按"宿主可见面变更须带 `!BREAKING` footer 或登记本清单"的纪律登记（非破坏，不带 footer）。
-- **出处**：`b7726761`（`feat(ai-gateway): resolve providers through the assembly's selected members first`）。
+- **出处**：`0d7d6a01`（`feat(ai-gateway): resolve providers through the assembly's selected members first`）。
+
+### （待编号）（收编阶段 2）billing：三个支付网关组件暂无仓内消费者（状态登记）
+
+- **状态**：`gateway.stripe` / `gateway.alipay` / `gateway.wechat` 组件（阶段 1 登记）已注册、经各包套件与双面对照测试钉住，但**没有任何仓内宿主消费其产品**：`billing.Module` 的支付网关表按设计由宿主注入（`WithGateways`，channel 集合不是配置），reference-app 无支付收单与 webhook 生命周期、亦不空导入任何 provider 子包，saasctl 各模板不含 billing。
+- **披露**：如实登记"暂不接"——不以虚构消费者（为示例宿主补一条无业务意义的收单流程）凑齐机制；将来宿主接入（组合选中 `gateway.*` 成员并经 `WithGateways` 注入）时另行登记。组件面本身已可用：选中即按普通组件参与装配的能力位校验。
+- **登记理由**：披露性状态登记，非破坏面。
 
 ## 6. D 组：configrefgen 工具内部迁移（工具面，非宿主面）
 
