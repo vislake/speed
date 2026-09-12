@@ -3,8 +3,8 @@ package wechat_test
 // Runnable documentation for the WeChat-Pay-backed billing.PaymentGateway,
 // compiled and executed by `go test`. None of the Examples below reach a
 // real WeChat Pay account -- see doc.go's own "no integration leg" section.
-// ExampleNewGateway and Example demonstrate construction and
-// billing.PaymentGatewayRegistry usage; ExampleGateway_VerifyWebhook is the
+// ExampleNewGateway and Example demonstrate construction and the
+// component face; ExampleGateway_VerifyWebhook is the
 // package's runnable, doc-rendered proof of the real thing: it
 // AEAD_AES_256_GCM-encrypts a transaction resource with a locally generated
 // APIv3 key and RSA-SHA256-signs the notify envelope with a locally
@@ -59,7 +59,7 @@ func examplePEMKeyPair() (privPEM, pubPEM []byte) {
 
 // ExampleNewGateway shows constructing a Gateway directly, the escape hatch
 // for a caller that wants to wire it with billing.WithGateways rather than
-// going through billing.PaymentGatewayRegistry. Nothing is dialed here --
+// selecting the provider component in a composition. Nothing is dialed here --
 // the underlying HTTP client issues no request until the first
 // CreateCharge/QueryStatus call.
 func ExampleNewGateway() {
@@ -88,27 +88,48 @@ func ExampleNewGateway() {
 	// gateway wired; the first CreateCharge/QueryStatus call contacts WeChat Pay
 }
 
-// Example demonstrates the package's self-registration: importing it for
-// side effect makes "gateway.wechat" build through
-// billing.PaymentGatewayRegistry.
+// Example demonstrates the package's component registration: importing it
+// for side effect makes "gateway.wechat" selectable in a composition, and
+// the descriptor constructs the same Gateway ExampleNewGateway builds by
+// hand.
 func Example() {
+	ctx := context.Background()
 	mchPrivPEM, _ := examplePEMKeyPair()
 	_, platformPubPEM := examplePEMKeyPair()
 
-	cfg := pkgcore.Config{
-		"mch_id":                  "1900000001",
-		"app_id":                  "wx1234567890",
-		"mch_cert_serial_no":      "EXAMPLESERIAL",
-		"mch_private_key_pem":     string(mchPrivPEM),
-		"api_v3_key":              "01234567890123456789012345678901",
-		"platform_public_key_pem": string(platformPubPEM),
-		"notify_url":              "https://example.test/billing/notify/wechat",
+	reg := pkgcore.NewComponentRegistry()
+	reg.Put(pkgcore.NewComponentConfig(map[string]any{
+		"components": map[string]any{
+			"gateway.wechat": map[string]any{
+				"mch_id":                  "1900000001",
+				"app_id":                  "wx1234567890",
+				"mch_cert_serial_no":      "EXAMPLESERIAL",
+				"mch_private_key_pem":     string(mchPrivPEM),
+				"api_v3_key":              "01234567890123456789012345678901",
+				"platform_public_key_pem": string(platformPubPEM),
+				"notify_url":              "https://example.test/billing/notify/wechat",
+			},
+		},
+	}))
+	if err := reg.Prepare(ctx); err != nil {
+		fmt.Println("prepare:", err)
+		return
 	}
-	gw, caps, err := billing.PaymentGatewayRegistry.Build("gateway.wechat", cfg)
-	fmt.Println("gateway.wechat:", err, gw != nil, caps)
+	if err := reg.Construct(ctx); err != nil {
+		fmt.Println("construct:", err)
+		return
+	}
+	defer func() { _ = reg.Close(ctx) }()
+
+	gw, err := pkgcore.Get[billing.PaymentGateway](reg)
+	fmt.Println("gateway.wechat:", err, gw != nil)
+
+	caps, capsErr := pkgcore.ComponentCapabilities(reg, "gateway.wechat")
+	fmt.Println("capabilities:", caps, capsErr)
 
 	// Output:
-	// gateway.wechat: <nil> true none
+	// gateway.wechat: <nil> true
+	// capabilities: none <nil>
 }
 
 // encryptResource is decryptResource's inverse (this package's own

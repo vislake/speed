@@ -3,8 +3,8 @@ package stripe_test
 // Runnable documentation for the Stripe-backed billing.PaymentGateway,
 // compiled and executed by `go test`. None of the Examples below reach a
 // real Stripe account -- see doc.go's own "no integration leg" section.
-// ExampleNewGateway and Example demonstrate construction and
-// billing.PaymentGatewayRegistry usage; ExampleGateway_VerifyWebhook is the
+// ExampleNewGateway and Example demonstrate construction and the component
+// face; ExampleGateway_VerifyWebhook is the
 // package's runnable, doc-rendered proof of the real thing --
 // webhook.GenerateTestSignedPayload (Stripe's own SDK helper) produces a
 // genuine HMAC-SHA256-signed Stripe-Signature header over a real payload,
@@ -26,7 +26,7 @@ import (
 
 // ExampleNewGateway shows constructing a Gateway directly, the escape hatch
 // for a caller that wants to wire it with billing.WithGateways rather than
-// going through billing.PaymentGatewayRegistry. Nothing is dialed here --
+// selecting the provider component in a composition. Nothing is dialed here --
 // the underlying Stripe client issues no request until the first
 // CreateCharge/QueryStatus call -- so this Example never needs reachable
 // Stripe credentials to construct successfully.
@@ -50,21 +50,42 @@ func ExampleNewGateway() {
 	// gateway wired; the first CreateCharge/QueryStatus call contacts Stripe
 }
 
-// Example demonstrates the package's self-registration: importing it for
-// side effect makes "gateway.stripe" build through
-// billing.PaymentGatewayRegistry.
+// Example demonstrates the package's component registration: importing it
+// for side effect makes "gateway.stripe" selectable in a composition, and
+// the descriptor constructs the same Gateway ExampleNewGateway builds by
+// hand.
 func Example() {
-	cfg := pkgcore.Config{
-		"api_key":        "sk_test_example",
-		"webhook_secret": "whsec_example",
-		"success_url":    "https://example.test/billing/success",
-		"cancel_url":     "https://example.test/billing/cancel",
+	ctx := context.Background()
+	reg := pkgcore.NewComponentRegistry()
+	reg.Put(pkgcore.NewComponentConfig(map[string]any{
+		"components": map[string]any{
+			"gateway.stripe": map[string]any{
+				"api_key":        "sk_test_example",
+				"webhook_secret": "whsec_example",
+				"success_url":    "https://example.test/billing/success",
+				"cancel_url":     "https://example.test/billing/cancel",
+			},
+		},
+	}))
+	if err := reg.Prepare(ctx); err != nil {
+		fmt.Println("prepare:", err)
+		return
 	}
-	gw, caps, err := billing.PaymentGatewayRegistry.Build("gateway.stripe", cfg)
-	fmt.Println("gateway.stripe:", err, gw != nil, caps)
+	if err := reg.Construct(ctx); err != nil {
+		fmt.Println("construct:", err)
+		return
+	}
+	defer func() { _ = reg.Close(ctx) }()
+
+	gw, err := pkgcore.Get[billing.PaymentGateway](reg)
+	fmt.Println("gateway.stripe:", err, gw != nil)
+
+	caps, capsErr := pkgcore.ComponentCapabilities(reg, "gateway.stripe")
+	fmt.Println("capabilities:", caps, capsErr)
 
 	// Output:
-	// gateway.stripe: <nil> true none
+	// gateway.stripe: <nil> true
+	// capabilities: none <nil>
 }
 
 // ExampleGateway_VerifyWebhook signs a checkout.session.completed fixture

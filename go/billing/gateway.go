@@ -3,8 +3,6 @@ package billing
 import (
 	"context"
 	"time"
-
-	"github.com/vislake/speed/go/pkgcore"
 )
 
 // This file is billing's half of the one-way dependency rule:
@@ -13,15 +11,11 @@ import (
 // PaymentGateway's provider-agnostic types below -- but billing's own root
 // package must never import go/billing/gateway or anything under it. billing
 // consumes a channel through PaymentGateway, an interface declared here;
-// PaymentGatewayRegistry is the database/sql-style seam a provider
-// subpackage's own init() registers a concrete implementation into (mirroring
-// go/pki's SignerRegistry -- see that file's own doc comment for the identical
-// shape, including the WithSigner-vs-SignerRegistry duality this seam
-// repeats: a host that already holds a constructed PaymentGateway wires it
-// directly wherever one is needed -- PollingService's gateways map, or a
-// live webhook handler -- while PaymentGatewayRegistry
-// is for a host that wants to build one by name plus a flat pkgcore.Config,
-// the shape a builtin composition or an environment-driven bootstrap naturally produces).
+// each provider subpackage supplies one implementation through its own
+// component descriptor (gateway/stripe's "gateway.stripe", and so on), and
+// a host that already holds a constructed PaymentGateway wires it directly
+// wherever one is needed -- PollingService's gateways map, or a live
+// webhook handler.
 //
 // Getting this backwards leaks a
 // provider-specific type (a stripe.Subscription-shaped field, an Alipay
@@ -295,27 +289,15 @@ type PaymentGateway interface {
 	QueryStatus(ctx context.Context, ref ChannelReference) (ChannelStatus, Money, error)
 }
 
-// PaymentGatewayRegistry is the package-level pkgcore.SeamRegistry[PaymentGateway]
-// every host resolves a named channel implementation through, mirroring
-// go/pki's SignerRegistry (see this file's own header comment) and, through
-// it, the database/sql driver-registration pattern pkgcore's own
-// module-internal registries already follow. go/billing/gateway/stripe,
-// .../alipay and .../wechat each
-// register themselves here from their own init() under "gateway.stripe",
-// "gateway.alipay" and "gateway.wechat" -- a host that never imports a
-// provider subpackage never resolves that name, and PaymentGatewayRegistry
-// itself carries none of the three SDKs: go.mod's require list does name
-// github.com/stripe/stripe-go/v82 directly (it is a non-indirect
-// requirement, since go/billing/gateway/stripe is a subpackage of this same
-// module), but never as an import of this package's own code -- only as
-// what that subpackage needs, the pruned-module-graph distinction the
-// gateway packaging rules state precisely.
-//
-// No built-in implementation is pre-registered here the way pkgcore's own
-// kv MemoryKVStore ships as a default -- unlike an infrastructure seam,
-// every PaymentGateway implementation genuinely needs a provider SDK or a
-// hand-rolled channel client, so there is no zero-dependency default the way
-// LocalSigner is for SignerRegistry (see that file's own doc comment on why
-// "signer.local" registers in go/pki's own root package instead of a
-// subpackage).
-var PaymentGatewayRegistry = pkgcore.NewSeamRegistry[PaymentGateway]()
+// A note on packaging: go/billing/gateway/stripe,
+// .../alipay and .../wechat each ship their implementation as a component
+// descriptor ("gateway.stripe", "gateway.alipay", "gateway.wechat") --
+// selected by a composition configuration, never pre-registered as a
+// default (unlike an infrastructure seam, every PaymentGateway
+// implementation genuinely needs a provider SDK or a hand-rolled channel
+// client). This package's own go.mod carries none of the three SDKs: its
+// require list does name github.com/stripe/stripe-go/v82 directly (it is a
+// non-indirect requirement, since go/billing/gateway/stripe is a subpackage
+// of this same module), but never as an import of this package's own code
+// -- only as what that subpackage needs, the pruned-module-graph
+// distinction the gateway packaging rules state precisely.

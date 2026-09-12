@@ -3,11 +3,9 @@ package stripe
 // component.go registers the "gateway.stripe" component with pkgcore's
 // global component registration: the descriptor a composition configuration
 // selects as the "gateway" module's member. It lives beside the
-// implementation it adapts, the same file-locality the package's own seam
-// registration (register.go) keeps. Both faces carry the identical name --
-// the component and the seam registration are two resolution paths to the
-// same implementation, and the registration stays the name-based path a
-// Preset-shaped caller resolves through.
+// implementation it adapts, and its New funnels through gatewayFromConfig
+// below -- this package's one construction path -- so a composition block
+// and a flat pkgcore.Config cannot diverge on validation.
 
 import (
 	"context"
@@ -18,9 +16,9 @@ import (
 )
 
 // stripeGatewayConfig is the "gateway.stripe" component's configuration
-// schema: one field per key the seam registration documents, so a
+// schema: one field per key the flat construction path reads, so a
 // composition block spells the same settings a flat pkgcore.Config carries
-// and neither face grows a setting the other lacks.
+// and neither shape grows a setting the other lacks.
 type stripeGatewayConfig struct {
 	APIKey          string `json:"api_key"`
 	WebhookSecret   string `json:"webhook_secret"`
@@ -58,6 +56,22 @@ var stripeGatewayComponent = pkgcore.Component{
 			"billing_interval": c.BillingInterval,
 		})
 	},
+}
+
+// gatewayFromConfig adapts a flat pkgcore.Config onto NewGateway -- the one
+// construction path stripeGatewayComponent's New funnels through.
+// "api_key" and "webhook_secret" have no safe default and are rejected by
+// NewGateway itself when empty; "success_url" and "cancel_url" are
+// likewise required. "billing_interval" is optional (NewGateway's own
+// default applies).
+func gatewayFromConfig(cfg pkgcore.Config) (billing.PaymentGateway, error) {
+	return NewGateway(Config{
+		APIKey:          cfg["api_key"],
+		WebhookSecret:   cfg["webhook_secret"],
+		SuccessURL:      cfg["success_url"],
+		CancelURL:       cfg["cancel_url"],
+		BillingInterval: cfg["billing_interval"],
+	})
 }
 
 func init() { pkgcore.MustRegister(stripeGatewayComponent) }

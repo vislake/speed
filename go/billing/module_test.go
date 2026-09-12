@@ -84,14 +84,14 @@ func TestModule_Accessors_ReturnWiredPieces(t *testing.T) {
 }
 
 // TestWithGateways_WiresThePollingServicesGatewayMap proves WithGateways'
-// value reaches PollingService -- the identical WithSigner-style direct-
-// injection seam gateway.go's own doc comment describes.
+// value reaches PollingService -- the direct-injection seam gateway.go's
+// own doc comment describes.
 func TestWithGateways_WiresThePollingServicesGatewayMap(t *testing.T) {
-	gw := &fakeRegistryGateway{}
+	gw := &stubGateway{}
 	m := NewModule(nil, stubUsage{}, WithGateways(map[string]PaymentGateway{"stripe": gw}))
 
 	if got := m.Polling().gateways["stripe"]; got != gw {
-		t.Errorf("Polling().gateways[\"stripe\"] = %v, want the *fakeRegistryGateway WithGateways was given", got)
+		t.Errorf("Polling().gateways[\"stripe\"] = %v, want the *stubGateway WithGateways was given", got)
 	}
 }
 

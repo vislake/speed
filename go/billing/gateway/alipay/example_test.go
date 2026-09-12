@@ -3,8 +3,8 @@ package alipay_test
 // Runnable documentation for the Alipay-backed billing.PaymentGateway,
 // compiled and executed by `go test`. None of the Examples below reach a
 // real Alipay account -- see doc.go's own "no integration leg" section.
-// ExampleNewGateway and Example demonstrate construction and
-// billing.PaymentGatewayRegistry usage; ExampleGateway_VerifyWebhook is the
+// ExampleNewGateway and Example demonstrate construction and the
+// component face; ExampleGateway_VerifyWebhook is the
 // package's runnable, doc-rendered proof of the real thing: it RSA2-signs a
 // notify body with a locally generated key pair, exactly the algorithm
 // sign.go's own signContent documents (Alipay ships no published
@@ -57,7 +57,7 @@ func examplePEMKeyPair() (privPEM, pubPEM []byte) {
 
 // ExampleNewGateway shows constructing a Gateway directly, the escape hatch
 // for a caller that wants to wire it with billing.WithGateways rather than
-// going through billing.PaymentGatewayRegistry. Nothing is dialed here --
+// selecting the provider component in a composition. Nothing is dialed here --
 // the underlying HTTP client issues no request until the first
 // CreateCharge/QueryStatus call.
 func ExampleNewGateway() {
@@ -82,23 +82,44 @@ func ExampleNewGateway() {
 	// gateway wired; the first CreateCharge/QueryStatus call contacts Alipay
 }
 
-// Example demonstrates the package's self-registration: importing it for
-// side effect makes "gateway.alipay" build through
-// billing.PaymentGatewayRegistry.
+// Example demonstrates the package's component registration: importing it
+// for side effect makes "gateway.alipay" selectable in a composition, and
+// the descriptor constructs the same Gateway ExampleNewGateway builds by
+// hand.
 func Example() {
+	ctx := context.Background()
 	privPEM, pubPEM := examplePEMKeyPair()
 
-	cfg := pkgcore.Config{
-		"app_id":                "2021000000000000",
-		"private_key_pem":       string(privPEM),
-		"alipay_public_key_pem": string(pubPEM),
-		"notify_url":            "https://example.test/billing/notify/alipay",
+	reg := pkgcore.NewComponentRegistry()
+	reg.Put(pkgcore.NewComponentConfig(map[string]any{
+		"components": map[string]any{
+			"gateway.alipay": map[string]any{
+				"app_id":                "2021000000000000",
+				"private_key_pem":       string(privPEM),
+				"alipay_public_key_pem": string(pubPEM),
+				"notify_url":            "https://example.test/billing/notify/alipay",
+			},
+		},
+	}))
+	if err := reg.Prepare(ctx); err != nil {
+		fmt.Println("prepare:", err)
+		return
 	}
-	gw, caps, err := billing.PaymentGatewayRegistry.Build("gateway.alipay", cfg)
-	fmt.Println("gateway.alipay:", err, gw != nil, caps)
+	if err := reg.Construct(ctx); err != nil {
+		fmt.Println("construct:", err)
+		return
+	}
+	defer func() { _ = reg.Close(ctx) }()
+
+	gw, err := pkgcore.Get[billing.PaymentGateway](reg)
+	fmt.Println("gateway.alipay:", err, gw != nil)
+
+	caps, capsErr := pkgcore.ComponentCapabilities(reg, "gateway.alipay")
+	fmt.Println("capabilities:", caps, capsErr)
 
 	// Output:
-	// gateway.alipay: <nil> true none
+	// gateway.alipay: <nil> true
+	// capabilities: none <nil>
 }
 
 // signNotifyParams RSA2-signs params the same way Alipay's own servers sign

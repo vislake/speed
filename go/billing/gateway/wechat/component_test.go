@@ -2,7 +2,6 @@ package wechat
 
 import (
 	"context"
-	"reflect"
 	"strings"
 	"testing"
 
@@ -12,10 +11,9 @@ import (
 	"github.com/vislake/speed/go/billing"
 )
 
-// wechatComponentSettings returns the settings both resolution paths are
-// fed from: the component's composition block and the seam registration's
-// flat pkgcore.Config carry the identical key set and values, so a setting
-// either face grows alone cannot pass unnoticed.
+// wechatComponentSettings returns the settings the component's composition
+// block carries: the same key set and values the flat construction path
+// reads, so a setting one shape grows alone cannot pass unnoticed.
 func wechatComponentSettings(t *testing.T) pkgcore.Config {
 	t.Helper()
 	privPEM, pubPEM, _ := generateTestKeyPair(t)
@@ -73,19 +71,13 @@ func TestComponentAssemblesThroughRegistry(t *testing.T) {
 	}
 }
 
-// TestComponentAndSeamRegistrationAgree pins the coexistence of the two
-// resolution paths under one name: both build the same implementation from
-// the same settings, both declare the same capabilities, and both refuse an
-// empty configuration the same way -- the seam path at Build, the component
-// path at Construct.
-func TestComponentAndSeamRegistrationAgree(t *testing.T) {
+// TestComponentConstructsAndRefusesEmptyConfig pins the component's one
+// construction path under its own name: gateway.wechat builds the package's
+// own gateway from its settings, declares the zero capability, and refuses
+// an empty configuration with NewGateway's required-field error.
+func TestComponentConstructsAndRefusesEmptyConfig(t *testing.T) {
 	ctx := context.Background()
 	settings := wechatComponentSettings(t)
-
-	seamGateway, seamCaps, err := billing.PaymentGatewayRegistry.Build("gateway.wechat", settings)
-	if err != nil {
-		t.Fatalf("PaymentGatewayRegistry.Build(gateway.wechat) error = %v", err)
-	}
 
 	reg := pkgcore.NewComponentRegistry()
 	reg.Put(pkgcore.NewComponentConfig(map[string]any{
@@ -103,17 +95,13 @@ func TestComponentAndSeamRegistrationAgree(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Get[billing.PaymentGateway] error = %v", err)
 	}
-	if reflect.TypeOf(componentGateway) != reflect.TypeOf(seamGateway) {
-		t.Errorf("component built %T, seam registration built %T; the two faces must resolve the same implementation", componentGateway, seamGateway)
+	if _, ok := componentGateway.(*Gateway); !ok {
+		t.Errorf("Get[billing.PaymentGateway] = %T, want the package's own *wechat.Gateway", componentGateway)
 	}
 
 	caps, err := pkgcore.ComponentCapabilities(reg, "gateway.wechat")
-	if err != nil || caps != seamCaps {
-		t.Errorf("ComponentCapabilities(gateway.wechat) = (%v, %v), want the seam registration's %v", caps, err, seamCaps)
-	}
-
-	if _, _, err := billing.PaymentGatewayRegistry.Build("gateway.wechat", pkgcore.Config{}); err == nil || !strings.Contains(err.Error(), "Config.MchID") {
-		t.Errorf("seam Build with an empty Config = %v, want NewGateway's required-field error", err)
+	if err != nil || caps != 0 {
+		t.Errorf("ComponentCapabilities(gateway.wechat) = (%v, %v), want the declared zero capability", caps, err)
 	}
 
 	emptyBlockReg := pkgcore.NewComponentRegistry()

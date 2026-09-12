@@ -3,11 +3,9 @@ package wechat
 // component.go registers the "gateway.wechat" component with pkgcore's
 // global component registration: the descriptor a composition configuration
 // selects as the "gateway" module's member. It lives beside the
-// implementation it adapts, the same file-locality the package's own seam
-// registration (register.go) keeps. Both faces carry the identical name --
-// the component and the seam registration are two resolution paths to the
-// same implementation, and the registration stays the name-based path a
-// Preset-shaped caller resolves through.
+// implementation it adapts, and its New funnels through gatewayFromConfig
+// below -- this package's one construction path -- so a composition block
+// and a flat pkgcore.Config cannot diverge on validation.
 
 import (
 	"context"
@@ -18,11 +16,11 @@ import (
 )
 
 // wechatGatewayConfig is the "gateway.wechat" component's configuration
-// schema: one field per key the seam registration documents, so a
+// schema: one field per key the flat construction path reads, so a
 // composition block spells the same settings a flat pkgcore.Config carries
-// and neither face grows a setting the other lacks. The PEM and APIv3 key
+// and neither shape grows a setting the other lacks. The PEM and APIv3 key
 // fields are the literal text, converted to []byte on the way to Config --
-// the same conversion the seam registration makes.
+// the same conversion gatewayFromConfig makes.
 type wechatGatewayConfig struct {
 	MchID                string `json:"mch_id"`
 	AppID                string `json:"app_id"`
@@ -65,6 +63,21 @@ var wechatGatewayComponent = pkgcore.Component{
 			"gateway_url":             c.GatewayURL,
 		})
 	},
+}
+
+// gatewayFromConfig adapts a flat pkgcore.Config onto NewGateway -- the one
+// construction path wechatGatewayComponent's New funnels through.
+func gatewayFromConfig(cfg pkgcore.Config) (billing.PaymentGateway, error) {
+	return NewGateway(Config{
+		MchID:                cfg["mch_id"],
+		AppID:                cfg["app_id"],
+		MchCertSerialNo:      cfg["mch_cert_serial_no"],
+		MchPrivateKeyPEM:     []byte(cfg["mch_private_key_pem"]),
+		APIv3Key:             []byte(cfg["api_v3_key"]),
+		PlatformPublicKeyPEM: []byte(cfg["platform_public_key_pem"]),
+		NotifyURL:            cfg["notify_url"],
+		GatewayURL:           cfg["gateway_url"],
+	})
 }
 
 func init() { pkgcore.MustRegister(wechatGatewayComponent) }

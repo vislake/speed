@@ -4,70 +4,27 @@ import (
 	"context"
 	"errors"
 	"testing"
-
-	"github.com/vislake/speed/go/pkgcore"
 )
 
-// fakeRegistryGateway is a minimal PaymentGateway used only to prove
-// PaymentGatewayRegistry's own Register/Build round trip -- the real
-// providers (stripe/alipay/wechat) each carry their own, much fuller test
-// suite in go/billing/gateway/<provider>.
-type fakeRegistryGateway struct{ name string }
+// stubGateway is a minimal PaymentGateway proving wiring paths that only
+// need a value (WithGateways' map, and similar) -- the real providers'
+// behavior lives in go/billing/gateway/<provider>. Tests compare it by
+// pointer identity, so it carries no fields.
+type stubGateway struct{}
 
-func (g *fakeRegistryGateway) CreateCharge(context.Context, ChargeRequest) (ChargeHandle, error) {
-	return ChargeHandle{}, errors.New("fakeRegistryGateway: not implemented")
+func (g *stubGateway) CreateCharge(context.Context, ChargeRequest) (ChargeHandle, error) {
+	return ChargeHandle{}, errors.New("stubGateway: not implemented")
 }
 
-func (g *fakeRegistryGateway) VerifyWebhook(context.Context, map[string][]string, []byte) (NormalizedEvent, error) {
-	return NormalizedEvent{}, errors.New("fakeRegistryGateway: not implemented")
+func (g *stubGateway) VerifyWebhook(context.Context, map[string][]string, []byte) (NormalizedEvent, error) {
+	return NormalizedEvent{}, errors.New("stubGateway: not implemented")
 }
 
-func (g *fakeRegistryGateway) QueryStatus(context.Context, ChannelReference) (ChannelStatus, Money, error) {
-	return "", Money{}, errors.New("fakeRegistryGateway: not implemented")
+func (g *stubGateway) QueryStatus(context.Context, ChannelReference) (ChannelStatus, Money, error) {
+	return "", Money{}, errors.New("stubGateway: not implemented")
 }
 
-var _ PaymentGateway = (*fakeRegistryGateway)(nil)
-
-// TestPaymentGatewayRegistry_RegisterAndBuild proves the registry's own
-// Register/Build round trip, mirroring go/pki's identical proof for
-// SignerRegistry (signer_registry_test.go) -- a name registered here is
-// buildable by that exact name, with the capability the registration
-// declared echoed back.
-func TestPaymentGatewayRegistry_RegisterAndBuild(t *testing.T) {
-	const name = "gateway.test-fake-for-registry-round-trip"
-	err := PaymentGatewayRegistry.Register(pkgcore.Registration[PaymentGateway]{
-		Name:         name,
-		Capabilities: 0,
-		New: func(cfg pkgcore.Config) (PaymentGateway, error) {
-			return &fakeRegistryGateway{name: cfg["name"]}, nil
-		},
-	})
-	if err != nil {
-		t.Fatalf("Register: %v", err)
-	}
-
-	gw, caps, err := PaymentGatewayRegistry.Build(name, pkgcore.Config{"name": "probe"})
-	if err != nil {
-		t.Fatalf("Build: %v", err)
-	}
-	if gw == nil {
-		t.Fatal("Build returned a nil PaymentGateway")
-	}
-	if caps != 0 {
-		t.Errorf("Build capabilities = %v, want none", caps)
-	}
-	fake, ok := gw.(*fakeRegistryGateway)
-	if !ok || fake.name != "probe" {
-		t.Errorf("Build returned %+v, want a *fakeRegistryGateway carrying the given Config", gw)
-	}
-}
-
-func TestPaymentGatewayRegistry_Build_UnknownName(t *testing.T) {
-	_, _, err := PaymentGatewayRegistry.Build("gateway.does-not-exist", pkgcore.Config{})
-	if !errors.Is(err, pkgcore.ErrUnknownImplementation) {
-		t.Errorf("Build(unknown name) error = %v, want it to wrap pkgcore.ErrUnknownImplementation", err)
-	}
-}
+var _ PaymentGateway = (*stubGateway)(nil)
 
 func TestChannelStatus_ClosedVocabulary(t *testing.T) {
 	// A compile-time-adjacent sanity check that the four declared values

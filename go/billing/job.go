@@ -109,10 +109,9 @@ type PollingService struct {
 	// gateways maps NormalizedEvent.Channel/PaymentEvent.Channel (e.g.
 	// "stripe") to the already-constructed PaymentGateway a host wired for
 	// it -- WithGateways' own doc comment explains why this is a plain map
-	// a host builds once, rather than a per-call PaymentGatewayRegistry.Build
-	// lookup: a registry Build call re-constructs a fresh implementation
-	// (and re-parses credentials for the providers that store them in
-	// their Config) from a Config on every call, which is the wrong cost
+	// a host builds once, rather than a per-call construction: building a
+	// fresh implementation (and re-parsing credentials for the providers
+	// that store them in their Config) on every call is the wrong cost
 	// to pay once per stuck row on every poll tick.
 	gateways map[string]PaymentGateway
 	queue    jobs.Queue

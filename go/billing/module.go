@@ -110,14 +110,12 @@ func WithQueue(queue jobs.Queue) Option {
 // WithGateways wires the PaymentGateway implementations the active-polling
 // fallback re-queries, keyed by NormalizedEvent.Channel/PaymentEvent.Channel
 // (e.g. "stripe", "alipay", "wechat") -- an already-constructed value per
-// channel, exactly the WithSigner half of the WithSigner-vs-SignerRegistry
-// duality PaymentGatewayRegistry's own doc comment describes (gateway.go):
-// a host builds each PaymentGateway once, typically via
-// PaymentGatewayRegistry.Build(name, cfg) against a blank-imported provider
-// subpackage, and hands the resulting map here. Without it (nil or an
-// empty map, NewModule's own default), PollingService.Poll finds every
-// stuck row's channel unwired and skips each one with a logged warning,
-// rather than failing the pass -- see Poll's own doc comment.
+// channel: a host builds each PaymentGateway once (typically from a
+// provider component it selected in the composition, or by calling a
+// provider's own constructor) and hands the resulting map here. Without it
+// (nil or an empty map, NewModule's own default), PollingService.Poll finds
+// every stuck row's channel unwired and skips each one with a logged
+// warning, rather than failing the pass -- see Poll's own doc comment.
 func WithGateways(gateways map[string]PaymentGateway) Option {
 	return func(m *Module) { m.gateways = gateways }
 }

@@ -3,11 +3,9 @@ package alipay
 // component.go registers the "gateway.alipay" component with pkgcore's
 // global component registration: the descriptor a composition configuration
 // selects as the "gateway" module's member. It lives beside the
-// implementation it adapts, the same file-locality the package's own seam
-// registration (register.go) keeps. Both faces carry the identical name --
-// the component and the seam registration are two resolution paths to the
-// same implementation, and the registration stays the name-based path a
-// Preset-shaped caller resolves through.
+// implementation it adapts, and its New funnels through gatewayFromConfig
+// below -- this package's one construction path -- so a composition block
+// and a flat pkgcore.Config cannot diverge on validation.
 
 import (
 	"context"
@@ -18,11 +16,11 @@ import (
 )
 
 // alipayGatewayConfig is the "gateway.alipay" component's configuration
-// schema: one field per key the seam registration documents, so a
+// schema: one field per key the flat construction path reads, so a
 // composition block spells the same settings a flat pkgcore.Config carries
-// and neither face grows a setting the other lacks. The two PEM fields are
+// and neither shape grows a setting the other lacks. The two PEM fields are
 // the PEM text itself, converted to []byte on the way to Config -- the same
-// conversion the seam registration makes.
+// conversion gatewayFromConfig makes.
 type alipayGatewayConfig struct {
 	AppID              string `json:"app_id"`
 	PrivateKeyPEM      string `json:"private_key_pem"`
@@ -59,6 +57,18 @@ var alipayGatewayComponent = pkgcore.Component{
 			"gateway_url":           c.GatewayURL,
 		})
 	},
+}
+
+// gatewayFromConfig adapts a flat pkgcore.Config onto NewGateway -- the one
+// construction path alipayGatewayComponent's New funnels through.
+func gatewayFromConfig(cfg pkgcore.Config) (billing.PaymentGateway, error) {
+	return NewGateway(Config{
+		AppID:              cfg["app_id"],
+		PrivateKeyPEM:      []byte(cfg["private_key_pem"]),
+		AlipayPublicKeyPEM: []byte(cfg["alipay_public_key_pem"]),
+		NotifyURL:          cfg["notify_url"],
+		GatewayURL:         cfg["gateway_url"],
+	})
 }
 
 func init() { pkgcore.MustRegister(alipayGatewayComponent) }
