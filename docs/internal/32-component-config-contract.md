@@ -66,13 +66,17 @@ type Documented interface {
 
 - `go/app`（已经依赖 `go/pkgcore/config` 的五源解析器）实现 `ComponentConfigResolver` 的具体版本，在 `reg.Prepare()` 之前把它 `reg.Put` 进注册表。`New`/`Prepare` 回调签名不变（`New(ctx, reg, cfg ComponentConfig) (any, error)`，组件内部仍然 `cfg.Decode(&c)`）——变化的只是 `cfg` 在传入前经过的合并处理。
 
-`go/pkgcore/config` 包新导出一个只读反射投影供两端复用：
+`go/pkgcore/config` 包新导出一个只读反射投影，供解析器实现（`go/app`）与工具侧复用：
 
 ```go
 func Describe(target any) ([]FieldSummary, error)
 ```
 
-根包在此基础上拼出 `pkgcore.DescribeComponentSchema(componentName string, schema any) ([]FieldDescriptor, error)`，叠加命名空间前缀与 `ConfigDocs()` 的文档字段。命令行 `--help` 渲染与配置参考文档生成器共享这一份 `FieldDescriptor` 收集逻辑。
+投影给出每个可解析字段的本地 key path（json tag 名，或没有 json tag 时的小写 Go 名，嵌套 struct 以点连接）、Go 字段名、类型与全部 tag 选项（`expose`/`derive`/`required`/`sensitive`/`env`/`group`/`-`），不含命名空间前缀——组件名与 `ConfigNamespace` 不属于这个包的知识，由调用方叠加；`"-"` 字段以 Skip 标志保留在投影里，因为排除配置文件来源正是解析器要按它执行的动作。
+
+根包一侧的 `pkgcore.DescribeComponentSchema(componentName string, schema any) ([]FieldDescriptor, error)` 与 `Describe` 同口径、但实现各自独立：根包不得 import `go/pkgcore/config`（依赖地板约束），因此根包自携分析器，而不是在 `Describe` 之上拼出；两份投影对同一 schema 的字段判定、键拼写与选项词汇由测试对齐（同 schema 经两条投影面产出逐字段一致的本地键与选项）。解析器侧另用 `Declaration` 的钉死环境变量名承载 `env=NAME`（声明管线的字段读取本就有 pin 席位，声明结构补上这一字段）。
+
+命令行 `--help` 渲染与配置参考文档生成器共享根包这一份 `FieldDescriptor` 收集逻辑。
 
 ## 5. 平台级密钥材料的归属
 
