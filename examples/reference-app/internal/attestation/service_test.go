@@ -79,11 +79,9 @@ func newTestService(t *testing.T, content ContentOpener) *Service {
 	registerTestPKISerializer()
 	db := dbtest.NewSQLite(t)
 	applyPKIMigrations(t, db)
+	applyMigrations(t, db)
 
 	store := NewAttestationStore(db)
-	if err := store.EnsureSchema(context.Background()); err != nil {
-		t.Fatalf("EnsureSchema: %v", err)
-	}
 	certificates := pki.NewCertificateRepository(db)
 	chain := pki.NewCAService(
 		pki.NewLocalSigner(db), "local",
@@ -265,11 +263,11 @@ type attestationFixture struct {
 }
 
 // newAttestationFixture returns a fully bootstrapped Service over a fresh
-// per-test SQLite database: pki's own migrations applied from zero (via
-// the same dbkit.MigrationRegistry the app's startup uses), the local key
-// serializer registered, the app's CA chain ensured and its schema
-// created -- the exact boot order internal/app's BuildServer runs. The
-// service is ready for attestation writes on acme's context.
+// per-test SQLite database: pki's own migrations and this module's applied
+// from zero (via the same dbkit.MigrationRegistry the app's Verify stage
+// runs), the local key serializer registered, the app's CA chain ensured --
+// the exact boot order internal/app's BuildServer runs. The service is
+// ready for attestation writes on acme's context.
 func newAttestationFixture(t *testing.T) *attestationFixture {
 	t.Helper()
 	registerTestPKISerializer()
@@ -277,6 +275,7 @@ func newAttestationFixture(t *testing.T) *attestationFixture {
 	db := dbtest.NewSQLite(t)
 
 	applyPKIMigrations(t, db)
+	applyMigrations(t, db)
 
 	signer := pki.NewLocalSigner(db)
 	chain := pki.NewCAService(signer, "local",
@@ -286,9 +285,6 @@ func newAttestationFixture(t *testing.T) *attestationFixture {
 	store := NewAttestationStore(db)
 	svc := NewService(chain, pki.NewCertificateRepository(db), content, store, db)
 
-	if err := svc.EnsureSchema(context.Background()); err != nil {
-		t.Fatalf("EnsureSchema: %v", err)
-	}
 	if err := svc.EnsureAuthorityChain(context.Background()); err != nil {
 		t.Fatalf("EnsureAuthorityChain: %v", err)
 	}

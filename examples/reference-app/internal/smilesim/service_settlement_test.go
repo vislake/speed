@@ -369,14 +369,9 @@ func TestService_CreditReservation_SurvivesRestart(t *testing.T) {
 	// the same database and the same (queue-double-modeled) persisted
 	// queue -- gateway is nil because nothing here calls Simulate on
 	// serviceB, only settlement.
+	applyMigrations(t, db)
 	store := NewReservationStore(db)
-	if schemaErr := store.EnsureSchema(context.Background()); schemaErr != nil {
-		t.Fatalf("EnsureSchema: %v", schemaErr)
-	}
 	simulations := NewSimulationStore(db)
-	if schemaErr := simulations.EnsureSchema(context.Background()); schemaErr != nil {
-		t.Fatalf("EnsureSchema (simulation index): %v", schemaErr)
-	}
 	serviceB := NewService(nil, credits, pkgcore.NewMemoryEventBus(), queue, store, simulations, nil)
 
 	queue.setJob(&jobs.Job{ID: jobID, TenantID: "tenant-acme", Status: jobs.StatusSucceeded})

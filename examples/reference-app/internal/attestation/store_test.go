@@ -6,22 +6,34 @@ import (
 	"fmt"
 	"testing"
 
+	"gorm.io/gorm"
+
 	"github.com/vislake/speed/go/dbkit"
 	"github.com/vislake/speed/go/dbkit/dbtest"
 	"github.com/vislake/speed/go/pkgcore"
+
+	"github.com/vislake/speed/examples/reference-app/internal/attestation/migrations"
 )
 
 // newTestStore returns an AttestationStore over a fresh SQLite database
-// with its schema ensured -- the store-only fixture these tests need
-// (message verification lives in message_test.go and the full service
-// path, bootstrapped against the real pki CA, in service_test.go).
+// whose table comes from the module's real migration set -- the store-only
+// fixture these tests need (message verification lives in message_test.go
+// and the full service path, bootstrapped against the real pki CA, in
+// service_test.go).
 func newTestStore(t *testing.T) *AttestationStore {
 	t.Helper()
-	store := NewAttestationStore(dbtest.NewSQLite(t))
-	if err := store.EnsureSchema(context.Background()); err != nil {
-		t.Fatalf("EnsureSchema: %v", err)
-	}
-	return store
+	db := dbtest.NewSQLite(t)
+	applyMigrations(t, db)
+	return NewAttestationStore(db)
+}
+
+// applyMigrations applies the attestation module's migration set to db
+// through the real dbkit.MigrationRegistry (dbtest.Migrate) -- the same
+// machinery the assembly's Verify stage runs, so the schema a test database
+// carries is the one a booted process carries.
+func applyMigrations(t *testing.T, db *gorm.DB) {
+	t.Helper()
+	dbtest.Migrate(t, db, dbkit.DialectSQLite, dbtest.Migration{Module: "attestation", FS: migrations.FS})
 }
 
 // newTestRecord builds the attestation-row shape tests write, with the

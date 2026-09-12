@@ -2,7 +2,11 @@
 // this app's test packages -- the command's own suites under cmd/server,
 // the app-level ones under flowtests and the boot fixtures under
 // internal/apptest -- so the sides cannot drift apart. It is test-only:
-// nothing in this app's executable code may import it.
+// nothing in this app's executable code may import it. Its dbschema
+// subpackage carries the schema-introspection helpers the domain migration
+// suites share, leaf-shaped so a migrations test binary can import it
+// without reaching back into the package whose migrations it exercises (see
+// that package's own doc comment).
 package testutil
 
 import (

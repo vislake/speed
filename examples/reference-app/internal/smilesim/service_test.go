@@ -279,15 +279,10 @@ func newTestServiceWithDB(t *testing.T, db *gorm.DB, provider aigateway.ImagePro
 	}
 	gateway := aigateway.NewGateway(credentials, gatewayOptions...)
 
-	store := NewReservationStore(db)
-	if err := store.EnsureSchema(context.Background()); err != nil {
-		t.Fatalf("EnsureSchema: %v", err)
-	}
+	applyMigrations(t, db)
 
+	store := NewReservationStore(db)
 	simulations := NewSimulationStore(db)
-	if err := simulations.EnsureSchema(context.Background()); err != nil {
-		t.Fatalf("EnsureSchema (simulation index): %v", err)
-	}
 
 	return NewService(gateway, credits, pkgcore.NewMemoryEventBus(), queue, store, simulations, entitlementSeam)
 }
@@ -667,10 +662,8 @@ func TestService_OptionsAndListing_SurviveRestart(t *testing.T) {
 	// Simulate on serviceB, only reads. The job finished while the
 	// process was down; the queue double records that terminal state the
 	// way the real persisted queue would.
+	applyMigrations(t, db)
 	simulations := NewSimulationStore(db)
-	if schemaErr := simulations.EnsureSchema(context.Background()); schemaErr != nil {
-		t.Fatalf("EnsureSchema (simulation index): %v", schemaErr)
-	}
 	queue.setJob(newSimulateResultJob(t, jobID, "tenant-acme", jobs.StatusSucceeded, "object-out-9"))
 	serviceB := NewService(nil, nil, pkgcore.NewMemoryEventBus(), queue, nil, simulations, nil)
 

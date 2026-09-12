@@ -7,12 +7,15 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"gorm.io/gorm"
 
 	"github.com/vislake/speed/go/dbkit"
 	"github.com/vislake/speed/go/dbkit/dbtest"
 	"github.com/vislake/speed/go/pkgcore"
 	"github.com/vislake/speed/go/pkgcore/testkit"
 	"github.com/vislake/speed/go/tenancy/tenancytest"
+
+	"github.com/vislake/speed/examples/reference-app/internal/cases/migrations"
 
 	// Blank-imported for its init side effect: registers dbkit.DialectSQLite
 	// with dbkit's dialect registry so the dbkit.Open calls in the
@@ -25,18 +28,25 @@ import (
 )
 
 // newRepository returns a Repository backed by a fresh, per-test SQLite
-// database whose two tables and indexes were created by the real
-// EnsureSchema path -- the same path internal/app's wiring runs at boot,
-// never a hand-written schema shortcut -- so a test failure here can never
-// be explained away as "the test fixture's schema diverged from the real
-// DDL".
+// database whose two tables and indexes were created by the domain's real
+// migration set -- the same files the assembly's Verify stage applies at
+// boot, never a hand-written schema shortcut -- so a test failure here can
+// never be explained away as "the test fixture's schema diverged from the
+// real DDL".
 func newRepository(t *testing.T) *Repository {
 	t.Helper()
-	repo := NewRepository(dbtest.NewSQLite(t))
-	if err := repo.EnsureSchema(context.Background()); err != nil {
-		t.Fatalf("EnsureSchema() error = %v", err)
-	}
-	return repo
+	db := dbtest.NewSQLite(t)
+	applyMigrations(t, db)
+	return NewRepository(db)
+}
+
+// applyMigrations applies the domain's migration set to db through the real
+// dbkit.MigrationRegistry (dbtest.Migrate) -- the same machinery the
+// assembly runs, so the schema a test database carries is the one a booted
+// process carries.
+func applyMigrations(t *testing.T, db *gorm.DB) {
+	t.Helper()
+	dbtest.Migrate(t, db, dbkit.DialectSQLite, dbtest.Migration{Module: "cases", FS: migrations.FS})
 }
 
 // tenantCtx returns a context carrying tenant and a dummy actor, the shape
@@ -88,20 +98,18 @@ func TestRepository_CasePhoto_AssertIsolated(t *testing.T) {
 	})
 }
 
-// TestRepository_EnsureSchema_IsIdempotent pins the schema bootstrap's
-// CREATE TABLE IF NOT EXISTS contract: a second EnsureSchema over the same
-// database must succeed (the statements all carry IF NOT EXISTS) and leave
-// a usable repository behind -- the exact sequence a process restart runs
-// over an existing database file.
-func TestRepository_EnsureSchema_IsIdempotent(t *testing.T) {
+// TestRepository_ReappliedMigrationsLeaveTheSchemaUsable pins the ledger
+// contract a process restart runs over an existing database file: applying
+// the domain's migration set again must succeed as a pure ledger skip (the
+// files are already recorded for module "cases") and leave a usable
+// repository behind.
+func TestRepository_ReappliedMigrationsLeaveTheSchemaUsable(t *testing.T) {
 	repo := newRepository(t)
-	if err := repo.EnsureSchema(context.Background()); err != nil {
-		t.Fatalf("second EnsureSchema() error = %v", err)
-	}
+	applyMigrations(t, repo.db)
 
 	ctx := tenantCtx("tenant-a")
 	if err := repo.Create(ctx, &caseRecord{ID: uuid.NewString(), PatientName: "still works"}); err != nil {
-		t.Fatalf("Create() after the second EnsureSchema error = %v", err)
+		t.Fatalf("Create() after the second migration apply error = %v", err)
 	}
 }
 
@@ -109,8 +117,8 @@ func TestRepository_EnsureSchema_IsIdempotent(t *testing.T) {
 // durability with a real restart: rows written through the repository,
 // then the database connection closed and the same file reopened with a
 // fresh dbkit.Open (exactly what a process restart does), must still be
-// there -- case row and photo rows alike -- after the reopened
-// repository's own EnsureSchema has run over the file.
+// there -- case row and photo rows alike -- after the reopened connection's
+// migration set has been re-applied over the file (a ledger skip).
 func TestRepository_CaseRows_SurviveReopen(t *testing.T) {
 	dsn := filepath.Join(t.TempDir(), "cases-durability.sqlite")
 
@@ -130,11 +138,8 @@ func TestRepository_CaseRows_SurviveReopen(t *testing.T) {
 			}
 			_ = sqlDB.Close()
 		})
-		repo := NewRepository(db)
-		if err := repo.EnsureSchema(context.Background()); err != nil {
-			t.Fatalf("EnsureSchema() over %q: %v", dsn, err)
-		}
-		return repo
+		applyMigrations(t, db)
+		return NewRepository(db)
 	}
 
 	first := open()

@@ -368,9 +368,10 @@ func TestAssemble_ComposesAndClosesTheWholeApplication(t *testing.T) {
 		t.Fatalf("read the migration ledger: %v", err)
 	}
 	wantModules := []string{
-		"admin", "ai-gateway", "audit", "authn", "billing", "config",
-		"integration", "metering", "notes", "notification", "org", "pki",
-		"rbac", "sharing", "storage",
+		"admin", "ai-gateway", "attestation", "audit", "authn", "billing",
+		"cases", "config", "integration", "metering", "notes",
+		"notification", "org", "pki", "rbac", "sharing", "smilesim",
+		"storage",
 	}
 	if !reflect.DeepEqual(modules, wantModules) {
 		t.Errorf("schema_migrations module keys = %v, want %v", modules, wantModules)

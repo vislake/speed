@@ -6,26 +6,37 @@ import (
 	"fmt"
 	"testing"
 
+	"gorm.io/gorm"
+
 	"github.com/vislake/speed/go/dbkit"
 	"github.com/vislake/speed/go/dbkit/dbtest"
 	"github.com/vislake/speed/go/jobs"
 	"github.com/vislake/speed/go/pkgcore"
+
+	"github.com/vislake/speed/examples/reference-app/internal/smilesim/migrations"
 )
 
 // newTestSimulationStore returns a SimulationStore backed by a fresh,
-// per-test SQLite database whose table and per-photo index were created by
-// the real EnsureSchema path -- the same path internal/app's wiring runs at
-// boot, never a hand-written schema shortcut -- so an isolation failure
-// here can never be explained away as "the test fixture's schema diverged
-// from the real DDL".
+// per-test SQLite database whose tables and index were created by the
+// domain's real migration set -- the same files the assembly's Verify stage
+// applies at boot, never a hand-written schema shortcut -- so an isolation
+// failure here can never be explained away as "the test fixture's schema
+// diverged from the real DDL".
 func newTestSimulationStore(t *testing.T) *SimulationStore {
 	t.Helper()
 	db := dbtest.NewSQLite(t)
-	store := NewSimulationStore(db)
-	if err := store.EnsureSchema(context.Background()); err != nil {
-		t.Fatalf("EnsureSchema: %v", err)
-	}
-	return store
+	applyMigrations(t, db)
+	return NewSimulationStore(db)
+}
+
+// applyMigrations applies the domain's migration set (both tables) to db
+// through the real dbkit.MigrationRegistry (dbtest.Migrate) -- the same
+// machinery the assembly runs, so the schema a test database carries is the
+// one a booted process carries. Both stores share the one set, so a
+// fixture building either store applies it once.
+func applyMigrations(t *testing.T, db *gorm.DB) {
+	t.Helper()
+	dbtest.Migrate(t, db, dbkit.DialectSQLite, dbtest.Migration{Module: "smilesim", FS: migrations.FS})
 }
 
 // isoTenantA and isoTenantB are the two tenants TestSimulationStore_

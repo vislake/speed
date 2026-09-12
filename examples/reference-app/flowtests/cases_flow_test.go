@@ -19,7 +19,7 @@ import (
 // (internal/app/cases.go) through the real composed HTTP stack
 // apptest.BuildServer builds -- the authn+tenancy middleware chain, the real
 // registration/sign-in surface, and a real temp-file SQLite database whose
-// cases tables the boot's own EnsureSchema created -- not a mock of any of
+// cases tables the boot's own migrations created -- not a mock of any of
 // it. The tenant comes from the bearer token alone (apptest.RegisterAndAuthenticate's
 // own doc comment explains why Host plays no part); where a request needs
 // a creator (the create route only -- the clinic-wide list reads no
