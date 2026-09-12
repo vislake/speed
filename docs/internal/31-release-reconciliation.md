@@ -228,6 +228,13 @@
 - **登记理由**：公共符号面变更（`RunAssembly` 签名新增参数 + 新导出类型 `ServeFunc`），按"宿主可见面变更须带 `!BREAKING` footer 或登记本清单"的纪律**双轨**登记（三个提交均带 `!` footer，先例同 §5.8）。
 - **出处**：`a3de33d3`（`feat(app)!: hand the host's serve step to RunAssembly`）+ `b6e1ac74`（`refactor(saasctl)!: hand the skeleton's serve step to RunAssembly`）+ `d0ccca95`（`refactor(reference-app)!: run the app through RunAssembly's serve step`）。
 
+### （待编号）pkgcore：新增 httpapi 响应编码帮手（非破坏，新增面登记）
+
+- **面**：`pkgcore/httpapi` 新增导出 `WriteJSON(w, status, v)` 与常量 `JSONContentType`（原包内未导出的 JSON media type 常量转正）：`WriteJSON` 把一次 JSON 成功响应写入收敛为一处——共享 Content-Type、调用方给定的状态码、`json.Encoder` 编码（带结尾换行）；编码失败在状态行已写出后丢弃（断连客户端，非响应缺陷）。包内 `WriteError` 改用同一导出常量。既有导出符号与签名不变。
+- **消费者影响**：无破坏、无升级动作；仓内各模块（admin、ai-gateway、authn、billing、config、integration、notification、org、pki、sharing、storage 与 reference-app 的 notes 面）此前的本地 `writeJSON` 帮手与 `jsonContentType` 常量已删除、调用点改走 `httpapi.WriteJSON`，线上字节逐字不变；新模块脚手架的生成物也改走 `httpapi.WriteJSON` / `httpapi.WriteError`（响应字节等价）。宿主自带处理器可直接调用新导出面。
+- **登记理由**：公共符号面新增，按"宿主可见面变更须带 `!BREAKING` footer 或登记本清单"的纪律登记（本轮为纯新增，不带 footer）。
+- **出处**：`42f57d80`（`feat(pkgcore): add the shared JSON response writer to httpapi`）+ `92187243`（`refactor: write the modules' JSON responses through pkgcore/httpapi`）+ `01abb1a0`（`refactor(reference-app): write the notes responses through httpapi.WriteJSON`）+ `2b8ae249`（`refactor(tools): emit the shared JSON helpers from the new-module scaffold`）。
+
 ## 6. D 组：configrefgen 工具内部迁移（工具面，非宿主面）
 
 - **面**：`tools/configrefgen` 的内部实现从旧内核面迁到组件面（工具自身不在消费者依赖面内）。
