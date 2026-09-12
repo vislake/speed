@@ -132,7 +132,7 @@ PR 模板包含一份 checklist，对应仓库根 [CLAUDE.md](../../CLAUDE.md) �
 尚未实现、如实披露的边界：
 
 - **oasdiff 破坏性变更闸门**：不存在。破坏性变更检测需要发布基线才有比较对象——v0.0.1 作废，但其发布提交 `fbaaaf98` 之树仍提供完整基线（main 的祖先；Go module proxy 只解析 21 个模块中的 17 个）；闸门的缺席是如实披露的机制决策，而非以假闸门占位。
-- **浏览器自动化**：Playwright 套件（`examples/reference-app/web/e2e`，26 个 spec 文件、chromium/webkit/ipad 三个项目）已驱动真实宿主；`.github/workflows/e2e.yml` 以按需触发加每日定时运行；合入 main 的 push 触发仍未开启，待一次 dispatched 运行变绿后接上。`@deployment` 门在指向真实部署时（需 `E2E_BASE_URL`）驱动该部署的伺服页面。
+- **浏览器自动化**：Playwright 套件（`examples/reference-app/web/e2e`，27 个 spec 文件、chromium/webkit/ipad 三个项目）已驱动真实宿主；`.github/workflows/e2e.yml` 以按需触发加每日定时运行，加上每次推送到 main（push 触发按既定条件在首次 dispatched 运行全绿后开启；触发细节与理由见 `.github/workflows/e2e.yml` 文件头）。`@deployment` 门在指向真实部署时（需 `E2E_BASE_URL`）驱动该部署的伺服页面。
 
 ## 文件拆分与移动的引用清扫
 
