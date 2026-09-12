@@ -60,7 +60,7 @@ imports `authn.User`).
 
 ### API contract: spec-first, non-negotiable order
 
-Edit `api/openapi.yaml` → run `task api:gen` → the resulting
+Edit the owning module's `api/openapi.yaml` fragment → run `task api:gen` → the resulting
 compilation failures reveal every handler to fix → implement → update
 the frontend → commit everything together. The generated Go server
 interface participates in compilation, so drift between spec and

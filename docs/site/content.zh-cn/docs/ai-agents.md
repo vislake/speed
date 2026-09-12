@@ -48,7 +48,7 @@ ID 引用加领域事件(`org` 按名称与 JSON 形载荷订阅 `authn` 的
 
 ### API 契约:先契约后代码,顺序不可逆
 
-改 `api/openapi.yaml` → 跑 `task api:gen` → 编译失败暴露每个待修的
+改归属模块的 `api/openapi.yaml` 片段 → 跑 `task api:gen` → 编译失败暴露每个待修的
 handler → 实现 → 更新前端 → 一起提交。生成的 Go server 接口参与编译,
 所以契约与实现之间的漂移无法编译通过。前端镜像同一纪律:手写
 `fetch`/`axios` 只允许出现在 `@speed/api-client` 内部;其它包一律调用
