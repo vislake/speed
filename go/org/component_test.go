@@ -48,7 +48,7 @@ func testInvitationLinkBuilder(_ context.Context, token string) (string, error) 
 // the loader resolves and publishes before anything is constructed.
 func testBootstrapMaterial() *pkgcore.BootstrapMaterial {
 	return pkgcore.NewBootstrapMaterial([]pkgcore.BootstrapMaterialEntry{
-		{KeyPath: bootstrapKeyDecl.Key, Value: bytes.Repeat([]byte{0x2f}, 32)},
+		{KeyPath: InvitationEmailIndexKeyPath, Value: bytes.Repeat([]byte{0x2f}, 32)},
 	})
 }
 

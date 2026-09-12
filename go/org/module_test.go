@@ -784,26 +784,32 @@ func (g fixedGate) IsEnabled(_ context.Context, _ string) (bool, error) {
 // other.
 var _ FeatureGate = fixedGate{}
 
-// TestModule_Register_DeclaresItsBootstrapKey pins the one process-start key
-// org's contract names: the HMAC key behind the invitation-address blind
-// indexer, a Sensitive hex key separate from every cipher key -- and the only
-// key org declares, since the runtime schema beside it is deliberately absent.
-func TestModule_Register_DeclaresItsBootstrapKey(t *testing.T) {
-	declared := component().BootstrapKeys
-	if len(declared) != 1 {
-		t.Fatalf("the org component declared %d bootstrap keys (%v), want exactly one", len(declared), declared)
+// TestComponent_SchemaDeclaresItsInvitationIndexKey pins the one
+// process-start key org's contract names: the HMAC key behind the
+// invitation-address blind indexer, a Sensitive derive-tagged []byte field
+// separate from every cipher key that resolves at exactly the platform key
+// path the component exports -- a schema rename cannot silently rotate the
+// key.
+func TestComponent_SchemaDeclaresItsInvitationIndexKey(t *testing.T) {
+	descriptors, err := pkgcore.DescribeComponentSchema(moduleName, component().ConfigSchema)
+	if err != nil {
+		t.Fatalf("DescribeComponentSchema() error = %v", err)
 	}
-	key := declared[0]
-	if key.Key != "org.invitation_email_index_key" {
-		t.Errorf("declared key = %q, want org.invitation_email_index_key", key.Key)
+	byKey := make(map[string]pkgcore.FieldDescriptor, len(descriptors))
+	for _, d := range descriptors {
+		byKey[d.Key] = d
 	}
-	if key.Format != "hexkey" || !key.Sensitive {
-		t.Errorf("declaration = %+v, want a Sensitive hexkey", key)
+	field, ok := byKey[InvitationEmailIndexKeyPath]
+	if !ok {
+		t.Fatalf("the org component did not declare key material at %q", InvitationEmailIndexKeyPath)
 	}
-	if key.Group != moduleName {
-		t.Errorf("declaration group = %q, want the module name %q", key.Group, moduleName)
+	if !field.Derive || field.Type != "[]byte" || !field.Sensitive {
+		t.Errorf("field = %+v, want a Sensitive derive-tagged []byte key", field)
 	}
-	if key.Default == "" || key.Description == "" || key.Example != "" {
-		t.Errorf("declaration = %+v, want a documented fallback and contract text, and no suggested value", key)
+	if field.Group != moduleName {
+		t.Errorf("field group = %q, want the module name %q", field.Group, moduleName)
+	}
+	if field.Doc.Default == "" || field.Doc.Description == "" || field.Doc.Example != "" {
+		t.Errorf("field doc = %+v, want a documented fallback and contract text, and no suggested value", field.Doc)
 	}
 }

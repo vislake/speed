@@ -14,9 +14,10 @@ package org
 // connection that parses the module's models opens; the host wiring
 // (org.RegisterEmailSerializer over the cipher it resolves) is the path that
 // performs it. New builds the blind indexer from the module's own declared
-// key material (bootstrapKeyDecl), which is what Register's
-// ErrEmailIndexerRequired precondition needs: the module reads the material
-// it declared, the same reading authn's blind-index key takes.
+// key material (the schema's invitation_email_index_key field), which is
+// what Register's ErrEmailIndexerRequired precondition needs: the module
+// reads the material it declared, the same reading authn's blind-index key
+// takes.
 
 import (
 	"context"
@@ -31,16 +32,47 @@ import (
 	"github.com/vislake/speed/go/org/migrations"
 )
 
+// InvitationEmailIndexKeyPath is the key path of the HMAC key org's
+// invitation-address blind indexer is built from: the derive field
+// "invitation_email_index_key" under the component's own "org" namespace, so
+// the key resolves at the platform key path it has always carried
+// (pkgcore.BootstrapKeyPurpose embeds the path, and a rename would silently
+// rotate the key). It is also the material address a host's wiring reads the
+// key from.
+const InvitationEmailIndexKeyPath = "org.invitation_email_index_key"
+
 // componentConfig is org's configuration schema in the assembly: the
 // construction-time knobs NewModule's options carry, as structured
-// configuration. The invitation-address blind-index key is process-start key
-// material and stays in the descriptor's BootstrapKeys (bootstrapKeyDecl),
-// never in configuration.
+// configuration, and the process-start blind-index key as a derive field.
+// The component's namespace is "org", so the key resolves at
+// InvitationEmailIndexKeyPath rather than under the default components.org.
+// prefix.
 type componentConfig struct {
-	MailFrom      string        `json:"mail_from"`
-	ReplyTo       string        `json:"reply_to"`
-	InvitationTTL time.Duration `json:"invitation_ttl"`
-	MaxDepth      int           `json:"max_depth"`
+	// InvitationEmailIndexKey indexes invitation email addresses; it is a
+	// separate secret from the host's configuration cipher key on purpose.
+	// A host reusing that cipher to encrypt org's Invitation.Email column is
+	// the ordinary wiring, and dbkit's own rule is that an AES key must
+	// never double as an HMAC key; this one additional key is what keeps
+	// that rule real rather than aspirational, and an invitation whose
+	// address cannot be indexed can never be found again, so the key must
+	// not change between restarts. The derive option resolves it through
+	// the five-source chain.
+	InvitationEmailIndexKey []byte        `json:"invitation_email_index_key" config:"derive,sensitive,group=org"`
+	MailFrom                string        `json:"mail_from"`
+	ReplyTo                 string        `json:"reply_to"`
+	InvitationTTL           time.Duration `json:"invitation_ttl"`
+	MaxDepth                int           `json:"max_depth"`
+}
+
+// ConfigDocs implements pkgcore.Documented: the operator-facing contract of
+// the schema's sensitive key-material field.
+func (*componentConfig) ConfigDocs() map[string]pkgcore.FieldDoc {
+	return map[string]pkgcore.FieldDoc{
+		"invitation_email_index_key": {
+			Description: "HMAC key org's blind indexer indexes invitation email addresses with; separate from every cipher key, because an AES key never doubles as an HMAC key.",
+			Default:     "documented non-secret development default",
+		},
+	}
 }
 
 // component returns org's component descriptor: the value init registers, so
@@ -80,12 +112,16 @@ func component() pkgcore.Component {
 		Provides: []any{(*Module)(nil)},
 		// org's state is its rows in the deployment's shared database and
 		// the shared event bus, so several replicas may run it at once.
-		Capabilities:  pkgcore.MultiReplicaSafe,
-		ConfigSchema:  (*componentConfig)(nil),
-		BootstrapKeys: []pkgcore.BootstrapKey{bootstrapKeyDecl},
-		Migrations:    migrations.FS,
-		Locales:       locales.FS,
-		OpenAPISpec:   openAPISpecYAML,
+		Capabilities: pkgcore.MultiReplicaSafe,
+		ConfigSchema: (*componentConfig)(nil),
+		// The "org" namespace keeps the schema's invitation_email_index_key
+		// field at the platform key path the key has always carried
+		// (InvitationEmailIndexKeyPath) instead of the default components.org.
+		// prefix.
+		ConfigNamespace: "org",
+		Migrations:      migrations.FS,
+		Locales:         locales.FS,
+		OpenAPISpec:     openAPISpecYAML,
 		New: func(_ context.Context, reg *pkgcore.ComponentRegistry, cfg pkgcore.ComponentConfig) (any, error) {
 			var c componentConfig
 			if err := cfg.Decode(&c); err != nil {
@@ -98,14 +134,14 @@ func component() pkgcore.Component {
 			// The blind indexer is built from the module's own declared key
 			// material: Register refuses a keyless module
 			// (ErrEmailIndexerRequired), and the material source the loader
-			// publishes is where the declared key path resolves.
+			// publishes is where the schema's derive field resolves.
 			material, err := pkgcore.BootstrapMaterialOf(reg)
 			if err != nil {
 				return nil, err
 			}
-			indexKey, ok := material.Material(bootstrapKeyDecl.Key)
+			indexKey, ok := material.Material(InvitationEmailIndexKeyPath)
 			if !ok {
-				return nil, fmt.Errorf("org: the assembly resolved no material for the declared bootstrap key %q", bootstrapKeyDecl.Key)
+				return nil, fmt.Errorf("org: the assembly resolved no material for the declared bootstrap key %q", InvitationEmailIndexKeyPath)
 			}
 			indexer, err := NewEmailIndexer(indexKey)
 			if err != nil {
