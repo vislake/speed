@@ -349,3 +349,108 @@ func TestSignerLocalComponent_ConstructsOverTheSharedConnection(t *testing.T) {
 		t.Errorf("FindByKeyRef(%q) error = %v: the signer must write through the shared connection", keyRef, err)
 	}
 }
+
+// TestComponent_TakesTheSelectedSignerMember pins the binding-module
+// selection path: the "signer.*" member the composition selects alongside
+// pki is the signer the module signs with -- the member's own constructed
+// instance, by pointer identity -- and the module records the member's name
+// with the family prefix stripped as the signer name every key row carries.
+func TestComponent_TakesTheSelectedSignerMember(t *testing.T) {
+	ctx := context.Background()
+	db := newTestDB(t)
+
+	var memberSigner Signer
+	member := pkgcore.Component{
+		Name:     signerModuleName + ".test-remote",
+		Module:   signerModuleName,
+		Provides: []any{(*Signer)(nil)},
+		Requires: []pkgcore.Requirement{{Token: (*gorm.DB)(nil)}},
+		New: func(_ context.Context, reg *pkgcore.ComponentRegistry, _ pkgcore.ComponentConfig) (any, error) {
+			d, err := pkgcore.Get[*gorm.DB](reg)
+			if err != nil {
+				return nil, err
+			}
+			memberSigner = NewLocalSigner(d)
+			return memberSigner, nil
+		},
+	}
+
+	reg := pkgcore.NewComponentRegistry()
+	if err := reg.Register(testDBComponent(db)); err != nil {
+		t.Fatalf("registering the database stand-in: %v", err)
+	}
+	if err := reg.Register(member); err != nil {
+		t.Fatalf("registering the signer member stand-in: %v", err)
+	}
+	reg.Put(pkgcore.NewComponentConfig(map[string]any{
+		"components": map[string]any{
+			"test.db":                         nil,
+			signerModuleName + ".test-remote": nil,
+			"pki":                             nil,
+		},
+	}))
+	if err := reg.Prepare(ctx); err != nil {
+		t.Fatalf("Prepare() error = %v", err)
+	}
+	if err := reg.Construct(ctx); err != nil {
+		t.Fatalf("Construct() error = %v", err)
+	}
+
+	m, err := pkgcore.Get[*Module](reg)
+	if err != nil {
+		t.Fatalf("Get[*Module] error = %v", err)
+	}
+	if memberSigner == nil {
+		t.Fatal("the signer member component never constructed")
+	}
+	if m.signer != memberSigner {
+		t.Errorf("the module signs with %T %p, want the selected member's own instance %p", m.signer, m.signer, memberSigner)
+	}
+	if m.signerName != "test-remote" {
+		t.Errorf("module signer name = %q, want \"test-remote\" (the member name with the %q prefix stripped)", m.signerName, signerModuleName+".")
+	}
+}
+
+// TestComponent_SignerLocalMemberKeepsTheLocalSignerName pins the
+// equivalence half of the switch: selecting the built-in "signer.local"
+// member records the signer name "local" -- the name LocalSigner's rows
+// have always carried -- so the component-name path changes no persisted
+// row, and a composition with no signer member selected keeps the module's
+// own LocalSigner default.
+func TestComponent_SignerLocalMemberKeepsTheLocalSignerName(t *testing.T) {
+	ctx := context.Background()
+
+	for _, tc := range []struct {
+		name    string
+		selects []string
+	}{
+		{"selected member", []string{"test.db", "signer.local", "pki"}},
+		{"no member", []string{"test.db", "pki"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			db := newTestDB(t)
+			reg := pkgcore.NewComponentRegistry()
+			if err := reg.Register(testDBComponent(db)); err != nil {
+				t.Fatalf("registering the database stand-in: %v", err)
+			}
+			components := map[string]any{}
+			for _, name := range tc.selects {
+				components[name] = nil
+			}
+			reg.Put(pkgcore.NewComponentConfig(map[string]any{"components": components}))
+			if err := reg.Prepare(ctx); err != nil {
+				t.Fatalf("Prepare() error = %v", err)
+			}
+			if err := reg.Construct(ctx); err != nil {
+				t.Fatalf("Construct() error = %v", err)
+			}
+			m, err := pkgcore.Get[*Module](reg)
+			if err != nil {
+				t.Fatalf("Get[*Module] error = %v", err)
+			}
+			if m.signerName != "local" {
+				t.Errorf("module signer name = %q, want \"local\"", m.signerName)
+			}
+		})
+	}
+}

@@ -19,6 +19,7 @@ package pki
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"gorm.io/gorm"
@@ -30,6 +31,13 @@ import (
 	"github.com/vislake/speed/go/pki/locales"
 	"github.com/vislake/speed/go/pki/migrations"
 )
+
+// signerModuleName is the module name every signer implementation component
+// carries (the "signer" in "signer.local", "signer.vault",
+// "signer.aws-kms"): the member directory the pki module's own descriptor
+// resolves its selected signer through, and the prefix with which a member
+// name maps to the module-facing signer name ("signer.local" -> "local").
+const signerModuleName = "signer"
 
 // componentConfig is pki's configuration schema in the assembly: the
 // construction-time knobs NewModule's options carry, as structured
@@ -72,6 +80,17 @@ func component() pkgcore.Component {
 			// keeps every construction-time or package value, which is why
 			// the read sites all carry documented fallbacks (settings.go).
 			{Token: (*config.Module)(nil), Optional: true},
+			// The signer member the composition selected -- the binding
+			// module's one-member selection, resolved through the
+			// component-name path: when exactly one "signer.*" component is
+			// in the selected set, that member is this module's signer and
+			// the requirement puts its construction ahead of this one. An
+			// optional requirement with no selected member is satisfied by
+			// nothing, and the module keeps its own LocalSigner default;
+			// two selected members fail the plan as an ambiguous provider
+			// before construction, the binding contract enforced by
+			// selection rather than by luck of ordering.
+			{Token: (*Signer)(nil), Optional: true},
 		},
 		// The construction deliveries are the *Module plus the *Service
 		// baked into it -- the signing-key lifecycle authn's own
@@ -109,6 +128,25 @@ func component() pkgcore.Component {
 			}
 			if c.CacheTTL != nil {
 				opts = append(opts, WithCacheTTL(*c.CacheTTL))
+			}
+			// The signer member selected alongside this module is the
+			// module's signer: the composition's component-name selection
+			// decides which implementation signs, and the member's name --
+			// this family's "signer." prefix stripped -- is the signer name
+			// every key row records, so "signer.local" reads "local" (the
+			// name LocalSigner's rows have always carried) while a provider
+			// member keeps its own identity ("vault", "aws-kms",
+			// "vault-direct"). The Requires declaration above orders the
+			// member's construction ahead of this one, so its product is
+			// already in the by-type context here. A composition that
+			// selects no signer member keeps the module's own LocalSigner
+			// default over the shared connection, constructed below.
+			if members := pkgcore.MemberNames(reg, signerModuleName); len(members) == 1 {
+				signer, err := pkgcore.Get[Signer](reg)
+				if err != nil {
+					return nil, err
+				}
+				opts = append(opts, WithSigner(strings.TrimPrefix(members[0], signerModuleName+"."), signer))
 			}
 			// The queue is optional: absent, the module runs without
 			// automatic rotation, and register claims neither task
@@ -182,7 +220,7 @@ func component() pkgcore.Component {
 // that registration goes.
 var signerLocalComponent = pkgcore.Component{
 	Name:         "signer.local",
-	Module:       "signer",
+	Module:       signerModuleName,
 	Provides:     []any{(*Signer)(nil)},
 	Capabilities: 0,
 	ConfigSchema: nil, // the shared connection replaces the registry entry's dialect/dsn pair
