@@ -28,8 +28,9 @@ app 是 speed 的**应用装配层**:每个应用自己的启动代码所基于�
   **Prepare → Construct → Verify → Init → Start**。
 - **`app.Shutdown`** 执行两相关停:逆序的非阻塞 **Stop** 通知,然后
   是逆序的 **Close**,释放资源并聚合错误。
-- **`app.RunAssembly`** 是给自身没有 HTTP 面的宿主的糖:建注册表、
-  驱动、等 context(SIGINT/SIGTERM 叠加)然后关停。
+- **`app.RunAssembly`** 是进程的 Run 糖:建注册表、驱动、调用宿主的
+  serve 步骤(可选 `ServeFunc`,拿到信号叠加后的 context 与活注册表;
+  nil 则由引擎自己等 context),然后两相关停。
 
 引擎**不含 HTTP 组装、不监听端口**——路由由宿主自己的应用组件组
 装,listener 由它自持。宿主中立的 HTTP 帮手住在引擎旁边,供宿主组
@@ -48,9 +49,10 @@ pre-auth 端点、覆盖 GET 与 HEAD 的 tenancy 选项)。
 每个基于 speed 的宿主都 import 它——无论还组装什么,宿主的
 `cmd/server` 就建在这个模块上。两个强制消费者是参考应用
 (`examples/reference-app`,完整组装)与 `saasctl new` 物化出的项目
-骨架(最小选集)。用哪个入口是你的决定:自己的组件持有 listener 时
-用 `app.Assemble` + `app.Shutdown`,进程自身没有 HTTP 面时用
-`app.RunAssembly`。
+骨架(最小选集)。用哪个入口是你的决定:主动驱动注册表、由调用方
+自己服务 handler 时用 `app.Assemble` + `app.Shutdown`;进程有自己
+的生命周期时用 `app.RunAssembly`,serve 步骤经 `ServeFunc` 交回引擎
+调用。
 
 ## 包布局与依赖成本
 
@@ -103,8 +105,9 @@ return app.Shutdown(context.WithoutCancel(ctx), reg)
 调用方的可选代码覆盖层——正是 `RunAssembly` 的拼法:
 
 ```go
-// 自身没有 HTTP 面的宿主:信号处理与关停归引擎;传你的基础 context。
-return app.RunAssembly(ctx, spec, extraComponents...)
+// 有 serve 步骤的宿主:引擎叠加信号、调用你的 serve 步骤并两相关停;
+// serve 拿到信号叠加后的 context 与活注册表。
+return app.RunAssembly(ctx, spec, serve, extraComponents...)
 ```
 
 配置选项是 `app.Config*` 构造器(`ConfigFile`、`ConfigArgs`、

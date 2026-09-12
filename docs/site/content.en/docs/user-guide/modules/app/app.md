@@ -34,9 +34,11 @@ infrastructure implementations and the host's own pieces, each a
 - **`app.Shutdown`** performs the two-phase close: the non-blocking
   **Stop** notification in reverse order, then the reverse-order
   **Close** that releases resources and aggregates errors.
-- **`app.RunAssembly`** is the sugar for a host with no HTTP face of
-  its own: it builds the registry, drives it, waits for the context
-  (SIGINT/SIGTERM overlaid) and shuts down.
+- **`app.RunAssembly`** is the sugar for a process: it builds the
+  registry, drives it, calls the host's serve step (the optional
+  `ServeFunc`, handed the signal-overlaid context and the live registry;
+  nil waits the context out itself) and shuts down in the two phases of
+  `app.Shutdown`.
 
 The engine contains **no HTTP assembly and no listening** — a host's
 own application component composes the routes and owns the listener.
@@ -61,8 +63,9 @@ consumers are the reference app
 (`examples/reference-app` — the full composition) and the project
 skeleton `saasctl new` materializes (the minimal selections). Which
 entry point you use is your call: `app.Assemble` + `app.Shutdown` when
-your own component owns a listener, `app.RunAssembly` when the process
-has no HTTP face of its own.
+you drive the registry yourself and serve the handler on your own
+terms, `app.RunAssembly` when the process has a lifecycle of its own —
+your serve step reaches the engine as a `ServeFunc` either way.
 
 ## Package layout and dependency cost
 
@@ -119,9 +122,10 @@ code-override layer for a caller that does not hold the registry —
 which is exactly the `RunAssembly` spelling:
 
 ```go
-// A host with no HTTP face of its own: signal handling and the
-// shutdown are the engine's; pass your base context.
-return app.RunAssembly(ctx, spec, extraComponents...)
+// A process with a serve step of its own: the engine overlays the
+// signals, calls your serve step (handed the overlaid context and the
+// live registry) and runs the two-phase close once it returns.
+return app.RunAssembly(ctx, spec, serve, extraComponents...)
 ```
 
 The configuration options are the `app.Config*` constructors

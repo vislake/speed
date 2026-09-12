@@ -95,6 +95,53 @@ func ExampleAssemble() {
 	// shut down cleanly
 }
 
+// ExampleRunAssembly documents the serve-callback shape: RunAssembly drives
+// the assembly, hands the live registry to the host's serve step, and runs
+// the two-beat close once that step returns. The example's one-component
+// serve step reads its product from the registry and returns right away, so
+// the run terminates without a signal; a real host's serve step holds
+// until the signalled end. Passing nil for the callback is the
+// no-serve-step shape: the engine waits the context out itself.
+func ExampleRunAssembly() {
+	type clock struct{}
+	type hostConfig struct {
+		Port string
+	}
+	host := hostConfig{Port: "8080"}
+
+	component := pkgcore.Component{
+		Name: "clock",
+		New: func(context.Context, *pkgcore.ComponentRegistry, pkgcore.ComponentConfig) (any, error) {
+			return &clock{}, nil
+		},
+	}
+
+	err := app.RunAssembly(context.Background(), app.LoadSpec{
+		Host: &host,
+		Options: []app.ConfigOption{
+			app.ConfigArgs([]string{}),
+			app.ConfigDevDefaults(map[string][]byte{}),
+		},
+		Overrides: &app.CompositionOverrides{Config: pkgcore.ComponentConfig{}.With("components",
+			pkgcore.ComponentConfig{}.With("clock", nil).With("observability", false))},
+	}, func(_ context.Context, reg *pkgcore.ComponentRegistry) error {
+		if _, err := pkgcore.Get[*clock](reg); err != nil {
+			return err
+		}
+		fmt.Println("serving the clock on port", host.Port)
+		return nil
+	}, component)
+	if err != nil {
+		fmt.Println("run:", err)
+		return
+	}
+	fmt.Println("shut down cleanly")
+
+	// Output:
+	// serving the clock on port 8080
+	// shut down cleanly
+}
+
 // ExamplePreAuthAllowlist shows the platform's pre-auth surface: the paths
 // that must work before a Principal exists pass the tenancy chain under
 // both GET and HEAD, while any other method on the same path stays

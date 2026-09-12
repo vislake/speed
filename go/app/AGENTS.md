@@ -34,9 +34,11 @@ hand-maintained in every consumer.
 - **No HTTP assembly, no listening, in the engine core.** `driver.go`,
   `loader.go` and `component_observability.go` contain neither: a host's own
   application component composes routes from the declaration seats and owns
-  the listener. The reusable helpers (`chain.Chain`, `chain.Standard`,
-  `PreAuthAllowlist`, the serve timeouts) stay in the module for hosts to
-  compose with.
+  the listener, and a host's serve step reaches the engine as a callback
+  (`RunAssembly`'s `ServeFunc`) the engine calls -- it is the host that
+  serves, never the engine. The reusable helpers (`chain.Chain`,
+  `chain.Standard`, `PreAuthAllowlist`, the serve timeouts) stay in the
+  module for hosts to compose with.
 - **Never constructs infrastructure implementations.** app drives components
   and ships HTTP helpers; which EventBus/KVStore/Mailer/ObjectStore a
   process runs stays the application assembler's decision — selected as
@@ -99,10 +101,15 @@ and walks the registry through Prepare, Construct, Verify, Init and Start;
 `Shutdown` performs the two-phase close (the non-blocking Stop notification,
 then the reverse-order Close, errors aggregated); `RunAssembly` is the sugar
 — it creates the registry from the global registration plus extras, drives,
-waits for the context (SIGINT/SIGTERM overlaid), and shuts down. Failure
-semantics are the registry's: a failed Prepare leaves nothing to roll back,
-and a failure from Construct on closes every constructed component in
-reverse order, exactly once, before the error returns.
+runs the host's serve step (the optional `ServeFunc`, handed the
+signal-overlaid context and the live registry; nil waits the context out
+itself), and shuts down. The serve callback is where a host whose process
+serves states its own serving lifetime between Start and the close; a serve
+failure does not skip the close — the two-beat shutdown runs regardless and
+the failure joins its result. Failure semantics are the registry's: a failed
+Prepare leaves nothing to roll back, and a failure from Construct on closes
+every constructed component in reverse order, exactly once, before the error
+returns.
 
 **The observability component (`component_observability.go`)** is registered
 by the engine's `init` and selected by the builtin composition defaults, so
@@ -186,8 +193,11 @@ engine-owned assembly call — `dbkit.Open`, `dbkit.NewMigrationRegistry`,
 `http.NewServeMux`, `jobs.NewStandaloneQueue`/`jobs.Wire`,
 `signal.NotifyContext`, `chain.Chain`, `obs.Init`, `pkgcore.app.Assemble`,
 `.Bootstrap(`, or the component drive's `pkgcore.NewComponentRegistry` and
-`Prepare`/`Construct`/`Verify`/`Init` — each with its one named-file
-allowance where the host's own component legitimately owns the call. A
+`Prepare`/`Construct`/`Verify`/`Init` — with the one named-file allowance,
+where one applies, for the host file that legitimately owns the call (the
+signal overlay and the jobs pair carry none: the engine's `RunAssembly`
+owns every host's signal handling, and background execution reaches a host
+through the `queue.standalone` component). A
 change to the engine, the chain, the allowlist or the serve lifecycle must
 keep both consumers working; a change that cannot be adopted by the
 skeleton's smallest selection (no authn, hence no `chain.Chain` call at
@@ -203,7 +213,9 @@ pipeline's edge and refusal paths (the flag walk's skips, the text
 spellings, the pass-through of an unregistered selection, the
 one-override rule) in `loader_composition_test.go`; the driver — its
 stage order, its rollback and its entry refusals — and the `RunAssembly`
-sugar in `driver_test.go`; the observability component's refusals and
+sugar in `driver_test.go` (the serve callback's beat between Start and the
+close, its error joined with the close's, and the nil callback's default
+wait); the observability component's refusals and
 teardown halves in `component_observability_test.go`; the pre-auth
 allowlist's method scoping in `kernel_test.go`. Fixtures live in
 `test_support_test.go` (a host configuration target, the loader options a

@@ -173,9 +173,12 @@ func TestAssemble_PrepareFailureConstructsNothing(t *testing.T) {
 	}
 }
 
-// TestRunAssembly_WaitsForCancellationAndShutsDown pins the sugar end to end:
-// a caller-cancelled context returns nil once the two-phase shutdown ran.
-func TestRunAssembly_WaitsForCancellationAndShutsDown(t *testing.T) {
+// TestRunAssembly_NilServeWaitsForCancellationAndShutsDown pins the nil-callback
+// shape end to end: with no host serve step the engine waits the context out
+// itself, and a caller-cancelled context returns nil once the two-phase
+// shutdown ran -- the behavior RunAssembly had before the serve callback
+// existed.
+func TestRunAssembly_NilServeWaitsForCancellationAndShutsDown(t *testing.T) {
 	var host testHostConfig
 	spec := driverLoadSpec(t, &host)
 	spec.Overrides = &CompositionOverrides{Config: pkgcore.ComponentConfig{}.
@@ -190,7 +193,7 @@ func TestRunAssembly_WaitsForCancellationAndShutsDown(t *testing.T) {
 		return nil
 	}
 	runErr := make(chan error, 1)
-	go func() { runErr <- RunAssembly(ctx, spec, waiter) }()
+	go func() { runErr <- RunAssembly(ctx, spec, nil, waiter) }()
 
 	// Wait for the assembly to be up, then cancel: the cancellation is the
 	// whole lifecycle here, nothing listens.
@@ -207,6 +210,101 @@ func TestRunAssembly_WaitsForCancellationAndShutsDown(t *testing.T) {
 		}
 	case <-time.After(ShutdownTimeout + 10*time.Second):
 		t.Fatal("RunAssembly did not return after its context was cancelled")
+	}
+}
+
+// TestRunAssembly_ServeCallbackRunsInTheServeBeat pins the serve callback's
+// position: it is called exactly once, after the assembly is up (every Start
+// has run) and before the close's first beat, and it is handed the live
+// registry -- the component's product is readable from the registry the
+// callback receives.
+func TestRunAssembly_ServeCallbackRunsInTheServeBeat(t *testing.T) {
+	var host testHostConfig
+	spec := driverLoadSpec(t, &host)
+	spec.Overrides = &CompositionOverrides{Config: pkgcore.ComponentConfig{}.
+		With("components", pkgcore.ComponentConfig{}.With("served", nil).With("observability", false))}
+
+	var log []string
+	served := stageRecorderComponent("served", &log)
+	serveCalls := 0
+	serve := func(_ context.Context, reg *pkgcore.ComponentRegistry) error {
+		serveCalls++
+		product, err := pkgcore.Get[*testMarker](reg)
+		if err != nil {
+			return err
+		}
+		log = append(log, "serve:"+product.name)
+		return nil
+	}
+
+	// A context that never fires: the serve step's return is what ends the
+	// serve phase, so RunAssembly must come back on that alone.
+	if err := RunAssembly(context.Background(), spec, serve, served); err != nil {
+		t.Fatalf("RunAssembly() error = %v", err)
+	}
+	want := []string{
+		"served:prepare", "served:new", "served:verify", "served:init", "served:start",
+		"serve:served",
+		"served:stop", "served:close",
+	}
+	if !slices.Equal(log, want) {
+		t.Fatalf("serve log = %v, want the callback between every Start and the first Stop: %v", log, want)
+	}
+	if serveCalls != 1 {
+		t.Fatalf("serve calls = %d, want exactly one", serveCalls)
+	}
+}
+
+// TestRunAssembly_ServeFailureStillClosesAndJoins pins the serve failure
+// semantics: a failing serve does not skip the two-beat close -- every
+// constructed component still stops and closes, exactly once -- and both
+// failures come back joined, so neither the serve error nor a close error is
+// lost on the caller's exit path.
+func TestRunAssembly_ServeFailureStillClosesAndJoins(t *testing.T) {
+	errCloseRefused := errors.New("test: the close refused")
+	errServeRefused := errors.New("test: the serve refused")
+
+	var host testHostConfig
+	spec := driverLoadSpec(t, &host)
+	spec.Overrides = &CompositionOverrides{Config: pkgcore.ComponentConfig{}.
+		With("components", pkgcore.ComponentConfig{}.With("closer", nil).With("observability", false))}
+
+	var log []string
+	closer := stageRecorderComponent("closer", &log)
+	closer.Close = func(context.Context, *pkgcore.ComponentRegistry, any) error {
+		log = append(log, "closer:close")
+		return errCloseRefused
+	}
+
+	err := RunAssembly(context.Background(), spec, func(context.Context, *pkgcore.ComponentRegistry) error {
+		return errServeRefused
+	}, closer)
+	if !errors.Is(err, errServeRefused) {
+		t.Fatalf("RunAssembly() error = %v, want it to carry the serve refusal", err)
+	}
+	if !errors.Is(err, errCloseRefused) {
+		t.Fatalf("RunAssembly() error = %v, want it to carry the close refusal the serve failure must not swallow", err)
+	}
+	if !slices.Equal(log, []string{"closer:prepare", "closer:new", "closer:verify", "closer:init", "closer:start", "closer:stop", "closer:close"}) {
+		t.Fatalf("close log = %v, want the full two-beat close after a failed serve", log)
+	}
+}
+
+// TestRunAssembly_ServeStepNeverRunsWhenTheAssemblyFails pins the pairing the
+// other way: a serve callback sits after Assemble, so a refused assembly
+// never reaches it.
+func TestRunAssembly_ServeStepNeverRunsWhenTheAssemblyFails(t *testing.T) {
+	serveCalled := false
+	err := RunAssembly(context.Background(), LoadSpec{Options: testConfigOptions(), Args: []string{}},
+		func(context.Context, *pkgcore.ComponentRegistry) error {
+			serveCalled = true
+			return nil
+		})
+	if err == nil || !strings.Contains(err.Error(), "LoadSpec.Host") {
+		t.Fatalf("RunAssembly() with no host target error = %v, want the loader's refusal", err)
+	}
+	if serveCalled {
+		t.Fatal("the serve callback ran although the assembly never came up")
 	}
 }
 
@@ -260,11 +358,11 @@ func TestAssemble_PropagatesALoadRefusal(t *testing.T) {
 // registration, and a spec the assembly refuses.
 func TestRunAssembly_PropagatesItsEntryRefusals(t *testing.T) {
 	var host testHostConfig
-	if err := RunAssembly(context.Background(), driverLoadSpec(t, &host), pkgcore.Component{Name: ""}); err == nil {
+	if err := RunAssembly(context.Background(), driverLoadSpec(t, &host), nil, pkgcore.Component{Name: ""}); err == nil {
 		t.Fatal("RunAssembly() with a nameless extra component error = nil, want the registration refusal")
 	}
 
-	err := RunAssembly(context.Background(), LoadSpec{Options: testConfigOptions(), Args: []string{}})
+	err := RunAssembly(context.Background(), LoadSpec{Options: testConfigOptions(), Args: []string{}}, nil)
 	if err == nil || !strings.Contains(err.Error(), "LoadSpec.Host") {
 		t.Fatalf("RunAssembly() with no host target error = %v, want the assembly's refusal", err)
 	}

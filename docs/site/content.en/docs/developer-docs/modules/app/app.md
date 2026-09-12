@@ -166,14 +166,17 @@ registry through Prepare, Construct, Verify, Init and Start; `Shutdown`
 performs the two-phase close (the non-blocking Stop notification, then
 the reverse-order Close, errors aggregated); `RunAssembly` is the sugar
 that creates the registry from the global registration plus extras,
-drives, waits for the context and shuts down. Failure semantics are the
-registry's: a failed Prepare leaves nothing to roll back, and a failure
-from Construct on closes every constructed component in reverse order,
-exactly once, before the error returns — so a caller never has to
-attempt a teardown of its own. One hole is accepted and documented: a
-route conflict panics at assembly time (`pkgcore.MountRoutes`'
-contract), getting the loudest available report, and no rollback runs
-on a panic.
+drives, calls the host's serve step (the optional `ServeFunc`, handed
+the signal-overlaid context and the live registry; nil waits the
+context out itself) and shuts down — and a serve failure does not skip
+the close: the two-beat shutdown runs regardless and the failure joins
+its result. Failure semantics are the registry's: a failed Prepare
+leaves nothing to roll back, and a failure from Construct on closes
+every constructed component in reverse order, exactly once, before the
+error returns — so a caller never has to attempt a teardown of its own.
+One hole is accepted and documented: a route conflict panics at
+assembly time (`pkgcore.MountRoutes`' contract), getting the loudest
+available report, and no rollback runs on a panic.
 
 ## Enforcement: one kernel, two hosts, a gate
 
@@ -187,8 +190,11 @@ assembly call (`dbkit.Open`, `dbkit.NewMigrationRegistry`,
 `http.NewServeMux`, `jobs.NewStandaloneQueue`/`jobs.Wire`,
 `signal.NotifyContext`, `chain.Chain`, `obs.Init`, `pkgcore.NewKernel`,
 `.Bootstrap(`, `pkgcore.NewComponentRegistry`, and the component
-stages), each with its one named-file allowance where a host component
-legitimately owns the call. The depguard rules cover the
+stages) — with the one named-file allowance, where one applies, for the
+host file that legitimately owns the call; the signal overlay and the
+jobs pair carry none, since the engine's `RunAssembly` owns every host's
+signal handling and background execution reaches a host through the
+`queue.standalone` component. The depguard rules cover the
 no-infrastructure-construction half for app as for every other module.
 
 The gate's design point doubles as the module's adoption test: a change
@@ -214,8 +220,8 @@ all) is a symptom that the change does not belong here.
   No consumer needs that today; the known-limitation note is the honest
   boundary.
 
-Frozen for consumers: `Assemble`, `Shutdown`, `RunAssembly`, `Load`,
-`LoadSpec`/`CompositionOverrides`, the `Config*` option constructors,
+Frozen for consumers: `Assemble`, `Shutdown`, `RunAssembly`, `ServeFunc`,
+`Load`, `LoadSpec`/`CompositionOverrides`, the `Config*` option constructors,
 the root helpers (`AuthnAPIPath`, `ReadHeaderTimeout`,
 `ShutdownTimeout`, `PreAuthAllowlist`), and the `chain`/`bridges`
 packages' entry points. The observability component participates by

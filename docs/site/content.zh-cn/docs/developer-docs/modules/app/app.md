@@ -129,12 +129,14 @@ authn 模块的选集完全不走链。用哪个入口是宿主的决定,而这�
 驱动器只做编排。`Assemble` 跑装载器并把注册表走过 Prepare、
 Construct、Verify、Init 与 Start;`Shutdown` 执行两相关停(非阻塞
 的 Stop 通知,然后逆序 Close、聚合错误);`RunAssembly` 是糖——从
-全局注册加 extra 建注册表、驱动、等 context、关停。失败语义是注
-册表的:Prepare 失败没有可回滚的东西;Construct 起的失败在返回错
-误前,把每个已构造组件按逆序关闭恰好一次——调用方绝不需要自行拆
-卸。有一个洞被接受并记录在案:路由冲突在装配期 panic
-(`pkgcore.MountRoutes` 的契约),拿到最响亮的报告,且 panic 时不
-跑回滚。
+全局注册加 extra 建注册表、驱动、调用宿主的 serve 步骤(可选
+`ServeFunc`,拿到信号叠加后的 context 与活注册表;nil 则自己等
+context)、关停;serve 失败不跳过关闭——两相关停照跑,错误并回结
+果。失败语义是注册表的:Prepare 失败没有可回滚的东西;Construct
+起的失败在返回错误前,把每个已构造组件按逆序关闭恰好一次——调用
+方绝不需要自行拆卸。有一个洞被接受并记录在案:路由冲突在装配期
+panic(`pkgcore.MountRoutes` 的契约),拿到最响亮的报告,且 panic
+时不跑回滚。
 
 ## 强制:一份内核、两个宿主、一道门
 
@@ -146,9 +148,11 @@ Construct、Verify、Init 与 Start;`Shutdown` 执行两相关停(非阻塞
 `http.NewServeMux`、`jobs.NewStandaloneQueue`/`jobs.Wire`、
 `signal.NotifyContext`、`chain.Chain`、`obs.Init`、
 `pkgcore.NewKernel`、`.Bootstrap(`、`pkgcore.NewComponentRegistry`
-与组件各阶段)——每一项各有唯一指名文件的豁免,用于宿主组件合法拥
-有该调用的地方。而 depguard 规则覆盖"不构造基础设施"的那一半,
-对 app 与对每个模块同等。
+与组件各阶段)——有一处唯一指名文件豁免的,用于宿主组件合法拥有该
+调用的地方;信号叠加与 jobs 两条没有豁免:信号处理归引擎的
+`RunAssembly`,后台执行经 `queue.standalone` 组件到达宿主。而
+depguard 规则覆盖"不构造基础设施"的那一半,对 app 与对每个模块
+同等。
 
 这道门的设计点同时就是模块的采用测试:对引擎、链、allowlist 或服
 务生命周期的任何改动,都必须让两个消费者继续工作;一个骨架最小选
@@ -167,8 +171,8 @@ Construct、Verify、Init 与 Start;`Shutdown` 执行两相关停(非阻塞
   `tenancy.Middleware`,而不是去掰配置。目前没有消费者需要那么
   做;把这条写成已知限制,就是诚实的边界。
 
-对消费者冻结的面:`Assemble`、`Shutdown`、`RunAssembly`、`Load`、
-`LoadSpec`/`CompositionOverrides`、`Config*` 选项构造器、根帮手
+对消费者冻结的面:`Assemble`、`Shutdown`、`RunAssembly`、`ServeFunc`、
+`Load`、`LoadSpec`/`CompositionOverrides`、`Config*` 选项构造器、根帮手
 (`AuthnAPIPath`、`ReadHeaderTimeout`、`ShutdownTimeout`、
 `PreAuthAllowlist`),以及 `chain`/`bridges` 两包的入口。
 observability 组件默认参与,像任何其他组件一样经 composition 块
