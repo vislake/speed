@@ -40,13 +40,14 @@ type Documented interface {
 
 ## 3. 命名空间
 
-一个组件的 `ConfigSchema` 字段解析出的 key path，默认取 `components.<组件名>.<字段名>`——这与该字段在配置文件里本来就占据的地址完全一致，只是现在同一地址也向 flag/env 开放。
+一个组件的 `ConfigSchema` 字段解析出的 flag/env key path，默认就是字段的裸本地路径（json tag 名，或没有 json tag 时的小写 Go 名），**不带任何前缀**。这与配置文件里的地址（总是嵌在 `components.<组件名>` 子树下）是两件事——命名空间只管 flag/env 的拼写，从不影响字段在配置文件里已经占据的地址。
 
 `Component` 用 `ConfigNamespace string` 字段控制这个前缀：
 
-- 留空：使用默认的 `components.<Name>.` 前缀。
-- `pkgcore.NoConfigNamespace`（`"-"`）：不加前缀，字段暴露成裸路径。
-- 其他非空字符串：整体替换默认前缀（规范化为以 `.` 结尾）。
+- 留空（零值）：不加前缀，字段暴露成裸路径。这是默认行为，多数组件不需要关心这一节。
+- 非空字符串：整体替换成该前缀（规范化为以 `.` 结尾），用于组件想让 flag/env 拼写带上自己的命名空间、避免和其他组件的裸字段名相撞的场景（例如把它设成组件自己的名字）。
+
+一个 key path 只有一种拼写：`ConfigNamespace` 不提供"留空表示默认前缀、另一个特殊值表示无前缀"这种双重路径，避免同一件事有两种声明方式。
 
 装配阶段对所有已选中组件展开出的最终 key path 做一次全集去重校验——任意两个组件（不论各自命名空间取值如何）产出同一个 key path 视为装配错误，报错点名两个来源，不允许运行期悄悄互相覆盖。
 
@@ -101,7 +102,7 @@ func Describe(target any) ([]FieldSummary, error)
 | §1 `Component.ConfigSchema` 是进程启动期配置的唯一声明位；`New` 收到五源合并后的成品 | `pkgcore/component.go`（`Component.ConfigSchema`）、`pkgcore/component_assembly.go`（`analyzeComponentSchema`/`resolveComponentConfigs`）、`pkgcore/config_resolver.go`（`ComponentConfigResolver` 接口）、`go/app/component_config.go`（引擎实现） | `pkgcore/config_schema_test.go`、`pkgcore/component_assembly_test.go`；`go/app/component_config_test.go` 的五源阶梯 |
 | §2 `config` tag 词表：`expose`/`derive`/`required`/`env=NAME`/`-`/`sensitive`/`group=NAME`（derive 隐含 expose；`-` 独占）；无 tag 字段仅配置文件 | `pkgcore/config_schema.go`（`parseSchemaTag`，装配分析与根投影共用）；子包等价读法 `pkgcore/config/describe.go`（`parseFieldTag`） | `pkgcore/config_schema_test.go` 与 `go/app/component_config_test.go` 的 `TestResolverComponentConfig_KeyPathsMatchTheRootProjection`（两投影逐字段对齐） |
 | §2 `FieldDoc`/`Documented`；sensitive 字段必须带非空 Description 说明，否则装配拒绝 | `pkgcore/config_schema.go`（`Documented`/`FieldDoc`）、`pkgcore/component_assembly.go`（`validateSensitiveDocs`，`ErrInvalidComponent`） | `pkgcore/component_assembly_test.go` |
-| §3 命名空间：默认 `components.<Name>.`、`pkgcore.NoConfigNamespace` 去前缀、自定义串规范化；最终 key path 全集去重（`ErrConfigKeyConflict`） | `pkgcore/config_schema.go`（`configKeyPrefix`）、`pkgcore/component_assembly.go`（`validateConfigKeyPaths`/`claimConfigKeyPath`）；引擎镜像于 `go/app/component_config.go`（`componentConfigPrefix`） | `pkgcore/component_assembly_test.go`；六平台键以平铺路径渲染（`go run ./cmd/server --help` 输出） |
+| §3 命名空间：默认不加前缀（裸路径）；非空 `ConfigNamespace` 整体替换为该前缀（规范化）；最终 key path 全集去重（`ErrConfigKeyConflict`） | `pkgcore/config_schema.go`（`configKeyPrefix`）、`pkgcore/component_assembly.go`（`validateConfigKeyPaths`/`claimConfigKeyPath`）；引擎镜像于 `go/app/component_config.go`（`componentConfigPrefix`） | `pkgcore/component_assembly_test.go`；六平台键以平铺路径渲染（`go run ./cmd/server --help` 输出） |
 | §4 根包只定义零依赖接口；解析器实现与 `koanf` 工具链只在 `go/app` / `pkgcore/config` | `pkgcore/config_resolver.go`、`go/app/component_config.go`；`go/app/loader.go`（`Load` 在 Prepare 前 `reg.Put`，宿主自带解析器时尊重既有者） | `go/app/component_config_test.go` 的 `TestLoad_PublishesTheComponentConfigResolver`、`TestResolverComponentConfig_NoDeclarationsKeepTheBlock` |
 | §4 `pkgcore/config.Describe` 只读投影，`"-"` 字段以 `Skip` 保留、json `"-"` 字段不列 | `pkgcore/config/describe.go` | `pkgcore/config/describe_test.go` |
 | §4 根包 `DescribeComponentSchema` 自携分析器（不 import 子包），与 `Describe` 同口径 | `pkgcore/config_schema.go`（`DescribeComponentSchema`/`analyzeConfigSchema`） | 对齐测试（上）+ `pkgcore/config_schema_example_test.go` |
