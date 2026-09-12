@@ -781,8 +781,9 @@ type hostFace struct {
 	// handler is the composed face: the protected-face composition
 	// (composeFace) over the mux carrying the platform liveness routes.
 	handler http.Handler
-	// server is the http.Server Start builds and serves. It carries the
-	// observability middleware as its handler, the serve timeouts and the
+	// server is the http.Server Start builds and serves. Its handler is the
+	// composed face (which already carries the observability middleware the
+	// chain's Middleware seat applies), plus the serve timeouts and the
 	// request base context.
 	server *http.Server
 	// listener is the bound listener Start serves on.
@@ -806,15 +807,17 @@ type hostFace struct {
 }
 
 // start builds the http.Server over the composed handler and serves it on
-// the face's listen address, in a goroutine: the observability middleware is
-// applied here, at serve time, exactly where the engine's serve loop applies
-// it (the outermost layer a served request reaches), the server's request
+// the face's listen address, in a goroutine: the server's handler is the
+// composed face itself, because the observability middleware already rides
+// inside it -- declared on the chain's Middleware seat by the observability
+// component and applied by chain.Standard around the fixed chain, so the
+// face's outer layer needs no serve-time wrapping. The server's request
 // base context is the face's own, and Start records the listener's real
 // address so a caller can reach a port the operating system picked.
 func (f *hostFace) start(ctx context.Context) error {
 	server := &http.Server{
 		Addr:              f.addr,
-		Handler:           obs.Middleware(f.handler),
+		Handler:           f.handler,
 		ReadHeaderTimeout: speedapp.ReadHeaderTimeout,
 		BaseContext:       func(net.Listener) context.Context { return f.baseCtx },
 	}
@@ -951,8 +954,8 @@ func appComponent(b *serverBuild, baseCtx context.Context) pkgcore.Component {
 // the mounted-route seed for the observability middleware's route-label
 // budget (healthz and metrics, which no module registers, plus every route
 // the assembly mounted -- the last write before that middleware is
-// constructed, which Start does), then the protected face composeFace builds
-// over it.
+// constructed, which composeFace's Standard call does, the very next step),
+// then the protected face composeFace builds over it.
 func (b *serverBuild) composeHostFace(reg *pkgcore.ComponentRegistry, face *hostFace) error {
 	mux := http.NewServeMux()
 	obs.MountLiveness(mux)

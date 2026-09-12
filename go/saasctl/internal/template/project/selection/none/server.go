@@ -606,10 +606,11 @@ type hostFace struct {
 
 // start builds the http.Server over the composed handler and serves it on
 // the face's listen address, in a goroutine: the observability middleware is
-// applied here, at serve time, exactly where the engine's serve loop applies
-// it (the outermost layer a served request reaches), the server's request
-// base context is the face's own, and Start records the listener's real
-// address so a caller can reach a port the operating system picked.
+// applied here, at serve time -- this selection composes no chain, so nothing
+// reads the registry's Middleware seat and the wrap is the host's own
+// application of that outermost layer. The server's request base context is
+// the face's own, and Start records the listener's real address so a caller
+// can reach a port the operating system picked.
 func (f *hostFace) start(ctx context.Context) error {
 	server := &http.Server{
 		Addr:              f.addr,
