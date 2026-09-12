@@ -57,9 +57,9 @@ Minimal wiring (standalone):
 
 ```go
 q := jobs.NewStandaloneQueue(db)   // db from dbkit.Open
-q.RegisterHandler(jobs.NewHandlerFunc("notes.export", exportHandler))
-q.Start(ctx)                        // before any Enqueue
-defer q.Close(ctx)
+if err := q.RegisterHandler(jobs.NewHandlerFunc("notes.export", exportHandler)); err != nil { /* handle err */ }
+if err := q.Start(ctx); err != nil { /* handle err */ } // before any Enqueue
+defer func() { _ = q.Close(ctx) }()
 ```
 
 ## The messaging surface: notification

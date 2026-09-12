@@ -47,9 +47,9 @@ Redis 支撑 `asynq.Queue`(分布式部署)。你的代码只面向 `Queue` 接�
 
 ```go
 q := jobs.NewStandaloneQueue(db)   // db 来自 dbkit.Open
-q.RegisterHandler(jobs.NewHandlerFunc("notes.export", exportHandler))
-q.Start(ctx)                        // 在任何 Enqueue 之前
-defer q.Close(ctx)
+if err := q.RegisterHandler(jobs.NewHandlerFunc("notes.export", exportHandler)); err != nil { /* handle err */ }
+if err := q.Start(ctx); err != nil { /* handle err */ } // 在任何 Enqueue 之前
+defer func() { _ = q.Close(ctx) }()
 ```
 
 ## 消息面:notification
