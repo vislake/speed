@@ -187,10 +187,12 @@ export type RequestFn = <T>(
 /** Everything createClient needs. */
 export interface ClientOptions {
   /**
-   * Scheme + host + optional prefix, e.g. 'https://api.example.com' or
-   * '/api/v1' for the same-origin dev host. Trailing slashes are
-   * stripped; request paths must start with '/' and are appended
-   * verbatim.
+   * Scheme + host + optional prefix, e.g. 'https://api.example.com'.
+   * Request paths must start with '/' and are appended verbatim, so a
+   * prefix composes with paths that do not carry one; the generated
+   * SDK's operation paths already carry their own '/api/v1', which is
+   * why a host wiring them passes the origin alone --
+   * window.location.origin, say. Trailing slashes are stripped.
    */
   baseUrl: string
   /**
