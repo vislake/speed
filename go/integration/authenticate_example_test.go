@@ -27,7 +27,7 @@ import (
 	"github.com/vislake/speed/go/integration"
 )
 
-// ExampleModule_WithAuthenticationGuard demonstrates the pre-auth rate-limit
+// ExampleWithAuthenticationGuard demonstrates the pre-auth rate-limit
 // gate: WithAuthenticationGuard wires an HTTPGuard that AuthMiddleware
 // applies BEFORE it authenticates anything, so a request bearing a forged
 // X-API-Key -- which would otherwise reach Service.Authenticate's lookups

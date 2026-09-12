@@ -177,7 +177,7 @@ func ExampleSendRecordRepository_ListByFilter() {
 	// channel=sms status=failed error=transport failed
 }
 
-// ExampleNotificationPreferences walks the preference matrix the way a host
+// ExamplePreferenceService walks the preference matrix the way a host
 // assembles it: the business module declares its notification types on the
 // host registry, the notification module's Register attaches that registrar
 // to its preference service, and a recipient's stored choice then wins over
