@@ -349,30 +349,28 @@ class ComponentAssemblyRules(unittest.TestCase):
 
 class AllowedFileRules(unittest.TestCase):
     """The one-file allowances the two hosts' assembly relies on: each
-    host's assembly core creates the registry, owns the process's signal
-    handling and composes its own HTTP face, and the reference app's
-    database component opens the connection with its write-capture scope.
-    Each stays silent in its own file and fires from any other."""
+    host's assembly core builds its own component set off a fresh registry
+    (the descriptor-read seed) and composes its own HTTP face, and the
+    reference app's database component opens the connection with its
+    write-capture scope. Each stays silent in its own file and fires from
+    any other -- while the signal overlay, which the engine's RunAssembly
+    owns for every host, carries no allowance at all."""
 
     ALLOWED_BODIES = {
         "examples/reference-app/internal/app/server.go": (
             "package app\n\n"
             "func assemble(ctx *Context) {\n"
             "\treg := pkgcore.NewComponentRegistry()\n"
-            "\tctx, stop := signal.NotifyContext(ctx, syscall.SIGINT)\n"
             "\t_ = reg\n"
-            "\t_ = stop\n"
             "}\n"
         ),
         "go/saasctl/internal/template/project/selection/authn/server.go": (
             "package main\n\n"
             "func assemble(ctx *Context) {\n"
             "\treg := pkgcore.NewComponentRegistry()\n"
-            "\tctx, stop := signal.NotifyContext(ctx, syscall.SIGINT)\n"
             "\tmux := http.NewServeMux()\n"
             "\tsrv := &http.Server{BaseContext: baseContext}\n"
             "\t_ = reg\n"
-            "\t_ = stop\n"
             "\t_ = mux\n"
             "\t_ = srv\n"
             "}\n"
@@ -393,6 +391,34 @@ class AllowedFileRules(unittest.TestCase):
             }
         )
         self.assertEqual(m.scan(root), [])
+
+    def test_the_engine_owned_signal_overlay_fires_everywhere(self):
+        # The engine's RunAssembly owns every host's signal overlay, so
+        # signal.NotifyContext carries no allowance: the host assembly
+        # cores themselves -- the files whose other sanctioned shapes stay
+        # silent -- fire like any other host file.
+        root = make_tree(
+            {
+                "examples/reference-app/internal/app/server.go": (
+                    "package app\n\n"
+                    "func assemble(ctx *Context) {\n"
+                    "\tctx, stop := signal.NotifyContext(ctx, syscall.SIGINT)\n"
+                    "\t_ = stop\n"
+                    "}\n"
+                ),
+                "go/saasctl/internal/template/project/selection/authn/server.go": (
+                    "package main\n\n"
+                    "func assemble(ctx *Context) {\n"
+                    "\tctx, stop := signal.NotifyContext(ctx, syscall.SIGINT)\n"
+                    "\t_ = stop\n"
+                    "}\n"
+                ),
+            }
+        )
+        findings = m.scan(root)
+        self.assertEqual(
+            sum("signal.NotifyContext" in f for f in findings), 2, findings
+        )
 
     def test_the_same_calls_fire_from_another_composition_file(self):
         root = make_tree(

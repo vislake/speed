@@ -79,10 +79,10 @@ APP_TREE = "examples/reference-app"
 
 # The five selection server.go templates `saasctl new` materializes into a
 # generated project's cmd/server/server.go: each selection's own assembly
-# file, which registers the host's own components, drives the assembly
-# through the engine's Assemble, owns the process's signal handling and
-# composes the host's HTTP face. Each is named in the allowances below for
-# exactly the host-owned shapes it carries.
+# file, which builds the host's own components and hands them, with the
+# host's serve step, to the engine's RunAssembly, and composes the host's
+# HTTP face. Each is named in the allowances below for exactly the
+# host-owned shapes it carries.
 TEMPLATE_SELECTION_SERVERS = tuple(
     "go/saasctl/internal/template/project/selection/%s/server.go" % key
     for key in ("authn+org+rbac", "authn+rbac", "authn+org", "authn", "none")
@@ -182,11 +182,10 @@ HOST_COMPOSITION_PATHS = (
 #         scope (dbkit.Options.AuditBus/AuditModels) is a construction
 #         parameter of the connection, so the host's database component
 #         owns the call. Any other host file still fires.
-#       - signal.NotifyContext in the reference app's assembly core
-#         (examples/reference-app/internal/app/server.go) and in each
-#         selection server.go template (TEMPLATE_SELECTION_SERVERS): the
-#         signal handling of the host's own serve belongs to the host whose
-#         listener the process owns. Any other host file still fires.
+#       - signal.NotifyContext: the engine's RunAssembly owns every host's
+#         signal overlay (SIGINT/SIGTERM are overlaid there, and a host's
+#         serve step receives the overlaid context), so no host file issues
+#         the call and the entry carries no allowance.
 #       - http.NewServeMux in the reference app's application component
 #         (examples/reference-app/internal/app/component.go) and in each
 #         selection server.go template (TEMPLATE_SELECTION_SERVERS): the mux
@@ -197,10 +196,10 @@ HOST_COMPOSITION_PATHS = (
 #       - pkgcore.NewComponentRegistry: the reference app's assembly core
 #         (examples/reference-app/internal/app/server.go) and each selection
 #         server.go template (TEMPLATE_SELECTION_SERVERS) are the allowed
-#         callers -- those files are where a host registers its own
-#         components and drives the assembly through the engine's Assemble,
-#         the shape this ban exists to force. Any other host file still
-#         fires.
+#         callers -- those files are where a host builds its own component
+#         set, reading the module descriptors off a fresh registration-seeded
+#         instance while the set itself is assembled on the registry the
+#         engine's RunAssembly owns. Any other host file still fires.
 HOST_COMPOSITION_CALL_BANS = (
     ("pkgcore.NewKernel", r"(?<![A-Za-z0-9_.])pkgcore\.NewKernel\(", "tree", ()),
     (".Bootstrap(", r"\.Bootstrap\(", "tree", ()),
@@ -245,7 +244,7 @@ HOST_COMPOSITION_CALL_BANS = (
         "signal.NotifyContext",
         r"(?<![A-Za-z0-9_.])signal\.NotifyContext\(",
         "tree",
-        ("examples/reference-app/internal/app/server.go",) + TEMPLATE_SELECTION_SERVERS,
+        (),
     ),
     ("chain.Chain", r"(?<![A-Za-z0-9_.])[A-Za-z0-9_]*chain\.Chain\(", "tree", ()),
     ("obs.Init", r"(?<![A-Za-z0-9_.])obs\.Init\(", "tree", ()),

@@ -34,9 +34,9 @@ const healthcheckTimeout = 3 * time.Second
 
 // main is deliberately thin process-lifecycle glue. The serve-and-drain
 // sequence, signal handling and observability init all live in the
-// application engine now (internal/app.Run over go/app's Run), so what
-// remains here is the logger the process attaches at startup and the two
-// seams its own tests cover directly: the healthcheck branch below and
+// application engine now (internal/app.Run over go/app's RunAssembly), so
+// what remains here is the logger the process attaches at startup and the
+// two seams its own tests cover directly: the healthcheck branch below and
 // runHealthcheck. This file's own end-to-end behavior is additionally proven
 // by literally running it and curling it (see this example's README.md).
 func main() {

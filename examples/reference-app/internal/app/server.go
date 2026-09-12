@@ -13,9 +13,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"os/signal"
 	"sync"
-	"syscall"
 	"time"
 
 	"gorm.io/gorm"
@@ -600,40 +598,46 @@ func BuildServer(ctx context.Context, cfg ServerConfig) (http.Handler, func() er
 	return face.Handler(), func() error { return speedapp.Shutdown(context.Background(), reg) }, complianceModule, nil
 }
 
-// Run assembles the reference app with BuildServer's composition and serves
-// it until the process is signalled: the app component's Start binds the
-// listener, the signal-derived context is what the serve waits on, and the
-// two-phase shutdown (the Stop notification, then the drain and release)
-// runs once the context is done.
+// Run assembles the reference app with BuildServer's composition and runs it
+// under the engine's lifecycle: RunAssembly overlays the signals on ctx,
+// drives the assembly (the app component's Start binds the listener), calls
+// this host's serve step (serveHost) and runs the two-phase shutdown (the
+// Stop notification, then the drain and release) once the step returns.
 func Run(ctx context.Context, cfg ServerConfig) error {
-	ctx, stop := signal.NotifyContext(ctx, syscall.SIGINT, syscall.SIGTERM)
-	defer stop()
-
 	b := newServerBuild(cfg)
-	reg, err := b.assemble(ctx, true)
+	components, spec, err := b.assemblyInputs(ctx, true)
 	if err != nil {
 		return err
 	}
-	<-ctx.Done()
-	if err := speedapp.Shutdown(context.WithoutCancel(ctx), reg); err != nil {
+	if err := speedapp.RunAssembly(ctx, spec, serveHost, components...); err != nil {
 		return err
 	}
 	obs.FromContext(ctx).Info("server stopped cleanly")
 	return nil
 }
 
-// assemble builds the host's component set over a fresh registry and drives
-// the whole assembly: the host's own components (the step components, the
-// override components and the provider components) register first, the
-// loader resolves the configuration and the composition, and the registry
-// walks Prepare through Start. live tells the drive whether this assembly
-// owns the listener -- true for Run, whose app component binds it, false for
-// BuildServer, whose caller serves the returned handler.
-func (b *serverBuild) assemble(ctx context.Context, live bool) (*pkgcore.ComponentRegistry, error) {
-	// The write-capture scope and the composed face both read runtime state
-	// the host keeps across components: the tenant reverse index and the
-	// sign-in membership store are resolved here, before any component
-	// callback runs.
+// serveHost is this host's serve step, run by the engine between Start and
+// the two-beat close: the application component's Start already owns the
+// listener, so the step is the process's own serving lifetime -- it holds
+// until the lifecycle context ends (the engine's signal overlay is what ends
+// it) and returns, and the engine then drains through Stop and Close.
+func serveHost(ctx context.Context, _ *pkgcore.ComponentRegistry) error {
+	<-ctx.Done()
+	return nil
+}
+
+// assemblyInputs prepares the build state and builds the two inputs both
+// drives share: the host's component set and the assembly's load spec. The
+// write-capture scope and the composed face both read runtime state the host
+// keeps across components -- the tenant reverse index and the sign-in
+// membership store are resolved here, before any component callback runs --
+// and the component set is built against a fresh registry seeded with the
+// global registration: the host's own override copies read the module
+// descriptors from that seed, while the caller assembles the built set on
+// the registry it owns. live tells the caller's composition whether this
+// assembly owns the listener -- true for Run, whose app component binds it,
+// false for BuildServer, whose caller serves the returned handler.
+func (b *serverBuild) assemblyInputs(ctx context.Context, live bool) ([]pkgcore.Component, speedapp.LoadSpec, error) {
 	b.hostByTenant = make(map[pkgcore.TenantID]string, len(b.cfg.HostTenants))
 	for host, tenant := range b.cfg.HostTenants {
 		b.hostByTenant[tenant] = host
@@ -643,21 +647,36 @@ func (b *serverBuild) assemble(ctx context.Context, live bool) (*pkgcore.Compone
 		b.memberships = NewSignInMemberships()
 	}
 
-	reg := pkgcore.NewComponentRegistry()
-	components, err := b.hostComponents(ctx, reg, live)
+	components, err := b.hostComponents(ctx, pkgcore.NewComponentRegistry(), live)
 	if err != nil {
-		return nil, err
+		return nil, speedapp.LoadSpec{}, err
 	}
-	for _, c := range components {
-		if err := reg.Register(c); err != nil {
-			return nil, err
-		}
-	}
-
 	spec := speedapp.LoadSpec{
 		Host:      &b.hostConfig,
 		Options:   declaredKeyOptions(),
 		Overrides: &speedapp.CompositionOverrides{Config: b.composition(live)},
+	}
+	return components, spec, nil
+}
+
+// assemble builds the host's component set over the registry it will be
+// assembled on and drives the whole assembly: the host's own components (the
+// step components, the override components and the provider components)
+// register first, the loader resolves the configuration and the composition,
+// and the registry walks Prepare through Start. It is the BuildServer drive,
+// where the caller holds the registry and serves the composed handler
+// itself; Run goes through the engine's RunAssembly instead (live tells both
+// whether this assembly owns the listener).
+func (b *serverBuild) assemble(ctx context.Context, live bool) (*pkgcore.ComponentRegistry, error) {
+	components, spec, err := b.assemblyInputs(ctx, live)
+	if err != nil {
+		return nil, err
+	}
+	reg := pkgcore.NewComponentRegistry()
+	for _, c := range components {
+		if err := reg.Register(c); err != nil {
+			return nil, err
+		}
 	}
 	if err := speedapp.Assemble(ctx, reg, spec); err != nil {
 		return nil, err
