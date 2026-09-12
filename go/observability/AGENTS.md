@@ -32,6 +32,40 @@ build their instrumentation for them.
 | `Middleware` (per-request span + request-count/duration metrics) + `AnnotateTenant` + `RegisterMountedRoutes` (the host route-table registration that seeds `Middleware`'s route limiter with its mount prefixes) | `middleware.go` |
 | The OTLP/gRPC trace and metric exporters (`otlptracegrpc`, `otlpmetricgrpc`), registered via `init()` | `exporter/otlp/otlp.go` |
 | The local, pull-based Prometheus metrics reader and its `/metrics` handler (`github.com/prometheus/client_golang`, `go.opentelemetry.io/otel/exporters/prometheus`), registered via `init()` | `exporter/prometheus/prometheus.go` |
+| The module's assembly component (init self-registration, the `service_name`/`otlp_endpoint` schema, the Prepare/New/Close lifecycle) | `component.go` |
+
+## Component declaration (`component.go`)
+
+The module declares its own assembly component, the shape every module
+follows: `observabilityComponent` is registered into the global component
+set by this package's `init` (`pkgcore.MustRegister`), so every binary
+importing `go/observability` carries it — `go/app`'s `kernel.go` (the
+pre-auth allowlist's `HealthzPath`/`MetricsPath`) among the importers,
+which is how an engine-assembled host gets the component without any
+package declaring it on the host's behalf. The engine loader's builtin
+composition selects it by name `"observability"`, so it participates in
+every assembly unless a higher layer deselects it.
+
+The descriptor's schema (`observabilityConfig`) is exactly the two knobs
+`Init`'s options take — `service_name` and `otlp_endpoint` — resolved
+through the assembly's five-source chain like any component's block. Its
+`Prepare` reads its own resolved block through `pkgcore.OwnComponentConfig`
+(so a host that registered a renamed copy gets the copy's block, never a
+stale literal lookup), calls `Init` with whichever option halves the block
+set, and publishes the returned shutdown function as the runtime value its
+`New` hands to the instance; `Close` shuts the providers down and flushes
+on a `context.WithoutCancel` copy, so a cancelled drain context cannot cut
+the final export short. The descriptor declares `MultiReplicaSafe` — each
+replica exports its own spans and metrics — and carries no dependencies and
+no assets.
+
+Its suite is `component_test.go` (internal `observability` package, the
+same white-box placement as `factory_vars_test.go`): the init
+self-registration, the descriptor contract (`componenttest.AssertWellFormed`),
+the whole lifecycle through the registry's own stages, the strict decode
+refusal, the no-registered-exporter wiring refusal, the renamed-copy
+overlay pin, and the `New`/`Close` refusals. What a successful `Init`
+installs stays pinned by the external suite (`init_test.go`).
 
 ## Public API
 

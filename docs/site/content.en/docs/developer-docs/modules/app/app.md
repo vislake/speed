@@ -35,8 +35,8 @@ Three prohibitions sharpen the boundary:
   composition layer — the standalone deployment default and the
   default-participating observability component — and both are
   overridable from any higher source.
-- **No HTTP assembly, no listening, in the engine core.** `driver.go`,
-  `loader.go` and `component_observability.go` contain neither; a
+- **No HTTP assembly, no listening, in the engine core.** `driver.go` and
+  `loader.go` contain neither; a
   host's own application component composes routes from the declaration
   seats and owns the listener.
 - **Never constructs infrastructure implementations.** Which

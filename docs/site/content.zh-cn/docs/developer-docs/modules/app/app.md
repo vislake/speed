@@ -28,8 +28,8 @@ description: "go/app 的设计——唯一没有业务域的模块为何存在�
   主没供给的值保持未设。唯一有记录在案的例外是内置 composition
   层——standalone 部署默认与默认参与的 observability 组件——两者都
   可被更高来源取消。
-- **引擎核心里没有 HTTP 组装、没有监听。** `driver.go`、`loader.go`
-  与 `component_observability.go` 两者皆无;路由由宿主自己的应用组
+- **引擎核心里没有 HTTP 组装、没有监听。** `driver.go` 与
+  `loader.go` 两者皆无;路由由宿主自己的应用组
   件从声明座席组装,listener 由它自持。
 - **绝不构造基础设施实现。** 一个进程跑哪个
   EventBus/KVStore/Mailer/ObjectStore 是组装应用的决定,二进制带哪

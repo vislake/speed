@@ -31,8 +31,8 @@ hand-maintained in every consumer.
   unset. The one documented exception is the builtin composition layer: the
   standalone deployment default and the default-participating observability
   component, both overridable from any higher source.
-- **No HTTP assembly, no listening, in the engine core.** `driver.go`,
-  `loader.go` and `component_observability.go` contain neither: a host's own
+- **No HTTP assembly, no listening, in the engine core.** `driver.go` and
+  `loader.go` contain neither: a host's own
   application component composes routes from the declaration seats and owns
   the listener, and a host's serve step reaches the engine as a callback
   (`RunAssembly`'s `ServeFunc`) the engine calls -- it is the host that
@@ -55,8 +55,12 @@ hand-maintained in every consumer.
 
 ## The engine (go/app, root package)
 
-The engine is three pieces: the loader, the driver and the observability
-component.
+The engine is two pieces: the loader and the driver, beside the root's
+config/kernel utilities (`config.go`'s options, `kernel.go`'s constants and
+`PreAuthAllowlist`, the help rendering). The observability component the
+loader's builtin composition selects is not one of them: it is declared by
+go/observability itself (`component.go`), whose init self-registers it, and
+go/app reaches that package through kernel.go's import like any consumer.
 
 **The loader (`loader.go`, `loader_composition.go`)** is the bootstrap root.
 It runs before the first stage, because what it resolves is what the
@@ -156,18 +160,21 @@ Prepare leaves nothing to roll back, and a failure from Construct on closes
 every constructed component in reverse order, exactly once, before the error
 returns.
 
-**The observability component (`component_observability.go`)** is registered
-by the engine's `init` and selected by the builtin composition defaults, so
-it participates unless a higher layer deselects it. Its `Prepare` (first
-among the components' Prepare callbacks) initializes OTel from its resolved
-`service_name` / `otlp_endpoint` block; its `Close` shuts the providers down
-and flushes. The engine never initializes observability itself.
+**The observability component (`go/observability/component.go`)** is
+declared and self-registered by go/observability's own init -- go/app's
+kernel.go import is what makes every engine-carrying binary reach that
+registration -- and the builtin composition defaults select it by name, so
+it participates unless a higher layer deselects it. Its `Prepare`
+initializes OTel from its resolved `service_name` / `otlp_endpoint` block;
+its `Close` shuts the providers down and flushes. The engine never
+initializes observability itself, and it declares nothing about the
+component beyond the builtin selection.
 
 ## Package layout — dependency cost is why it is split
 
 | Package | Concern | Dependency closure |
 |---|---|---|
-| `go/app` (root) | the engine: the loader, the driver and the `RunAssembly` sugar, the observability component, and the HTTP helpers the engine and hand-composing hosts share (`AuthnAPIPath`, `ReadHeaderTimeout`/`ShutdownTimeout`, `PreAuthAllowlist`) | pkgcore (+ its config subpackage), config, observability, tenancy — and, through config, dbkit and its GORM. Every composition carries the root |
+| `go/app` (root) | the engine: the loader, the driver and the `RunAssembly` sugar, and the HTTP helpers the engine and hand-composing hosts share (`AuthnAPIPath`, `ReadHeaderTimeout`/`ShutdownTimeout`, `PreAuthAllowlist`) | pkgcore (+ its config subpackage), config, observability, tenancy — and, through config, dbkit and its GORM. Every composition carries the root |
 | `go/app/chain` | the fixed middleware chain: `chain.Standard` (the registry-derived derivation, over either registry shape's `RouteSource`: guard the mounted routes through the host's rbac rule table, split the authn and admin subtrees, mount the rest, delegate to `Chain`), `chain.Config`/`chain.Chain` (the direct path for a custom layout) — the order (authn outermost, then the optional impersonation decorator, then tenancy with the pre-auth allowlist), the authn/admin branches dispatched around it, validation (`chain.go`, `standard.go`) | root + authn + rbac + tenancy + pkgcore — bounded by the chain's own participants (the rule table is rbac's, the impersonation decorator stays a `func(http.Handler) http.Handler` the host builds, and no admin import is needed: the admin prefix arrives as `admin.APIPath` through an option) |
 | `go/app/bridges` | the no-import bridges: `Entitlements`, `UsageRecorder`, `OrgFeatureGate`, `AuthnFeatureGate`, `ShareExpiryReader` (`bridges.go`, `sharing.go`) | ai-gateway, billing, metering, org, sharing, authn, config — paid only by hosts that wire those modules |
 
@@ -268,14 +275,17 @@ the write failure — in `config_help_test.go`; the driver — its
 stage order, its rollback and its entry refusals — and the `RunAssembly`
 sugar in `driver_test.go` (the serve callback's beat between Start and the
 close, its error joined with the close's, and the nil callback's default
-wait); the observability component's refusals and
-teardown halves in `component_observability_test.go`; the pre-auth
+wait); the observability component's participation through the engine -- its
+self-registration reaching the seeded registry and its Prepare/New/Close
+running inside the stage drive with the builtin selection -- in
+`loader_test.go`; the pre-auth
 allowlist's method scoping in `kernel_test.go`. Fixtures live in
 `test_support_test.go` (a host configuration target, the loader options a
 bare test boot runs with and the marker product, so no business module
 enters the test binary). Each package's `example_test.go` compiles and
 runs the documented usage. Behavior owned by another module is not
-re-pinned here (the route-label seed's mechanism lives with
+re-pinned here (the route-label seed's mechanism and the observability
+component's lifecycle and refusals live with
 `go/observability`, the enrollment of the `Entitlements` closure body is
 exercised end-to-end by the reference app's consult flow) — this module's
 tests pin the composition it adds, not the modules it composes.
