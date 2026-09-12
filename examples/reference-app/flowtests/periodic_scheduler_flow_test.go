@@ -434,8 +434,8 @@ func errString(err error) string {
 // of a fresh window really runs through the real host wiring; the
 // periodicity of
 // later windows (and a dead-lettered window's non-poisoning) is the
-// modules' own real-queue proof (go/storage's sweep_window_test.go,
-// go/compliance's retention_sweep_window_test.go), not this e2e's.
+// modules' own real-queue proof (go/storage's cleanup_test.go,
+// go/compliance's retention_test.go), not this e2e's.
 func TestBuildServer_PeriodicScheduler_ExpirySweep_RemovesExpiredObject(t *testing.T) {
 	cfg := periodicSweepTestConfig(t)
 	jpegBytes := jpegWithExif(t)
