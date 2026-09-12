@@ -339,6 +339,14 @@
 - **登记理由**：破坏面登记（一个公共符号删除 + 默认 key path 语义翻转），按"宿主可见面变更须带 `!BREAKING` footer 或登记本清单"的纪律：本批 pkgcore 提交带 `!BREAKING` footer 并在此登记；一并登记校验面收窄（对无 `expose` 字段的冲突拒绝放宽，32 号文 §3 已同批对齐为终态）。
 - **出处**：`2f7529f5`（`fix(pkgcore)!: resolve schema fields at their bare paths by default`）+ `8db54bed`（`fix(app): mirror the bare-path default in the component config resolver`）+ `e8e66b84`（`docs(pkgcore): state the configuration contract at its bare-path default`）+ `8d38ef42`（`docs(authn,config,notification,org,pki): restate the namespace rationale`）。
 
+### （待编号）pkgcore：宿主覆盖辅助升格为导出 API（非破坏，新增面登记）
+
+- **面**：`go/pkgcore` 新增两个导出符号，把宿主接线长期自带的"复制已注册描述符并改名"机制提升为公共面：`LookupComponent(reg *ComponentRegistry, name string) (Component, bool)`（在注册结果里按名查找，返回组件与 found 标志——读的是注册而非装配计划，已注册未选中的组件同样可查）与 `Override(reg *ComponentRegistry, base, name string, construct func(ctx context.Context, reg *ComponentRegistry, cfg ComponentConfig) (any, error), extra ...Requirement) (Component, error)`（返回 base 已注册描述符的派生副本：除 Name/New/Requires 外全部字段——Module、ConfigSchema 与 ConfigNamespace、BootstrapKeys、SystemPurposes、Capabilities、Provides、Migrations、Locales、OpenAPISpec 及除 New 外的全部生命周期回调——逐字段与原描述符一致；Requires 为原列表的副本追加 extra，注册表里的原描述符不被改动；New 替换为 construct；名字由调用方决定；base 未注册返回点名 base 的错误）。`examples/reference-app` 的宿主接线删除私有 `overrideComponent`/`registeredComponent`，五处构造覆盖（authn/notification/integration/ai-gateway/org）、`capabilityComponent`、`registerOnlyComponent` 与两处测试查找全部改走新 API；覆盖组件的注册名、声明面与 Requires 列表逐字段不变（宿主既有测试逐字段钉住）。
+- **消费者影响**：无破坏、无升级动作——纯新增面；不调用即行为不变。自写同类辅助的宿主可改用这两个导出函数，选择语义一致（未注册 base 的错误文本包前缀由宿主自述变为 `pkgcore:`，点名的组件不变）。
+- **替代路径**：无（纯新增面）。
+- **登记理由**：宿主可见面新增（`go/pkgcore` 两个新导出符号），按"宿主可见面变更须带 `!BREAKING` footer 或登记本清单"的纪律登记（纯新增，不带 footer）。
+- **出处**：`86a0d7a8`（`feat(pkgcore): export the host-wiring descriptor derivation`）+ `3d09fc6c`（`style(pkgcore): group and unshadow the override test fixtures`）+ `0e1a209d`（`refactor(reference-app): derive the host overrides through the pkgcore API`）。
+
 ## 6. D 组：configrefgen 工具内部迁移（工具面，非宿主面）
 
 - **面**：`tools/configrefgen` 的内部实现从旧内核面迁到组件面（工具自身不在消费者依赖面内）。
