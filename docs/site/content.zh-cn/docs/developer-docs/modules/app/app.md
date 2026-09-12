@@ -146,7 +146,7 @@ panic(`pkgcore.MountRoutes` 的契约),拿到最响亮的报告,且 panic
 语句(服务循环、liveness 与 authn 路径字面量);以及重发引擎自有
 的装配调用(`dbkit.Open`、`dbkit.NewMigrationRegistry`、
 `http.NewServeMux`、`jobs.NewStandaloneQueue`/`jobs.Wire`、
-`signal.NotifyContext`、`chain.Chain`、`obs.Init`、`.Bootstrap(`、
+`signal.NotifyContext`、`chain.Chain`、`obs.Init`、
 `pkgcore.NewComponentRegistry`
 与组件各阶段)——有一处唯一指名文件豁免的,用于宿主组件合法拥有该
 调用的地方;信号叠加与 jobs 两条没有豁免:信号处理归引擎的
