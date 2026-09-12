@@ -14,7 +14,7 @@
  * is pinned at the two layers that can: the wire journey in the Go
  * suite (flowtests/share_journey_flow_test.go decodes the access
  * route's real bytes for both halves) and the e2e gate that opens the
- * real page in a real browser (web/e2e/core-journey.pending.spec.ts).
+ * real page in a real browser (web/e2e/core-journey.spec.ts).
  * What this suite pins is the page's own contract: two image elements,
  * one per half of the pair, each consuming its own half's access-route
  * answer directly, and every refusal the route can answer rendering

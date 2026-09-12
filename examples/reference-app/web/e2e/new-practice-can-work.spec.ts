@@ -4,7 +4,7 @@
  *
  * WHY THIS EXISTS SEPARATELY FROM THE CORE JOURNEY GATES
  *
- * Every gate in core-journey.pending.spec.ts signs in as a SEEDED demo
+ * Every gate in core-journey.spec.ts signs in as a SEEDED demo
  * account. Boot-time seeding gives the demo tenants their entitlement
  * (internal/app/demo/demo_entitlements.go) and their credits
  * (internal/app/demo/demo_credits.go);

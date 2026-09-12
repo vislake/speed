@@ -21,7 +21,7 @@
 // the patient's page -- which cannot be driven by a Go wire test alone;
 // the web host's own journeys (views/simulation-share-action.test.tsx,
 // views/share-view.test.tsx) and the e2e gate over the core journey
-// (web/e2e/core-journey.pending.spec.ts) cover the browser shape. This
+// (web/e2e/core-journey.spec.ts) cover the browser shape. This
 // file pins the wire facts those surfaces rest on, end to end over a REAL
 // simulation result: each shared resource's bytes ARE what the sharing
 // side means them to be -- the before half is the uploaded patient

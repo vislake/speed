@@ -78,7 +78,7 @@ test.describe('a practice signing itself up', { tag: '@budget' }, () => {
     // Owning the practice means being able to write in it. The notes
     // surface carries the assertion here as this app's tenant-scoped
     // write path; the case write path is the core-journey gates in
-    // core-journey.pending.spec.ts.
+    // core-journey.spec.ts.
     await openSurface(page, APP_TEXT.navNotes)
     const text = `first note in a self-registered practice ${Date.now()}`
     await page.getByRole('textbox', { name: APP_TEXT.notesTextLabel }).fill(text)
