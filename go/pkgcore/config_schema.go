@@ -11,12 +11,12 @@ import (
 
 // config_schema.go carries the declaration half of the component
 // configuration contract: the vocabulary a component's ConfigSchema struct
-// declares its fields with (the config struct tag), the namespace prefix the
-// fields resolve under (Component.ConfigNamespace), and the documentation
-// surface (Documented, FieldDoc, DescribeComponentSchema) that keeps a
-// field's operator-facing description beside the field instead of inside the
-// tag string. The resolution half -- turning a component's file block into
-// the five-source-merged value its New receives -- is the
+// declares its fields with (the config struct tag), the optional namespace
+// prefix the fields resolve under (Component.ConfigNamespace), and the
+// documentation surface (Documented, FieldDoc, DescribeComponentSchema) that
+// keeps a field's operator-facing description beside the field instead of
+// inside the tag string. The resolution half -- turning a component's file
+// block into the five-source-merged value its New receives -- is the
 // ComponentConfigResolver seam (config_resolver.go); the assembly-side
 // wiring, the required-value check and the one-key-path-per-source
 // validation live in component_assembly.go.
@@ -25,27 +25,22 @@ import (
 // One vocabulary, one address. Every tag option except "-" talks about the
 // field's one key path: the address the field already occupies in the
 // component's configuration block -- its json tag name, or its lowercased
-// Go field name when it carries no json tag -- qualified by the component's
-// namespace prefix. An option never gives a field a second spelling, so a
-// value is addressable exactly one way whether it arrives from a flag, an
-// environment variable, a config file or a derivation.
-
-// NoConfigNamespace is the ConfigNamespace value that drops the key-path
-// prefix entirely: the component's fields resolve at their bare local paths
-// ("authn.pii_cipher_key") instead of under the default "components.<Name>."
-// namespace. It serves a component whose key paths must satisfy an
-// established flat platform-key address that predates the component
-// namespace -- the address of a key material field whose path is part of its
-// derivation identity, for example.
-const NoConfigNamespace = "-"
+// Go field name when it carries no json tag -- prefixed by the component's
+// namespace when it declares one, and bare otherwise. An option never gives
+// a field a second spelling, so a value is addressable exactly one way
+// whether it arrives from a flag, an environment variable, a config file or
+// a derivation.
 
 // ErrConfigKeyConflict reports a configuration key path two sources of one
-// assembly both produce: two selected components' ConfigSchema fields, or a
-// ConfigSchema field and a BootstrapKeys declaration, spaced by the
-// namespaces their descriptors declare. The assembly refuses it at the
-// Prepare stage, naming the key path and both sources, because a single
-// address two declarations share would otherwise silently resolve one of
-// them from the other's value.
+// assembly both produce: two selected components' source-addressed
+// ConfigSchema fields (an expose/derive field each), or such a field and a
+// BootstrapKeys declaration, spaced by the namespaces their descriptors
+// declare. The assembly refuses it at the Prepare stage, naming the key path
+// and both sources, because a single address two declarations share would
+// otherwise silently resolve one of them from the other's value. A field no
+// source opens (no expose option) resolves from its own component's
+// configuration block alone, so it holds no shareable address and cannot
+// conflict.
 var ErrConfigKeyConflict = errors.New("pkgcore: conflicting configuration key path")
 
 // ErrMissingConfigValue reports a field a ConfigSchema declares with the
@@ -141,9 +136,10 @@ type FieldDescriptor struct {
 // componentName names the component whose schema is described: the
 // namespace prefix is the ConfigNamespace the component's own registration
 // declares (its effect on the rendered key paths is exactly its effect on
-// resolution), or the default "components.<componentName>." when no
-// registered component carries the name. A schema that is nil or declares
-// no fields describes as an empty list.
+// resolution), and a name no registered component carries declares none --
+// its fields describe at their bare local paths, the way an empty
+// ConfigNamespace resolves them. A schema that is nil or declares no fields
+// describes as an empty list.
 //
 // The returned descriptors are a read-only projection: they describe the
 // declaration, they never validate it into an assembly (the Prepare stage
@@ -194,30 +190,23 @@ func renderSchemaType(t reflect.Type) string {
 }
 
 // configKeyPrefix returns the namespace prefix a component's schema fields
-// resolve under: the default "components.<name>." when namespace is empty,
-// no prefix at all for NoConfigNamespace, and the namespace itself -- with a
-// trailing dot added when it lacks one -- otherwise. A namespace carrying an
+// resolve under: no prefix at all when namespace is empty -- the fields
+// resolve at their bare local paths -- and the namespace itself, with a
+// trailing dot added when it lacks one, otherwise. A namespace carrying an
 // empty segment (a leading dot, or two dots in a row) is refused: it would
 // produce unusable key paths.
 func configKeyPrefix(componentName, namespace string) (string, error) {
-	switch namespace {
-	case "":
-		if componentName == "" {
-			return "", fmt.Errorf("%w: an empty component name cannot derive the default key-path prefix", ErrInvalidComponent)
-		}
-		return "components." + componentName + ".", nil
-	case NoConfigNamespace:
+	if namespace == "" {
 		return "", nil
-	default:
-		prefix := namespace
-		if !strings.HasSuffix(prefix, ".") {
-			prefix += "."
-		}
-		if strings.HasPrefix(prefix, ".") || strings.Contains(prefix, "..") {
-			return "", fmt.Errorf("%w: component %q declares ConfigNamespace %q, whose normalized form %q carries an empty segment", ErrInvalidComponent, componentName, namespace, prefix)
-		}
-		return prefix, nil
 	}
+	prefix := namespace
+	if !strings.HasSuffix(prefix, ".") {
+		prefix += "."
+	}
+	if strings.HasPrefix(prefix, ".") || strings.Contains(prefix, "..") {
+		return "", fmt.Errorf("%w: component %q declares ConfigNamespace %q, whose normalized form %q carries an empty segment", ErrInvalidComponent, componentName, namespace, prefix)
+	}
+	return prefix, nil
 }
 
 // schemaField is one resolvable leaf of a ConfigSchema: a field some source

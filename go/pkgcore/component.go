@@ -189,14 +189,17 @@ type Component struct {
 	// ComponentConfigResolver has merged the five sources into the block.
 	ConfigSchema any
 
-	// ConfigNamespace overrides the key-path prefix the ConfigSchema fields
-	// resolve under: empty keeps the default "components.<Name>.", the
-	// NoConfigNamespace value ("-") drops the prefix entirely so fields
-	// resolve at their bare local paths, and any other non-empty string
-	// replaces the default prefix (normalized to end with a dot). The
-	// assembly refuses a selection in which two components' fields -- or a
-	// field and a BootstrapKeys declaration -- end up addressing one key
-	// path, naming both sources.
+	// ConfigNamespace prefixes the key path the ConfigSchema fields resolve
+	// under: empty (the default) resolves each field at its bare local path,
+	// and any non-empty string replaces the prefix wholesale (normalized to
+	// end with a dot), so a component can put the flag/environment spelling
+	// of its fields under a namespace of its own -- its own name, typically,
+	// when its key paths must satisfy an established flat address. The
+	// assembly refuses a selection in which two source-addressed fields --
+	// an expose/derive field of one component against another's, or one
+	// against a BootstrapKeys declaration -- end up addressing one key path,
+	// naming both sources; a field no source opens resolves from its own
+	// component's block alone and claims no key path.
 	ConfigNamespace string
 
 	// BootstrapKeys declares the process-start key material this component

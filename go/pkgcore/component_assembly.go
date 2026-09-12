@@ -449,12 +449,16 @@ func validateSensitiveDocs(c Component, fields []schemaField) error {
 }
 
 // validateConfigKeyPaths runs the one-key-path-per-source rule over the
-// selected whole: every key path the selection produces -- each component's
-// schema fields under the namespace prefix its ConfigNamespace declares,
+// selected whole: every key path a source can resolve in the selection --
+// each component's source-addressed schema fields (the expose option, which
+// derive implies) under the namespace prefix its ConfigNamespace declares,
 // plus each component's BootstrapKeys declarations -- must be unique. A key
 // path two sources produce would let one of them silently resolve the
 // other's value, so the assembly refuses it, naming the key path and both
-// sources.
+// sources. A field no source opens (no expose option) resolves from its own
+// component's configuration block alone, so it holds no shareable address
+// and claims no key path here: two components' block-only fields of one
+// name read their own blocks and never each other's value.
 func validateConfigKeyPaths(draft *assemblyDraft) error {
 	owner := make(map[string]string)
 	for _, name := range draft.order {
@@ -468,6 +472,9 @@ func validateConfigKeyPaths(draft *assemblyDraft) error {
 			return fmt.Errorf("pkgcore: component %q (stage prepare): %w", sel.name, err)
 		}
 		for _, f := range fields {
+			if !f.expose {
+				continue
+			}
 			who := fmt.Sprintf("component %q (ConfigSchema field %q)", sel.name, f.name)
 			if err := claimConfigKeyPath(owner, prefix+f.key, who); err != nil {
 				return err

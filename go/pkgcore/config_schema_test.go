@@ -232,12 +232,11 @@ func TestConfigKeyPrefix(t *testing.T) {
 		want      string
 		wantErr   bool
 	}{
-		{name: "default", component: "authn", namespace: "", want: "components.authn."},
-		{name: "no namespace", component: "authn", namespace: NoConfigNamespace, want: ""},
+		{name: "empty namespace resolves at the bare path", component: "authn", namespace: "", want: ""},
+		{name: "empty namespace with no component name", component: "", namespace: "", want: ""},
 		{name: "custom with dot", component: "authn", namespace: "platform.", want: "platform."},
 		{name: "custom without dot", component: "authn", namespace: "platform", want: "platform."},
 		{name: "custom multi-segment", component: "authn", namespace: "speed.authn", want: "speed.authn."},
-		{name: "empty name with default namespace", component: "", namespace: "", wantErr: true},
 		{name: "leading empty segment", component: "authn", namespace: ".platform", wantErr: true},
 		{name: "interior empty segment", component: "authn", namespace: "speed..authn", wantErr: true},
 	}
@@ -270,15 +269,15 @@ func TestDescribeComponentSchema(t *testing.T) {
 	}
 
 	host := descriptors[0]
-	if host.Key != "components.fixture.host" || host.Type != "string" || !host.Expose || host.Derive || host.Required || host.Sensitive {
-		t.Errorf("host descriptor = %+v, want the default-namespace exposed string", host)
+	if host.Key != "host" || host.Type != "string" || !host.Expose || host.Derive || host.Required || host.Sensitive {
+		t.Errorf("host descriptor = %+v, want the bare-path exposed string", host)
 	}
 	if host.Doc.Description != "the address the listener binds" || host.Doc.Default != "127.0.0.1" || host.Doc.Example != "0.0.0.0" {
 		t.Errorf("host doc = %+v, want the ConfigDocs entry matched case-insensitively", host.Doc)
 	}
 
 	key := descriptors[1]
-	if key.Key != "components.fixture.cipher_key" || key.Type != "[]byte" || !key.Derive || !key.Expose || !key.Sensitive {
+	if key.Key != "cipher_key" || key.Type != "[]byte" || !key.Derive || !key.Expose || !key.Sensitive {
 		t.Errorf("cipher_key descriptor = %+v, want the derive/sensitive key-material shape", key)
 	}
 	if key.Doc.Description == "" {
@@ -291,7 +290,7 @@ func TestDescribeComponentSchemaNilPointerDocs(t *testing.T) {
 	if err != nil {
 		t.Fatalf("DescribeComponentSchema = %v, want nil", err)
 	}
-	if len(descriptors) != 1 || descriptors[0].Key != "components.fixture.endpoints" {
+	if len(descriptors) != 1 || descriptors[0].Key != "endpoints" {
 		t.Fatalf("descriptors = %+v, want one endpoint field", descriptors)
 	}
 	if descriptors[0].Doc.Description != "the upstream endpoints" {
@@ -310,7 +309,6 @@ func TestDescribeComponentSchemaFollowsRegisteredNamespace(t *testing.T) {
 		t.Fatalf("Register(%q) = %v, want nil", custom.Name, err)
 	}
 	flat := plainComponent("testschema.flat", &struct{}{})
-	flat.ConfigNamespace = NoConfigNamespace
 	if err := Register(flat); err != nil {
 		t.Fatalf("Register(%q) = %v, want nil", flat.Name, err)
 	}
@@ -332,15 +330,15 @@ func TestDescribeComponentSchemaFollowsRegisteredNamespace(t *testing.T) {
 		t.Fatalf("DescribeComponentSchema = %v, want nil", err)
 	}
 	if descriptors[0].Key != "token" {
-		t.Errorf("no-namespace key = %q, want %q", descriptors[0].Key, "token")
+		t.Errorf("empty-namespace key = %q, want the bare path %q", descriptors[0].Key, "token")
 	}
 
 	descriptors, err = DescribeComponentSchema("testschema.unregistered", schema)
 	if err != nil {
 		t.Fatalf("DescribeComponentSchema = %v, want nil", err)
 	}
-	if descriptors[0].Key != "components.testschema.unregistered.token" {
-		t.Errorf("unregistered-name key = %q, want the default prefix", descriptors[0].Key)
+	if descriptors[0].Key != "token" {
+		t.Errorf("unregistered-name key = %q, want the bare path: no registration declares a namespace", descriptors[0].Key)
 	}
 }
 

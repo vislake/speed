@@ -43,11 +43,11 @@ func ExampleDescribeComponentSchema() {
 	}
 
 	// Output:
-	// components.lister.addr type=string expose=true derive=false required=false sensitive=false env="APP_LISTEN_ADDR" group="network"
+	// addr type=string expose=true derive=false required=false sensitive=false env="APP_LISTEN_ADDR" group="network"
 	//   the address the lister binds
-	// components.lister.cipher_key type=[]byte expose=true derive=true required=true sensitive=true env="" group="security"
+	// cipher_key type=[]byte expose=true derive=true required=true sensitive=true env="" group="security"
 	//   32 bytes of key material the lister seals its cache with
-	// components.lister.cache_ttl type=int expose=false derive=false required=false sensitive=false env="" group="tuning"
+	// cache_ttl type=int expose=false derive=false required=false sensitive=false env="" group="tuning"
 	//   seconds a listing stays cached
 }
 

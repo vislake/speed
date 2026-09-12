@@ -1090,16 +1090,24 @@ func TestPrepareSensitiveFieldNeedsDocs(t *testing.T) {
 	})
 }
 
-// conflictSchemas are the key-path shapes the conflict check judges.
+// conflictSchemas are the key-path shapes the conflict check judges: the
+// exposed variants hold a key path a source resolves, the plain ones are
+// supplied by their own component's configuration block alone.
 type (
+	exposedTokenSchema struct {
+		Token string `json:"token" config:"expose"`
+	}
+	exposedMaterialSchema struct {
+		Material []byte `json:"pii_cipher_key" config:"expose"`
+	}
+	exposedHostSchema struct {
+		Host string `json:"host" config:"expose"`
+	}
 	flatTokenSchema struct {
 		Token string `json:"token"`
 	}
 	flatMaterialSchema struct {
 		Material []byte `json:"pii_cipher_key"`
-	}
-	hostSchema struct {
-		Host string `json:"host"`
 	}
 	skippedTokenSchema struct {
 		Token string `json:"token" config:"-"`
@@ -1107,10 +1115,8 @@ type (
 )
 
 func TestPrepareRejectsConflictingConfigKeyPaths(t *testing.T) {
-	flatComponent := func(name string, schema any) Component {
-		c := schemaComponent(name, schema, &asmTokenA{})
-		c.ConfigNamespace = NoConfigNamespace
-		return c
+	bareComponent := func(name string, schema any) Component {
+		return schemaComponent(name, schema, &asmTokenA{})
 	}
 	prepare := func(comps ...Component) error {
 		t.Helper()
@@ -1122,10 +1128,10 @@ func TestPrepareRejectsConflictingConfigKeyPaths(t *testing.T) {
 		return err
 	}
 
-	t.Run("two flat-namespace fields at one path", func(t *testing.T) {
+	t.Run("two exposed bare fields at one path", func(t *testing.T) {
 		err := prepare(
-			flatComponent("asm.conflict.x", (*flatTokenSchema)(nil)),
-			flatComponent("asm.conflict.y", (*flatTokenSchema)(nil)),
+			bareComponent("asm.conflict.x", (*exposedTokenSchema)(nil)),
+			bareComponent("asm.conflict.y", (*exposedTokenSchema)(nil)),
 		)
 		if !errors.Is(err, ErrConfigKeyConflict) {
 			t.Fatalf("Prepare = %v, want ErrConfigKeyConflict", err)
@@ -1137,11 +1143,11 @@ func TestPrepareRejectsConflictingConfigKeyPaths(t *testing.T) {
 		}
 	})
 
-	t.Run("a schema field against a BootstrapKeys declaration", func(t *testing.T) {
+	t.Run("an exposed field against a BootstrapKeys declaration", func(t *testing.T) {
 		declaring := schemaComponent("asm.conflict.declaring", (*asmSchema)(nil), &asmTokenB{})
 		declaring.BootstrapKeys = []BootstrapKey{{Key: "pii_cipher_key"}}
 		err := prepare(
-			flatComponent("asm.conflict.flat", (*flatMaterialSchema)(nil)),
+			bareComponent("asm.conflict.flat", (*exposedMaterialSchema)(nil)),
 			declaring,
 		)
 		if !errors.Is(err, ErrConfigKeyConflict) {
@@ -1154,25 +1160,59 @@ func TestPrepareRejectsConflictingConfigKeyPaths(t *testing.T) {
 		}
 	})
 
-	t.Run("a custom namespace against another component's default", func(t *testing.T) {
-		custom := schemaComponent("asm.conflict.custom", (*hostSchema)(nil), &asmTokenA{})
-		custom.ConfigNamespace = "components.asm.conflict.other"
-		err := prepare(
-			custom,
-			schemaComponent("asm.conflict.other", (*hostSchema)(nil), &asmTokenB{}),
-		)
+	t.Run("a custom namespace against another component's namespace", func(t *testing.T) {
+		custom := schemaComponent("asm.conflict.custom", (*exposedHostSchema)(nil), &asmTokenA{})
+		custom.ConfigNamespace = "asm.conflict.other"
+		other := schemaComponent("asm.conflict.other", (*exposedHostSchema)(nil), &asmTokenB{})
+		other.ConfigNamespace = "asm.conflict.other"
+		err := prepare(custom, other)
 		if !errors.Is(err, ErrConfigKeyConflict) {
 			t.Fatalf("Prepare = %v, want ErrConfigKeyConflict", err)
 		}
-		if !strings.Contains(err.Error(), `"components.asm.conflict.other.host"`) {
+		if !strings.Contains(err.Error(), `"asm.conflict.other.host"`) {
 			t.Errorf("error %q does not name the conflicting key path", err)
 		}
 	})
 
-	t.Run("same field name under distinct default namespaces passes", func(t *testing.T) {
+	t.Run("a bare field under a namespace it cannot collide with passes", func(t *testing.T) {
+		declared := schemaComponent("asm.conflict.declared", (*exposedHostSchema)(nil), &asmTokenA{})
+		declared.ConfigNamespace = "asm.conflict.other"
 		if err := prepare(
-			schemaComponent("asm.conflict.one", (*hostSchema)(nil), &asmTokenA{}),
-			schemaComponent("asm.conflict.two", (*hostSchema)(nil), &asmTokenB{}),
+			bareComponent("asm.conflict.bare", (*exposedTokenSchema)(nil)),
+			declared,
+		); err != nil {
+			t.Fatalf("Prepare = %v, want nil", err)
+		}
+	})
+
+	t.Run("same field name under distinct namespaces passes", func(t *testing.T) {
+		one := schemaComponent("asm.conflict.one", (*exposedHostSchema)(nil), &asmTokenA{})
+		one.ConfigNamespace = "asm.conflict.one"
+		two := schemaComponent("asm.conflict.two", (*exposedHostSchema)(nil), &asmTokenB{})
+		two.ConfigNamespace = "asm.conflict.two"
+		if err := prepare(one, two); err != nil {
+			t.Fatalf("Prepare = %v, want nil", err)
+		}
+	})
+
+	t.Run("two block-only bare fields at one path coexist", func(t *testing.T) {
+		// A field no source opens resolves from its own component's block
+		// alone: the two values never share an address, so same bare names
+		// are not a conflict.
+		if err := prepare(
+			bareComponent("asm.conflict.block.x", (*flatTokenSchema)(nil)),
+			bareComponent("asm.conflict.block.y", (*flatTokenSchema)(nil)),
+		); err != nil {
+			t.Fatalf("Prepare = %v, want nil", err)
+		}
+	})
+
+	t.Run("a block-only field beside a BootstrapKeys declaration coexists", func(t *testing.T) {
+		declaring := schemaComponent("asm.conflict.declaring", (*asmSchema)(nil), &asmTokenB{})
+		declaring.BootstrapKeys = []BootstrapKey{{Key: "pii_cipher_key"}}
+		if err := prepare(
+			bareComponent("asm.conflict.block", (*flatMaterialSchema)(nil)),
+			declaring,
 		); err != nil {
 			t.Fatalf("Prepare = %v, want nil", err)
 		}
@@ -1180,8 +1220,8 @@ func TestPrepareRejectsConflictingConfigKeyPaths(t *testing.T) {
 
 	t.Run("a skipped field claims no key path", func(t *testing.T) {
 		if err := prepare(
-			flatComponent("asm.conflict.skipped", (*skippedTokenSchema)(nil)),
-			flatComponent("asm.conflict.claimed", (*flatTokenSchema)(nil)),
+			bareComponent("asm.conflict.skipped", (*skippedTokenSchema)(nil)),
+			bareComponent("asm.conflict.claimed", (*exposedTokenSchema)(nil)),
 		); err != nil {
 			t.Fatalf("Prepare = %v, want nil", err)
 		}
