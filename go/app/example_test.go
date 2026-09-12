@@ -28,7 +28,7 @@ func (exampleFailingResolver) Resolve(*http.Request) (pkgcore.TenantID, error) {
 	return "", errors.New("example: no tenant resolvable")
 }
 
-// ExampleAssemble drives one component assembly through the seven stages:
+// ExampleAssemble drives one component assembly through the eight stages:
 // the registry is populated from the global registration plus one local
 // component, the code-override layer selects what the builtin composition
 // defaults do not (and deselects the observability component this example

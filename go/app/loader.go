@@ -13,7 +13,7 @@ import (
 )
 
 // loader.go carries the engine's loader: the bootstrap root of every
-// assembly. It runs before the first stage of the seven-stage drive, because
+// assembly. It runs before the first stage of the eight-stage drive, because
 // what it resolves is what the Prepare stage plans from and what every
 // component's Prepare callback reads -- the assembly cannot even choose its
 // components until the composition configuration exists.

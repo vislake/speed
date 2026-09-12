@@ -11,7 +11,7 @@ import (
 
 // driver.go carries the engine's stage driver -- the piece of the engine
 // that only orchestrates. Assemble walks a populated ComponentRegistry
-// through the assembly's first five stages; Shutdown performs the two-phase
+// through the assembly's first six stages; Shutdown performs the two-phase
 // close; RunAssembly is the sugar that creates the registry, runs the
 // loader, calls the host's serve step (the ServeFunc) and drives both around
 // a context's lifetime.
@@ -24,7 +24,10 @@ import (
 
 // Assemble drives one assembly over reg: the loader runs first (the
 // configuration load of the Prepare stage's first beat), then the registry
-// is walked through Prepare, Construct, Verify, Init and Start in order.
+// is walked through Prepare, Construct, Verify, Init, Start and Serve in
+// order. The drive ends at Serve -- the entry points accepting external
+// requests are up, so a caller's serve step runs against the assembled
+// whole -- where the returned registry still holds the live assembly.
 //
 // A failure at any stage is returned as-is. The registry itself owns the
 // failure semantics: a failed Prepare leaves the registry exactly as it was
@@ -48,17 +51,22 @@ func Assemble(ctx context.Context, reg *pkgcore.ComponentRegistry, spec LoadSpec
 	if err := reg.Init(ctx); err != nil {
 		return err
 	}
-	return reg.Start(ctx)
+	if err := reg.Start(ctx); err != nil {
+		return err
+	}
+	return reg.Serve(ctx)
 }
 
 // Shutdown performs the two-phase close every speed application shares: the
-// non-blocking Stop notification goes out in reverse dependency order
-// (failures ignored -- a notification that cannot be delivered must not keep
-// the Close that waits for the drain from running), then the Close stage
-// waits out the drain and releases every constructed component's resources,
-// in reverse dependency order, aggregating failures. Both phases run exactly
-// once, whatever the registry's state: a registry whose assembly never
-// constructed anything closes as a no-op.
+// non-blocking Stop notification goes out in reverse dependency order, in
+// its two beats -- the components that declared Serve (the entry points)
+// first, then every other component -- with failures ignored (a
+// notification that cannot be delivered must not keep the Close that waits
+// for the drain from running), then the Close stage waits out the drain and
+// releases every constructed component's resources, in reverse dependency
+// order, aggregating failures. Both phases run exactly once, whatever the
+// registry's state: a registry whose assembly never constructed anything
+// closes as a no-op.
 //
 // ctx bounded the whole shutdown -- the caller's own bound, if any, sits on
 // top of the per-step timeout each component applies internally.
@@ -69,9 +77,12 @@ func Shutdown(ctx context.Context, reg *pkgcore.ComponentRegistry) error {
 
 // ServeFunc is a host's serve step: the callback RunAssembly invokes once the
 // assembly is up, handing it the lifecycle context and the live registry. It
-// is where a process that serves states its own serving lifetime -- an HTTP
-// face of its own, a worker loop, anything the host holds open -- while the
-// engine keeps owning the signal overlay and the two-beat close around it.
+// runs after the assembly's Serve round -- the registry stage in which the
+// components that accept external requests are started -- so the host's own
+// wait begins against the assembled whole. It is where a process that serves
+// states its own serving lifetime -- an HTTP face of its own, a worker loop,
+// anything the host holds open -- while the engine keeps owning the signal
+// overlay and the two-beat close around it.
 //
 // The callback returns when serving should end; the engine then runs the
 // close. ctx carries the engine's SIGINT/SIGTERM overlay, so the ordinary
@@ -81,7 +92,7 @@ type ServeFunc func(ctx context.Context, reg *pkgcore.ComponentRegistry) error
 
 // RunAssembly is the engine's Run sugar for a process: it creates a
 // ComponentRegistry from the global component registration plus extra, runs
-// the loader over spec, drives the assembly through Start, runs the host's
+// the loader over spec, drives the assembly through Serve, runs the host's
 // serve step (the serve callback; nil waits the lifecycle context out), and
 // then shuts the assembly down in the two phases of Shutdown (the
 // non-blocking Stop notification, then the blocking Close). Signal handling
@@ -90,13 +101,14 @@ type ServeFunc func(ctx context.Context, reg *pkgcore.ComponentRegistry) error
 // of its own.
 //
 // The serve callback is what a host whose process serves composes with: the
-// callback is called in the serve beat between Start and the close, handed
-// the signal-derived context and the live registry, and its return ends the
-// serve phase. A serve failure does not skip the close -- the two-beat
-// shutdown runs regardless and the serve error joins its result, so a
-// teardown is never silently dropped and a serve failure still reaches the
-// caller's exit path. A nil callback is the no-serve-step shape: the engine
-// waits for ctx itself, exactly as it did before the callback existed.
+// callback is called in the serve beat between the registry's Serve round
+// and the close, handed the signal-derived context and the live registry,
+// and its return ends the serve phase. A serve failure does not skip the
+// close -- the two-beat shutdown runs regardless and the serve error joins
+// its result, so a teardown is never silently dropped and a serve failure
+// still reaches the caller's exit path. A nil callback is the no-serve-step
+// shape: the engine waits for ctx itself, exactly as it did before the
+// callback existed.
 //
 // A host whose application component owns a listener passes the component
 // set as extra and a serve step that waits the lifecycle out (the listener

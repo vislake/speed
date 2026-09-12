@@ -41,6 +41,10 @@ func stageRecorderComponent(name string, log *[]string) pkgcore.Component {
 			record("start")
 			return nil
 		},
+		Serve: func(context.Context, *pkgcore.ComponentRegistry, any) error {
+			record("serve")
+			return nil
+		},
 		Stop: func(context.Context, *pkgcore.ComponentRegistry, any) error {
 			record("stop")
 			return nil
@@ -65,10 +69,11 @@ func driverLoadSpec(t *testing.T, host *testHostConfig) LoadSpec {
 	}
 }
 
-// TestAssemble_DrivesTheSevenStagesInDependencyOrder pins the driver's shape:
-// the loader publishes before anything runs, and the stages run in order,
-// per component in dependency order, closing in the reverse.
-func TestAssemble_DrivesTheSevenStagesInDependencyOrder(t *testing.T) {
+// TestAssemble_DrivesTheEightStagesInDependencyOrder pins the driver's
+// shape: the loader publishes before anything runs, the stages run in order
+// -- Serve as the round after every Start -- per component in dependency
+// order, closing in the reverse.
+func TestAssemble_DrivesTheEightStagesInDependencyOrder(t *testing.T) {
 	var host testHostConfig
 	spec := driverLoadSpec(t, &host)
 	var log []string
@@ -94,6 +99,7 @@ func TestAssemble_DrivesTheSevenStagesInDependencyOrder(t *testing.T) {
 		"first:verify", "second:verify",
 		"first:init", "second:init",
 		"first:start", "second:start",
+		"first:serve", "second:serve",
 	}
 	if !slices.Equal(log, want) {
 		t.Fatalf("stage log = %v, want %v", log, want)
@@ -112,44 +118,92 @@ func TestAssemble_DrivesTheSevenStagesInDependencyOrder(t *testing.T) {
 }
 
 // TestAssemble_FailuresRollBackThroughClose pins the failure semantics the
-// driver inherits from the registry: a failure from Construct on closes every
-// constructed component in reverse order, exactly once, and reports the
-// rolled-back set.
+// driver inherits from the registry: a failure from Construct on -- a
+// refusing Start and a refusing Serve alike -- closes every constructed
+// component in reverse order, exactly once, and reports the rolled-back set.
 func TestAssemble_FailuresRollBackThroughClose(t *testing.T) {
+	for _, stage := range []string{"start", "serve"} {
+		t.Run(stage, func(t *testing.T) {
+			var host testHostConfig
+			spec := driverLoadSpec(t, &host)
+			var log []string
+
+			refusing := stageRecorderComponent("refusing", &log)
+			switch stage {
+			case "start":
+				refusing.Start = func(context.Context, *pkgcore.ComponentRegistry, any) error {
+					log = append(log, "refusing:start")
+					return errStageRefused
+				}
+			case "serve":
+				refusing.Serve = func(context.Context, *pkgcore.ComponentRegistry, any) error {
+					log = append(log, "refusing:serve")
+					return errStageRefused
+				}
+			}
+			healthy := stageRecorderComponent("healthy", &log)
+
+			reg := pkgcore.NewComponentRegistry()
+			for _, c := range []pkgcore.Component{healthy, refusing} {
+				if err := reg.Register(c); err != nil {
+					t.Fatalf("register: %v", err)
+				}
+			}
+			reg.Put(CompositionOverrides{Config: pkgcore.ComponentConfig{}.With("components",
+				pkgcore.ComponentConfig{}.With("healthy", nil).With("refusing", nil).With("observability", false))})
+
+			err := Assemble(context.Background(), reg, spec)
+			if err == nil {
+				t.Fatalf("Assemble() with a failing %s error = nil, want the refusal", stage)
+			}
+			if !strings.Contains(err.Error(), "(stage "+stage+")") {
+				t.Fatalf("Assemble() error = %v, want it to name the %s stage", err, stage)
+			}
+			if !strings.Contains(err.Error(), "rolled back: refusing, healthy") {
+				t.Fatalf("Assemble() error = %v, want it to name the rolled-back set in reverse order", err)
+			}
+			// The rollback closed every constructed component exactly once, and a
+			// later Close reports the same cached result without repeating it.
+			if closeErr := reg.Close(context.Background()); closeErr != nil {
+				t.Fatalf("Close() after the rollback error = %v, want the cached clean rollback", closeErr)
+			}
+			if countOf(log, "healthy:close") != 1 || countOf(log, "refusing:close") != 1 {
+				t.Fatalf("close log = %v, want exactly one close per constructed component", log)
+			}
+		})
+	}
+}
+
+// TestAssemble_CompositionWithoutServeParticipants pins the Serve stage's
+// absence tolerance at the driver level: a composition in which no
+// component declares Serve -- the pure background shape -- assembles
+// through the full drive with the Serve round a no-op, and shuts down
+// cleanly.
+func TestAssemble_CompositionWithoutServeParticipants(t *testing.T) {
 	var host testHostConfig
 	spec := driverLoadSpec(t, &host)
 	var log []string
 
-	refusing := stageRecorderComponent("refusing", &log)
-	refusing.Start = func(context.Context, *pkgcore.ComponentRegistry, any) error {
-		log = append(log, "refusing:start")
-		return errStageRefused
-	}
-	healthy := stageRecorderComponent("healthy", &log)
+	background := stageRecorderComponent("background", &log)
+	background.Serve = nil
 
 	reg := pkgcore.NewComponentRegistry()
-	for _, c := range []pkgcore.Component{healthy, refusing} {
-		if err := reg.Register(c); err != nil {
-			t.Fatalf("register: %v", err)
-		}
+	if err := reg.Register(background); err != nil {
+		t.Fatalf("register: %v", err)
 	}
 	reg.Put(CompositionOverrides{Config: pkgcore.ComponentConfig{}.With("components",
-		pkgcore.ComponentConfig{}.With("healthy", nil).With("refusing", nil).With("observability", false))})
+		pkgcore.ComponentConfig{}.With("background", nil).With("observability", false))})
 
-	err := Assemble(context.Background(), reg, spec)
-	if err == nil {
-		t.Fatal("Assemble() with a failing Start error = nil, want the refusal")
+	if err := Assemble(context.Background(), reg, spec); err != nil {
+		t.Fatalf("Assemble() error = %v", err)
 	}
-	if !strings.Contains(err.Error(), "rolled back: refusing, healthy") {
-		t.Fatalf("Assemble() error = %v, want it to name the rolled-back set in reverse order", err)
+	for _, entry := range log {
+		if strings.HasSuffix(entry, ":serve") {
+			t.Fatalf("stage log = %v, want no Serve callback to have run", log)
+		}
 	}
-	// The rollback closed every constructed component exactly once, and a
-	// later Close reports the same cached result without repeating it.
-	if closeErr := reg.Close(context.Background()); closeErr != nil {
-		t.Fatalf("Close() after the rollback error = %v, want the cached clean rollback", closeErr)
-	}
-	if countOf(log, "healthy:close") != 1 || countOf(log, "refusing:close") != 1 {
-		t.Fatalf("close log = %v, want exactly one close per constructed component", log)
+	if err := Shutdown(context.Background(), reg); err != nil {
+		t.Fatalf("Shutdown() error = %v", err)
 	}
 }
 
@@ -213,12 +267,13 @@ func TestRunAssembly_NilServeWaitsForCancellationAndShutsDown(t *testing.T) {
 	}
 }
 
-// TestRunAssembly_ServeCallbackRunsInTheServeBeat pins the serve callback's
-// position: it is called exactly once, after the assembly is up (every Start
-// has run) and before the close's first beat, and it is handed the live
-// registry -- the component's product is readable from the registry the
-// callback receives.
-func TestRunAssembly_ServeCallbackRunsInTheServeBeat(t *testing.T) {
+// TestRunAssembly_ServeCallbackRunsAfterTheServeRound pins the serve
+// callback's position: it is called exactly once, after the assembly is up
+// (every Start has run, and the registry's own Serve round has completed)
+// and before the close's first beat, and it is handed the live registry --
+// the component's product is readable from the registry the callback
+// receives.
+func TestRunAssembly_ServeCallbackRunsAfterTheServeRound(t *testing.T) {
 	var host testHostConfig
 	spec := driverLoadSpec(t, &host)
 	spec.Overrides = &CompositionOverrides{Config: pkgcore.ComponentConfig{}.
@@ -243,12 +298,12 @@ func TestRunAssembly_ServeCallbackRunsInTheServeBeat(t *testing.T) {
 		t.Fatalf("RunAssembly() error = %v", err)
 	}
 	want := []string{
-		"served:prepare", "served:new", "served:verify", "served:init", "served:start",
+		"served:prepare", "served:new", "served:verify", "served:init", "served:start", "served:serve",
 		"serve:served",
 		"served:stop", "served:close",
 	}
 	if !slices.Equal(log, want) {
-		t.Fatalf("serve log = %v, want the callback between every Start and the first Stop: %v", log, want)
+		t.Fatalf("serve log = %v, want the callback between the registry's Serve round and the first Stop: %v", log, want)
 	}
 	if serveCalls != 1 {
 		t.Fatalf("serve calls = %d, want exactly one", serveCalls)
@@ -285,7 +340,7 @@ func TestRunAssembly_ServeFailureStillClosesAndJoins(t *testing.T) {
 	if !errors.Is(err, errCloseRefused) {
 		t.Fatalf("RunAssembly() error = %v, want it to carry the close refusal the serve failure must not swallow", err)
 	}
-	if !slices.Equal(log, []string{"closer:prepare", "closer:new", "closer:verify", "closer:init", "closer:start", "closer:stop", "closer:close"}) {
+	if !slices.Equal(log, []string{"closer:prepare", "closer:new", "closer:verify", "closer:init", "closer:start", "closer:serve", "closer:stop", "closer:close"}) {
 		t.Fatalf("close log = %v, want the full two-beat close after a failed serve", log)
 	}
 }

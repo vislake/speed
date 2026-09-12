@@ -10,11 +10,12 @@
 //   - this package (go/app): the assembly engine. The loader resolves the
 //     host's configuration, the composition configuration and the declared
 //     bootstrap key material before anything runs; the driver walks a
-//     pkgcore.ComponentRegistry through the seven lifecycle stages
-//     (Prepare, Construct, Verify, Init, Start, Stop, Close) and provides
-//     the Run sugar around a context's lifetime. The engine contains no
-//     HTTP assembly and no listening: a host's own application component
-//     composes the routes from the declaration seats and owns the listener.
+//     pkgcore.ComponentRegistry through the eight lifecycle stages
+//     (Prepare, Construct, Verify, Init, Start, Serve, Stop, Close) and
+//     provides the Run sugar around a context's lifetime. The engine
+//     contains no HTTP assembly and no listening: a host's own application
+//     component composes the routes from the declaration seats and owns the
+//     listener.
 //     The host-neutral HTTP helpers the engine and its consumers share --
 //     authn's mount-path constant, the serve timeouts, the pre-auth
 //     allowlist set (PreAuthAllowlist) -- live beside it in the same

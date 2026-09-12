@@ -146,18 +146,21 @@ against the registered set by longest prefix. A selection value spelled
 `false` (or `true`) in a text source reads as its boolean.
 
 **The driver (`driver.go`)** only orchestrates: `Assemble` runs the loader
-and walks the registry through Prepare, Construct, Verify, Init and Start;
-`Shutdown` performs the two-phase close (the non-blocking Stop notification,
-then the reverse-order Close, errors aggregated); `RunAssembly` is the sugar
-— it creates the registry from the global registration plus extras, drives,
-runs the host's serve step (the optional `ServeFunc`, handed the
-signal-overlaid context and the live registry; nil waits the context out
-itself), and shuts down. The serve callback is where a host whose process
-serves states its own serving lifetime between Start and the close; a serve
-failure does not skip the close — the two-beat shutdown runs regardless and
-the failure joins its result. Failure semantics are the registry's: a failed
-Prepare leaves nothing to roll back, and a failure from Construct on closes
-every constructed component in reverse order, exactly once, before the error
+and walks the registry through Prepare, Construct, Verify, Init, Start and
+Serve — the drive ends at the Serve round, where the entry points accepting
+external requests are up; `Shutdown` performs the two-phase close (the
+non-blocking Stop notification, its first beat reaching the Serve-declaring
+entry points, then the reverse-order Close, errors aggregated);
+`RunAssembly` is the sugar — it creates the registry from the global
+registration plus extras, drives, runs the host's serve step (the optional
+`ServeFunc`, handed the signal-overlaid context and the live registry; nil
+waits the context out itself), and shuts down. The serve callback is where a
+host whose process serves states its own serving lifetime between the
+registry's Serve round and the close; a serve failure does not skip the
+close — the two-beat shutdown runs regardless and the failure joins its
+result. Failure semantics are the registry's: a failed Prepare leaves
+nothing to roll back, and a failure from Construct on closes every
+constructed component in reverse order, exactly once, before the error
 returns.
 
 **The observability component (`go/observability/component.go`)** is
@@ -288,9 +291,9 @@ schema-carrying selection, the namespaced key paths, the redacted sensitive
 cells, the derived and pinned environment spellings, the empty surface and
 the write failure — in `config_help_test.go`; the driver — its
 stage order, its rollback and its entry refusals — and the `RunAssembly`
-sugar in `driver_test.go` (the serve callback's beat between Start and the
-close, its error joined with the close's, and the nil callback's default
-wait); the observability component's participation through the engine -- its
+sugar in `driver_test.go` (the serve callback's beat between the registry's
+Serve round and the close, its error joined with the close's, and the nil
+callback's default wait); the observability component's participation through the engine -- its
 self-registration reaching the seeded registry and its Prepare/New/Close
 running inside the stage drive with the builtin selection -- in
 `loader_test.go`; the pre-auth
