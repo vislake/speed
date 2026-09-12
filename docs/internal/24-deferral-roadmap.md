@@ -36,7 +36,7 @@
 |---|---|---|
 | 1. dbkit 软删模型 Update 清标缺陷 | 实现(不等真实调用方) | 普查行 109 闭。`907e864a`(fix(dbkit): keep a stale model's Update from clearing a row's soft-delete mark),错误码索引随行 `d7c9a8b3` |
 | 2. GeoIP 许可证审查(MaxMind GeoLite2 条款) | ★加排 | 未实现;触发行=异常登录检测(新设备/新地区/不可能位移)整族。见第 4.1 节 |
-| 3. SMS 厂商适配器 | 实现 | 普查行 143、166 闭。`e10d3d49`(feat(authn): add Aliyun, Tencent Cloud and Twilio SMS provider adapters),行文修复随行 `3e1933f6`。真网关验收残余:三适配器对真实账号的验收以 `ALIYUN_SMS_*`/`TENCENT_SMS_*`/`TWILIO_SMS_*` 环境变量门控的集成 leg 形式存在(缺凭据自跳过),见 go/pkgcore/AGENTS.md "SMS carrier adapters"(适配器已随 SMS 模块升格自 go/authn/sms 移入 pkgcore/sms,`87364ed4`;authn 侧记录见其 "The SMS module is pkgcore's" 节) |
+| 3. SMS 厂商适配器 | 实现 | 普查行 143、166 闭。`e10d3d49`(feat(authn): add Aliyun, Tencent Cloud and Twilio SMS provider adapters),行文修复随行 `3e1933f6`。真网关验收残余:三适配器对真实账号的验收以 `ALIYUN_SMS_*`/`TENCENT_SMS_*`/`TWILIO_SMS_*` 环境变量门控的集成 leg 形式存在(缺凭据自跳过),见 go/pkgcore/AGENTS.md "SMS carrier adapters"(适配器已随 SMS 模块升格自 go/authn/sms 移入 pkgcore/sms,`b5cc4f4b`;authn 侧记录见其 "The SMS module is pkgcore's" 节) |
 | 4. X.509 层真实消费方 | 实现 | 普查行 174 闭。`66c81ee9`(CAService.SignCertificate 签发)+ `e0f4e691`(reference-app 对 AI 输出做链验证公证并门控公开分享),残余记录 `65cd4362`、`d2e991ee`。到期驱动续期机制本身仍开,见第 7 章普查行 8、121 |
 | 5. 基准套件 | 实现 | 普查行 86、179 的 benchmark 半边闭。`f09dc0db`(jobs)、`c88a26ab`(authn)、`0c8d858f`(notification)、`f89c4e20`(rbac),nightly GATE 文本随行 `78dbe0e7`、doc 20 记录 `cde7c11d`。千级组织树压测仍缺(普查行 74、88,归属 org 侧) |
 
@@ -184,7 +184,7 @@
 | 40 | ROADMAP | `docs/internal/07-platform-services.md` | storage 病毒扫描钩子与 WebP/水印派生未实现 | 病毒扫描需外部杀毒引擎;WebP/水印属新派生种类+产品语义 |
 | 54 | ROADMAP | `examples/reference-app/web/src/useHashRoute.ts` | 正式路由库决策从未做出 | 正式路由库决策延后记录;导航现行为 hash 片段,随壳/平台面增长再定 |
 | 55 | ROADMAP | `internal/app/server.go` | authn social per-provider credential 的动态 config 读渠道未实现 | 读回绑定等有活值消费端才接(反投机;flag 可见性已由宿主 FeatureGate 生效) |
-| 61 | 实现 | `go/notification/sms.go` | SMS 未成为 pkgcore 模块 | 闭:`3f06333f`(feat(pkgcore): add the shared SMS seam)。SMS 现为 pkgcore 共享模块(根包 `SMS`/`SMSSender` 契约 + console/http-gateway 发送器);carrier 适配器移入 `pkgcore/sms/`,authn 与 notification 消费方切换随 `87364ed4`/`7be42b46`。刻意无内核座位(无 registry/preset/capability 条目):两消费方均经各自 WithSMSSender 注入并自带接线期约束,`pkgcore.SMSSender` doc 记录该形状 |
+| 61 | 实现 | `go/notification/sms.go` | SMS 未成为 pkgcore 模块 | 闭:`44d02dbf`(feat(pkgcore): add the shared SMS seam)。SMS 现为 pkgcore 共享模块(根包 `SMS`/`SMSSender` 契约 + console/http-gateway 发送器);carrier 适配器移入 `pkgcore/sms/`,authn 与 notification 消费方切换随 `b5cc4f4b`/`b7954842`。刻意无内核座位(无 registry/preset/capability 条目):两消费方均经各自 WithSMSSender 注入并自带接线期约束,`pkgcore.SMSSender` doc 记录该形状 |
 | 63 | ROADMAP | `go/authn/mfa.go` | RequireStepUp 无 MFA 账户无密码重输回退 | RequireStepUp 无密码回退需安全设计决策(证明有效期/与 MFA 组合) |
 | 82 | ROADMAP | `docs/internal/17-risks.md` | 数据分域表第五类取舍未定 | 数据分域表第五类取舍 wait-for-trigger 开放裁决 |
 | 87 | ROADMAP | `docs/internal/03-deployment-modes.md` | preset 参数通道与配置文件逐项覆盖层未落地 | 闭:`c7aeafd9`(feat(pkgcore)!: carry configuration through the preset channel)。`Preset` 现为 `map[string]SeamPreset`(实现名+`Config`),`resolveKernelSeam` 把条目 `Config` 交给 `Registration.New`;`Preset.With` 提供逐项覆盖(返回副本);03 的状态段与四个实现条目的模板句同步改写,三条路径分工写入正文 |
@@ -275,7 +275,7 @@
 | 67 | ROADMAP | `go/dbkit/repository.go` | Restore 无保留期窗口强制 | 锚:M4 compliance 保留策略;dbkit Restore 不强制保留窗口 |
 | 68 | ROADMAP | `go/dbkit/audit/AGENTS.md` | 审计表无 hash 链、无查询/报表 API、无保留/归档 | 锚:M4 compliance 行;哈希链/时间分区归档/HTTP 面 |
 | 78 | ROADMAP | `web/packages/account-ui/README.md` | 消费者壳无真实 callback 路由,binding 完成腿从不被行使 | 锚:M4 浏览器 leg;社交绑定回调路径→binding 片段桥(壳不服务 callback 路由) |
-| 90 | ROADMAP | `docs/internal/07-platform-services.md` | storage 按租户保留策略与 compliance 联动未实现 | 锚:M4 保留联动(compliance);片段入合并文档的半随模块驱动合并策略落地(1f3257ba),storage 路径已在 merged 文档 |
+| 90 | ROADMAP | `docs/internal/07-platform-services.md` | storage 按租户保留策略与 compliance 联动未实现 | 锚:M4 保留联动(compliance);片段入合并文档的半随模块驱动合并策略落地(d9fbb527),storage 路径已在 merged 文档 |
 | 92 | ROADMAP | `docs/internal/12-frontend.md` | 浏览器自动化(M4 e2e)未落地 | 锚:M4 e2e 行;浏览器自动化已落地(e5ec05b9:套件驱动真实服务器;e2e.yml 真实运行——按需+每日+push) |
 | 98 | ROADMAP | `.github/workflows/docs-check.yml` | docs/site/ 按版本分目录发布未做 | 锚:M4 文档站完整化(自动生成配置清单/按版本分目录发布);生成入口需真实宿主 schema |
 | 100 | ROADMAP | `.github/workflows/reusable-npm-package-ci.yml` | Storybook 组件预览 harness 不存在 | 锚:Storybook 组件文档站+可视化回归(M4 行) |
@@ -359,19 +359,19 @@
 
 | 普查号 | 判定 | 文件 | 主题 | 标记/锚点/落地 |
 |---|---|---|---|---|
-| 5 | ROADMAP | `go/sharing/AGENTS.md` | HTTP fragment 未并入 build/openapi/speed.yaml 合并文档 | 闭:1f3257ba 模块驱动合并策略落地——sharing 片段并入合并文档与 @speed/api-sdk(并入不再等前端消费方) |
-| 36 | ROADMAP | `docs/internal/21-api-contract.md` | org 片段进入合并文档待前端消费者 | 闭:1f3257ba org 片段已并入合并文档与 SDK(模块驱动策略;org-web 轮锚作废) |
-| 56 | ROADMAP | `go/ai-gateway/api/openapi.yaml` | ai-gateway fragment 未并入 merged build/openapi/speed.yaml | 闭:1f3257ba ai-gateway 片段已并入合并文档与 @speed/api-sdk |
-| 76 | ROADMAP | `web/packages/ui-kit/AGENTS.md` | storage frontend leg (generated storage operations in api-sdk) | 闭:1f3257ba storage 操作已由 orval 生成进 @speed/api-sdk(合并文档现覆盖 storage 片段) |
-| 101 | ROADMAP | `Taskfile.yml` | org/storage/sharing/pki/integration/ai-gateway 前端 merge/orval 腿未做 | 闭:1f3257ba Taskfile api:merge/api:gen 与 api-contract.yml 的 merge+orval 腿现覆盖全部十三片段(含 org、storage、sharing、pki、integration、ai-gateway) |
+| 5 | ROADMAP | `go/sharing/AGENTS.md` | HTTP fragment 未并入 build/openapi/speed.yaml 合并文档 | 闭:d9fbb527 模块驱动合并策略落地——sharing 片段并入合并文档与 @speed/api-sdk(并入不再等前端消费方) |
+| 36 | ROADMAP | `docs/internal/21-api-contract.md` | org 片段进入合并文档待前端消费者 | 闭:d9fbb527 org 片段已并入合并文档与 SDK(模块驱动策略;org-web 轮锚作废) |
+| 56 | ROADMAP | `go/ai-gateway/api/openapi.yaml` | ai-gateway fragment 未并入 merged build/openapi/speed.yaml | 闭:d9fbb527 ai-gateway 片段已并入合并文档与 @speed/api-sdk |
+| 76 | ROADMAP | `web/packages/ui-kit/AGENTS.md` | storage frontend leg (generated storage operations in api-sdk) | 闭:d9fbb527 storage 操作已由 orval 生成进 @speed/api-sdk(合并文档现覆盖 storage 片段) |
+| 101 | ROADMAP | `Taskfile.yml` | org/storage/sharing/pki/integration/ai-gateway 前端 merge/orval 腿未做 | 闭:d9fbb527 Taskfile api:merge/api:gen 与 api-contract.yml 的 merge+orval 腿现覆盖全部十三片段(含 org、storage、sharing、pki、integration、ai-gateway) |
 | 109 | BLOCKED | `go/dbkit/soft_delete.go` | Update 不尊重 deleted_at 的未修复缺陷 | 闭:907e864a 修软删模型 Update 清标;d7c9a8b3 错误码索引再生成 |
-| 143 | BLOCKED | `go/authn/sms.go` | SMS 厂商适配器(Aliyun/Tencent/Twilio)未实现 | 闭:e10d3d49 阿里云/腾讯云/Twilio 短信适配器;3e1933f6 行文随行;SMS 模块升格后适配器随 87364ed4 移入 pkgcore/sms;真网关验收残余:三适配器真实账号验收为 env 门控集成 leg(缺凭据自跳过) |
-| 153 | ROADMAP | `go/org/AGENTS.md` | org fragment 未并入 merged openapi/speed.yaml | 闭:1f3257ba org 片段已并入 merged speed.yaml(AGENTS.md 同步改写) |
-| 166 | BLOCKED | `docs/internal/03-deployment-modes.md` | 运营商短信适配器(阿里云/腾讯云/Twilio)未接入 | 闭:e10d3d49 适配器落地(docs/03 已同步现文);3e1933f6 行文随行;适配器随 87364ed4 移入 pkgcore/sms;真网关验收残余:三适配器真实账号验收为 env 门控集成 leg(缺凭据自跳过) |
+| 143 | BLOCKED | `go/authn/sms.go` | SMS 厂商适配器(Aliyun/Tencent/Twilio)未实现 | 闭:e10d3d49 阿里云/腾讯云/Twilio 短信适配器;3e1933f6 行文随行;SMS 模块升格后适配器随 b5cc4f4b 移入 pkgcore/sms;真网关验收残余:三适配器真实账号验收为 env 门控集成 leg(缺凭据自跳过) |
+| 153 | ROADMAP | `go/org/AGENTS.md` | org fragment 未并入 merged openapi/speed.yaml | 闭:d9fbb527 org 片段已并入 merged speed.yaml(AGENTS.md 同步改写) |
+| 166 | BLOCKED | `docs/internal/03-deployment-modes.md` | 运营商短信适配器(阿里云/腾讯云/Twilio)未接入 | 闭:e10d3d49 适配器落地(docs/03 已同步现文);3e1933f6 行文随行;适配器随 b5cc4f4b 移入 pkgcore/sms;真网关验收残余:三适配器真实账号验收为 env 门控集成 leg(缺凭据自跳过) |
 | 171 | ROADMAP | `CLAUDE.md` | notes 模块删除/恢复 HTTP 端点 | 闭:2b2cd5da notes HTTP delete/restore 端点(spec 先行);8419861b 合并文档再生成 |
 | 174 | BLOCKED | `CLAUDE.md` | pki X.509 层的真实消费方 | 闭:66c81ee9 CAService.SignCertificate;e0f4e691 reference-app 公证 AI 输出+分享门控;65cd4362/d2e991ee 记录残余 |
-| 30 | ROADMAP | `docs/internal/16-verification.md` | 配置清单生成一致性检查未接线 | 闭:02831bf3 生成核心落地——`examples/reference-app/cmd/configrefgen` 以真实宿主组合(声明配置项的五个平台模块 authn/metering/compliance/sharing/pki+config,内存 SQLite)Attach 冻结 schema 经 `Service.Describe` 导出,产出 `docs/config-reference.md`/`.json` 与根 `.env.example`;`config.example.yaml` 过真实 loader 的加载验证随命令单测;生成器后归位为独立 Go 工具模块 `tools/configrefgen`(go.work use 条目在 go/ 之外);残余:文档站用户引导页版式与按版本分目录发布随 M4 文档站完整化 |
-| 50 | ROADMAP | `.github/workflows/docs-check.yml` | config-reference 生成漂移未进 CI | 闭:02831bf3 漂移门接线——docs-check.yml 的 Config reference drift check 步(Go 装好后 `go run ./cmd/configrefgen --check`),声明侧路径(authn/metering/compliance/sharing/pki 的 module.go、go/config/**、internal/app/**、生成器自身)入 PATH SET 按 api-contract 模式自触发;生成器后归位 `tools/configrefgen`,漂移步改为工作目录 `tools/configrefgen` 下 `go run . --check`,PATH SET 改 `tools/configrefgen/**`,单测随 fast-check/full-check 的 `tools/configrefgen` 矩阵行;残余:站点版式与按版本发布随 M4 文档站完整化 |
+| 30 | ROADMAP | `docs/internal/16-verification.md` | 配置清单生成一致性检查未接线 | 闭:dec7074f 生成核心落地——`examples/reference-app/cmd/configrefgen` 以真实宿主组合(声明配置项的五个平台模块 authn/metering/compliance/sharing/pki+config,内存 SQLite)Attach 冻结 schema 经 `Service.Describe` 导出,产出 `docs/config-reference.md`/`.json` 与根 `.env.example`;`config.example.yaml` 过真实 loader 的加载验证随命令单测;生成器后归位为独立 Go 工具模块 `tools/configrefgen`(go.work use 条目在 go/ 之外);残余:文档站用户引导页版式与按版本分目录发布随 M4 文档站完整化 |
+| 50 | ROADMAP | `.github/workflows/docs-check.yml` | config-reference 生成漂移未进 CI | 闭:dec7074f 漂移门接线——docs-check.yml 的 Config reference drift check 步(Go 装好后 `go run ./cmd/configrefgen --check`),声明侧路径(authn/metering/compliance/sharing/pki 的 module.go、go/config/**、internal/app/**、生成器自身)入 PATH SET 按 api-contract 模式自触发;生成器后归位 `tools/configrefgen`,漂移步改为工作目录 `tools/configrefgen` 下 `go run . --check`,PATH SET 改 `tools/configrefgen/**`,单测随 fast-check/full-check 的 `tools/configrefgen` 矩阵行;残余:站点版式与按版本发布随 M4 文档站完整化 |
 | 127 | ROADMAP | `CLAUDE.md` | release 真实发布 | 闭:00e24732(2026-09-10)v0.0.1 真实发布执行腿落地——release.yml 验证+发布两 job;首轮真实运行半成功:Go 21 个模块 tag 曾推送发布(`go/<module>/v0.0.1`,指向 fbaaaf98;后随该版本作废从远端与本地删除),npm 十二包发布失败——首个包 @speed/tokens PUT 即 403 permission_denied,`@speed` scope 未关联仓库 owner 的 GitHub Packages 安装(仓库外 org 配置,非代码缺陷),十二包零上 registry;半成功态恢复机制已落地(2026-09-10:跳过已存在 tag、npm 逐包已存在跳过,含根 tag,语义见第 5 章导言)并保留为流水线的部分态语义、面向后续版本;该版本号已不复用,org 侧关联 @speed scope(或等效配置)后由下一个版本号的发布完整收敛;CLAUDE.md 经重构已不载"发布未接线"判定,无现文可改述 |
 | 212 | ROADMAP | `.github/workflows/release.yml` | 真实发布序列未接线 | 闭:00e24732(2026-09-10)接线落地——release.yml 由只读验证扩展为验证+发布(Go tag 推送 + npm 发布至 GitHub Packages),权限 contents: write + packages: write,写权限只挂 publish job;web 十二包 0.0.1 bump 随 bd0399b8 先落;首轮真实运行半成功——Go 21 个模块 tag 推送成功,npm 发布半程失败(E403,`@speed` scope 未关联仓库 owner 的 GitHub Packages 安装,属仓库外 org 配置,十二包零上 registry);半成功态恢复机制已落地(2026-09-10:tag 步跳过已存在 tag、npm 逐包探测跳过已存在版本,模块 tag 与根 tag 同规,语义见第 5 章导言)并保留为流水线的部分态语义、面向后续版本;该版本随后作废(21 个模块 tag 已从远端与本地删除、版本号不复用),org 侧关联 @speed scope(或等效配置)后由下一个版本号的发布完整收敛 |
 | 145 | ROADMAP | `go/config/module.go` | 两个 pre-auth 端点无 OpenAPI fragment | 闭:5cb0ce68 pre-auth 端点先 secured/versioned——移入 `/api/v1/config/...` 版本化前缀、两路径共享每地址限流预算、成功答案一分钟公开缓存 + `Vary: Host`(行内记录的前置条件达成);片段随 ba3ddb76 落地——`go/config/api/openapi.yaml` 声明 config_getPublicConfig/config_getSystemFeatures 两个操作,`*Module` 以编译期断言实现生成 `api.ServerInterface` 并经生成 wrapper 挂载 |
@@ -433,7 +433,7 @@ TEXT 判定=注释/文档措辞改述候选(流程词、未来承诺句、里程
 | 58 | `docs/internal/17-risks.md` | SystemContextEnteredEvent 缺影响记录数字段 | docs/17 SystemContextEnteredEvent 行=文档声明已重述 |
 | 59 | `docs/internal/19-dev-workflow.md` | 数据库初始化与 lefthook 预提交钩子未实现 | docs/19 db 初始化+lefthook=记录即现状(启动 Apply 承担迁移;CI 全量门已覆盖) |
 | 60 | `docs/internal/03-deployment-modes.md` | saasctl 生成项目模板未 blank-import exporter/prometheus | docs/03 exporter 已按现状重述(生成模板 blank-import 缺口记录于 observability AGENTS);抽查已核 |
-| 61 | `CLAUDE.md` | notification: pkgcore 级 SMS 模块 | 原前提已随普查行 61 闭合而变:SMS 模块已升格 pkgcore(3f06333f/87364ed4/7be42b46),CLAUDE.md 相应措辞已改写为共享模块现文(pkgcore/authn/notification 三条目+notification 延付清单去项) |
+| 61 | `CLAUDE.md` | notification: pkgcore 级 SMS 模块 | 原前提已随普查行 61 闭合而变:SMS 模块已升格 pkgcore(44d02dbf/b5cc4f4b/b7954842),CLAUDE.md 相应措辞已改写为共享模块现文(pkgcore/authn/notification 三条目+notification 延付清单去项) |
 | 62 | `CLAUDE.md` | Trivy 每 PR 容器镜像扫描 | CLAUDE.md Trivy DEFERRED 条目已随 docker-image 轮更新为具体缺前置的现文 |
 | 63 | `.github/workflows/docs-check.yml` | docs/ 整树 markdown 链接检查未做 | docs-check 整树链接检查=记于 workflow 的刻意决定(DELIBERATELY NOT WIRED) |
 | 64 | `go/integration/AGENTS.md` | Deliberately not in scope 表 + Known limitations 段(8 条)在轮次史改写中保留的 deferral 记录(无手动重投、无 API-key expiry sweep、Rotate 非原子、Payload 冻结、无每租户量限等) | integration 范围表+Known limitations 保持最新(两条已标 DISCHARGED) |
@@ -441,7 +441,7 @@ TEXT 判定=注释/文档措辞改述候选(流程词、未来承诺句、里程
 | 66 | `go/compliance/export.go` | 24h 窗口旁 '(see ExportDelivery)':export 送达通知未实现,已从'later round's job'改写为现状 | export.go 已为现状表述(24h 窗口+送达通知缺失一致);无 later round 措辞 |
 | 67 | `go/pkgcore/AGENTS.md` | broker 后端(eventbus/redis\|nats\|postgres)同实例本地 fan-out 的 panic 防护不延伸(原 future-work 改写为 deliberately-not-extended) | pkgcore broker 本地 fan-out panic 防护已实际落地(31246d14)+AGENTS 记录闭合(19a4456b/33b70db5) |
 | 71 | `CLAUDE.md` | census 自指措辞 4 处(行 8×2 "this census's `go/dbkit` entry records" 与 "this census's `go/dbkit` entry has the detail";行 11 "the auth-ui census entry below";行 13 "the auth-ui census defers to this shell";原记行 12/14 锚已校为行 11/13) | 4 处实测均在(抽查已核);按"可改可留"全部保留并记因——四句均为 census 条目间互指(指向 go/dbkit、auth-ui 条目),属导航措辞而非流程措辞;原记引语 "The census closes with…" 经 CLAUDE.md 全史检索不存在,已从记录删除 |
-| 24 | `go/storage/api/openapi.yaml` | 22 行 "Merging this fragment into an application-wide build/openapi/speed.yaml stays future work until the merge tooling lands"(已被现状取代) | 闭:1f3257ba 随片段并入合并文档改写为现状(future-work 句由 merge 成员段落取代;另见第 9 章普查行 153 同批闭) |
+| 24 | `go/storage/api/openapi.yaml` | 22 行 "Merging this fragment into an application-wide build/openapi/speed.yaml stays future work until the merge tooling lands"(已被现状取代) | 闭:d9fbb527 随片段并入合并文档改写为现状(future-work 句由 merge 成员段落取代;另见第 9 章普查行 153 同批闭) |
 | 30 | `.github/workflows/release.yml` | Report 步 echo "Real publishing is scheduled for the v1.0 release at M4, by design of this M0 round"(运行时文本保留 M0/M4 承诺;job name 的 "(M0)" 反而删了,不一致) | 闭:00e24732(2026-09-10)随 v0.0.1 发布机制改写——Report 步与头注现述验证+发布现状(M0/M4 承诺句已删);由 10.3 移档于此 |
 | 70 | `web/packages/api-client/README.md` | 286 行表格 "(no spec fragment exists yet)" — "yet" 残余(低信号;config-fetcher.ts 同义句已改),未改未声明(已被现状取代) | 闭:ba3ddb76 README 表格行改述为现状——两个路径常量与 go/config 的 OpenAPI 片段同步(片段生成 `@speed/api-sdk` 的 `useConfigGetPublicConfig`/`useConfigGetSystemFeatures`);api-client 包内该句无残留;由 10.3 移档于此 |
 | 12 | `.github/workflows/e2e.yml` | stub guard 文本与头部 PURPOSE 以计划时态描述未实现套件 | 闭:e5ec05b9(2026-09-11)真实流水线改写——guard stub 移除,PURPOSE 与 WHAT EXISTS 现述既有套件;由 10.3 移档于此 |
