@@ -142,6 +142,76 @@ func ExampleRunAssembly() {
 	// shut down cleanly
 }
 
+// ExampleComponentConfig shows how a component's configuration reaches it
+// when the engine assembles. The schema declares how each field resolves --
+// here an exposed field the command line, the environment and the config
+// file may supply, and a derive field that resolves to key material the
+// root key derives or a declared default stands in for -- and the engine's
+// resolver merges those sources into the block before New runs. Every
+// source spells the field's key path: the flag is --components.<component>.
+// <field>.
+func ExampleComponentConfig() {
+	type clockConfig struct {
+		Zone  string `json:"zone" config:"expose,required"`
+		Stamp []byte `json:"stamp" config:"derive"`
+	}
+	type clock struct{ zone string }
+	type hostConfig struct {
+		Port string
+	}
+	host := hostConfig{Port: "8080"}
+
+	reg := pkgcore.NewComponentRegistry()
+	if err := reg.Register(pkgcore.Component{
+		Name:         "clock",
+		ConfigSchema: (*clockConfig)(nil),
+		New: func(_ context.Context, _ *pkgcore.ComponentRegistry, cfg pkgcore.ComponentConfig) (any, error) {
+			var c clockConfig
+			if err := cfg.Decode(&c); err != nil {
+				return nil, err
+			}
+			return &clock{zone: c.Zone}, nil
+		},
+	}); err != nil {
+		fmt.Println("register:", err)
+		return
+	}
+	reg.Put(app.CompositionOverrides{Config: pkgcore.ComponentConfig{}.With("components",
+		pkgcore.ComponentConfig{}.With("clock", nil).With("observability", false))})
+
+	spec := app.LoadSpec{
+		Host: &host,
+		Options: []app.ConfigOption{
+			// The flag outranks the environment and the config file; the
+			// required declaration is satisfied by whichever source supplies
+			// the field, and the assembly fails before New runs when none
+			// does.
+			app.ConfigArgs([]string{"--components.clock.zone=UTC"}),
+			app.ConfigDevDefaults(map[string][]byte{"components.clock.stamp": make([]byte, 32)}),
+		},
+		Args: []string{},
+	}
+	if err := app.Assemble(context.Background(), reg, spec); err != nil {
+		fmt.Println("assemble:", err)
+		return
+	}
+	product, err := pkgcore.Get[*clock](reg)
+	if err != nil {
+		fmt.Println("get:", err)
+		return
+	}
+	fmt.Println("the clock runs in", product.zone)
+	if err := app.Shutdown(context.Background(), reg); err != nil {
+		fmt.Println("shutdown:", err)
+		return
+	}
+	fmt.Println("shut down cleanly")
+
+	// Output:
+	// the clock runs in UTC
+	// shut down cleanly
+}
+
 // ExamplePreAuthAllowlist shows the platform's pre-auth surface: the paths
 // that must work before a Principal exists pass the tenancy chain under
 // both GET and HEAD, while any other method on the same path stays
