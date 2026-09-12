@@ -163,7 +163,7 @@ cd ../my-app
 saasctl upgrade --version v1.0.0     # 重写 ./go.mod 的 speed require
 saasctl db migrate                   # 在 ./go.mod 旁备好 app.db
 saasctl config print                 # 预览这次启动会用到的配置
-go run .                             # 启动;启动 Apply 空转
+go run ./cmd/server                  # 启动;启动 Apply 空转
 ```
 
 ## 边界与注意

@@ -103,7 +103,7 @@ go run ./go/saasctl config print ../my-app/go.mod
 
 # then boot the generated app from its own directory
 cd ../my-app
-go run .
+go run ./cmd/server
 ```
 
 The boot defaults: standalone deployment mode, a SQLite database `app.db`

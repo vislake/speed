@@ -190,7 +190,7 @@ cd ../my-app
 saasctl upgrade --version v1.0.0     # rewrite ./go.mod's speed requires
 saasctl db migrate                   # prepare app.db beside ./go.mod
 saasctl config print                 # preview what this boot would use
-go run .                             # boot; startup Apply no-ops
+go run ./cmd/server                  # boot; startup Apply no-ops
 ```
 
 ## Boundaries and notes

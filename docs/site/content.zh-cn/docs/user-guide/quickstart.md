@@ -92,7 +92,7 @@ go run ./go/saasctl config print ../my-app/go.mod
 
 # 然后从生成项目自己的目录里启动它
 cd ../my-app
-go run .
+go run ./cmd/server
 ```
 
 启动默认值:standalone 部署形态、当前目录下名为 `app.db` 的 SQLite
