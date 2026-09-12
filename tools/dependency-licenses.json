@@ -6,10 +6,7 @@
       "license": "MIT",
       "name": "github.com/BurntSushi/toml",
       "used_by": [
-        "go/admin",
-        "go/authn",
-        "go/pkgcore",
-        "go/pki"
+        "go/pkgcore"
       ],
       "version": "v1.6.0"
     },
@@ -103,7 +100,6 @@
       "name": "github.com/minio/minio-go/v7",
       "used_by": [
         "go/pkgcore",
-        "go/saasctl",
         "go/storage"
       ],
       "version": "v7.3.0"
@@ -136,9 +132,7 @@
       "used_by": [
         "go/config",
         "go/jobs",
-        "go/notification",
-        "go/pkgcore",
-        "go/rbac"
+        "go/pkgcore"
       ],
       "version": "v9.14.1"
     },
@@ -152,12 +146,10 @@
         "go/config",
         "go/dbkit",
         "go/integration",
-        "go/jobs",
         "go/notification",
         "go/pkgcore",
         "go/rbac",
-        "go/saasctl",
-        "go/storage"
+        "go/saasctl"
       ],
       "version": "v0.44.0"
     },
@@ -182,11 +174,7 @@
       "license": "MIT",
       "name": "github.com/testcontainers/testcontainers-go/modules/redis",
       "used_by": [
-        "go/config",
-        "go/jobs",
-        "go/notification",
-        "go/pkgcore",
-        "go/rbac"
+        "go/pkgcore"
       ],
       "version": "v0.44.0"
     },
