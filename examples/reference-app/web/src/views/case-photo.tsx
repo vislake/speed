@@ -1,14 +1,13 @@
 /**
  * case-photo.tsx -- one photo of a case rendered from its stored bytes:
- * the bytes fetched through the cases photo-content operation,
- * base64-decoded, and shown as a blob URL this component owns and
- * revokes (the pattern the case page and the simulation comparison both
- * use, so both fetch the original through one shared query). A photo
- * whose read fails renders its refusal's bilingual text (mapped through
- * the cases reachable-error map), never a broken image.
+ * the bytes fetched through the cases photo-content operation and shown
+ * as the blob URL use-content-object-url owns and revokes (the hook the
+ * case page and the simulation comparison both read the original
+ * through, so both share one query). A photo whose read fails renders
+ * its refusal's bilingual text (mapped through the cases
+ * reachable-error map), never a broken image.
  */
 
-import { useEffect, useState } from 'react'
 import type { ReactElement } from 'react'
 import Box from '@mui/material/Box'
 import Typography from '@mui/material/Typography'
@@ -23,12 +22,12 @@ import {
   casesErrorTextKey,
 } from '../cases-errors.js'
 import { REFERENCE_APP_NAMESPACE } from '../resources.js'
-import { base64ToBytes } from '../base64.js'
 import { useTenantQueryKey } from '../tenant-query-key.js'
+import { useContentObjectUrl } from '../use-content-object-url.js'
 
 /** One photo of the case: its bytes fetched through the photo-content
- * operation and rendered from a blob URL that this component owns and
- * revokes. */
+ * operation and rendered from a blob URL owned and revoked by
+ * use-content-object-url. */
 export function CasePhoto({
   caseId,
   photo,
@@ -47,26 +46,7 @@ export function CasePhoto({
     query: { queryKey: contentKey, enabled: tenantId !== null },
   })
 
-  // The blob URL the img renders: created when the bytes arrive,
-  // revoked when they are replaced or the photo leaves the page. The
-  // effect owns exactly the URL it created -- revoking the previous
-  // URL is the cleanup of the previous effect run, so a session that
-  // renders many photos never leaks.
-  const [objectUrl, setObjectUrl] = useState<string | null>(null)
-  useEffect(() => {
-    const data = contentQuery.data
-    if (data === undefined) {
-      return
-    }
-    const bytes = base64ToBytes(data.content_base64)
-    const url = URL.createObjectURL(
-      new Blob([bytes], { type: data.media_type }),
-    )
-    setObjectUrl(url)
-    return () => {
-      URL.revokeObjectURL(url)
-    }
-  }, [contentQuery.data])
+  const objectUrl = useContentObjectUrl(contentQuery.data)
 
   const alt = t('cases.detail.photoAlt', { index })
 

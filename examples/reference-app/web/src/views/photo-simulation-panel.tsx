@@ -55,8 +55,8 @@ import {
   smileSimErrorCodeOf,
   smileSimErrorTextKey,
 } from '../smile-sim-errors.js'
-import { base64ToBytes } from '../base64.js'
 import { useTenantQueryKey } from '../tenant-query-key.js'
+import { useContentObjectUrl } from '../use-content-object-url.js'
 import { useDateFormatter } from '../use-date-formatter.js'
 import { CasePhoto } from './case-photo.js'
 import { SimulationDownloadAction } from './simulation-download-action.js'
@@ -192,9 +192,9 @@ function OptionGroup({
 }
 
 /** The generated image of one succeeded simulation, fetched through the
- * simulation-content operation and rendered from a blob URL this
- * component owns and revokes -- the same pattern CasePhoto established
- * for the original photo's bytes. A failed read renders its code's
+ * simulation-content operation and rendered from a blob URL owned and
+ * revoked by use-content-object-url -- the same pattern CasePhoto reads
+ * the original photo's bytes through. A failed read renders its code's
  * bilingual text, never a broken image. */
 function SimulationResultImage({
   photoObjectID,
@@ -213,21 +213,7 @@ function SimulationResultImage({
     { query: { queryKey: contentKey, enabled: tenantId !== null } },
   )
 
-  const [objectUrl, setObjectUrl] = useState<string | null>(null)
-  useEffect(() => {
-    const data = contentQuery.data
-    if (data === undefined) {
-      return
-    }
-    const bytes = base64ToBytes(data.content_base64)
-    const url = URL.createObjectURL(
-      new Blob([bytes], { type: data.media_type }),
-    )
-    setObjectUrl(url)
-    return () => {
-      URL.revokeObjectURL(url)
-    }
-  }, [contentQuery.data])
+  const objectUrl = useContentObjectUrl(contentQuery.data)
 
   if (contentQuery.isError) {
     const code = smileSimErrorCodeOf(contentQuery.error)

@@ -9,15 +9,14 @@
  *
  * The bytes are read through the simulation-content operation -- the
  * same tenant-namespaced query the comparison's result image reads, so
- * the action's presence adds no second network read -- materialized
- * into a blob URL of the media type the probe assigned, and offered as
- * a real download link: an anchor whose download attribute carries the
- * filename and whose href is the blob URL, so pressing it starts the
- * browser's own download (the event, the name and the bytes the e2e
- * download gate observes) rather than a navigation that opens the
- * image in a tab. The blob URL is revoked when the bytes are replaced
- * or the control leaves the page, the same ownership discipline as
- * every other URL this page creates.
+ * the action's presence adds no second network read -- materialized by
+ * use-content-object-url into a blob URL of the media type the probe
+ * assigned (revoked when the bytes are replaced or the control leaves
+ * the page), and offered as a real download link: an anchor whose
+ * download attribute carries the filename and whose href is the blob
+ * URL, so pressing it starts the browser's own download (the event,
+ * the name and the bytes the e2e download gate observes) rather than a
+ * navigation that opens the image in a tab.
  *
  * The control renders nothing until the bytes have actually arrived: a
  * read that has not settled offers no download of nothing, and a
@@ -25,7 +24,6 @@
  * image belongs -- to speak, never a control that saves an error page.
  */
 
-import { useEffect, useState } from 'react'
 import type { ReactElement } from 'react'
 import Box from '@mui/material/Box'
 import Button from '@mui/material/Button'
@@ -36,8 +34,8 @@ import {
 import type { SmilesimSimulation } from '../app-api/index.js'
 import { useTranslation } from '@speed/i18n'
 import { REFERENCE_APP_NAMESPACE } from '../resources.js'
-import { base64ToBytes } from '../base64.js'
 import { useTenantQueryKey } from '../tenant-query-key.js'
+import { useContentObjectUrl } from '../use-content-object-url.js'
 
 /** The image media types the storage probe can assign, each to the
  * extension its bytes should carry when saved to disk. A type outside
@@ -101,26 +99,7 @@ export function SimulationDownloadAction({
     { query: { queryKey: contentKey, enabled: tenantId !== null } },
   )
 
-  // The blob URL the anchor downloads: created when the bytes arrive,
-  // revoked when they are replaced or the action leaves the page. The
-  // effect owns exactly the URL it created -- revoking the previous
-  // URL is the cleanup of the previous effect run, so a session that
-  // renders many simulations never leaks.
-  const [objectUrl, setObjectUrl] = useState<string | null>(null)
-  useEffect(() => {
-    const data = contentQuery.data
-    if (data === undefined) {
-      return
-    }
-    const bytes = base64ToBytes(data.content_base64)
-    const url = URL.createObjectURL(
-      new Blob([bytes], { type: data.media_type }),
-    )
-    setObjectUrl(url)
-    return () => {
-      URL.revokeObjectURL(url)
-    }
-  }, [contentQuery.data])
+  const objectUrl = useContentObjectUrl(contentQuery.data)
 
   const data = contentQuery.data
   if (objectUrl === null || data === undefined) {
