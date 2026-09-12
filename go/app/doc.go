@@ -13,9 +13,9 @@
 //     pkgcore.ComponentRegistry through the eight lifecycle stages
 //     (Prepare, Construct, Verify, Init, Start, Serve, Stop, Close) and
 //     provides the Run sugar around a context's lifetime. The engine
-//     contains no HTTP assembly and no listening: a host's own application
-//     component composes the routes from the declaration seats and owns the
-//     listener.
+//     contains no HTTP assembly and no listening: the http component
+//     (go/app/httpserve) composes the routes the declaration faces
+//     accumulated and owns the listener.
 //     The host-neutral HTTP helpers the engine and its consumers share --
 //     authn's mount-path constant, the serve timeouts, the pre-auth
 //     allowlist set (PreAuthAllowlist) -- live beside it in the same
@@ -23,13 +23,21 @@
 //   - go/app/chain: the fixed middleware chain -- the order authn then the
 //     optional impersonation decorator then tenancy with the pre-auth
 //     allowlist, with the authn subtree and the admin route dispatched around
-//     it by structure. chain.Standard derives the whole composition from a
-//     registry's RouteSource (its mounted routes, plus the Middleware seat
-//     it wraps around the finished chain -- the platform's one layer outside
-//     the fixed order); chain.Chain is the direct path for a host with a
-//     custom layout. Its closure is bounded by the chain's own participants
-//     (authn and rbac included); it imports no module a chain-bearing host
-//     does not already have.
+//     it by structure. chain.Standard derives the whole composition from the
+//     http component's RouteSource (its mounted routes, plus the middleware
+//     face it wraps around the finished chain -- the platform's one layer
+//     outside the fixed order); chain.Chain is the direct path for a host
+//     with a custom layout. Its closure is bounded by the chain's own
+//     participants (authn and rbac included); it imports no module a
+//     chain-bearing host does not already have.
+//   - go/app/httpserve: the http component. It provides the process's HTTP
+//     face: the route and middleware declaration tokens
+//     (pkgcore.RouteRegistrar, pkgcore.MiddlewareRegistrar), the product
+//     that satisfies chain.RouteSource, the Init-only write gate, the
+//     handler assembly per the host's required LinkPolicy and the
+//     listener's Serve/Stop/Close contract. Every serving composition
+//     selects it; a chainless composition declares that in the policy
+//     instead of wrapping a chain.
 //   - go/app/bridges: the no-import seam bridges that hand one module's
 //     concrete service to another module's structurally-typed seam
 //     (billing/metering onto ai-gateway's two seams, the config module's
