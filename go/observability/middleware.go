@@ -707,11 +707,12 @@ var (
 // exactly like request-time labels when they are seeded, so the same
 // bounds apply to them (see routeLabelLimiter.seed).
 //
-// examples/reference-app is the mandatory first consumer: its BuildServer
-// calls this with the module route table the http component accumulated plus the two
-// host-level routes (/healthz and /metrics) it mounts on the mux
-// directly, and its flowtests/obs_route_seed_test.go drives the real composed
-// stack through the garbage-flood scenario. The mechanism's behavioral
+// examples/reference-app is the mandatory first consumer: the http
+// component's Serve assembly calls this with the module route table it
+// accumulated plus the two liveness routes (/healthz and /metrics) it
+// mounts directly on the mux, and its flowtests/obs_route_seed_test.go
+// drives the real composed stack through the garbage-flood scenario. The
+// mechanism's behavioral
 // proof inside this module is middleware_test.go's
 // TestMiddleware_RealRoutesSurviveGarbage_WhenSeeded, and the
 // mount-subtree semantics -- a deep operation under a seeded prefix

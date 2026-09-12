@@ -336,7 +336,7 @@ magic numbers:
   `Handler` is built here, not in `NewModule`, so it serves the service and
   repository instances the host's `With*` options actually configured —
   the same `m.svc`, `m.life`, `m.objects` and `m.derivatives` the job
-  handlers above are bound to. `Routes.Mount` is a plain registration, no
+  handlers above are bound to. `pkgcore.MountRoute` is a plain registration, no
   I/O, so Register's no-I/O contract stands.
 
 ### The HTTP surface — `handler.go`, `api/`

@@ -16,9 +16,10 @@ import (
 // loader, calls the host's serve step (the ServeFunc) and drives both around
 // a context's lifetime.
 //
-// The driver contains no HTTP assembly and no listening: a host's own
-// application component assembles the routes from the declaration seats and
-// owns the listener, exactly as any component owns the resources it starts.
+// The driver contains no HTTP assembly and no listening: the http
+// component (go/app/httpserve) composes the routes the declaration faces
+// accumulated and owns the listener, exactly as any component owns the
+// resources it starts.
 // The engine only calls the host's serve step and surrounds it with the
 // signal overlay and the two-beat close.
 

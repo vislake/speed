@@ -491,7 +491,7 @@ func (m *Module) OpenAPISpec() []byte { return openAPISpecYAML }
 // here, not in NewModule, so it serves the service and repository
 // instances every Option has already configured by the time Register runs
 // (the assembly calls Register only after NewModule has returned) -- the same
-// reasoning storage.Module's identical placement documents. Routes.Mount
+// reasoning storage.Module's identical placement documents. MountRoute
 // is a plain registration, no I/O, so Register's no-I/O contract stands.
 func (m *Module) Register(reg *pkgcore.ComponentRegistry) error {
 	if err := reg.PermissionsSeat().Add(

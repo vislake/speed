@@ -319,7 +319,7 @@ func (m *Module) OpenAPISpec() []byte { return openAPISpecYAML }
 // of which host-level mount pattern matched it there first (a request for
 // PathAccess never matches a PathShares-rooted pattern, and vice versa, so
 // each mount's own host-applied gating -- allowlisted or permission-checked
-// -- only ever wraps the requests it is actually meant to). Routes.Mount is
+// -- only ever wraps the requests it is actually meant to). MountRoute is
 // a plain registration, no I/O, so Register's no-I/O contract stands.
 //
 // PathAccess is NOT an ordinary tenant-scoped route: a host MUST allowlist
@@ -329,9 +329,9 @@ func (m *Module) OpenAPISpec() []byte { return openAPISpecYAML }
 // anonymous visitor -- without that allowlist entry, tenancy.Middleware's
 // own fail-closed default refuses every request here with 403 before
 // Handler is ever reached, since the request carries no tenant claim by
-// design. Whichever gate table a host
-// layers on top of Routes.Routes() (examples/reference-app's
-// DemoRouteRules, for instance) must declare this same path public, for the
+// design. Whichever gate table a host hands the http component in its
+// link policy (examples/reference-app's DemoRouteRules, for instance)
+// must declare this same path public, for the
 // identical reason: an unauthenticated visitor holds no
 // Subject an authorization layer could evaluate a permission against either.
 //

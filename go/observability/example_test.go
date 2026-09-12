@@ -279,10 +279,12 @@ func ExampleMiddleware() {
 
 // ExampleRegisterMountedRoutes shows the host-side wiring that keeps the
 // route label limiter every Middleware constructs from being pre-empted
-// by request-time garbage: a host hands over the real route table it
-// assembled from its pkgcore.ComponentRegistry (the same table it mounts on its
-// mux -- pkgcore.ComponentRegistry.Routes.Routes()), and Middleware seeds its
-// limiter with those paths at construction, so 256 junk paths arriving
+// by request-time garbage: the application's real route table is handed
+// over before any request traffic arrives -- with the http component in
+// the composition, its Serve assembly makes this call with the routes it
+// accumulated through its route face (the same product's Routes()
+// reading) plus the liveness routes -- and Middleware seeds its limiter
+// with those paths at construction, so 256 junk paths arriving
 // right after startup cannot collapse the app's genuine routes to the
 // overflow bucket. See middleware_test.go's
 // TestMiddleware_RealRoutesSurviveGarbage_WhenSeeded for the behavioral

@@ -240,7 +240,7 @@ func (m *Module) OpenAPISpec() []byte { return openAPISpecYAML }
 // caller passed to NewModule has already run by the time Register is
 // called (the assembly calls Register only after NewModule has returned), so
 // the handler serves the service instances the host actually configured,
-// never versions captured before the options ran. Routes.Mount is a plain
+// never versions captured before the options ran. MountRoute is a plain
 // registration, no I/O, so Register's no-I/O contract stands.
 func (m *Module) Register(reg *pkgcore.ComponentRegistry) error {
 	if err := reg.PermissionsSeat().Add(

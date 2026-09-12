@@ -431,7 +431,7 @@ func (m *Module) OpenAPISpec() []byte { return openAPISpecYAML }
 // its own registration rather than booting half-policyed.
 //
 // The module's HTTP surface is registered too: Handler is built here and
-// mounted on the host's router at apiPath. Routes.Mount is a plain
+// mounted on the host's router at apiPath. MountRoute is a plain
 // registration, no I/O, so Register's no-I/O contract stands.
 func (m *Module) Register(reg *pkgcore.ComponentRegistry) error {
 	if m.queue == nil {
@@ -497,7 +497,7 @@ func (m *Module) Register(reg *pkgcore.ComponentRegistry) error {
 	// service and repository instances the host actually configured -- the
 	// same m.svc, m.life, m.objects and m.derivatives the job handlers above
 	// are bound to -- never versions captured before the options ran.
-	// Routes.Mount is a plain registration: no I/O, exactly as the
+	// MountRoute is a plain registration: no I/O, exactly as the
 	// no-I/O contract this doc comment promises requires.
 	m.handler = NewHandler(m.svc, m.life, m.objects, m.derivatives)
 	if err := pkgcore.MountRoute(reg, apiPath, m.handler); err != nil {
