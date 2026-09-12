@@ -76,9 +76,11 @@ m := integration.NewModule(db,
     }),
     // validates requested scopes against the creator's permissions
     // (rbac's Authorizer implements the same shape):
-    integration.WithPermissionLister(func(ctx context.Context, tenantID, userID string) ([]string, error) {
-        return az.ListPermissions(ctx, rbac.Subject{TenantID: pkgcore.TenantID(tenantID), UserID: userID})
-    }),
+    integration.WithPermissionLister(integration.PermissionListerFunc(
+        func(ctx context.Context, tenantID, userID string) ([]string, error) {
+            return az.ListPermissions(ctx, rbac.Subject{TenantID: pkgcore.TenantID(tenantID), UserID: userID})
+        },
+    )),
     // optional: WithMaxAPIKeyLifetime, WithSubjectResolver, WithMembershipChecker, WithAuthenticationGuard
 )
 ```

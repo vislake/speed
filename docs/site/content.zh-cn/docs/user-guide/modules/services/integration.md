@@ -60,9 +60,11 @@ m := integration.NewModule(db,
     }),
     // 校验请求作用域是否创建者当前权限的子集
     // (rbac 的 Authorizer 实现同形):
-    integration.WithPermissionLister(func(ctx context.Context, tenantID, userID string) ([]string, error) {
-        return az.ListPermissions(ctx, rbac.Subject{TenantID: pkgcore.TenantID(tenantID), UserID: userID})
-    }),
+    integration.WithPermissionLister(integration.PermissionListerFunc(
+        func(ctx context.Context, tenantID, userID string) ([]string, error) {
+            return az.ListPermissions(ctx, rbac.Subject{TenantID: pkgcore.TenantID(tenantID), UserID: userID})
+        },
+    )),
     // 更多可选选项:WithMaxAPIKeyLifetime、WithSubjectResolver、WithMembershipChecker、WithAuthenticationGuard
 )
 ```
