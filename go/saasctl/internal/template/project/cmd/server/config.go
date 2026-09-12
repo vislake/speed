@@ -164,9 +164,9 @@ var (
 
 // hostConfig is the loader target carrying this project's own bootstrap
 // surface: one pinned field per host variable. The six key materials are
-// deliberately absent -- the importing module components declare them, and
-// the assembly's loader resolves the declarations into the bootstrap
-// material the wiring reads. The three fields whose unset behavior is a
+// deliberately absent -- the importing module components' ConfigSchemas
+// declare them as derive fields, and the assembly's loader resolves those
+// fields into the bootstrap material the wiring reads. The three fields whose unset behavior is a
 // scalar default -- DeploymentMode, Port and DBPath -- are pre-set by
 // hostConfigDefaults as the loader's lowest-priority source; every other
 // field's empty value is its documented unset behavior, handled by
@@ -322,8 +322,8 @@ func hostConfigDefaults() hostConfig {
 // the declared defaults table: the loader's lowest-priority source for the
 // declared key materials, keyed by the declared key path each declaring
 // module's component carries. It is handed to the assembly's loader options
-// (the selection's loaderOptions()), which is the pass that resolves the
-// declarations; an entry naming a key no imported module declares is inert,
+// (the selection's loaderOptions()), which is the pass that resolves them;
+// an entry naming a key no imported module declares is inert,
 // so one table serves every selection -- a composition that imports no authn
 // module simply has nothing to resolve authn.blind_index_key for.
 func bootstrapDevDefaults() map[string][]byte {

@@ -75,7 +75,7 @@ encrypts it (see `config.go`'s doc comments), so the bootstrap values
 arrive through the environment instead.
 
 The six key variables are spelled by the loader's own derivation of the six
-key paths the platform declaration carries: the declared path uppercased
+key paths the platform modules declare: the declared path uppercased
 with its dots doubled under the APP_ prefix -- the declared key path
 `config.cipher_key` reads as `APP_CONFIG__CIPHER_KEY`,
 `authn.blind_index_key` as `APP_AUTHN__BLIND_INDEX_KEY`. The other

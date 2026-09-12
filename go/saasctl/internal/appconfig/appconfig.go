@@ -71,7 +71,8 @@ import (
 // bootstrap surface, exported because the command groups that render
 // provenance and the tests that pin template parity all name the same
 // variables. The six key-material names are the loader's derivation of the
-// declared key paths the module components carry -- the declared path,
+// key paths the module components declare (each as a ConfigSchema derive
+// field) -- the declared path,
 // uppercased, its dots doubled -- not names the generated project pins
 // anywhere: the declarations own them, and a platform key added to a module
 // arrives with its derived name together.

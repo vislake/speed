@@ -589,10 +589,8 @@ func firstLine(s string) string {
 // appconfig's own twin tests, which re-read that file.
 func TestAuthnSelectionsConsumeTheDeclaredKeyMaterials(t *testing.T) {
 	authnKeys := []string{
-		`authnBlindIndexKeyPath = "authn.blind_index_key"`,
-		`pkiLocalKeyCipherKeyPath = "pki.local_key_cipher_key"`,
-		"declaredMaterial(reg, authnBlindIndexKeyPath)",
-		"declaredMaterial(reg, pkiLocalKeyCipherKeyPath)",
+		"declaredMaterial(reg, authn.BlindIndexKeyPath)",
+		"declaredMaterial(reg, pki.LocalKeyCipherKeyPath)",
 	}
 	banished := []string{
 		"dbkit.NewCipher(devPIICipherKey)",
@@ -600,6 +598,7 @@ func TestAuthnSelectionsConsumeTheDeclaredKeyMaterials(t *testing.T) {
 		"authn.WithBlindIndexKey(devBlindIndexKey)",
 		"same documented trade-off as config.go's devConfigKey",
 	}
+	const wantPlatformCipherRead = "declaredMaterial(reg, config.CipherKeyPath)"
 	for _, key := range validSelectionKeys {
 		path := ProjectRoot + "/selection/" + key + "/server.go"
 		content, err := fs.ReadFile(Project, path)
@@ -607,6 +606,9 @@ func TestAuthnSelectionsConsumeTheDeclaredKeyMaterials(t *testing.T) {
 			t.Fatalf("read %s: %v", path, err)
 		}
 		src := string(content)
+		if !strings.Contains(src, wantPlatformCipherRead) {
+			t.Errorf("%s does not build the platform cipher from the assembly-resolved material (%s); the module's exported key path is the one spelling the wiring may use", key, wantPlatformCipherRead)
+		}
 		if key == "none" {
 			for _, want := range authnKeys {
 				if strings.Contains(src, want) {
@@ -644,8 +646,8 @@ func TestAuthnSelectionsConsumeTheDeclaredKeyMaterials(t *testing.T) {
 // failed. The selections that wire no org module must mention neither call.
 func TestOrgSelectionsBuildTheInvitationIndexerOverEmailIndexColumn(t *testing.T) {
 	const wantRegistrar = "org.RegisterEmailSerializer(cipher)"
-	const wantDeclaredPath = `orgInvitationIndexKeyPath = "org.invitation_email_index_key"`
-	const wantMaterialRead = "declaredMaterial(reg, orgInvitationIndexKeyPath)"
+	const wantDeclaredPath = "org.InvitationEmailIndexKeyPath"
+	const wantMaterialRead = "declaredMaterial(reg, org.InvitationEmailIndexKeyPath)"
 	const wantConstructor = "org.NewEmailIndexer(indexKey)"
 	const stale = "dbkit.NewBlindIndexer("
 	for _, key := range validSelectionKeys {

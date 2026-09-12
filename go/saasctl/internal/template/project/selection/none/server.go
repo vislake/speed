@@ -47,16 +47,6 @@ import (
 // module packages register for themselves.
 const hostComponentPrefix = "__APP_NAME__."
 
-// The declared bootstrap key paths this file's wiring reads material for.
-// Each is the declaring module's own key path, spelled as its declaration
-// carries it: the assembly's loader resolves the declaration, and this file
-// reads the result by the same path.
-const (
-	// configCipherKeyPath is the path the platform cipher's material is
-	// declared under (go/config's component).
-	configCipherKeyPath = "config.cipher_key"
-)
-
 // serverBuild carries the assembly state this selection's components hand
 // each other: the resolved configuration and the loader target the engine
 // fills, the modules the host's steps and its composed face read products
@@ -358,9 +348,10 @@ func overrideComponent(reg *pkgcore.ComponentRegistry, base, moduleName string, 
 	return c, nil
 }
 
-// declaredMaterial reads the []byte material a declared bootstrap key
-// resolved to from the assembly's published material source, naming the
-// declared path when the assembly carries no value for it.
+// declaredMaterial reads the []byte material a module's declared key
+// resolved to from the assembly's published material source, by the key path
+// the module itself exports (config.CipherKeyPath and siblings), naming the
+// path when the assembly carries no value for it.
 func declaredMaterial(reg *pkgcore.ComponentRegistry, keyPath string) ([]byte, error) {
 	material, err := pkgcore.BootstrapMaterialOf(reg)
 	if err != nil {
@@ -383,7 +374,7 @@ func (b *serverBuild) cryptoComponent() pkgcore.Component {
 		Name:     hostComponentPrefix + "crypto",
 		Provides: []any{(*dbkit.Cipher)(nil)},
 		Prepare: func(_ context.Context, reg *pkgcore.ComponentRegistry) error {
-			cipherKey, err := declaredMaterial(reg, configCipherKeyPath)
+			cipherKey, err := declaredMaterial(reg, config.CipherKeyPath)
 			if err != nil {
 				return err
 			}

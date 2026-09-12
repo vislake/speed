@@ -56,25 +56,6 @@ import (
 // module packages register for themselves.
 const hostComponentPrefix = "__APP_NAME__."
 
-// The declared bootstrap key paths this file's wiring reads material for.
-// Each is the declaring module's own key path, spelled as its declaration
-// carries it: the assembly's loader resolves the declaration, and this file
-// reads the result by the same path.
-const (
-	// configCipherKeyPath is the path the platform cipher's material is
-	// declared under (go/config's component).
-	configCipherKeyPath = "config.cipher_key"
-	// authnBlindIndexKeyPath is the path authn's blind-index HMAC key is
-	// declared under (go/authn's component).
-	authnBlindIndexKeyPath = "authn.blind_index_key"
-	// pkiLocalKeyCipherKeyPath is the path the cipher sealing pki's
-	// local-signer private-key column is declared under (go/pki's component).
-	pkiLocalKeyCipherKeyPath = "pki.local_key_cipher_key"
-	// orgInvitationIndexKeyPath is the path org's invitation-address
-	// blind-index HMAC key is declared under (go/org's component).
-	orgInvitationIndexKeyPath = "org.invitation_email_index_key"
-)
-
 // overriddenModuleLocales lists the locale resources of the modules whose
 // descriptors this host overrides. A locale file's message ids are prefixed
 // with the MODULE name, and the assembly's locale validation requires the
@@ -437,9 +418,10 @@ func capabilityComponent(reg *pkgcore.ComponentRegistry, name string) (pkgcore.C
 	return c, nil
 }
 
-// declaredMaterial reads the []byte material a declared bootstrap key
-// resolved to from the assembly's published material source, naming the
-// declared path when the assembly carries no value for it.
+// declaredMaterial reads the []byte material a module's declared key
+// resolved to from the assembly's published material source, by the key path
+// the module itself exports (config.CipherKeyPath and siblings), naming the
+// path when the assembly carries no value for it.
 func declaredMaterial(reg *pkgcore.ComponentRegistry, keyPath string) ([]byte, error) {
 	material, err := pkgcore.BootstrapMaterialOf(reg)
 	if err != nil {
@@ -465,7 +447,7 @@ func (b *serverBuild) cryptoComponent() pkgcore.Component {
 		Name:     hostComponentPrefix + "crypto",
 		Provides: []any{(*dbkit.Cipher)(nil)},
 		Prepare: func(_ context.Context, reg *pkgcore.ComponentRegistry) error {
-			cipherKey, err := declaredMaterial(reg, configCipherKeyPath)
+			cipherKey, err := declaredMaterial(reg, config.CipherKeyPath)
 			if err != nil {
 				return err
 			}
@@ -478,7 +460,7 @@ func (b *serverBuild) cryptoComponent() pkgcore.Component {
 			// pki.local_key_cipher_key material -- a separate secret from
 			// the platform cipher above, because an AES key must never double
 			// as another construction's key (dbkit's key-separation rule).
-			pkiLocalKeyCipherKey, err := declaredMaterial(reg, pkiLocalKeyCipherKeyPath)
+			pkiLocalKeyCipherKey, err := declaredMaterial(reg, pki.LocalKeyCipherKeyPath)
 			if err != nil {
 				return err
 			}
@@ -572,7 +554,7 @@ func (b *serverBuild) authnComponent(reg *pkgcore.ComponentRegistry) (pkgcore.Co
 		if err != nil {
 			return nil, err
 		}
-		blindIndexKey, err := declaredMaterial(reg, authnBlindIndexKeyPath)
+		blindIndexKey, err := declaredMaterial(reg, authn.BlindIndexKeyPath)
 		if err != nil {
 			return nil, err
 		}
@@ -646,7 +628,7 @@ func (b *serverBuild) orgComponent(reg *pkgcore.ComponentRegistry) (pkgcore.Comp
 		if err != nil {
 			return nil, err
 		}
-		indexKey, err := declaredMaterial(reg, orgInvitationIndexKeyPath)
+		indexKey, err := declaredMaterial(reg, org.InvitationEmailIndexKeyPath)
 		if err != nil {
 			return nil, err
 		}
