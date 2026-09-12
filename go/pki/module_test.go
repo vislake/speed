@@ -372,11 +372,14 @@ func (stubQueue) Cancel(context.Context, jobs.JobID) error           { return ni
 // compile-time check that stubQueue satisfies jobs.Queue.
 var _ jobs.Queue = stubQueue{}
 
-// TestModule_Register_DeclaresItsBootstrapKey pins the one process-start key
-// pki's contract names: the AES key sealing the LocalSigner key column, a
-// Sensitive hex key separate from every other module's material, and disjoint
-// from the runtime schema's own validity items.
-func TestModule_Register_DeclaresItsBootstrapKey(t *testing.T) {
+// TestComponent_SchemaDeclaresItsLocalKeyCipherKey pins the one
+// process-start key pki's contract names: the AES key sealing the LocalSigner
+// key column, a Sensitive derive-tagged []byte field separate from every
+// other module's material, resolving at exactly the platform key path the
+// component exports -- a schema rename cannot silently rotate the key. Key
+// material must stay off the runtime layer, so the runtime schema must stay
+// free of the identifier.
+func TestComponent_SchemaDeclaresItsLocalKeyCipherKey(t *testing.T) {
 	t.Parallel()
 
 	reg := componenttest.NewRegistry()
@@ -384,26 +387,30 @@ func TestModule_Register_DeclaresItsBootstrapKey(t *testing.T) {
 		t.Fatalf("Register: %v", err)
 	}
 
-	declared := component().BootstrapKeys
-	if len(declared) != 1 {
-		t.Fatalf("the pki component declared %d bootstrap keys (%v), want exactly the local-key cipher key", len(declared), declared)
+	descriptors, err := pkgcore.DescribeComponentSchema(moduleName, component().ConfigSchema)
+	if err != nil {
+		t.Fatalf("DescribeComponentSchema() error = %v", err)
 	}
-	key := declared[0]
-	if key.Key != "pki.local_key_cipher_key" {
-		t.Errorf("declared key = %q, want pki.local_key_cipher_key", key.Key)
+	byKey := make(map[string]pkgcore.FieldDescriptor, len(descriptors))
+	for _, d := range descriptors {
+		byKey[d.Key] = d
 	}
-	if key.Format != "hexkey" || !key.Sensitive {
-		t.Errorf("declaration = %+v, want a Sensitive hexkey", key)
+	field, ok := byKey[LocalKeyCipherKeyPath]
+	if !ok {
+		t.Fatalf("the pki component did not declare key material at %q", LocalKeyCipherKeyPath)
 	}
-	if key.Group != moduleName {
-		t.Errorf("declaration group = %q, want the module name %q", key.Group, moduleName)
+	if !field.Derive || field.Type != "[]byte" || !field.Sensitive {
+		t.Errorf("field = %+v, want a Sensitive derive-tagged []byte key", field)
 	}
-	if key.Default == "" || key.Description == "" || key.Example != "" {
-		t.Errorf("declaration = %+v, want a documented fallback and contract text, and no suggested value", key)
+	if field.Group != moduleName {
+		t.Errorf("field group = %q, want the module name %q", field.Group, moduleName)
+	}
+	if field.Doc.Default == "" || field.Doc.Description == "" || field.Doc.Example != "" {
+		t.Errorf("field doc = %+v, want a documented fallback and contract text, and no suggested value", field.Doc)
 	}
 	for _, item := range reg.ConfigSeat().Items() {
-		if item.Key == key.Key {
-			t.Errorf("key %q is declared on both the bootstrap seat and the runtime schema", item.Key)
+		if item.Key == LocalKeyCipherKeyPath {
+			t.Errorf("key %q is declared on both the key-material layer and the runtime schema", item.Key)
 		}
 	}
 }

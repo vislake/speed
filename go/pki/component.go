@@ -58,17 +58,51 @@ func signerNameFromMember(member string) string {
 	return member
 }
 
+// LocalKeyCipherKeyPath is the key path of the AES key sealing
+// pki_local_keys' private-key column: the derive field
+// "local_key_cipher_key" under the component's own "pki" namespace, so the
+// key resolves at the platform key path it has always carried
+// (pkgcore.BootstrapKeyPurpose embeds the path, and a rename would silently
+// rotate the key). It is also the material address a host's wiring reads the
+// key from.
+const LocalKeyCipherKeyPath = "pki.local_key_cipher_key"
+
 // componentConfig is pki's configuration schema in the assembly: the
 // construction-time knobs NewModule's options carry, as structured
-// configuration. Every field is a pointer, so an omitted key leaves the
+// configuration, and the process-start local-key cipher as a derive field.
+// The component's namespace is "pki", so the key resolves at
+// LocalKeyCipherKeyPath rather than under the default components.pki.
+// prefix. Every other field is a pointer, so an omitted key leaves the
 // module's own default in place while a present key is applied verbatim --
 // including an explicit zero, which WithCacheTTL documents as disabling the
 // key-set cache outright.
 type componentConfig struct {
+	// LocalKeyCipherKey seals the LocalSigner private-key column
+	// (pki_local_keys, via RegisterLocalKeySerializer). It is a separate
+	// secret from every other module's key material, because dbkit's
+	// key-separation rule applies across modules and not only within one,
+	// and the keys it seals are the ones authn's access tokens are
+	// ultimately signed with, so a host that leaves it at the development
+	// default ships with signing keys sealed under a key committed to this
+	// repository's own source. The derive option resolves it through the
+	// five-source chain (an explicit flag/environment/file value, the
+	// root-key derivation, the declared defaults table).
+	LocalKeyCipherKey []byte         `json:"local_key_cipher_key" config:"derive,sensitive,group=pki"`
 	PropagationWindow *time.Duration `json:"propagation_window"`
 	RenewalLeadTime   *time.Duration `json:"renewal_lead_time"`
 	ExpiryScanWindow  *time.Duration `json:"expiry_scan_window"`
 	CacheTTL          *time.Duration `json:"cache_ttl"`
+}
+
+// ConfigDocs implements pkgcore.Documented: the operator-facing contract of
+// the schema's sensitive key-material field.
+func (*componentConfig) ConfigDocs() map[string]pkgcore.FieldDoc {
+	return map[string]pkgcore.FieldDoc{
+		"local_key_cipher_key": {
+			Description: "AES key sealing go/pki's LocalSigner private-key column, the key authn's access tokens are ultimately signed with; separate from every other key, since dbkit's key-separation rule spans modules, not only one.",
+			Default:     "documented non-secret development default",
+		},
+	}
 }
 
 // component returns pki's component descriptor: the value init registers, so
@@ -120,12 +154,16 @@ func component() pkgcore.Component {
 		// pki's state is its platform rows in the deployment's shared
 		// database and the shared event bus, so several replicas may run it
 		// at once.
-		Capabilities:  pkgcore.MultiReplicaSafe,
-		ConfigSchema:  (*componentConfig)(nil),
-		BootstrapKeys: []pkgcore.BootstrapKey{bootstrapKeyDecl},
-		Migrations:    migrations.FS,
-		Locales:       locales.FS,
-		OpenAPISpec:   openAPISpecYAML,
+		Capabilities: pkgcore.MultiReplicaSafe,
+		ConfigSchema: (*componentConfig)(nil),
+		// The "pki" namespace keeps the schema's local_key_cipher_key field
+		// at the platform key path the key has always carried
+		// (LocalKeyCipherKeyPath) instead of the default components.pki.
+		// prefix.
+		ConfigNamespace: "pki",
+		Migrations:      migrations.FS,
+		Locales:         locales.FS,
+		OpenAPISpec:     openAPISpecYAML,
 		New: func(_ context.Context, reg *pkgcore.ComponentRegistry, cfg pkgcore.ComponentConfig) (any, error) {
 			var c componentConfig
 			if err := cfg.Decode(&c); err != nil {
