@@ -91,11 +91,11 @@ func TestComponentAndSeamRegistrationAgree(t *testing.T) {
 	reg.Put(pkgcore.NewComponentConfig(map[string]any{
 		"components": map[string]any{"gateway.wechat": componentBlock(settings)},
 	}))
-	if err := reg.Prepare(ctx); err != nil {
-		t.Fatalf("Prepare() error = %v", err)
+	if prepareErr := reg.Prepare(ctx); prepareErr != nil {
+		t.Fatalf("Prepare() error = %v", prepareErr)
 	}
-	if err := reg.Construct(ctx); err != nil {
-		t.Fatalf("Construct() error = %v", err)
+	if constructErr := reg.Construct(ctx); constructErr != nil {
+		t.Fatalf("Construct() error = %v", constructErr)
 	}
 	t.Cleanup(func() { _ = reg.Close(context.Background()) })
 
