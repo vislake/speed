@@ -227,12 +227,47 @@ func authnJSON(t *testing.T, client *http.Client, method, urlStr, token string, 
 		t.Fatalf("%s %s: %v", method, urlStr, err)
 	}
 	if out != nil {
-		defer resp.Body.Close()
-		if decodeErr := json.NewDecoder(resp.Body).Decode(out); decodeErr != nil {
+		// Read the body once, decode from the captured bytes, and restore
+		// it for the caller: decoding straight from resp.Body would consume
+		// it, so a caller's failure-path read would print an empty body.
+		raw, readErr := io.ReadAll(resp.Body)
+		_ = resp.Body.Close()
+		if readErr != nil {
+			t.Fatalf("read %s %s response: %v", method, urlStr, readErr)
+		}
+		if decodeErr := json.NewDecoder(bytes.NewReader(raw)).Decode(out); decodeErr != nil {
 			t.Fatalf("decode %s %s response: %v", method, urlStr, decodeErr)
 		}
+		resp.Body = io.NopCloser(bytes.NewReader(raw))
 	}
 	return resp
+}
+
+// TestAuthnJSON_KeepsTheResponseBodyReadableAfterDecode pins that authnJSON
+// leaves the response body readable after decoding: the failure-path
+// assertions around its call sites print the raw body, and a consumed or
+// closed body would print empty.
+func TestAuthnJSON_KeepsTheResponseBodyReadableAfterDecode(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"id":"probe-user"}`)
+	}))
+	defer srv.Close()
+
+	var out struct {
+		ID string `json:"id"`
+	}
+	resp := authnJSON(t, srv.Client(), http.MethodGet, srv.URL+"/probe", "", nil, &out)
+	if out.ID != "probe-user" {
+		t.Fatalf("decoded id = %q, want probe-user", out.ID)
+	}
+	raw, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("read the response body after decoding: %v", err)
+	}
+	if string(raw) != `{"id":"probe-user"}` {
+		t.Fatalf("response body after decoding = %q, want the served JSON -- a failure message reading it must not find it consumed", raw)
+	}
 }
 
 // tokenPairResponse is the wire shape of AuthnTokenPair
@@ -717,10 +752,18 @@ func TestAuthnE2E_TrustedProxyDeclaration_RecordsTheForwardedClientAddress(t *te
 			t.Fatalf("%s %s: %v", method, urlStr, err)
 		}
 		if out != nil {
-			defer resp.Body.Close()
-			if decodeErr := json.NewDecoder(resp.Body).Decode(out); decodeErr != nil {
+			// Same read-once-then-restore contract as authnJSON: the
+			// failure-path reads below print the raw body, which a consumed
+			// resp.Body would have already lost.
+			raw, readErr := io.ReadAll(resp.Body)
+			_ = resp.Body.Close()
+			if readErr != nil {
+				t.Fatalf("read %s %s response: %v", method, urlStr, readErr)
+			}
+			if decodeErr := json.NewDecoder(bytes.NewReader(raw)).Decode(out); decodeErr != nil {
 				t.Fatalf("decode %s %s response: %v", method, urlStr, decodeErr)
 			}
+			resp.Body = io.NopCloser(bytes.NewReader(raw))
 		}
 		return resp
 	}
