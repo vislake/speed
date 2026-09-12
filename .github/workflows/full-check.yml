@@ -139,7 +139,7 @@ name: full-check
 #     second sub-assertion drives one wrong-password login against each
 #     replica for the same account and checks replica B sees the
 #     account-locked state replica A's attempt wrote, proving the KVStore
-#     seam crossed the same boundary; a negative-path sub-test proves an
+#     module crossed the same boundary; a negative-path sub-test proves an
 #     incompletely-composed distributed boot fails closed through the
 #     real binary's own process exit code. The job also runs the app's
 #     coverage gate (tools/check_coverage_baseline.py --check --module

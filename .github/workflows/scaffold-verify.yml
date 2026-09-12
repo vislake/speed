@@ -4,7 +4,7 @@ name: scaffold-verify
 # go/saasctl/integration_test/scaffold_dual_mode_test.go's
 # TestScaffoldNewProject_AuthnOrgRbac_BootsInBothDeploymentModes --
 # materialize the authn+org+rbac selection (the richest, and the one whose
-# server.go exercises authn's "SMS sender" seam's distributed-mode
+# server.go exercises authn's "SMS sender" module's distributed-mode
 # conditional injection that a selection with no authn module cannot
 # touch), a genuine `go mod tidy` against the real network, a genuine `go
 # build`, `saasctl db migrate` and a full boot-and-smoke cycle under the
@@ -24,7 +24,7 @@ name: scaffold-verify
 # but do NOT get a per-PR (or per-schedule) dual-mode BOOT proof of their
 # own: running the full generate/tidy(network)/build/boot/smoke cycle five
 # times, twice each, would multiply this job's Docker and network cost for
-# a property -- the general infrastructure-seam wiring in
+# a property -- the general infrastructure-module wiring in
 # cmd/server/config.go, identical prose across every selection -- this one
 # test already exercises. create-saas-app and the web-side template remain
 # entirely unbuilt, so this pipeline covers only the Go half of the
