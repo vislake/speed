@@ -10,14 +10,14 @@ import (
 )
 
 // This file carries the test-only seat helpers: a component's declaration
-// body writes into the ten declaration seats, and those seats accept writes
-// only while the Init stage runs, so a test that exercises a declaration
-// body has to drive a real assembly up to that stage. Both helpers below do
-// exactly that -- they advance the stages of the assembly the test builds,
-// and the seats open because the assembly's own Init stage opened them.
-// Nothing here can make a write outside Init legal: the gate inside each
-// seat remains the only gate, and a test that calls a seat after a helper
-// returns sees the same refusal production sees.
+// body writes into the nine declaration seats, and those seats accept
+// writes only while the Init stage runs, so a test that exercises a
+// declaration body has to drive a real assembly up to that stage. Both
+// helpers below do exactly that -- they advance the stages of the assembly
+// the test builds, and the seats open because the assembly's own Init stage
+// opened them. Nothing here can make a write outside Init legal: the gate
+// inside each seat remains the only gate, and a test that calls a seat
+// after a helper returns sees the same refusal production sees.
 
 // DuringInit runs declare inside a real Init stage over reg, handing it the
 // assembly itself as the declaration face. Use it to exercise a declaration
@@ -116,6 +116,7 @@ func DeclareAll(reg *pkgcore.ComponentRegistry, declares ...func(*pkgcore.Compon
 // declaration component, returning the stage error to the caller.
 func declareAll(reg *pkgcore.ComponentRegistry, declare func(*pkgcore.ComponentRegistry) error) error {
 	const name = "componenttest.declare"
+	seedFaceRecorder(reg)
 	if err := reg.Register(pkgcore.Component{
 		Name: name,
 		New: func(context.Context, *pkgcore.ComponentRegistry, pkgcore.ComponentConfig) (any, error) {
@@ -149,6 +150,7 @@ func declareAll(reg *pkgcore.ComponentRegistry, declare func(*pkgcore.ComponentR
 // returned, so a test can pin the refusal.
 func RunInit(t *testing.T, reg *pkgcore.ComponentRegistry, c pkgcore.Component, values ...any) error {
 	t.Helper()
+	seedFaceRecorder(reg)
 	if existing, ok := registeredDescriptor(reg, c.Name); ok {
 		if !sameDeclarations(existing, c) {
 			t.Fatalf("componenttest: %q is already registered with a different descriptor", c.Name)
@@ -200,6 +202,34 @@ func sameDeclarations(a, b pkgcore.Component) bool {
 		reflect.DeepEqual(a.ProvidesMember, b.ProvidesMember) &&
 		reflect.DeepEqual(a.BootstrapKeys, b.BootstrapKeys) &&
 		reflect.DeepEqual(a.SystemPurposes, b.SystemPurposes)
+}
+
+// seedFaceRecorder puts a FaceRecorder into reg unless one is already there,
+// so the declaration bodies the helpers drive can mount routes and declare
+// middleware -- the same optional dependency a component declares in
+// production -- and the test can read what they declared back
+// (FaceOf). One recorder per registry: the match is by the registrar
+// contract, and a second one would make every GetOptional on the faces
+// ambiguous.
+func seedFaceRecorder(reg *pkgcore.ComponentRegistry) {
+	if _, ok, _ := pkgcore.GetOptional[pkgcore.RouteRegistrar](reg); ok {
+		return
+	}
+	reg.Put(NewFaceRecorder())
+}
+
+// FaceOf returns the FaceRecorder the test helpers seeded into reg -- the
+// value a declaration body mounted its routes on and declared its middleware
+// through, so a test asserts against exactly what the body delivered. It
+// panics when reg carries none: every helper-built registry has one, so a
+// miss means the test bypassed the helpers and there is nothing to read.
+func FaceOf(reg *pkgcore.ComponentRegistry) *FaceRecorder {
+	registrar, ok, err := pkgcore.GetOptional[pkgcore.RouteRegistrar](reg)
+	face, isFace := registrar.(*FaceRecorder)
+	if err != nil || !ok || !isFace {
+		panic(fmt.Sprintf("componenttest: the registry carries no FaceRecorder; build it through DeclareInto or RunInit so the declaration faces are reachable (err=%v)", err))
+	}
+	return face
 }
 
 // strictComposition builds a composition configuration selecting exactly

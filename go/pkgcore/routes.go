@@ -39,3 +39,27 @@ func MountRoutes(mux *http.ServeMux, routes ...MountedRoute) {
 		}
 	}
 }
+
+// MountRoute mounts one route through the http component's route face
+// (RouteRegistrar) when the composition carries one, and does nothing when
+// it does not. It is the declaration body's one-line form of the optional
+// route dependency: a module declares
+// Requires{Token: (*RouteRegistrar)(nil), Optional: true} and calls this
+// from its Init turn, so a composition that serves HTTP mounts the route on
+// the component's accumulated face, while a pure-background composition --
+// no http component -- constructs the module and serves nothing, which is a
+// legitimate configuration rather than an error. An error is returned only
+// when the by-type context holds several registrars (an ambiguous
+// assembly); a mount the face refuses for its stage panics, exactly as the
+// face's own contract states.
+func MountRoute(reg *ComponentRegistry, path string, handler http.Handler) error {
+	registrar, ok, err := GetOptional[RouteRegistrar](reg)
+	if err != nil {
+		return err
+	}
+	if !ok {
+		return nil
+	}
+	registrar.Mount(path, handler)
+	return nil
+}
