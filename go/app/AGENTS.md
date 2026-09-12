@@ -60,7 +60,7 @@ component.
 
 **The loader (`loader.go`, `loader_composition.go`)** is the bootstrap root.
 It runs before the first stage, because what it resolves is what the
-assembly plans from and what components read. It does three things in order:
+assembly plans from and what components read. It does four things in order:
 
 1. loads the host's configuration target through a `pkgcore/config`
    Loader (the same options and sources the declared keys resolve on);
@@ -83,7 +83,31 @@ assembly plans from and what components read. It does three things in order:
    declaring party's documented development defaults — a
    `pkgcore/config` defaults table handed in as a loader option
    (`ConfigDevDefaults`) — stand where a struct default used to: below the
-   root-key derivation and the explicit sources.
+   root-key derivation and the explicit sources;
+4. publishes the engine's `pkgcore.ComponentConfigResolver`
+   (`component_config.go`), which the Prepare stage reads to upgrade every
+   selected component's configuration block into the value its `New`
+   receives. A resolver the registry already carries — a host's own,
+   `Put` before the load — stays the one in use; a second one of the same
+   type would make every read of it ambiguous.
+
+**The component configuration resolver (`component_config.go`)** is the
+engine's half of the component configuration contract. The block the
+composition carried is the base; a field the schema marks `expose` (the
+`derive` option implies it) is resolved at its own key path through the
+same loader — flag `--<key path>`, the pinned or loader-derived
+environment variable, the config-file entry at the key path, the
+root-key derivation, the declared defaults table — and the resolved value
+is written over the block, so `derive` material reaches the block as the
+bytes it is and the assembly's `required` check sees it. A field with no
+tag keeps the block's value alone; a field carrying `"-"` resolves from
+nothing, so its key (a container's whole subtree included) is dropped from
+the block. A component whose schema declares none of these options is
+handed its block unchanged, and the key-path namespace
+(`Component.ConfigNamespace`, mirrored by `componentConfigPrefix`) is read
+off the registry's descriptors rather than the process-wide registration,
+so a component a host registered privately resolves under the namespace it
+declares.
 
 Composition spelling (the loading implementation's convention; the design's
 §6.1 leaves the carrying format to the implementation): the whole tree
@@ -211,7 +235,12 @@ the bootstrap material resolution, the declaration-set validations and the
 root-key derivation are pinned in `loader_test.go`; the composition
 pipeline's edge and refusal paths (the flag walk's skips, the text
 spellings, the pass-through of an unregistered selection, the
-one-override rule) in `loader_composition_test.go`; the driver — its
+one-override rule) in `loader_composition_test.go`; the component
+configuration resolver — the five-source ladder down to the block, the
+key-material tiers, the skip option, the pinned environment name, the
+behaviour-preserving no-declaration path, the wiring through `Load` and
+`RunAssembly`, and the alignment of its key paths with the root package's
+own projection — in `component_config_test.go`; the driver — its
 stage order, its rollback and its entry refusals — and the `RunAssembly`
 sugar in `driver_test.go` (the serve callback's beat between Start and the
 close, its error joined with the close's, and the nil callback's default

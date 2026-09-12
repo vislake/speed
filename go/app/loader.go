@@ -17,7 +17,7 @@ import (
 // component's Prepare callback reads -- the assembly cannot even choose its
 // components until the composition configuration exists.
 //
-// The loader does three things, in order:
+// The loader does four things, in order:
 //
 //  1. It loads the host's configuration target through a pkgcore/config
 //     Loader -- the same options and the same sources the declared bootstrap
@@ -34,6 +34,12 @@ import (
 //     not resolvable as one schema fails the load, naming the stage, the
 //     declaring component, the reason and the remedy -- before any component
 //     is constructed.
+//  4. It publishes the engine's component configuration resolver
+//     (component_config.go), which the Prepare stage reads to upgrade each
+//     selected component's configuration block into the five-source-merged
+//     value its New receives. A resolver the registry already carries -- a
+//     host's own implementation, put before the load -- stays the one the
+//     Prepare stage reads.
 //
 // The loader is engine-provided and runs unconditionally: no composition can
 // deselect it, because nothing can be chosen before it has run.
@@ -125,6 +131,19 @@ func Load(ctx context.Context, reg *pkgcore.ComponentRegistry, spec LoadSpec) er
 		return err
 	}
 	reg.Put(material)
+
+	// The component configuration resolver, published before Prepare so the
+	// five-source merge reaches every schema-carrying component's New. A
+	// resolver already in the by-type context is a host's own and stays the
+	// one in use: publishing a second one of the same type would make every
+	// read of it ambiguous.
+	_, resolverPresent, resolverErr := pkgcore.GetOptional[pkgcore.ComponentConfigResolver](reg)
+	if resolverErr != nil {
+		return fmt.Errorf("app: the component configuration resolver: %w", resolverErr)
+	}
+	if !resolverPresent {
+		reg.Put(newComponentConfigResolver(loader, reg))
+	}
 	return nil
 }
 
