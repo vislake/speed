@@ -259,6 +259,14 @@
 - **登记理由**：宿主可见面（组装契约：关闭阶段多释放一类产品）的行为变更，按"宿主可见面变更须带 `!BREAKING` footer 或登记本清单"的纪律登记（非破坏，不带 footer）。
 - **出处**：`5fd9c801`（`feat(pkgcore): release constructed products through their own Close() error`）+ `b671031c`（`refactor(pkgcore): drop the duplicated close adapters from the built-in descriptors`）+ `7af0a87f`（`test(pkgcore): keep the kv.redis release probe inside its implementing package`）。
 
+### （待编号）org：`org.invitation_email` 的声明默认改随宿主接线（行为修正）
+
+- **面**：`go/org` 的 `org.invitation_email` 声明默认此前硬编码为 true，与 `WithInvitationEmailDisabled`（语义="该宿主未配置邮件发送设施"）相悖。现 `Register` 按模块自身的 `emailEnabled` 状态构造声明（`featureFlagDecls(emailEnabled)`，`go/org/module.go`）：调用该 option 的宿主声明默认即为 false，与模块无 gate 时的内部回落、以及 `Register` 对"邮件开而发件地址/链接未配"的启动期拒绝三者自此同源。未调该 option 的宿主声明默认保持 true，无任何变化。
+- **消费者影响**：同时调用 `WithInvitationEmailDisabled` 且经 `org.WithFeatureGate` 接线 config 读取缝的宿主（saasctl 两份含 org 的选择模板即此形态），在租户无覆盖行时：config 的 features 查询不再把 `org.invitation_email` 报为开，Invite 以成功、静默不发信完成（接线前骨架行为；接线缺陷下该默认臂曾以 `org.invitation_mail_required`（Internal 类）硬失败，正是本轮修复的对象）。操作员显式写 `org.invitation_email=true`（系统行或租户行）时，无 from/link 的宿主按 org 真实语义拒绝该次邀请（`org.invitation_mail_required`）并撤销刚落库的邀请——与启动期"邮件开即要求传输配齐"的契约同语义，不静默丢信；有真实传输的宿主（reference-app 形态，不调该 option）显式开臂照常送达。既有导出符号与签名不变。
+- **替代路径**：无（行为修正）；要由 org 自行送达的宿主接 `WithMailFrom` 与 `WithInvitationLinkBuilder` 并去掉该 option；交由通知模块送达的宿主维持现状。
+- **登记理由**：宿主可见面（已声明特性开关的默认值随宿主接线改变，features 查询的报告随之改变）的行为修正，按"宿主可见面变更须带 `!BREAKING` footer 或登记本清单"的纪律登记（签名不变，不带 footer）。
+- **出处**：`01bf3405`（`fix(org): declare the email flag off for a host without a mail transport`）+ `1bc68db1`（`test(saasctl): pin the three invitation arms a gated generated project produces`）。
+
 ## 6. D 组：configrefgen 工具内部迁移（工具面，非宿主面）
 
 - **面**：`tools/configrefgen` 的内部实现从旧内核面迁到组件面（工具自身不在消费者依赖面内）。
