@@ -89,7 +89,7 @@ type componentConfig struct {
 func (*componentConfig) ConfigDocs() map[string]pkgcore.FieldDoc {
 	return map[string]pkgcore.FieldDoc{
 		"pii_cipher_key": {
-			Description: "AES key sealing authn's encrypted PII columns (email, phone, TOTP secrets), deliberately separate from every other module's key material and from authn's own blind-index key.",
+			Description: "AES key sealing authn's encrypted PII columns (email, phone, TOTP secrets), deliberately separate from every other module's key material and from authn's own blind-index key below.",
 			Default:     "documented non-secret development default",
 		},
 		"blind_index_key": {

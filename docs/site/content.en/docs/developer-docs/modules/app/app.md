@@ -93,8 +93,9 @@ and a declared key can never resolve differently for one assembly);
 resolve the composition configuration from its five sources (builtin
 defaults, project file, environment, command line, host code override)
 and publish it with the configuration target into the registry; and
-resolve every registered component's declared `BootstrapKeys` on the
-same chain.
+resolve every registered component's declared key material — the
+`BootstrapKeys` seat and each component `ConfigSchema`'s derive fields —
+on the same chain.
 
 The third step is where the design saves a struct: a declared key has
 **no host struct field behind it** — a declaration is resolved where it

@@ -70,10 +70,12 @@ assembly plans from and what components read. It does four things in order:
    registry as a `pkgcore.ComponentConfig` (the code override via a
    `CompositionOverrides` Put, or `LoadSpec.Overrides` when the caller does
    not hold the registry);
-3. resolves every registered component's declared `BootstrapKeys` on the
-   same loader chain — through `pkgcore/config`'s declaration-driven entry
+3. resolves every registered component's declared key material — the
+   `BootstrapKeys` seat and each component `ConfigSchema`'s derive fields,
+   at the final key path each resolves at — on the same loader chain,
+   through `pkgcore/config`'s declaration-driven entry
    (`ResolveDeclarations`), with no host struct field behind a declared key
-   — and publishes the results as the assembly's by-purpose
+   — and publishes the results as the assembly's by-key-path and by-purpose
    `pkgcore.BootstrapMaterial` source. A declared key whose value no source
    supplies resolves to nothing, and the consumer that needs it reports the
    missing material itself; a declaration that cannot be resolved as one

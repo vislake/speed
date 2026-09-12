@@ -11,7 +11,8 @@ speed 的动态配置模块:schema 先行、数据库承载的设置库,值可�
 值存在 `configs` 表里,分两层作用域,`system`(平台级)→ `tenant`
 (逐租户覆盖);读取从窄层回落到宽层,再落到 schema 默认值。配置的
 另一层——进程启动的引导输入(旗标、环境变量与文件)——不在本模块
-职责内:声明在 `pkgcore` 的引导声明面上(组件描述符的 `BootstrapKeys`)、
+职责内:声明在 `pkgcore` 的组件配置契约上(组件 `ConfigSchema` 的
+`derive` 字段;`BootstrapKeys` 是没有天然组件归属的键的声明席位)、
 由通用加载器
 `pkgcore/config` 解析(宿主自己的目标结构体驱动),该零依赖包本模块
 绝不导入;声明键材料的派生约定——每个键路径一个 purpose 串

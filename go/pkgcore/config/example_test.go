@@ -265,9 +265,10 @@ func ExampleWithRootKeyEnv() {
 }
 
 // ExampleVerify shows the check a host runs once it knows which bootstrap keys
-// its modules declared (the components' declared `BootstrapKeys`): every declared
-// key must map onto a field of the host's loader target, and the error names
-// the ones that do not.
+// its modules declared (through `pkgcore.DescribeComponentSchema` for a
+// component's schema fields, or the descriptor's `BootstrapKeys` seat): every
+// declared key must map onto a field of the host's loader target, and the
+// error names the ones that do not.
 func ExampleVerify() {
 	type hostConfig struct {
 		Port     int `config:"env=PORT"`

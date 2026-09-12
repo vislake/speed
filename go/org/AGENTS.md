@@ -163,9 +163,9 @@ A host that lets something else deliver the invitation calls `WithInvitationEmai
 
 Feature **flags** are different, and org does declare two: a flag is a boolean, and `FeatureGate` restates the one method needed to read one without naming a config type. The numbers stay constants, overridable per host through `WithMaxDepth` / `WithInvitationTTL`.
 
-### The bootstrap key it declares
+### The key material it declares
 
-`Register` declares one process-start key on the component descriptor's `BootstrapKeys`: `org.invitation_email_index_key`, the HMAC key the invitation-address blind indexer is built from (`WithEmailIndexer` over `dbkit.NewBlindIndexer`). It is `hexkey` and Sensitive, its documented fallback is a non-secret development default, and it must be a DIFFERENT secret from the host's encryption key -- dbkit takes the two through separate constructors for exactly that reason, and an index built under a rotated key can never find its addresses again. The declaration states the contract; the host resolves the value and injects the indexer. org never reads the environment.
+The component's `ConfigSchema` declares one process-start key as its `invitation_email_index_key` `derive` field (namespace `"org"`, so it resolves at `org.invitation_email_index_key`, exported as `InvitationEmailIndexKeyPath`): the HMAC key the invitation-address blind indexer is built from (`WithEmailIndexer` over `dbkit.NewBlindIndexer`). It is `[]byte` and Sensitive, its `ConfigDocs` entry documents a non-secret development default, and it must be a DIFFERENT secret from the host's encryption key -- dbkit takes the two through separate constructors for exactly that reason, and an index built under a rotated key can never find its addresses again. The declaration states the contract; the assembly's loader resolves the value at that key path and `New` builds the indexer from the published material. org never reads the environment.
 
 ## Public API
 

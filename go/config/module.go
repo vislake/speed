@@ -228,9 +228,6 @@ func (m *Module) Register(reg *pkgcore.ComponentRegistry) error {
 	if err := reg.AuditActionsSeat().Add(AuditActionConfigSet); err != nil {
 		return err
 	}
-	// The process-start key material (bootstrapKeyDecl) is descriptor data:
-	// the component descriptor carries it as BootstrapKeys, which the loader
-	// resolves before anything is constructed.
 	return nil
 }
 

@@ -22,8 +22,8 @@ frontend. It is among the always-on modules with no off switch.
 - **Assembly resolution is not this module's business.** How to
   reach infrastructure — DSNs, addresses, the deployment mode, the
   composition configuration, the bootstrap key material — is decided
-  once at process startup: the keys are declared as each component's
-  `BootstrapKeys`, resolved by the general-purpose `pkgcore/config`
+  once at process startup: the keys are declared as each component
+  `ConfigSchema`'s `derive` fields, resolved by the general-purpose `pkgcore/config`
   loader (a separate zero-dependency package this module must never
   import), and their key-material derivation convention — one purpose
   string per declared key path (`pkgcore.BootstrapKeyPurpose`),

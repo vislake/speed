@@ -14,8 +14,10 @@ two scope tiers, `system` (platform-wide) → `tenant` (per-tenant
 overrides), with reads falling back from the narrow tier to the wide
 one and then to the schema default. speed's other configuration
 layer — process-start bootstrap input (flags, env and files) — is
-outside this module's scope: it is declared on `pkgcore`'s bootstrap
-declaration (the component descriptor's `BootstrapKeys`), resolved by the general-purpose
+outside this module's scope: it is declared on `pkgcore`'s component
+configuration contract (a `ConfigSchema` `derive` field; the
+`BootstrapKeys` seat is the face for a key no component's construction
+owns), resolved by the general-purpose
 `pkgcore/config` loader (host-driven against its own target struct;
 a zero-dependency package this module never imports), and its
 key-material derivation convention — one purpose string per declared

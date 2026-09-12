@@ -15,7 +15,8 @@ weight: 98
 ## 启动层
 
 启动层的键由消费它们的模块声明:模块把每个键的契约写在组件描述符上
-(`pkgcore.Component.BootstrapKeys`),由组装的 loader 在构造任何东西之前解析;
+——作为 `pkgcore.Component.BootstrapKeys` 声明,或作为 `ConfigSchema` 的
+`derive` 字段——由组装的 loader 在构造任何东西之前解析;
 宿主负责解析值并注入,模块自己从不读环境变量。宿主用 `go/pkgcore/config`
 加载器解析,优先级从高到低为命令行旗标、环境变量、可选的 YAML **或 JSON**
 配置文件、根密钥派生(仅限打 `derive` 标记的密钥材料字段)、目标结构体上
@@ -28,7 +29,8 @@ weight: 98
 启动层文件源的成对完整示例随仓库提交:`docs/config.example.yaml` 与其派生的
 `docs/config.example.json`(平台键,两种格式等价),可直接作为复制模板。
 
-六枚密钥材料(authn、org、notification、pki、config 各自声明)有文档化的
+六枚密钥材料(authn、org、notification、pki、config 各自以组件 `ConfigSchema`
+的 `derive` 字段声明,解析在各自的平台 key path 上)有文档化的
 **非密钥**开发默认值,真实部署必须从密钥库覆盖。平台为派生定下两件稳定
 契约:声明的键路径在引导键声明上固定其 purpose 串(`pkgcore.BootstrapKeyPurpose`,
 目的串内嵌键路径,如 `speed.config.cipher_key.v1`),`dbkit.DeriveKey`
@@ -51,6 +53,7 @@ system(平台级)与 tenant(租户级)两档,读取按 tenant → system → sch
 
 ## 分层规则
 
-一个 dotted 键只能属于一层。同一键在两层的声明会被启动与生成器同时拒绝:
-一个标识符承载两种含义、两种默认值、两种编辑面,运维改"那个键"时无从知道
-改的是哪一层。
+一个 dotted 键只能属于一层。**密钥材料**(组件 `BootstrapKeys` 声明或
+`ConfigSchema` 的 `derive` 字段)与运行时的同名配置项会被启动期校验拒绝:
+运维改"那个键"时无从知道改的是哪一层。普通 schema 字段不受此限——它可以
+与同名运行时配置项共存,那正是"构造期值作为运行时读取回退"的既有形态。
