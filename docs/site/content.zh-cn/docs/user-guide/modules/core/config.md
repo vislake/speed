@@ -38,21 +38,15 @@ schema,运行时解析开关依赖,并服务有效值。
 ## 接线与最少使用
 
 ```go
-db, err := dbkit.Open(ctx, dbkit.Options{Dialect: dbkit.DialectSQLite, DSN: dsn})
-// handle err
-
-configModule := config.NewModule(db, config.WithPollInterval(30*time.Second))
-migrations := dbkit.NewMigrationRegistry()
-if err := migrations.Register(configModule); err != nil { /* handle err */ }
-if err := migrations.Apply(ctx, db, dbkit.DialectSQLite); err != nil { /* handle err */ }
-
+// 组合选中 config 组件;装配构造模块并驱动它——Register 在它的 Init
+// 回合声明,附着的 *Service 在每个组件的声明都就位后,由模块自己的
+// Start 回合发布。
 reg := pkgcore.NewComponentRegistry()
+// 在 reg 上注册宿主自己的组件(或让加载器替你选)
 if err := app.Assemble(ctx, reg, app.LoadSpec{Host: &hostConfig, Options: loaderOpts}); err != nil { /* handle err */ }
-// handle err
 
-svc, err := configModule.Attach(reg)
+svc, err := pkgcore.Get[*config.Service](reg) // 装配已附着的服务
 // handle err
-defer svc.Close() // 停掉轮询与 watcher
 
 name, err := config.GetTyped[string](svc, ctx, "brand.site_name") // 平台默认值
 // handle err
@@ -66,8 +60,13 @@ enabled, err := svc.IsEnabled(tenantCtx, "brand.custom_theme")
 // handle err
 ```
 
-(压缩自模块可运行的 `example_test.go`——它对着内存 SQLite 走完
-这条确切路径。)
+组件是被选中的,不是手工构造的:装配构造模块,它的 `Init` 回合经
+`Register` 声明,它的 `Start` 回合附着 schema 快照并发布 `*Service`,
+宿主用 `pkgcore.Get` 读回。被选的 db 组件已在 `Verify` 阶段应用每
+个组件声明的迁移集,所以服务附着前 `configs` 表已存在。需要在
+`Init` 期间就用服务的宿主——早于 `Start` 发布它——由自己的步骤组件
+在 `Init` 里调用 `configModule.Attach(reg)` 并发布返回的服务;模块
+的 `Start` 回合随后补全那份快照,而不是再附着第二个服务。
 
 ## 核心概念与 API 要点
 

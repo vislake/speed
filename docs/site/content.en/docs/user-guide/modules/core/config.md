@@ -44,21 +44,16 @@ poll interval. The `*Service` `Attach` returns is what the host keeps.
 ## Wiring and minimal use
 
 ```go
-db, err := dbkit.Open(ctx, dbkit.Options{Dialect: dbkit.DialectSQLite, DSN: dsn})
-// handle err
-
-configModule := config.NewModule(db, config.WithPollInterval(30*time.Second))
-migrations := dbkit.NewMigrationRegistry()
-if err := migrations.Register(configModule); err != nil { /* handle err */ }
-if err := migrations.Apply(ctx, db, dbkit.DialectSQLite); err != nil { /* handle err */ }
-
+// The composition selects the config component; the assembly constructs the
+// module and drives it — Register declares during its Init turn, and the
+// attached *Service is published from the module's Start turn, once every
+// component's declarations are in.
 reg := pkgcore.NewComponentRegistry()
 // register the host's own components on reg (or let the loader select them)
 if err := app.Assemble(ctx, reg, app.LoadSpec{Host: &hostConfig, Options: loaderOpts}); err != nil { /* handle err */ }
 
-svc, err := configModule.Attach(reg)
+svc, err := pkgcore.Get[*config.Service](reg) // the service the assembly attached
 // handle err
-defer svc.Close() // stops the poller and watchers
 
 name, err := config.GetTyped[string](svc, ctx, "brand.site_name") // platform default
 // handle err
@@ -71,6 +66,17 @@ if err := svc.Set(tenantCtx, config.ScopeTenant, "brand.site_name",
 enabled, err := svc.IsEnabled(tenantCtx, "brand.custom_theme")
 // handle err
 ```
+
+The component is selected, never hand-built: the assembly constructs the
+module, its `Init` turn declares through `Register`, and its `Start` turn
+attaches the schema snapshot and publishes the `*Service`, which the host
+reads back with `pkgcore.Get`. The db component has already applied every
+selected component's declared migration set at the `Verify` stage, so the
+`configs` table exists before the service attaches. A host that needs the
+service *during* `Init` — before `Start` publishes it — calls
+`configModule.Attach(reg)` from its own step component's `Init` and
+publishes the returned service; the module's `Start` turn then completes
+that snapshot instead of attaching a second service.
 
 ## Core concepts and API essentials
 
