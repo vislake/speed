@@ -1221,7 +1221,7 @@
       "file": "examples/reference-app/internal/app/cases.go",
       "ident": "casesErrInternal",
       "kind": "declared",
-      "line": 60,
+      "line": 59,
       "module": "cases",
       "status": 500
     },
@@ -1230,7 +1230,7 @@
       "file": "examples/reference-app/internal/app/cases.go",
       "ident": "casesInvalidRequestBody",
       "kind": "declared",
-      "line": 67,
+      "line": 66,
       "module": "cases",
       "status": 400
     },
@@ -1284,7 +1284,7 @@
       "file": "examples/reference-app/internal/app/cases_photos.go",
       "ident": "ErrPhotoContentInvalid",
       "kind": "declared",
-      "line": 80,
+      "line": 79,
       "module": "cases",
       "status": 400
     },
@@ -1293,7 +1293,7 @@
       "file": "examples/reference-app/internal/app/cases_photos.go",
       "ident": "ErrPhotoContentRequired",
       "kind": "declared",
-      "line": 75,
+      "line": 74,
       "module": "cases",
       "status": 400
     },
@@ -1302,7 +1302,7 @@
       "file": "examples/reference-app/internal/app/cases_photos.go",
       "ident": "ErrPhotoContentTooLarge",
       "kind": "declared",
-      "line": 87,
+      "line": 86,
       "module": "cases",
       "status": 400
     },
@@ -1311,7 +1311,7 @@
       "file": "examples/reference-app/internal/app/cases_photos.go",
       "ident": "ErrPhotoNotFound",
       "kind": "declared",
-      "line": 102,
+      "line": 101,
       "module": "cases",
       "status": 404
     },
@@ -1338,7 +1338,7 @@
       "file": "examples/reference-app/internal/app/cases_photos.go",
       "ident": "ErrPhotoRejected",
       "kind": "declared",
-      "line": 95,
+      "line": 94,
       "module": "cases",
       "status": 400
     },
@@ -1653,7 +1653,7 @@
       "file": "examples/reference-app/internal/app/consult.go",
       "ident": "consultErrInternal",
       "kind": "declared",
-      "line": 42,
+      "line": 41,
       "module": "consult",
       "status": 500
     },
@@ -1662,7 +1662,7 @@
       "file": "examples/reference-app/internal/app/consult.go",
       "ident": "",
       "kind": "inline",
-      "line": 71,
+      "line": 70,
       "module": "consult",
       "status": 400
     },
@@ -1671,7 +1671,7 @@
       "file": "examples/reference-app/internal/app/consult.go",
       "ident": "",
       "kind": "inline",
-      "line": 75,
+      "line": 74,
       "module": "consult",
       "status": 400
     },
@@ -3156,7 +3156,7 @@
       "file": "examples/reference-app/internal/app/team_members.go",
       "ident": "teamMemberErrInternal",
       "kind": "declared",
-      "line": 120,
+      "line": 119,
       "module": "reference_app",
       "status": 500
     },
@@ -3165,7 +3165,7 @@
       "file": "examples/reference-app/internal/app/clinic_name.go",
       "ident": "",
       "kind": "inline",
-      "line": 79,
+      "line": 78,
       "module": "reference_app",
       "status": 400
     },
@@ -3318,7 +3318,7 @@
       "file": "examples/reference-app/internal/app/smilesim.go",
       "ident": "smilesimErrRecipientNotInTenant",
       "kind": "declared",
-      "line": 486,
+      "line": 478,
       "module": "smilesim",
       "status": 400
     },
