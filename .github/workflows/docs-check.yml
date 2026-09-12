@@ -165,13 +165,22 @@ name: docs-check
 #     root. Elsewhere in go/ -- go/jobs' refusal sites, go/tenancy's
 #     middleware and system-context refusals,
 #     go/sharing/ratelimit.go, go/ai-gateway/ratelimit.go,
-#     go/admin/handler.go, go/integration/module.go today; the
-#     committed index's source column names the live set -- a
-#     construction added, moved or removed in a code-only PR changes
-#     the index's source column (and so docs/error-codes.json and its
-#     site page) without starting this pipeline, and one removed with
-#     its locales entry left behind can leave the platform-error bundle
-#     stale the same way. Deliberate: wiring go/** to close it would
+#     go/admin/handler.go, go/integration/module.go, and
+#     go/authn/handler.go's inline construction of authn.internal_error
+#     -- is the live residue, fifteen files today. That roster cannot be
+#     read off the committed index: its source column names each code's
+#     winning site only, and the per-code collapse ranks a named
+#     declaration above an inline construction of the same code -- so
+#     the collapsed go/authn/handler.go site (the declaration in
+#     go/authn/errors.go wins it) appears in no source-column entry,
+#     nor in any docs/error-codes.json row. A code-only PR that adds,
+#     moves or removes a construction site in this residue can change
+#     the committed index without starting this pipeline -- the site
+#     page's stats footer counts every construction site, while the
+#     rows (and the JSON twin) follow the winning sites -- and one
+#     removed with its locales entry left behind can leave the
+#     platform-error bundle stale the same way. Deliberate: wiring
+#     go/** to close it would
 #     fire this pipeline on every code-only PR, which is what the path
 #     set exists to avoid -- code-only PRs belong to fast-check's
 #     module matrix by the trigger design above. The residue is
