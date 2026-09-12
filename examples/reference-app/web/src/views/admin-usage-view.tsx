@@ -73,19 +73,12 @@ import Typography from '@mui/material/Typography'
 import { useAdminGetUsageSummary } from '@speed/api-sdk'
 import type { AdminSubscription } from '@speed/api-sdk'
 import { useTranslation } from '@speed/i18n'
-import type { RouteGuardStatus } from '@speed/layout-kit'
-import { RouteGuard } from '@speed/layout-kit'
-import { EmptyState } from '@speed/ui-kit'
-import { apiErrorCodeOf } from '../cases-errors.js'
 import { demoTenantNameKey } from '../demo-tenants.js'
+import { gatedRead } from '../gated-read.js'
+import { GatedContent } from '../gated-read.js'
 import { REFERENCE_APP_NAMESPACE } from '../resources.js'
 import { useTenantQueryKey } from '../tenant-query-key.js'
 import { useDateFormatter } from '../use-date-formatter.js'
-
-/** The read gate's own refusal code: the rbac layer's 403, the only
- * dashboard-read answer that is an authorization fact (the answer this
- * app's admin route guard gives a caller without the admin grant). */
-const ADMIN_READ_DENIED_CODE = 'rbac.permission_denied'
 
 /** A metering summary's bundle key by the feature key the composed app
  * records (go/ai-gateway's usage dimensions). A feature outside the
@@ -139,18 +132,9 @@ export function AdminUsageView(): ReactElement {
     query: { queryKey: summaryKey, enabled: tenantId !== null },
   })
 
-  // The read failure, classified error-first exactly like the ledger
-  // surface's: only the rbac gate's own refusal is an authorization
-  // fact; every other failed read is a load failure and renders the
-  // error suit, never the no-permission one.
-  const readFailed = summaryQuery.isError
-  const errorCode = readFailed ? apiErrorCodeOf(summaryQuery.error) : null
-  const gateDenied = errorCode === ADMIN_READ_DENIED_CODE
-  const gateStatus: RouteGuardStatus = gateDenied
-    ? 'denied'
-    : summaryQuery.data !== undefined
-      ? 'allowed'
-      : 'pending'
+  // The gate is the dashboard read itself (gated-read.tsx's
+  // error-first classification and why it must be so).
+  const gate = gatedRead(summaryQuery)
 
   const formatNumber = useMemo(() => {
     const formatter = new Intl.NumberFormat(i18n.language)
@@ -189,138 +173,123 @@ export function AdminUsageView(): ReactElement {
       >
         {t('admin.usage.intro')}
       </Typography>
-      {readFailed && !gateDenied ? (
-        // The read failed for a reason other than authorization -- the
-        // error empty state in its own suit, never the no-permission
-        // one (a down server is not a permission problem).
-        <EmptyState variant="error" headingLevel="h2" />
-      ) : (
-        <RouteGuard
-          status={gateStatus}
-          deniedFallback={
-            <EmptyState variant="noPermission" headingLevel="h2" />
-          }
-        >
-          {rows.length === 0 ? (
-            <Box>
-              <Typography component="h2" variant="h6" sx={{ fontWeight: 600 }}>
-                {t('admin.usage.emptyTitle')}
-              </Typography>
-              <Typography variant="body2" color="text.secondary">
-                {t('admin.usage.emptyDescription')}
-              </Typography>
-            </Box>
-          ) : (
-            <Box
-              component="ul"
-              sx={{ margin: 0, padding: 0, listStyle: 'none' }}
-            >
-              {rows.map((row) => (
-                <Box
-                  component="li"
-                  key={row.tenantId}
-                  sx={{
-                    paddingY: 1.5,
-                    borderBottom: '1px solid',
-                    borderColor: 'divider',
-                    ':last-of-type': { borderBottom: 'none' },
-                  }}
+      <GatedContent gate={gate}>
+        {rows.length === 0 ? (
+          <Box>
+            <Typography component="h2" variant="h6" sx={{ fontWeight: 600 }}>
+              {t('admin.usage.emptyTitle')}
+            </Typography>
+            <Typography variant="body2" color="text.secondary">
+              {t('admin.usage.emptyDescription')}
+            </Typography>
+          </Box>
+        ) : (
+          <Box component="ul" sx={{ margin: 0, padding: 0, listStyle: 'none' }}>
+            {rows.map((row) => (
+              <Box
+                component="li"
+                key={row.tenantId}
+                sx={{
+                  paddingY: 1.5,
+                  borderBottom: '1px solid',
+                  borderColor: 'divider',
+                  ':last-of-type': { borderBottom: 'none' },
+                }}
+              >
+                <Typography
+                  component="h2"
+                  variant="h6"
+                  sx={{ fontWeight: 600 }}
                 >
-                  <Typography
-                    component="h2"
-                    variant="h6"
-                    sx={{ fontWeight: 600 }}
-                  >
-                    {tenantSectionName(t, row)}
-                  </Typography>
-                  {row.meteringSummaries !== undefined &&
-                    (row.meteringSummaries.length === 0 ? (
-                      <Typography variant="body2" color="text.secondary">
-                        {t('admin.usage.noUsage')}
-                      </Typography>
-                    ) : (
-                      <Box
-                        component="ul"
-                        sx={{ margin: 0, padding: 0, listStyle: 'none' }}
-                      >
-                        {row.meteringSummaries.map((summary) => {
-                          const featureKey =
-                            USAGE_FEATURE_TEXT_KEYS[summary.feature]
-                          const caption = periodCaption(
-                            summary.periodStart,
-                            summary.periodEnd,
-                          )
-                          return (
-                            <Box
-                              component="li"
-                              key={`${summary.feature}-${summary.periodStart}`}
-                              sx={{
-                                display: 'flex',
-                                justifyContent: 'space-between',
-                                gap: 2,
-                                alignItems: 'baseline',
-                                paddingY: 0.5,
-                              }}
-                            >
-                              <Box sx={{ minWidth: 0 }}>
-                                <Typography variant="body2">
-                                  {featureKey === undefined
-                                    ? summary.feature
-                                    : t(featureKey)}
-                                </Typography>
-                                {caption !== '' && (
-                                  <Typography
-                                    variant="caption"
-                                    color="text.secondary"
-                                  >
-                                    {caption}
-                                  </Typography>
-                                )}
-                              </Box>
-                              <Typography
-                                variant="body2"
-                                sx={{ whiteSpace: 'nowrap' }}
-                              >
-                                {formatNumber(summary.quantity)}
+                  {tenantSectionName(t, row)}
+                </Typography>
+                {row.meteringSummaries !== undefined &&
+                  (row.meteringSummaries.length === 0 ? (
+                    <Typography variant="body2" color="text.secondary">
+                      {t('admin.usage.noUsage')}
+                    </Typography>
+                  ) : (
+                    <Box
+                      component="ul"
+                      sx={{ margin: 0, padding: 0, listStyle: 'none' }}
+                    >
+                      {row.meteringSummaries.map((summary) => {
+                        const featureKey =
+                          USAGE_FEATURE_TEXT_KEYS[summary.feature]
+                        const caption = periodCaption(
+                          summary.periodStart,
+                          summary.periodEnd,
+                        )
+                        return (
+                          <Box
+                            component="li"
+                            key={`${summary.feature}-${summary.periodStart}`}
+                            sx={{
+                              display: 'flex',
+                              justifyContent: 'space-between',
+                              gap: 2,
+                              alignItems: 'baseline',
+                              paddingY: 0.5,
+                            }}
+                          >
+                            <Box sx={{ minWidth: 0 }}>
+                              <Typography variant="body2">
+                                {featureKey === undefined
+                                  ? summary.feature
+                                  : t(featureKey)}
                               </Typography>
+                              {caption !== '' && (
+                                <Typography
+                                  variant="caption"
+                                  color="text.secondary"
+                                >
+                                  {caption}
+                                </Typography>
+                              )}
                             </Box>
-                          )
-                        })}
-                      </Box>
-                    ))}
-                  {row.creditBalance !== undefined && (
-                    <Box sx={{ marginTop: 0.5 }}>
-                      <Typography variant="body1" sx={{ fontWeight: 600 }}>
+                            <Typography
+                              variant="body2"
+                              sx={{ whiteSpace: 'nowrap' }}
+                            >
+                              {formatNumber(summary.quantity)}
+                            </Typography>
+                          </Box>
+                        )
+                      })}
+                    </Box>
+                  ))}
+                {row.creditBalance !== undefined && (
+                  <Box sx={{ marginTop: 0.5 }}>
+                    <Typography variant="body1" sx={{ fontWeight: 600 }}>
+                      {balanceLine(
+                        'admin.usage.availableLine',
+                        row.creditBalance.available,
+                      )}
+                    </Typography>
+                    {row.creditBalance.reserved > 0 && (
+                      <Typography variant="body2" color="text.secondary">
                         {balanceLine(
-                          'admin.usage.availableLine',
-                          row.creditBalance.available,
+                          'admin.usage.reservedLine',
+                          row.creditBalance.reserved,
                         )}
                       </Typography>
-                      {row.creditBalance.reserved > 0 && (
-                        <Typography variant="body2" color="text.secondary">
-                          {balanceLine(
-                            'admin.usage.reservedLine',
-                            row.creditBalance.reserved,
-                          )}
-                        </Typography>
-                      )}
-                    </Box>
-                  )}
-                  <Typography
-                    variant="body2"
-                    color="text.secondary"
-                    sx={{ marginTop: 0.5 }}
-                  >
-                    {row.activeSubscription !== undefined
-                      ? subscriptionLine(row.activeSubscription)
-                      : t('admin.usage.subscriptionNone')}
-                  </Typography>
-                </Box>
-              ))}
-            </Box>
-          )}
-        </RouteGuard>
-      )}
+                    )}
+                  </Box>
+                )}
+                <Typography
+                  variant="body2"
+                  color="text.secondary"
+                  sx={{ marginTop: 0.5 }}
+                >
+                  {row.activeSubscription !== undefined
+                    ? subscriptionLine(row.activeSubscription)
+                    : t('admin.usage.subscriptionNone')}
+                </Typography>
+              </Box>
+            ))}
+          </Box>
+        )}
+      </GatedContent>
     </Box>
   )
 }

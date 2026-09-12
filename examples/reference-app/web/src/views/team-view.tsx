@@ -89,22 +89,19 @@ import {
 } from '@speed/api-sdk'
 import { useAuthState } from '@speed/auth-core'
 import { useTranslation } from '@speed/i18n'
-import type { RouteGuardStatus } from '@speed/layout-kit'
-import { RouteGuard } from '@speed/layout-kit'
 import type { DataTableColumn } from '@speed/ui-kit'
-import { DataTable, EmptyState, FormField, FormLayout } from '@speed/ui-kit'
+import { DataTable, FormField, FormLayout } from '@speed/ui-kit'
 import { useForm } from 'react-hook-form'
 import { useAppServices } from '../app-services.js'
+import { apiErrorCodeOf } from '../cases-errors.js'
+import { gatedRead } from '../gated-read.js'
+import { GatedContent } from '../gated-read.js'
 import { REFERENCE_APP_NAMESPACE } from '../resources.js'
 import { fetchTeamMembers } from '../team-api.js'
 import type { TeamMember } from '../team-api.js'
 import { useTenantQueryKey } from '../tenant-query-key.js'
 import { usePreferredTimeZone } from '../use-preferred-time-zone.js'
 import { CurrentClinicLine } from './current-clinic.js'
-
-/** The read gate's own refusal code, like the notes surface's: the rbac
- * layer's 403, the only list-read answer that is an authorization fact. */
-const TEAM_READ_DENIED_CODE = 'rbac.permission_denied'
 
 /** A failure that carries no code (a bug-shaped throw, an un-normalized
  * answer) collapses to this -- not a code @speed/api-client ever emits,
@@ -185,18 +182,6 @@ interface InviteDraft {
   readonly email: string
 }
 
-/**
- * The code of an ApiError-shaped failure, or null for a failure that
- * carries none (a bug-shaped throw, an un-normalized answer).
- */
-function apiErrorCodeOf(error: unknown): string | null {
-  if (typeof error !== 'object' || error === null) {
-    return null
-  }
-  const code = (error as { code?: unknown }).code
-  return typeof code === 'string' && code.length > 0 ? code : null
-}
-
 /** A submit failure's code, collapsed to the never-whitelisted unknown
  * marker when the failure carried none, so the resolver always has a
  * code to show. */
@@ -256,20 +241,9 @@ export function TeamView(): ReactElement {
   // hand-written send's did.
   const inviteMutation = useOrgCreateInvitation()
 
-  // The read failure, classified error-first exactly like the notes
-  // surface (see notes-view.tsx's own account of why the error state
-  // must be consulted before anything else): only the rbac gate's own
-  // refusal is an authorization fact; every other failed read is a
-  // load failure and renders the error suit, never the no-permission
-  // one.
-  const listReadFailed = teamQuery.isError
-  const listErrorCode = listReadFailed ? apiErrorCodeOf(teamQuery.error) : null
-  const gateDenied = listErrorCode === TEAM_READ_DENIED_CODE
-  const gateStatus: RouteGuardStatus = gateDenied
-    ? 'denied'
-    : teamQuery.data !== undefined
-      ? 'allowed'
-      : 'pending'
+  // The gate is the snapshot read itself (gated-read.tsx's error-first
+  // classification and why it must be so).
+  const gate = gatedRead(teamQuery)
 
   const inviteForm = useForm<InviteDraft>({ defaultValues: { email: '' } })
 
@@ -437,117 +411,101 @@ export function TeamView(): ReactElement {
       >
         {t('team.intro')}
       </Typography>
-      {listReadFailed && !gateDenied ? (
-        // The read failed for a reason other than authorization -- the
-        // error empty state in its own suit, never the no-permission
-        // one (a down server is not a permission problem).
-        <EmptyState variant="error" headingLevel="h2" />
-      ) : (
-        <RouteGuard
-          status={gateStatus}
-          deniedFallback={
-            <EmptyState variant="noPermission" headingLevel="h2" />
-          }
-        >
-          <Box sx={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-            <section>
-              <Typography component="h2" variant="h6" sx={{ marginBottom: 1 }}>
-                {t('team.members.heading')}
-              </Typography>
-              <DataTable
-                rows={teamQuery.data?.members ?? []}
-                columns={memberColumns}
-                rowKey={(membership) => membership.membershipId}
-                loading={teamQuery.isFetching}
-                emptyTitle={t('team.members.emptyTitle')}
-                emptyDescription={t('team.members.emptyDescription')}
-              />
-            </section>
-            <section>
-              <Typography component="h2" variant="h6" sx={{ marginBottom: 1 }}>
-                {t('team.invitations.heading')}
-              </Typography>
-              {sentNotice && (
-                <Alert severity="success" role="status" sx={{ marginBottom: 2 }}>
-                  {t('team.invite.sentNotice')}
-                </Alert>
-              )}
-              {/* The invite affordance renders only while this clinic has
-                  a root node carrying an id to bind an invitee to -- a
-                  clinic whose tree is missing, or whose root answers no
-                  id, cannot receive members, so no control is drawn
-                  that would fail on click. */}
-              {teamQuery.data?.rootNode?.id !== undefined && !inviteFormOpen ? (
-                <Button
-                  variant="contained"
-                  onClick={openInviteForm}
-                  sx={{ marginBottom: 2 }}
-                >
-                  {t('team.invite.action')}
-                </Button>
-              ) : null}
-              {inviteFormOpen && teamQuery.data?.rootNode?.id !== undefined && (
-                <FormLayout
-                  form={inviteForm}
-                  onSubmit={handleSend}
-                  actions={
-                    <Button
-                      type="submit"
-                      variant="contained"
-                      disabled={inviteForm.formState.isSubmitting}
-                    >
-                      {t('team.invite.send')}
-                    </Button>
-                  }
-                >
-                  <FormField
-                    name="email"
-                    required
-                    rules={{
-                      required: t('team.invite.emailRequired'),
-                      pattern: {
-                        value: /^[^\s@]+@[^\s@]+\.[^\s@]+$/,
-                        message: t('team.invite.emailInvalid'),
-                      },
-                    }}
-                    render={({ field, invalid, errorText }) => (
-                      <TextField
-                        {...field}
-                        type="email"
-                        label={t('team.invite.emailLabel')}
-                        fullWidth
-                        error={invalid}
-                        helperText={errorText ?? undefined}
-                      />
-                    )}
-                  />
-                  {submitErrorCode !== null && (
-                    <Alert
-                      severity="error"
-                      role="alert"
-                      sx={{ width: '100%' }}
-                    >
-                      {submitErrorText(submitErrorCode)}
-                    </Alert>
+      <GatedContent gate={gate}>
+        <Box sx={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+          <section>
+            <Typography component="h2" variant="h6" sx={{ marginBottom: 1 }}>
+              {t('team.members.heading')}
+            </Typography>
+            <DataTable
+              rows={teamQuery.data?.members ?? []}
+              columns={memberColumns}
+              rowKey={(membership) => membership.membershipId}
+              loading={teamQuery.isFetching}
+              emptyTitle={t('team.members.emptyTitle')}
+              emptyDescription={t('team.members.emptyDescription')}
+            />
+          </section>
+          <section>
+            <Typography component="h2" variant="h6" sx={{ marginBottom: 1 }}>
+              {t('team.invitations.heading')}
+            </Typography>
+            {sentNotice && (
+              <Alert severity="success" role="status" sx={{ marginBottom: 2 }}>
+                {t('team.invite.sentNotice')}
+              </Alert>
+            )}
+            {/* The invite affordance renders only while this clinic has
+                a root node carrying an id to bind an invitee to -- a
+                clinic whose tree is missing, or whose root answers no
+                id, cannot receive members, so no control is drawn
+                that would fail on click. */}
+            {teamQuery.data?.rootNode?.id !== undefined && !inviteFormOpen ? (
+              <Button
+                variant="contained"
+                onClick={openInviteForm}
+                sx={{ marginBottom: 2 }}
+              >
+                {t('team.invite.action')}
+              </Button>
+            ) : null}
+            {inviteFormOpen && teamQuery.data?.rootNode?.id !== undefined && (
+              <FormLayout
+                form={inviteForm}
+                onSubmit={handleSend}
+                actions={
+                  <Button
+                    type="submit"
+                    variant="contained"
+                    disabled={inviteForm.formState.isSubmitting}
+                  >
+                    {t('team.invite.send')}
+                  </Button>
+                }
+              >
+                <FormField
+                  name="email"
+                  required
+                  rules={{
+                    required: t('team.invite.emailRequired'),
+                    pattern: {
+                      value: /^[^\s@]+@[^\s@]+\.[^\s@]+$/,
+                      message: t('team.invite.emailInvalid'),
+                    },
+                  }}
+                  render={({ field, invalid, errorText }) => (
+                    <TextField
+                      {...field}
+                      type="email"
+                      label={t('team.invite.emailLabel')}
+                      fullWidth
+                      error={invalid}
+                      helperText={errorText ?? undefined}
+                    />
                   )}
-                </FormLayout>
-              )}
-              <DataTable
-                rows={teamQuery.data?.invitations ?? []}
-                columns={invitationColumns}
-                // The spec leaves the row's id optional; a row that
-                // carries one keys by it, and one that does not falls
-                // back to the table's own index keying rather than
-                // minting a colliding empty-string key.
-                rowKey={(invitation, rowIndex) => invitation.id ?? rowIndex}
-                loading={teamQuery.isFetching}
-                emptyTitle={t('team.invitations.emptyTitle')}
-                emptyDescription={t('team.invitations.emptyDescription')}
-              />
-            </section>
-          </Box>
-        </RouteGuard>
-      )}
+                />
+                {submitErrorCode !== null && (
+                  <Alert severity="error" role="alert" sx={{ width: '100%' }}>
+                    {submitErrorText(submitErrorCode)}
+                  </Alert>
+                )}
+              </FormLayout>
+            )}
+            <DataTable
+              rows={teamQuery.data?.invitations ?? []}
+              columns={invitationColumns}
+              // The spec leaves the row's id optional; a row that
+              // carries one keys by it, and one that does not falls
+              // back to the table's own index keying rather than
+              // minting a colliding empty-string key.
+              rowKey={(invitation, rowIndex) => invitation.id ?? rowIndex}
+              loading={teamQuery.isFetching}
+              emptyTitle={t('team.invitations.emptyTitle')}
+              emptyDescription={t('team.invitations.emptyDescription')}
+            />
+          </section>
+        </Box>
+      </GatedContent>
     </Box>
   )
 }

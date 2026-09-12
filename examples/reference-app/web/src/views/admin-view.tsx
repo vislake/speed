@@ -60,19 +60,14 @@ import Typography from '@mui/material/Typography'
 import { useAdminListTenants } from '@speed/api-sdk'
 import type { AdminTenant } from '@speed/api-sdk'
 import { useTranslation } from '@speed/i18n'
-import type { RouteGuardStatus } from '@speed/layout-kit'
-import { RouteGuard } from '@speed/layout-kit'
 import type { DataTableColumn } from '@speed/ui-kit'
-import { DataTable, EmptyState } from '@speed/ui-kit'
+import { DataTable } from '@speed/ui-kit'
 import { demoTenantNameKey } from '../demo-tenants.js'
+import { gatedRead } from '../gated-read.js'
+import { GatedContent } from '../gated-read.js'
 import { REFERENCE_APP_NAMESPACE } from '../resources.js'
 import { useTenantQueryKey } from '../tenant-query-key.js'
 import { usePreferredTimeZone } from '../use-preferred-time-zone.js'
-
-/** The read gate's own refusal code: the rbac layer's 403, the only
- * ledger-read answer that is an authorization fact (the answer this
- * app's admin route guard gives a caller without the admin grant). */
-const ADMIN_READ_DENIED_CODE = 'rbac.permission_denied'
 
 /** A ledger status's bundle key by the server's vocabulary value.
  * Statuses outside the vocabulary (a future addition) render as their
@@ -80,16 +75,6 @@ const ADMIN_READ_DENIED_CODE = 'rbac.permission_denied'
 const TENANT_STATUS_TEXT_KEYS: Readonly<Record<string, string>> = {
   active: 'admin.tenants.statusActive',
   suspended: 'admin.tenants.statusSuspended',
-}
-
-/** The code of an ApiError-shaped failure, or null for a failure that
- * carries none (a bug-shaped throw, an un-normalized answer). */
-function apiErrorCodeOf(error: unknown): string | null {
-  if (typeof error !== 'object' || error === null) {
-    return null
-  }
-  const code = (error as { code?: unknown }).code
-  return typeof code === 'string' && code.length > 0 ? code : null
 }
 
 /**
@@ -111,18 +96,9 @@ export function AdminView(): ReactElement {
     query: { queryKey: tenantsKey, enabled: tenantId !== null },
   })
 
-  // The read failure, classified error-first exactly like the team
-  // surface's: only the rbac gate's own refusal is an authorization
-  // fact; every other failed read is a load failure and renders the
-  // error suit, never the no-permission one.
-  const listReadFailed = tenantsQuery.isError
-  const listErrorCode = listReadFailed ? apiErrorCodeOf(tenantsQuery.error) : null
-  const gateDenied = listErrorCode === ADMIN_READ_DENIED_CODE
-  const gateStatus: RouteGuardStatus = gateDenied
-    ? 'denied'
-    : tenantsQuery.data !== undefined
-      ? 'allowed'
-      : 'pending'
+  // The gate is the ledger read itself (gated-read.tsx's error-first
+  // classification and why it must be so).
+  const gate = gatedRead(tenantsQuery)
 
   const timeZone = usePreferredTimeZone()
   const formatDate = useMemo(() => {
@@ -193,28 +169,16 @@ export function AdminView(): ReactElement {
       >
         {t('admin.intro')}
       </Typography>
-      {listReadFailed && !gateDenied ? (
-        // The read failed for a reason other than authorization -- the
-        // error empty state in its own suit, never the no-permission
-        // one (a down server is not a permission problem).
-        <EmptyState variant="error" headingLevel="h2" />
-      ) : (
-        <RouteGuard
-          status={gateStatus}
-          deniedFallback={
-            <EmptyState variant="noPermission" headingLevel="h2" />
-          }
-        >
-          <DataTable
-            rows={tenantsQuery.data?.tenants ?? []}
-            columns={tenantColumns}
-            rowKey={(row) => row.tenantId}
-            loading={tenantsQuery.isFetching}
-            emptyTitle={t('admin.tenants.emptyTitle')}
-            emptyDescription={t('admin.tenants.emptyDescription')}
-          />
-        </RouteGuard>
-      )}
+      <GatedContent gate={gate}>
+        <DataTable
+          rows={tenantsQuery.data?.tenants ?? []}
+          columns={tenantColumns}
+          rowKey={(row) => row.tenantId}
+          loading={tenantsQuery.isFetching}
+          emptyTitle={t('admin.tenants.emptyTitle')}
+          emptyDescription={t('admin.tenants.emptyDescription')}
+        />
+      </GatedContent>
     </Box>
   )
 }

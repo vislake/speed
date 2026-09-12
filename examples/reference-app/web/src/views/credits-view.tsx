@@ -53,19 +53,12 @@ import {
   useBillingListCreditTransactions,
 } from '@speed/api-sdk'
 import { useTranslation } from '@speed/i18n'
-import { RouteGuard } from '@speed/layout-kit'
-import type { RouteGuardStatus } from '@speed/layout-kit'
-import { EmptyState } from '@speed/ui-kit'
 import { REFERENCE_APP_NAMESPACE } from '../resources.js'
-import { apiErrorCodeOf } from '../cases-errors.js'
+import { gatedRead } from '../gated-read.js'
+import { GatedContent } from '../gated-read.js'
 import { useTenantQueryKey } from '../tenant-query-key.js'
 import { useDateFormatter } from '../use-date-formatter.js'
 import { CurrentClinicLine } from './current-clinic.js'
-
-/** The read gate's own refusal code: the rbac layer's 403, the only
- * credits-read answer that is an authorization fact (never a transport
- * answer, never a server 5xx). */
-const CREDITS_READ_DENIED_CODE = 'rbac.permission_denied'
 
 /**
  * The reachable codes of the credits surface's two reads, each mapped
@@ -149,28 +142,10 @@ export function CreditsView(): ReactElement {
     },
   })
 
-  // The read error, classified by the queries' own error states first:
-  // an error state means a read failed, whatever it carried. Only the
-  // rbac read gate's own refusal -- its code -- is an authorization
-  // fact; every other failed read, coded or not, is a load failure and
-  // renders the read-error state, never the no-permission suit.
-  const readFailed = balanceQuery.isError || transactionsQuery.isError
-  const errorCode = readFailed
-    ? apiErrorCodeOf(balanceQuery.error ?? transactionsQuery.error)
-    : null
-  const gateDenied = errorCode === CREDITS_READ_DENIED_CODE
-
-  // The gate: an error state fails it closed before anything else is
-  // consulted; a served surface is 'allowed' only when both reads have
-  // answered with no error standing, and no answer at all yet is
-  // 'pending' -- the ordering notes-view.tsx documents for its own
-  // gate.
-  const gateStatus: RouteGuardStatus = gateDenied
-    ? 'denied'
-    : balanceQuery.data !== undefined &&
-        transactionsQuery.data !== undefined
-      ? 'allowed'
-      : 'pending'
+  // The gate stands on both reads: the balance leg's failure decides a
+  // refusal, and the surface is 'allowed' only once both have answered
+  // (gated-read.tsx's error-first ordering and why it must be so).
+  const gate = gatedRead(balanceQuery, transactionsQuery)
 
   const balance = balanceQuery.data
   const rows = transactionsQuery.data?.transactions ?? []
@@ -195,96 +170,81 @@ export function CreditsView(): ReactElement {
       >
         {t('credits.intro')}
       </Typography>
-      {readFailed && !gateDenied ? (
-        // The read failed for a reason other than authorization -- the
-        // error empty state in its own suit, not the no-permission one.
-        // Coded or codeless, a failed read renders here.
-        <EmptyState variant="error" headingLevel="h2" />
-      ) : (
-        <RouteGuard
-          status={gateStatus}
-          deniedFallback={
-            <EmptyState variant="noPermission" headingLevel="h2" />
-          }
-        >
-          <Typography component="h2" variant="h6">
-            {t('credits.balance')}
-          </Typography>
-          <Typography variant="h3" sx={{ fontWeight: 600 }}>
-            {t('credits.availableLine', {
-              count: balance?.available ?? 0,
-              value: formatNumber(balance?.available ?? 0),
+      <GatedContent gate={gate}>
+        <Typography component="h2" variant="h6">
+          {t('credits.balance')}
+        </Typography>
+        <Typography variant="h3" sx={{ fontWeight: 600 }}>
+          {t('credits.availableLine', {
+            count: balance?.available ?? 0,
+            value: formatNumber(balance?.available ?? 0),
+          })}
+        </Typography>
+        {(balance?.reserved ?? 0) > 0 && (
+          <Typography variant="body2" color="text.secondary">
+            {t('credits.reservedLine', {
+              count: balance?.reserved ?? 0,
+              value: formatNumber(balance?.reserved ?? 0),
             })}
           </Typography>
-          {(balance?.reserved ?? 0) > 0 && (
-            <Typography variant="body2" color="text.secondary">
-              {t('credits.reservedLine', {
-                count: balance?.reserved ?? 0,
-                value: formatNumber(balance?.reserved ?? 0),
-              })}
-            </Typography>
-          )}
-          {updatedLine !== '' && (
-            <Typography variant="caption" color="text.secondary">
-              {updatedLine}
-            </Typography>
-          )}
-
-          <Typography
-            component="h2"
-            variant="h6"
-            sx={{ marginTop: 3, marginBottom: 1 }}
-          >
-            {t('credits.activityHeading')}
+        )}
+        {updatedLine !== '' && (
+          <Typography variant="caption" color="text.secondary">
+            {updatedLine}
           </Typography>
-          {rows.length === 0 ? (
-            <Typography variant="body2" color="text.secondary">
-              {t('credits.empty')}
-            </Typography>
-          ) : (
-            <Box
-              component="ul"
-              sx={{ margin: 0, padding: 0, listStyle: 'none' }}
-            >
-              {rows.map((row) => (
-                <Box
-                  component="li"
-                  key={`${row.id}-${row.createdAt}`}
-                  sx={{
-                    display: 'flex',
-                    justifyContent: 'space-between',
-                    gap: 2,
-                    alignItems: 'baseline',
-                    paddingY: 1,
-                    borderBottom: '1px solid',
-                    borderColor: 'divider',
-                  }}
-                >
-                  <Box sx={{ minWidth: 0 }}>
-                    <Typography variant="body2">
-                      {t(ROW_TEXT_KEY[`${row.type}.${row.status}`] ??
-                        'credits.rows.unknown')}
-                    </Typography>
-                    {/* The meta line is the row's date alone. The
-                     * ledger's reason field never renders: go/billing's
-                     * contract makes it a machine annotation (the value
-                     * audit Changes rows copy verbatim), and the
-                     * translated label above is what the row means to
-                     * the reader -- a token beside it would say the
-                     * same thing in machine text. */}
-                    <Typography variant="caption" color="text.secondary">
-                      {formatDate(row.createdAt)}
-                    </Typography>
-                  </Box>
-                  <Typography variant="body2" sx={{ whiteSpace: 'nowrap' }}>
-                    {signedAmount(formatNumber, row)}
+        )}
+
+        <Typography
+          component="h2"
+          variant="h6"
+          sx={{ marginTop: 3, marginBottom: 1 }}
+        >
+          {t('credits.activityHeading')}
+        </Typography>
+        {rows.length === 0 ? (
+          <Typography variant="body2" color="text.secondary">
+            {t('credits.empty')}
+          </Typography>
+        ) : (
+          <Box component="ul" sx={{ margin: 0, padding: 0, listStyle: 'none' }}>
+            {rows.map((row) => (
+              <Box
+                component="li"
+                key={`${row.id}-${row.createdAt}`}
+                sx={{
+                  display: 'flex',
+                  justifyContent: 'space-between',
+                  gap: 2,
+                  alignItems: 'baseline',
+                  paddingY: 1,
+                  borderBottom: '1px solid',
+                  borderColor: 'divider',
+                }}
+              >
+                <Box sx={{ minWidth: 0 }}>
+                  <Typography variant="body2">
+                    {t(ROW_TEXT_KEY[`${row.type}.${row.status}`] ??
+                      'credits.rows.unknown')}
+                  </Typography>
+                  {/* The meta line is the row's date alone. The
+                   * ledger's reason field never renders: go/billing's
+                   * contract makes it a machine annotation (the value
+                   * audit Changes rows copy verbatim), and the
+                   * translated label above is what the row means to
+                   * the reader -- a token beside it would say the
+                   * same thing in machine text. */}
+                  <Typography variant="caption" color="text.secondary">
+                    {formatDate(row.createdAt)}
                   </Typography>
                 </Box>
-              ))}
-            </Box>
-          )}
-        </RouteGuard>
-      )}
+                <Typography variant="body2" sx={{ whiteSpace: 'nowrap' }}>
+                  {signedAmount(formatNumber, row)}
+                </Typography>
+              </Box>
+            ))}
+          </Box>
+        )}
+      </GatedContent>
     </Box>
   )
 }

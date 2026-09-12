@@ -8,32 +8,12 @@
  * The gate is the list query itself: the server's rbac layer answers a
  * caller without notes:read with 403 rbac.permission_denied, so the
  * query is the real permission fetch behind the router-level
- * RouteGuard. The classification is error-state first, because the
- * error state is where every failure of this read lands, whatever it
- * carried: only the rbac read gate's own refusal (its code,
- * rbac.permission_denied) is an authorization fact and maps to
- * 'denied'; every other failed read -- a coded transport answer or
- * server 5xx, or a refusal that carries no code at all (a raw
- * AbortError, an error thrown before the api-client could normalize
- * it) -- is a load failure and renders the ui-kit error empty state in
- * its own suit, never the no-permission one (a down server is not a
- * permission problem, and a user told they are forbidden while the
- * server is failing reads like a misconfiguration to the operator who
- * must fix it). Whichever suit, a failed read means no surface,
- * whether or not an earlier read on the very same query already left
- * rows in the cache: tanstack query v5 never clears a query's `data`
- * on a failed refetch (the last successful answer stays in the cache
- * while the retry runs), so classifying by the error's code alone
- * would let a codeless refusal fall through to the stale rows (the
- * code check finds none, `data` is still defined, the gate reads
- * 'allowed') or, with no data ever served, park at 'pending' forever
- * instead of rendering a failure. Checking `isError` ahead of anything
- * else closes both: a served list is 'allowed' only when no error
- * stands, and no answer at all yet is 'pending'. The create form lives
- * inside the allowed branch, and a refused create (a caller without
- * notes:write answers the same 403) stays on the page with its code
- * text -- the write gate is probed by the mutation, never pre-empted
- * client-side.
+ * RouteGuard, and gated-read.tsx classifies its outcome (error-state
+ * first, refusal to 'denied', everything else to the load-failure
+ * suit). The create form lives inside the allowed branch, and a refused
+ * create (a caller without notes:write answers the same 403) stays on
+ * the page with its code text -- the write gate is probed by the
+ * mutation, never pre-empted client-side.
  *
  * The list query key is tenant-namespaced per the frontend standard
  * (['tenant', tenantId, ...] over the generated bare key) so a tenant
@@ -67,11 +47,12 @@ import {
   useNotesListNotes,
 } from '../app-api/index.js'
 import { useTranslation } from '@speed/i18n'
-import { RouteGuard } from '@speed/layout-kit'
-import type { RouteGuardStatus } from '@speed/layout-kit'
 import type { DataTableColumn } from '@speed/ui-kit'
-import { DataTable, EmptyState, FormField, FormLayout } from '@speed/ui-kit'
+import { DataTable, FormField, FormLayout } from '@speed/ui-kit'
 import { useForm } from 'react-hook-form'
+import { apiErrorCodeOf } from '../cases-errors.js'
+import { gatedRead } from '../gated-read.js'
+import { GatedContent } from '../gated-read.js'
 import { REFERENCE_APP_NAMESPACE } from '../resources.js'
 import { useTenantQueryKey } from '../tenant-query-key.js'
 import { usePreferredTimeZone } from '../use-preferred-time-zone.js'
@@ -96,23 +77,6 @@ interface NoteDraft {
  * (its failures are client.network / client.timeout / client.protocol /
  * client.http.*), so the resolver treats it as unknown. */
 const UNKNOWN_FAILURE_CODE = 'client.unknown'
-
-/** The read gate's own refusal code: the rbac layer's 403, the only
- * list-read answer that is an authorization fact (never a transport
- * answer, never a server 5xx). */
-const NOTES_READ_DENIED_CODE = 'rbac.permission_denied'
-
-/**
- * The code of an ApiError-shaped failure, or null for a failure that
- * carries none (a bug-shaped throw, an un-normalized answer).
- */
-function apiErrorCodeOf(error: unknown): string | null {
-  if (typeof error !== 'object' || error === null) {
-    return null
-  }
-  const code = (error as { code?: unknown }).code
-  return typeof code === 'string' && code.length > 0 ? code : null
-}
 
 /**
  * The submit path's failure classifier: an ApiError-shaped failure
@@ -188,35 +152,9 @@ export function NotesView(): ReactElement {
     }
   }, [createForm])
 
-  // The read error, classified by the query's own error state first:
-  // an error state means the read failed, whatever the failure carried.
-  // Only the rbac read gate's own refusal -- its code -- is an
-  // authorization fact; every other failed read, coded or not, is a
-  // load failure and renders the read-error state below, never the
-  // no-permission suit (a down server is not a permission problem, and
-  // a user told they are forbidden while the server is failing reads
-  // like a misconfiguration to the operator who must fix it; and a
-  // codeless refusal is a failure too -- never stale rows, never a
-  // permanent pending).
-  const listReadFailed = notesQuery.isError
-  const listErrorCode = listReadFailed
-    ? apiErrorCodeOf(notesQuery.error)
-    : null
-  const gateDenied = listErrorCode === NOTES_READ_DENIED_CODE
-
-  // The gate: an error state fails it closed before anything else is
-  // consulted -- even when the query still holds an earlier read's
-  // data, since tanstack query v5 never clears `data` on a failed
-  // refetch (see the file header). Classifying on the error alone would
-  // fail open: a refusal whose error carries no code slips past the
-  // code check into the stale `data` (gate 'allowed') or, with no data
-  // ever served, parks at 'pending' -- so a served list is checked only
-  // once no error stands, and no answer at all yet is pending.
-  const gateStatus: RouteGuardStatus = gateDenied
-    ? 'denied'
-    : notesQuery.data !== undefined
-      ? 'allowed'
-      : 'pending'
+  // The gate is the list read itself (gated-read.tsx's error-first
+  // classification and why it must be so).
+  const gate = gatedRead(notesQuery)
 
   /** Creates the note, then turns the form over and refetches the list
    * so the served answer is the source of the new row. A refused
@@ -304,74 +242,58 @@ export function NotesView(): ReactElement {
       >
         {t('notes.intro')}
       </Typography>
-      {listReadFailed && !gateDenied ? (
-        // The read failed for a reason other than authorization -- the
-        // error empty state in its own suit, not the no-permission
-        // one. Coded or codeless, a failed read renders here: an error
-        // state is a failure, never stale rows and never a permanent
-        // pending. Both placeholders sit at the same heading level
-        // (h2, below this view's h1) so the page's heading order does
-        // not change with the state.
-        <EmptyState variant="error" headingLevel="h2" />
-      ) : (
-        <RouteGuard
-          status={gateStatus}
-          deniedFallback={
-            <EmptyState variant="noPermission" headingLevel="h2" />
+      <GatedContent gate={gate}>
+        <FormLayout
+          form={createForm}
+          onSubmit={handleCreate}
+          actions={
+            <Button
+              type="submit"
+              variant="contained"
+              disabled={createForm.formState.isSubmitting}
+            >
+              {t('notes.create.submit')}
+            </Button>
           }
         >
-          <FormLayout
-            form={createForm}
-            onSubmit={handleCreate}
-            actions={
-              <Button
-                type="submit"
-                variant="contained"
-                disabled={createForm.formState.isSubmitting}
-              >
-                {t('notes.create.submit')}
-              </Button>
-            }
-          >
-            <FormField
-              name="text"
-              required
-              rules={{
-                maxLength: {
-                  value: NOTE_TEXT_LIMIT,
-                  message: t('notes.create.textTooLong'),
-                },
-              }}
-              render={({ field, invalid, errorText }) => (
-                <TextField
-                  {...field}
-                  label={t('notes.create.textLabel')}
-                  fullWidth
-                  multiline
-                  minRows={3}
-                  maxRows={10}
-                  error={invalid}
-                  helperText={errorText ?? undefined}
-                />
-              )}
-            />
-            {submitErrorCode !== null && (
-              <Alert severity="error" role="alert" sx={{ width: '100%' }}>
-                {submitErrorText(submitErrorCode)}
-              </Alert>
+          <FormField
+            name="text"
+            required
+            rules={{
+              maxLength: {
+                value: NOTE_TEXT_LIMIT,
+                message: t('notes.create.textTooLong'),
+              },
+            }}
+            render={({ field, invalid, errorText }) => (
+              <TextField
+                {...field}
+                label={t('notes.create.textLabel')}
+                fullWidth
+                multiline
+                minRows={3}
+                maxRows={10}
+                error={invalid}
+                helperText={errorText ?? undefined}
+              />
             )}
-          </FormLayout>
-          <DataTable
-            rows={notesQuery.data?.notes ?? []}
-            columns={columns}
-            rowKey={(note) => note.id ?? ''}
-            loading={notesQuery.isFetching}
-            emptyTitle={t('notes.list.emptyTitle')}
-            emptyDescription={t('notes.list.emptyDescription')}
-            sx={{ marginTop: 3 }}
           />
-        </RouteGuard>
-      )}
+          {submitErrorCode !== null && (
+            <Alert severity="error" role="alert" sx={{ width: '100%' }}>
+              {submitErrorText(submitErrorCode)}
+            </Alert>
+          )}
+        </FormLayout>
+        <DataTable
+          rows={notesQuery.data?.notes ?? []}
+          columns={columns}
+          rowKey={(note) => note.id ?? ''}
+          loading={notesQuery.isFetching}
+          emptyTitle={t('notes.list.emptyTitle')}
+          emptyDescription={t('notes.list.emptyDescription')}
+          sx={{ marginTop: 3 }}
+        />
+      </GatedContent>
     </Box>
   )
 }
