@@ -21,7 +21,7 @@
 - **API 响应默认不返回翻译后的文案，而是返回结构化错误码 + 参数**（如 `{"code":"billing.quota_exceeded","params":{"limit":1000}}`），由前端翻译。这样同一个后端能同时服务不同语言的客户端，也便于业务方覆盖文案。
 - **后端自己生成的内容必须后端翻译**：邮件（邀请、密码重置、超额提醒）、导出的账单/发票、Webhook 通知文本、运营后台的审计日志描述。这类内容用收件人的 `locale` 而非请求方的语言渲染——给英文用户发的邀请邮件不能因为操作者是中文界面就变成中文。
 - 每个 Go module 在自己目录维护 `locales/{zh-CN,en-US}.toml` 并 `embed.FS` 暴露，由装配驱动在装载阶段合并注册（与 migrations 的聚合机制一致）。
-- 时区链：profile `users.timezone`（`GET/PATCH /api/v1/authn/me/preferences` 读写，空 = 未选）→ 设备时区 → **UTC 终值**（渲染器始终显式传 `timeZone`，不走 `Intl` 的进程本地隐式默认）；billing 发票固定 UTC（既有豁免，保留）。数据库统一存 UTC，展示层转换。后端今天没有按收件人时区渲染的内容（各模块 locales 目录不含任何日期格式化参数），tzdata 嵌入当前只服务偏好校验；默认语言 `en-US`、默认时区 `UTC`。**缺口**：第三方渲染点不携带请求者设备时区（本期不引入时区请求头）；将来服务端按请求者时区渲染的链 = 收件人 tz → 请求者档（仅前端请求存在时）→ UTC 兜底。
+- 时区链：profile `users.timezone`（`GET/PATCH /api/v1/authn/me/preferences` 读写，空 = 未选）→ 设备时区 → **UTC 终值**（渲染器始终显式传 `timeZone`，不走 `Intl` 的进程本地隐式默认）；billing 发票固定 UTC（既有豁免，保留）。数据库统一存 UTC，展示层转换。后端今天没有按收件人时区渲染的内容（各模块 locales 目录不含任何日期格式化参数），tzdata 嵌入当前只服务偏好校验；默认语言 `en-US`、默认时区 `UTC`。时区解析在实现里刻意保持三份拼写：auth-ui 的注册上报链（设备报告 → provider profile → IP 解析 → 空）、account-ui 包内 `internal/time-format.ts` 的展示解析（`resolveTimeZone`：profile → 设备 → UTC）与 reference-app 宿主 `use-preferred-time-zone.ts` 的同一三段展示链（宿主自有视图各持一份）——接受重复、不上提到 `@speed/i18n`，account-ui 的包内边界维持不变。**缺口**：第三方渲染点不携带请求者设备时区（本期不引入时区请求头）；将来服务端按请求者时区渲染的链 = 收件人 tz → 请求者档（仅前端请求存在时）→ UTC 兜底。
 
 **前端**
 - 新增 `@speed/i18n` 包（位于 `api-client` 同层），封装 `react-i18next` 实例创建、语言检测、懒加载与 MUI locale 联动（切到英文时 MUI 组件的内置文案也要跟着变，`@mui/material/locale` 的 `zhCN`/`enUS`）。
