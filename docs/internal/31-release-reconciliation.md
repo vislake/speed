@@ -331,6 +331,14 @@
 - **登记理由**：宿主可见面新增（`go/app` 三个新导出符号，加示例宿主二进制新增一个 CLI 实参面），按"宿主可见面变更须带 `!BREAKING` footer 或登记本清单"的纪律登记（纯新增，不带 footer）。
 - **出处**：`0d391414`（`feat(app): render the component configuration surface for --help`）+ `d23bf5f2`（`feat(reference-app): print the component configuration surface from --help`）。
 
+### （待编号）pkgcore：ConfigSchema 默认命名空间翻转为裸路径、`NoConfigNamespace` 哨兵删除（破坏面登记）
+
+- **面**：① `Component.ConfigNamespace` 的零值语义翻转：`configKeyPrefix`（`pkgcore/config_schema.go`）与引擎镜像 `componentConfigPrefix`（`go/app/component_config.go`）从"零值=默认 `components.<Name>.` 前缀"改为"零值=不加前缀（字段在 flag/env 处暴露成裸本地路径）"；`pkgcore.NoConfigNamespace`（`"-"`）常量及其全部分支删除——它与零值同义，保留即违反"一个 key path 只有一种拼写"（32 号文 §3，17630085 起为该文正文）。非空 `ConfigNamespace` 的"整体替换前缀（规范化为以 `.` 结尾）"与空段拒绝不变。② 随之对齐：key path 去重校验（`validateConfigKeyPaths`）只覆盖**可被来源解析**的 key path——`expose` 字段（`derive` 隐含）与 `BootstrapKeys` 声明；无 `expose` 的字段（仅由自身配置块供给）不占据共享地址、不再参与该校验（旧默认下每组件前缀天然唯一，这一点不可见；裸默认下它是旗舰组合成立的前提——如同一组合里 `eventbus.redis` 与 `kv.redis` 的同名 `addr` 字段、`chat.openai-compatible` 与 `image.openai-compatible` 的同名 schema 字段）。③ 文档面同步：`Component.ConfigNamespace` 字段文档、`config_schema.go` 文件头、`ErrConfigKeyConflict` 说明、`pkgcore/AGENTS.md` 组件配置契约一节、五个模块各自的命名空间声明注释、32 号文 §3 与 §6.1 对照行，全部改述为终态语义。
+- **消费者影响**：① 曾用 `pkgcore.NoConfigNamespace` 的宿主：删除该引用、`ConfigNamespace` 留空即可（零值即原意；该组件字段的 flag/env 拼写逐字不变）；② 曾依赖默认 `components.<Name>.` 前缀的宿主/组件：为受影响组件显式设 `ConfigNamespace`（要恢复旧的拼写形态就写 `components.<Name>`），其 flag/env 拼写随之显式化，配置文件里的块地址（`components.<组件名>` 子树）从始至终不受命名空间影响；③ 装配冲突面双向变化：两个组件的同名普通字段（无 `expose`）不再触发 `ErrConfigKeyConflict`（各读自己的块），而两个 `expose`/`derive` 字段、或字段与 `BootstrapKeys` 声明撞同一 key path 的拒绝逐字不变；④ 仓内五模块不受影响（证据）：authn/config/notification/org/pki 均显式 `ConfigNamespace: "<模块名>"`（取值逐字未动），六平台键的 key path、环境变量拼写、flag 拼写与派生身份逐字不变——flowtests 的 `TestDeclaredMaterial_RootKey_DerivesAllSixKeys`（六键 root-key 派生全绿）与 `--help` 渲染 pin（`authn.pii_cipher_key`、`env: APP_AUTHN__PII_CIPHER_KEY`）在改后仍绿。
+- **替代路径**：无（默认语义本身）；需要 flag/env 拼写带命名空间者显式设 `ConfigNamespace`，需要旧的 `components.<Name>` 形态者把该串写进 `ConfigNamespace`。
+- **登记理由**：破坏面登记（一个公共符号删除 + 默认 key path 语义翻转），按"宿主可见面变更须带 `!BREAKING` footer 或登记本清单"的纪律：本批 pkgcore 提交带 `!BREAKING` footer 并在此登记；一并登记校验面收窄（对无 `expose` 字段的冲突拒绝放宽，32 号文 §3 已同批对齐为终态）。
+- **出处**：`2f7529f5`（`fix(pkgcore)!: resolve schema fields at their bare paths by default`）+ `8db54bed`（`fix(app): mirror the bare-path default in the component config resolver`）+ `e8e66b84`（`docs(pkgcore): state the configuration contract at its bare-path default`）+ `8d38ef42`（`docs(authn,config,notification,org,pki): restate the namespace rationale`）。
+
 ## 6. D 组：configrefgen 工具内部迁移（工具面，非宿主面）
 
 - **面**：`tools/configrefgen` 的内部实现从旧内核面迁到组件面（工具自身不在消费者依赖面内）。
