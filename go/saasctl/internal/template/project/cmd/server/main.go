@@ -62,10 +62,11 @@ func main() {
 	// in the same structured JSON stream.
 	//
 	// This is deliberately a context with no cancellation of its own --
-	// runServer derives the signal-carrying lifecycle context from it and
-	// keeps it as the request base context the composed face hands its
-	// listener, so a shutdown signal never cancels in-flight requests
-	// ahead of the graceful drain.
+	// the engine's RunAssembly overlays the shutdown signals on it, and the
+	// http component's Serve stage hands its listener a request base
+	// context decoupled from that cancellation (context.WithoutCancel), so
+	// a shutdown signal never cancels in-flight requests ahead of the
+	// graceful drain.
 	baseCtx := obs.WithLogger(context.Background(), slog.New(slog.NewJSONHandler(os.Stdout, nil)))
 
 	if err := run(baseCtx); err != nil {

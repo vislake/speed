@@ -5,13 +5,10 @@ package main
 import (
 	"context"
 	"embed"
-	"errors"
 	"fmt"
-	"net"
-	"net/http"
-	"sync"
 
 	speedapp "github.com/vislake/speed/go/app"
+	"github.com/vislake/speed/go/app/httpserve"
 	"github.com/vislake/speed/go/config"
 	"github.com/vislake/speed/go/dbkit"
 
@@ -74,8 +71,10 @@ type serverBuild struct {
 // the ones this project selects), and config's own declaration timing needs
 // this file's register-only override.
 //
-// There is deliberately NO middleware chain here, and so composeFace carries
-// none: a middleware chain exists to turn a verified caller into tenant
+// There is deliberately NO middleware chain here, and so this composition's
+// link policy declares Chainless instead -- the http component serves the
+// protected mux directly, with no fixed chain around it: a middleware chain
+// exists to turn a verified caller into tenant
 // context, and this composition has no authn module and therefore no
 // verification step and no Principal -- authn.Middleware's verifier has
 // nothing to verify, and tenancy's resolver has no claim to resolve a tenant
@@ -101,14 +100,15 @@ func runServer(baseCtx context.Context, cfg serverConfig, hc hostConfig) error {
 	// descriptors from that seed -- and the engine assembles the set on the
 	// registry it owns. The engine's RunAssembly drives the whole boot: the
 	// loader, the eight stages, this host's serve step and the two-beat
-	// close, with SIGINT and SIGTERM overlaid on baseCtx. baseCtx itself
-	// stays the request base context the composed face hands its listener,
+	// close, with SIGINT and SIGTERM overlaid on baseCtx. The http
+	// component's Serve stage opens the listener and hands it a request
+	// base context decoupled from that cancellation (context.WithoutCancel),
 	// so a shutdown signal never cancels in-flight requests ahead of the
-	// graceful drain (net/http's Server.BaseContext contract). A failure
+	// graceful drain. A failure
 	// needs no host-side teardown: the assembly's own rollback closes every
 	// constructed component in reverse order, exactly once, before the
 	// error returns.
-	components, err := b.hostComponents(pkgcore.NewComponentRegistry(), baseCtx)
+	components, err := b.hostComponents(pkgcore.NewComponentRegistry())
 	if err != nil {
 		return err
 	}
@@ -124,9 +124,10 @@ func runServer(baseCtx context.Context, cfg serverConfig, hc hostConfig) error {
 	return nil
 }
 
-// serveHost is this host's serve step, run by the engine between Start and
-// the two-beat close: the application component's Start already owns the
-// listener, so the step is the process's own serving lifetime -- it holds
+// serveHost is this host's serve step, run by the engine after the Serve
+// round and before the two-beat close: the http component's Serve stage
+// already opened the listener, so the step is the process's own serving
+// lifetime -- it holds
 // until the lifecycle context ends (the engine's signal overlay is what ends
 // it) and returns, and the engine then drains through Stop and Close.
 func serveHost(ctx context.Context, _ *pkgcore.ComponentRegistry) error {
@@ -236,6 +237,12 @@ func (b *serverBuild) composition() pkgcore.ComponentConfig {
 				With("otlp_endpoint", b.cfg.OTLPEndpoint))
 	}
 
+	// The http component (go/app/httpserve): the process's HTTP face, whose
+	// required dependency is this host's link policy (the "__APP_NAME__.app"
+	// component above). The listener binds in the Serve stage on the
+	// configured address.
+	components = components.With("http", pkgcore.ComponentConfig{}.With("addr", ":"+b.cfg.Port))
+
 	return pkgcore.ComponentConfig{}.
 		With("deployment", string(b.cfg.DeploymentMode)).
 		With("strict", true).
@@ -268,7 +275,7 @@ func s3BucketLookupText(lookup objectstores3.BucketLookupType) string {
 // override components copy their modules' descriptors from (a fresh
 // registration-seeded instance; the built set is registered on the registry
 // the engine owns).
-func (b *serverBuild) hostComponents(reg *pkgcore.ComponentRegistry, baseCtx context.Context) ([]pkgcore.Component, error) {
+func (b *serverBuild) hostComponents(reg *pkgcore.ComponentRegistry) ([]pkgcore.Component, error) {
 	components := []pkgcore.Component{b.cryptoComponent()}
 
 	for _, build := range []func(*pkgcore.ComponentRegistry) (pkgcore.Component, error){
@@ -295,7 +302,7 @@ func (b *serverBuild) hostComponents(reg *pkgcore.ComponentRegistry, baseCtx con
 	components = append(components,
 		b.tenancyResolverComponent(),
 		b.postBootstrapComponent(),
-		appComponent(b, baseCtx),
+		linkPolicyComponent(),
 	)
 
 	// Every component this file contributes is replica-safe state: each
@@ -535,7 +542,17 @@ func (b *serverBuild) postBootstrapComponent() pkgcore.Component {
 				return fmt.Errorf("__APP_NAME__: attach the config module: %w", attachErr)
 			}
 			reg.Put(b.configService)
-
+			// The link policy: the host's half of the HTTP face, consumed by
+			// the http component when it assembles the handler. This
+			// composition carries no authn module -- there is nothing to
+			// verify and no claim to resolve a tenant from -- so the policy
+			// is the explicit chainless declaration: the protected mux is
+			// served directly, with only the platform middleware around it.
+			policy, err := pkgcore.Get[*httpserve.LinkPolicy](reg)
+			if err != nil {
+				return fmt.Errorf("__APP_NAME__: read the host link policy: %w", err)
+			}
+			*policy = httpserve.LinkPolicy{Chainless: true}
 			return nil
 		},
 	}
@@ -572,212 +589,26 @@ func (b *serverBuild) bindRegistry(reg *pkgcore.ComponentRegistry) error {
 	return nil
 }
 
-// hostFace is the application component's product: the composed HTTP handler
-// and the listener's drain state. Its reads and lifecycle methods are what
-// this file's serve loop drives; the fields stay unexported because only the
-// component's callbacks write them.
-type hostFace struct {
-	// handler is the composed face: the protected-face composition
-	// (composeFace) over the mux carrying the platform liveness routes.
-	handler http.Handler
-	// server is the http.Server Start builds and serves. It carries the
-	// observability middleware as its handler, the serve timeouts and the
-	// request base context.
-	server *http.Server
-	// listener is the bound listener Start serves on.
-	listener net.Listener
-	// addr is the listen address: the resolved port before Start, the
-	// listener's own address after it.
-	addr string
-	// baseCtx is the context every served request inherits. It is
-	// deliberately the host's own assembly context, never the signal-derived
-	// context a serve loop waits on, so a shutdown signal never cancels
-	// in-flight requests ahead of the drain (net/http's Server.BaseContext
-	// contract).
-	baseCtx context.Context
-	// drained closes when the asynchronous drain Stop began has finished;
-	// drainErr carries its result. Both are written before the close, so a
-	// reader that sees the closed channel sees the error.
-	drained  chan struct{}
-	drainErr error
-
-	stopOnce sync.Once
-}
-
-// start builds the http.Server over the composed handler and serves it on
-// the face's listen address, in a goroutine: the observability middleware is
-// applied here, at serve time -- this selection composes no chain, so nothing
-// reads the registry's Middleware seat and the wrap is the host's own
-// application of that outermost layer. The server's request base context is
-// the face's own, and Start records the listener's real address so a caller
-// can reach a port the operating system picked.
-func (f *hostFace) start(ctx context.Context) error {
-	server := &http.Server{
-		Addr:              f.addr,
-		Handler:           obs.Middleware(f.handler),
-		ReadHeaderTimeout: speedapp.ReadHeaderTimeout,
-		BaseContext:       func(net.Listener) context.Context { return f.baseCtx },
-	}
-	listener, err := net.Listen("tcp", f.addr)
-	if err != nil {
-		return fmt.Errorf("__APP_NAME__: serve: listen on %s: %w", f.addr, err)
-	}
-	f.server = server
-	f.listener = listener
-	f.addr = listener.Addr().String()
-	f.drained = make(chan struct{})
-	obs.FromContext(ctx).Info("server listening", "addr", f.addr)
-	go func() {
-		if err := server.Serve(f.listener); err != nil && !errors.Is(err, http.ErrServerClosed) {
-			obs.FromContext(ctx).Error("the server stopped serving", "error", err)
-		}
-	}()
-	return nil
-}
-
-// stop is the non-blocking half of shutdown: it detaches a goroutine that
-// stops the listener from accepting and waits out the in-flight requests,
-// bounded by the shutdown timeout, and returns immediately. A face that
-// never started is a no-op, so Stop is safe before Start.
-func (f *hostFace) stop(ctx context.Context) {
-	if f.server == nil || f.drained == nil {
-		return
-	}
-	f.stopOnce.Do(func() {
-		go func() {
-			drainCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), speedapp.ShutdownTimeout)
-			defer cancel()
-			f.drainErr = f.server.Shutdown(drainCtx)
-			close(f.drained)
-		}()
-	})
-}
-
-// close is the blocking half: it reports the drain stop began, waiting it
-// out bounded by the shutdown timeout on top of the caller's context. A face
-// whose drain has not finished -- Close before Stop, or a drain still in
-// flight -- stops accepting and waits out the in-flight requests here,
-// synchronously and bounded the same way; a face that never started releases
-// nothing.
-func (f *hostFace) close(ctx context.Context) error {
-	if f.server == nil {
-		return nil
-	}
-	if f.drained != nil {
-		select {
-		case <-f.drained:
-			if f.drainErr != nil {
-				return fmt.Errorf("__APP_NAME__: shut the HTTP server down: %w", f.drainErr)
-			}
-			return nil
-		default:
-		}
-	}
-
-	drainCtx, cancel := context.WithTimeout(ctx, speedapp.ShutdownTimeout)
-	defer cancel()
-	if err := f.server.Shutdown(drainCtx); err != nil {
-		return fmt.Errorf("__APP_NAME__: shut the HTTP server down: %w", err)
-	}
-	return nil
-}
-
-// hostFaceOf returns the application component's own product from the
-// instance a callback was handed. The registry passes back the very value
-// New returned, so a mismatch means the descriptor and its callbacks
-// disagree about the product -- a wiring error reported by name rather than
-// a panic inside a lifecycle callback.
-func hostFaceOf(instance any) (*hostFace, error) {
-	face, ok := instance.(*hostFace)
-	if !ok {
-		return nil, fmt.Errorf("__APP_NAME__: the application component was handed a %T, want its own *hostFace product", instance)
-	}
-	return face, nil
-}
-
-// appComponent returns the host's application component: the one component
-// that owns the HTTP face and the listener. Its Init composes the face -- a
-// phase that must compose it: composing installs the subscriptions the
-// middleware chain carries and the mounting rule resolves the selected
-// modules' routes, and no route declaration may land after Start. Start only
-// listens; Stop begins the non-blocking drain and Close waits it out.
+// linkPolicyComponent returns the host's link-policy component: the one
+// component that delivers the host's half of the HTTP face -- the verifier
+// and, for a composition with rbac selected, the route-authorization table
+// -- which the http component (go/app/httpserve) consumes as its required
+// dependency and applies when it assembles the handler in the Serve stage.
 //
-// baseCtx is the context every served request inherits (see hostFace's own
-// doc comment for why it is not the signal-derived one).
-func appComponent(b *serverBuild, baseCtx context.Context) pkgcore.Component {
+// Its product is a *httpserve.LinkPolicy, delivered empty at construction:
+// that delivery is what resolves the http component's required token and
+// orders the two components structurally. The CONTENT is filled by the
+// post-bootstrap step's Init turn, whose position at the end of the plan is
+// what guarantees every module -- authn's service above all -- has declared
+// and attached by the time the policy is written. One *LinkPolicy value
+// travels the whole way: constructed here, filled there, read by the http
+// component in its Serve stage.
+func linkPolicyComponent() pkgcore.Component {
 	return pkgcore.Component{
 		Name:     hostComponentPrefix + "app",
-		Provides: []any{(*hostFace)(nil)},
+		Provides: []any{(*httpserve.LinkPolicy)(nil)},
 		New: func(context.Context, *pkgcore.ComponentRegistry, pkgcore.ComponentConfig) (any, error) {
-			return &hostFace{baseCtx: baseCtx}, nil
-		},
-		Init: func(_ context.Context, reg *pkgcore.ComponentRegistry, instance any) error {
-			face, err := hostFaceOf(instance)
-			if err != nil {
-				return err
-			}
-			if err := b.bindRegistry(reg); err != nil {
-				return err
-			}
-			return b.composeHostFace(reg, face)
-		},
-		Start: func(ctx context.Context, _ *pkgcore.ComponentRegistry, instance any) error {
-			face, err := hostFaceOf(instance)
-			if err != nil {
-				return err
-			}
-			return face.start(ctx)
-		},
-		Stop: func(ctx context.Context, _ *pkgcore.ComponentRegistry, instance any) error {
-			face, err := hostFaceOf(instance)
-			if err != nil {
-				return err
-			}
-			face.stop(ctx)
-			return nil
-		},
-		Close: func(ctx context.Context, _ *pkgcore.ComponentRegistry, instance any) error {
-			face, err := hostFaceOf(instance)
-			if err != nil {
-				return err
-			}
-			return face.close(ctx)
+			return &httpserve.LinkPolicy{}, nil
 		},
 	}
-}
-
-// composeHostFace composes the face the application component serves, in the
-// one order the pieces require: a mux carrying the platform liveness routes,
-// the mounted-route seed for the observability middleware's route-label
-// budget (healthz and metrics, which no module registers, plus every route
-// the assembly mounted -- the last write before that middleware is
-// constructed, which Start does), then the protected face composeFace builds
-// over it.
-func (b *serverBuild) composeHostFace(reg *pkgcore.ComponentRegistry, face *hostFace) error {
-	mux := http.NewServeMux()
-	obs.MountLiveness(mux)
-	obs.RegisterMountedRoutes(append([]pkgcore.MountedRoute{
-		{Path: obs.HealthzPath},
-		{Path: obs.MetricsPath},
-	}, reg.MountedRoutes()...))
-
-	handler, err := b.composeFace(reg, mux)
-	if err != nil {
-		return err
-	}
-	face.handler = handler
-	face.addr = ":" + b.cfg.Port
-	return nil
-}
-
-// composeFace is the protected-face composition the application component
-// runs in its Init: the mux itself, carrying the platform liveness routes
-// and the selected modules' routes mounted through the platform's own
-// mounting rule, with no middleware chain -- see runServer's own doc
-// comment for why this selection carries none.
-func (b *serverBuild) composeFace(reg *pkgcore.ComponentRegistry, mux *http.ServeMux) (http.Handler, error) {
-	for _, route := range reg.MountedRoutes() {
-		pkgcore.MountRoutes(mux, route)
-	}
-	return mux, nil
 }

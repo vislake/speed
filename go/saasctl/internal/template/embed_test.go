@@ -259,29 +259,29 @@ func TestSelectionServerGoMatchesSelectionKey(t *testing.T) {
 			modules: []string{"pki", "signer.local", "authn", "org", "config", "rbac"},
 			contains: []string{
 				"authn.NewModule(", "org.NewModule(", "pkgcore.NewComponentRegistry()",
-				"speedchain.Standard(", "authnModule.Service().Verifier(),",
-				"speedchain.WithAuthorization(b.rbacService, routeRules())",
+				"*policy = httpserve.LinkPolicy{", "b.authnModule.Service().Verifier(),",
+				"Authorizer: b.rbacService,", "RouteRules: routeRules(),",
 			},
 		},
 		{
 			key:     "authn+rbac",
 			modules: []string{"pki", "signer.local", "authn", "config", "rbac"},
 			contains: []string{
-				"authn.NewModule(", "speedchain.Standard(", "authnModule.Service().Verifier(),",
-				"speedchain.WithAuthorization(b.rbacService, routeRules())",
+				"authn.NewModule(", "*policy = httpserve.LinkPolicy{", "b.authnModule.Service().Verifier(),",
+				"Authorizer: b.rbacService,", "RouteRules: routeRules(),",
 			},
 			absent: []string{"org.NewModule("},
 		},
 		{
 			key:      "authn+org",
 			modules:  []string{"pki", "signer.local", "authn", "org", "config"},
-			contains: []string{"authn.NewModule(", "org.NewModule(", "speedchain.Standard(", "authnModule.Service().Verifier(),"},
+			contains: []string{"authn.NewModule(", "org.NewModule(", "*policy = httpserve.LinkPolicy{", "b.authnModule.Service().Verifier(),"},
 			absent:   []string{"rbac.NewModule(", "rbac.GuardRoutes"},
 		},
 		{
 			key:      "authn",
 			modules:  []string{"pki", "signer.local", "authn", "config"},
-			contains: []string{"authn.NewModule(", "speedchain.Standard(", "authnModule.Service().Verifier(),"},
+			contains: []string{"authn.NewModule(", "*policy = httpserve.LinkPolicy{", "b.authnModule.Service().Verifier(),"},
 			absent:   []string{"org.NewModule(", "rbac.NewModule("},
 		},
 		{
@@ -289,7 +289,7 @@ func TestSelectionServerGoMatchesSelectionKey(t *testing.T) {
 			modules: []string{"config"},
 			contains: []string{
 				`With("config", false).`, `With(hostComponentPrefix+"config", nil).`,
-				"pkgcore.MountRoutes(",
+				"*policy = httpserve.LinkPolicy{Chainless: true}",
 			},
 			absent: []string{
 				"authn.NewModule(", "org.NewModule(", "rbac.NewModule(", "pki.NewModule(",
@@ -364,8 +364,8 @@ func TestAuthnSelectionsExemptAuthnSubtreeByStructure(t *testing.T) {
 		}
 		server := string(content)
 		for _, want := range []string{
-			"speedchain.Standard(",
-			"authnModule.Service().Verifier(),",
+			"*policy = httpserve.LinkPolicy{",
+			"b.authnModule.Service().Verifier(),",
 		} {
 			if !strings.Contains(server, want) {
 				t.Errorf("%s: missing the structural exemption marker %q", path, want)
@@ -448,7 +448,8 @@ func TestRBACSelectionsAdoptTheRouteTable(t *testing.T) {
 		}
 		server := string(content)
 		for _, want := range []string{
-			"speedchain.WithAuthorization(b.rbacService, routeRules())",
+			"Authorizer: b.rbacService,",
+			"RouteRules: routeRules(),",
 			"func routeRules() []rbac.RouteRule {",
 			"{Path: speedapp.AuthnAPIPath, Access: pkgcore.RouteAccess{Public: true}}",
 			"{Path: config.PathPublic, Access: pkgcore.RouteAccess{Public: true}}",
@@ -921,7 +922,7 @@ func TestOrgFeatureGateThroughTheConfigHandle_DrivesTheThreeInvitationArms(t *te
 	// The rows an operator writes go through the module's real Set path,
 	// under the audited system purpose config's own descriptor declares.
 	// The purpose is descriptor data the assembly registers when the Init
-	// stage closes; the seat-level declaration window this test drives does
+	// stage closes; the Init-stage declaration window this test drives does
 	// not reach that closing step, so register it directly.
 	pkgcore.RegisterSystemPurpose(config.SystemPurposeSystemWrite)
 	sysCtx, err := pkgcore.WithSystemContext(context.Background(), pkgcore.SystemReason{
@@ -1060,7 +1061,7 @@ const (
 // KeySource, over a real SQLite file) and composes the HTTP chain exactly
 // as the generated server.go does under the requested shape. The authn
 // handler is reached the way the generated code reaches it: through
-// reg.Routes after the assembly's declaration turn registered the module.
+// the route face after the assembly's declaration turn registered the module.
 func buildComposedHandler(t *testing.T, shape composedShape) http.Handler {
 	t.Helper()
 	ctx := context.Background()
@@ -1091,7 +1092,7 @@ func buildComposedHandler(t *testing.T, shape composedShape) http.Handler {
 	const authnAPIPath = "/api/v1/authn"
 	authnMux := http.NewServeMux()
 	protectedMux := http.NewServeMux()
-	for _, route := range reg.Routes.Routes() {
+	for _, route := range componenttest.FaceOf(reg).Routes() {
 		target := protectedMux
 		if strings.HasPrefix(route.Path, authnAPIPath) {
 			target = authnMux
@@ -1105,7 +1106,7 @@ func buildComposedHandler(t *testing.T, shape composedShape) http.Handler {
 		// allowlisted one (method, path) pair at a time, the built-in
 		// social channels enumerated by hand.
 		allMux := http.NewServeMux()
-		for _, route := range reg.Routes.Routes() {
+		for _, route := range componenttest.FaceOf(reg).Routes() {
 			allMux.Handle(route.Path, route.Handler)
 			if !strings.HasSuffix(route.Path, "/") {
 				allMux.Handle(route.Path+"/", route.Handler)
@@ -1160,8 +1161,8 @@ func TestPreauthExemption_ComposedShapeIsTheTemplatesOwn(t *testing.T) {
 		}
 		server := string(content)
 		for _, marker := range []string{
-			"speedchain.Standard(",
-			"authnModule.Service().Verifier(),",
+			"*policy = httpserve.LinkPolicy{",
+			"b.authnModule.Service().Verifier(),",
 		} {
 			if !strings.Contains(server, marker) {
 				t.Errorf("%s: the composed-shape twin marker %q is missing from the template", key, marker)
