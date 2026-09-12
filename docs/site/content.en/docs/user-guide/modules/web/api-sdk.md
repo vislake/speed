@@ -56,7 +56,7 @@ import { createClient, createMemoryAccessTokenStore } from '@speed/api-client'
 
 bindRequestFn(
   createClient({
-    baseUrl: '/api/v1',
+    baseUrl: window.location.origin, // scheme + host only — operation paths carry /api/v1
     accessTokenStore: createMemoryAccessTokenStore(),
     refreshAccessToken: () => session.refresh(),
   }),

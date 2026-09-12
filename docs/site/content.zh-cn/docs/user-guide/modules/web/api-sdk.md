@@ -50,7 +50,7 @@ import { createClient, createMemoryAccessTokenStore } from '@speed/api-client'
 
 bindRequestFn(
   createClient({
-    baseUrl: '/api/v1',
+    baseUrl: window.location.origin, // 只到 scheme + host——操作路径自带 /api/v1
     accessTokenStore: createMemoryAccessTokenStore(),
     refreshAccessToken: () => session.refresh(),
   }),

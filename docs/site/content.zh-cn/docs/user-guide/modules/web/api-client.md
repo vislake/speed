@@ -54,7 +54,7 @@ const session = createAuthSession(accessTokenStore)   // 会话层,见下
 
 bindRequestFn(
   createClient({
-    baseUrl: '/api/v1',                        // 或 scheme + host + 前缀
+    baseUrl: window.location.origin,           // 只到 scheme + host——生成路径自带 /api/v1
     accessTokenStore,
     refreshAccessToken: () => session.refresh(),   // 静默 401 刷新
     timeoutMs: 10_000,

@@ -59,7 +59,7 @@ const session = createAuthSession(accessTokenStore)   // the session layer, belo
 
 bindRequestFn(
   createClient({
-    baseUrl: '/api/v1',                        // or scheme + host + prefix
+    baseUrl: window.location.origin,           // scheme + host only — generated paths carry /api/v1
     accessTokenStore,
     refreshAccessToken: () => session.refresh(),   // silent 401 refresh
     timeoutMs: 10_000,
