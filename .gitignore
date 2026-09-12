@@ -16,6 +16,9 @@ Thumbs.db
 /go/**/bin/
 *.test
 *.out
+# The tool module's in-place build output: configrefgen is run with
+# `go run .` from tools/configrefgen, never as a built binary.
+/tools/configrefgen/configrefgen
 
 # Python (the checkers and the release coordinator under tools/)
 __pycache__/
