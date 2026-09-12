@@ -18,8 +18,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/redis/go-redis/v9"
-
 	"github.com/vislake/speed/go/pkgcore"
 	"github.com/vislake/speed/go/pkgcore/componenttest"
 
@@ -138,16 +136,11 @@ var builtinAssemblies = []struct {
 		}
 	}},
 	{name: "kv.memory"},
-	{name: "kv.redis", closed: func(t *testing.T, ctx context.Context, reg *pkgcore.ComponentRegistry) {
-		t.Helper()
-		store, err := pkgcore.Get[pkgcore.KVStore](reg)
-		if err != nil {
-			t.Fatalf("Get[pkgcore.KVStore] error = %v", err)
-		}
-		if _, _, err := store.Get(ctx, "close-probe"); !errors.Is(err, redis.ErrClosed) {
-			t.Errorf("Get after Close = %v, want redis.ErrClosed: the close stage must have released the client", err)
-		}
-	}},
+	// kv.redis's closed-client probe lives in its implementing package's own
+	// test (kv/redis/component_test.go): the go-redis sentinel it asserts
+	// needs the concrete client import, which the depguard rule allows only
+	// inside the implementation packages.
+	{name: "kv.redis"},
 	{name: "kv.postgres", cfg: map[string]any{"dsn": assembledPostgresDSN}, migrations: true, closed: func(t *testing.T, ctx context.Context, reg *pkgcore.ComponentRegistry) {
 		t.Helper()
 		store, err := pkgcore.Get[pkgcore.KVStore](reg)
