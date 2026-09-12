@@ -225,7 +225,7 @@ func main() {
 
 	// The host's assembly: the composition selects the db component, the
 	// config component and the subscriptions component registered above;
-	// the engine constructs each one and drives the seven stages. Register
+	// the engine constructs each one and drives the eight stages. Register
 	// runs in the Init stage, and the config component's Start turn attaches
 	// the schema snapshot and publishes the *Service. (hostConfig,
 	// loaderOpts and the composition override that names those selections

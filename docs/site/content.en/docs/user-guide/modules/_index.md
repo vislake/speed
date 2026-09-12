@@ -37,7 +37,7 @@ above its own layer:
   `ai-gateway`, `compliance`, `admin`.
 - **app** — the assembly layer at the top of the graph:
   [app](./app/), the one module with no business domain — the loader,
-  the seven-stage component drive and the fixed middleware chain every
+  the eight-stage component drive and the fixed middleware chain every
   host composes through.
 - **tools** — developer-facing tooling: `saasctl`.
 - **web** — the `@speed` npm packages (tokens, i18n, ui-kit,

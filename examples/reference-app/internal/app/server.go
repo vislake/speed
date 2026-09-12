@@ -555,12 +555,12 @@ func newServerBuild(cfg ServerConfig) *serverBuild {
 //
 // The assembly is the component registry's: the loader resolves the
 // configuration targets and the composition configuration, and the registry
-// walks its seven stages -- Prepare (the bootstrap material, the ciphers and
+// walks its eight stages -- Prepare (the bootstrap material, the ciphers and
 // the column registrations), Construct (every component's product), Verify
 // (the assembled migration sets), Init (every declaration, plus the host's
-// assembly steps and the composed HTTP face), and Start. BuildServer's drive
-// starts no listener: the returned handler is served by its caller, which is
-// what lets an httptest.Server front the exact composed chain.
+// assembly steps and the composed HTTP face), Start and Serve. BuildServer's
+// drive starts no listener: the returned handler is served by its caller,
+// which is what lets an httptest.Server front the exact composed chain.
 //
 // The deployment mode is validated by the assembly itself, against the
 // capabilities every selected component declares: a composition that cannot

@@ -125,10 +125,10 @@ authn 模块的选集完全不走链。用哪个入口是宿主的决定,而这�
 刻意的:注册表路由集就是面子时用 `Standard`,布局是宿主自己的时
 用 `Chain`。
 
-## 七阶段驱动与其失败语义
+## 八阶段驱动与其失败语义
 
 驱动器只做编排。`Assemble` 跑装载器并把注册表走过 Prepare、
-Construct、Verify、Init 与 Start;`Shutdown` 执行两相关停(非阻塞
+Construct、Verify、Init、Start 与 Serve;`Shutdown` 执行两相关停(非阻塞
 的 Stop 通知,然后逆序 Close、聚合错误);`RunAssembly` 是糖——从
 全局注册加 extra 建注册表、驱动、调用宿主的 serve 步骤(可选
 `ServeFunc`,拿到信号叠加后的 context 与活注册表;nil 则自己等

@@ -1,7 +1,7 @@
 ---
 title: Assembly layer — design
 weight: 5
-description: "Design of go/app — the module discipline's one recorded exception: why a module with no domain is warranted, how its three packages split by dependency cost, and why the loader, the fixed chain order and the seven-stage drive are shaped the way they are."
+description: "Design of go/app — the module discipline's one recorded exception: why a module with no domain is warranted, how its three packages split by dependency cost, and why the loader, the fixed chain order and the eight-stage drive are shaped the way they are."
 bookCollapseSection: true
 ---
 

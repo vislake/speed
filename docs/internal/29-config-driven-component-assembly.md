@@ -1,6 +1,6 @@
 # 29 配置驱动的组件装配
 
-> 本文定义应用的组装模型与生命周期：统一的组件抽象、核心数据结构 `ComponentRegistry`、组合配置与七阶段生命周期。全文为终态设计，代码块为接口示意；术语与对象声明以本文为准，**各模块实现以本文为准进行适配**。
+> 本文定义应用的组装模型与生命周期：统一的组件抽象、核心数据结构 `ComponentRegistry`、组合配置与八阶段生命周期。全文为终态设计，代码块为接口示意；术语与对象声明以本文为准，**各模块实现以本文为准进行适配**。
 
 ## 1 目标与范围
 
@@ -28,18 +28,18 @@
 ```mermaid
 flowchart TB
     subgraph HOST["宿主应用"]
-        SHELL["薄壳：注册组件 + 驱动七阶段"]
+        SHELL["薄壳：注册组件 + 驱动八阶段"]
         LOCAL["应用本地组件：app（宿主应用）/ 宿主步骤"]
     end
 
     subgraph ENG["引擎 go/app"]
         SRC["loader（引导根，引擎内建前置）：命令行解析 + 五源分层加载：内置默认 ＜ 项目文件 ＜ env ＜ flag ＜ 代码覆盖"]
-        ORCH["按序驱动七阶段：Prepare→Construct→Verify→Init→Start→Stop→Close"]
+        ORCH["按序驱动八阶段：Prepare→Construct→Verify→Init→Start→Serve→Stop→Close"]
     end
 
     subgraph CORE["契约层 go/pkgcore（依赖地板：零第三方依赖，不读环境/文件）"]
-        MODEL["Component（描述符七回调）/ Requirement / 资产字段"]
-        REG["ComponentRegistry：注册信息 + 组装信息（拓扑序）+ 七阶段方法 + Put/Get + 10 席"]
+        MODEL["Component（描述符八回调）/ Requirement / 资产字段"]
+        REG["ComponentRegistry：注册信息 + 组装信息（拓扑序）+ 八阶段方法 + Put/Get + 10 席"]
         CFG["Config：唯一配置类型"]
         CREG["包级 Register/MustRegister → 全局注册"]
     end
@@ -68,13 +68,14 @@ flowchart TB
 type Component struct {
     Name string // 组合配置里的选择键："authn"、"mailer.smtp"、"seed.demo"
 
-    // 生命周期：七个回调；除 New 外皆可选。Verify 起的回调接收 New 构造的实例（instance）。
+    // 生命周期：八个回调；除 New 外皆可选。Verify 起的回调接收 New 构造的实例（instance）。
     Prepare func(ctx context.Context, reg *ComponentRegistry) error // 一切构造之前（loader 在此加载配置；authn 在此自建 cipher、注册 serializer）
     New     func(ctx context.Context, reg *ComponentRegistry, cfg ComponentConfig) (any, error) // 构造产物——唯一必填
     Verify  func(ctx context.Context, reg *ComponentRegistry, instance any) error // 数据库可达后的需求自验
     Init    func(ctx context.Context, reg *ComponentRegistry, instance any) error // 声明、挂接、发布运行时服务
-    Start   func(ctx context.Context, reg *ComponentRegistry, instance any) error // 开始对外服务
-    Stop    func(ctx context.Context, reg *ComponentRegistry, instance any) error // 停止通知，非阻塞
+    Start   func(ctx context.Context, reg *ComponentRegistry, instance any) error // 组件自身启动（worker/调度/seed）
+    Serve   func(ctx context.Context, reg *ComponentRegistry, instance any) error // 入口开始接受外部请求（全体 Start 之后的一整轮）
+    Stop    func(ctx context.Context, reg *ComponentRegistry, instance any) error // 停止通知，非阻塞（两拍）
     Close   func(ctx context.Context, reg *ComponentRegistry, instance any) error // 释放资源
 
     Requires     []Requirement // 依赖（可选）
@@ -125,7 +126,7 @@ const (
 
 1. **注册信息**——名 → 描述符，回答“系统中有哪些组件”；
 2. **组装信息**——选中组件及已解析配置，**按拓扑序存储**，回答“应用由哪些组件组成”；
-3. **生命周期**——七个阶段方法，外加运行上下文（按类型的值、10 个声明席）。
+3. **生命周期**——八个阶段方法，外加运行上下文（按类型的值、10 个声明席）。
 
 ```go
 type ComponentRegistry struct { /* 注册信息 + 组装信息 + 生命周期状态 */ }
@@ -141,9 +142,13 @@ func (r *ComponentRegistry) Prepare(ctx context.Context) error   // config 加�
 func (r *ComponentRegistry) Construct(ctx context.Context) error // 拓扑构造产物；db 组件完成连接
 func (r *ComponentRegistry) Verify(ctx context.Context) error    // db 组件应用迁移；组件自查需求
 func (r *ComponentRegistry) Init(ctx context.Context) error      // 声明 / 挂接 / 发布服务；收尾统一校验
-func (r *ComponentRegistry) Start(ctx context.Context) error     // 开始对外服务
-func (r *ComponentRegistry) Stop(ctx context.Context) error      // 非阻塞停止通知
+func (r *ComponentRegistry) Start(ctx context.Context) error     // 组件自身启动（worker/调度/seed），拓扑序
+func (r *ComponentRegistry) Serve(ctx context.Context) error     // 入口开始接受外部请求；全体 Start 之后的一整轮，拓扑序
+func (r *ComponentRegistry) Stop(ctx context.Context) error      // 非阻塞停止通知；两拍，逆拓扑序
 func (r *ComponentRegistry) Close(ctx context.Context) error     // 逆拓扑序关闭，恰好一次
+
+// 阶段只读读法（装配契约的一部分——组件自持声明面时据以拒绝越界写入）：
+func (r *ComponentRegistry) Stage() Stage // 当前阶段（最后一个进入者）；StageIdle 渲染 "not started"
 
 // 运行上下文：按类型存取，结构匹配——唯一 assignable 即返回；零个点名缺失；多个报歧义。
 func (r *ComponentRegistry) Put(v any)
@@ -212,7 +217,7 @@ classDiagram
         +组装信息（选中集合，按拓扑序）
         +Put(v) / Get~T~() 按类型
         +10 个声明席（写仅限 Init；读任意时刻合法，Init 前为空集）
-        +Prepare / Construct / Verify / Init / Start / Stop / Close(ctx)
+        +Prepare / Construct / Verify / Init / Start / Serve / Stop / Close(ctx)
     }
     class Config {
         +Decode(target)
@@ -230,14 +235,14 @@ classDiagram
     }
 
     Component *-- Requirement
-    Component ..> ComponentRegistry : 七个回调的入参
+    Component ..> ComponentRegistry : 八个回调的入参
     Component ..> Config : New 的入参
     NewComponentRegistry ..> ComponentRegistry : 以全局注册为初值
 ```
 
 ## 5 生命周期
 
-### 5.1 七阶段总览
+### 5.1 八阶段总览
 
 ```mermaid
 stateDiagram-v2
@@ -246,7 +251,8 @@ stateDiagram-v2
     Construct --> Verify : 构造完成（db 组件应用迁移）
     Verify --> Init : 需求自验通过；声明席开放
     Init --> Start : 收尾统一校验通过
-    Start --> Running : 监听
+    Start --> Serve : 全体 Start 完成
+    Serve --> Running : 入口开始接受外部请求
     Running --> Stop : 信号触发（非阻塞停止通知）
     Stop --> Close : 逆拓扑序关闭
     Close --> [*]
@@ -254,6 +260,7 @@ stateDiagram-v2
     Verify --> Rollback : 自验失败
     Init --> Rollback : 初始化失败
     Start --> Rollback : 失败
+    Serve --> Rollback : 失败
     Rollback --> [*] : 逆拓扑序关闭已构造值（错误聚合）
 ```
 
@@ -263,8 +270,9 @@ stateDiagram-v2
 | Construct | `Component.New` | 构造产物；db 组件完成连接（不迁移） | 图拓扑序 | 逆序关闭 |
 | Verify | `Component.Verify` | db 组件**应用数据库迁移**；各组件校验自身前提（只做校验，不做初始化） | 图拓扑序 | 逆序关闭 |
 | Init | `Component.Init` | 声明席开放：声明进 10 席、挂接、发布运行时服务；全部完成后装配器做收尾统一校验 | 图拓扑序 | 逆序关闭 |
-| Start | `Component.Start` | 开始对外服务（Worker / scheduler / seed；宿主应用组件起监听——face 组装与订阅已在 Init） | 图拓扑序 | 逆序关闭 |
-| Stop | `Component.Stop` | 非阻塞停止通知（停接单、开始排空） | 逆拓扑序 | 忽略 |
+| Start | `Component.Start` | 组件自身启动（worker / scheduler / seed） | 图拓扑序 | 逆序关闭 |
+| Serve | `Component.Serve` | **入口开始接受外部请求**（HTTP 监听、队列消费、调度触发）；全体 `Start` 完成之后开始的一整轮，未声明该回调的组件不受影响 | 图拓扑序 | 逆序关闭 |
+| Stop | `Component.Stop` | 非阻塞停止通知（停接单、开始排空），两拍：先 Serve 声明者，再其余 | 逆拓扑序 | 忽略 |
 | Close | `Component.Close` | 等待排空、释放资源 | 逆拓扑序 | 错误聚合返回 |
 
 表中 `Verify` 起的回调带第三个参数——`New` 构造的实例（`instance`）：回调直接作用于自己的实例，不再从注册表取回产物；`Prepare` 先于实例存在、`New` 负责创建实例，故二者不带。
@@ -279,9 +287,11 @@ stateDiagram-v2
 
 **Init——声明、挂接与服务发布。** **进入本阶段即汇总注册各选中组件的 `SystemPurposes`（先于任何 Init 回调——声明数据先于使用，任何 Init 回调都可能开启系统上下文；重复/冲突 fail-closed、全量校验通过后一次性注册）**——注册为进程级、幂等、不可撤销，同进程多次装配的接受集是历次并集（装配按「一进程一次」使用；测试的否定用例须用私有 purpose 名保证前提；**装配是唯一的注册路径**——模块不得在构造函数等非装配路径隐式注册 purpose，绕过装配直接构造的消费者须显式调用注册入口）；随后声明席开放，按拓扑序执行各组件 `Init`：声明束进 10 席、挂接依赖、发布运行时服务（含 app 组件的 face 组装与订阅——它拓扑序最后，彼时声明齐备，且订阅先于一切 Start）。全部完成后装配器做收尾统一校验（席一致性、资产合并、特征图）。**值进构造、服务进 Init**：能进构造图的是值，进不了的是服务（见 §5.4）。
 
-**Start——开始服务。** 在 Init 收尾校验通过之后：`jobs` 的 queue 组件先 wire（Jobs/Schedules 席已完整——全部 Init 已毕），再按自身配置启动 worker 与 scheduler（“本副本不启 worker”即该组件的配置，如 `worker: false`）；seed 执行；对外监听由**宿主应用组件**承担——face 的组装与订阅已在 Init 完成（订阅须先于任何 Start，运行期事件不致丢失），本阶段只起监听。引擎不含任何 HTTP 组装或监听逻辑。
+**Start——组件自身启动。** 在 Init 收尾校验通过之后：`jobs` 的 queue 组件先 wire（Jobs/Schedules 席已完整——全部 Init 已毕），再按自身配置启动 worker 与 scheduler（“本副本不启 worker”即该组件的配置，如 `worker: false`）；seed 执行。引擎不含任何 HTTP 组装或监听逻辑。
 
-**Stop——停止通知。** 逆拓扑序发出停止信号，非阻塞：停接单、开始排空；失败忽略，不阻断后续阶段。
+**Serve——入口开始接受外部请求。** 全体 `Start` 完成之后开始的一整轮：HTTP 监听、队列消费、调度触发这类“把外部流量引入进程”的动作在此执行，参与者在轮内按拓扑序执行，未声明 `Serve` 回调的组件不受影响；失败与 `Start` 失败同语义（逆序回滚）。独立成阶段而非并入 `Start` 的原因：拓扑序只能表达“排在我的依赖之后”，而入口的流量可打到任何组件——它需要的是“排在全体之后”。
+
+**Stop——停止通知。** 两拍、逆拓扑序：第一拍先通知声明了 `Serve` 的组件（入口最先停止接受新请求，让在飞请求对着仍然完整的系统排空），第二拍再按逆拓扑序通知其余；失败忽略，不阻断后续阶段。
 
 **Close——关闭。** 逆拓扑序等待排空、释放资源（含实现值如 `kv.redis`、`objectstore.s3`…，db 组件在此关库）；恰好一次；错误聚合返回。
 
@@ -313,15 +323,17 @@ sequenceDiagram
     R->>P: 拓扑序：声明进 10 席、挂接、发布运行时服务（app：face 组装与订阅）
     R->>R: 收尾统一校验（席/资产合并/特征图）
     H->>R: Start(ctx)
-    R->>P: 拓扑序：Worker/scheduler/seed 启动；app 组件起监听（组装与订阅已在 Init）
+    R->>P: 拓扑序：Worker/scheduler/seed 启动
+    H->>R: Serve(ctx)
+    R->>P: 拓扑序：入口开始接受外部请求（声明 Serve 的组件）
     H-->>H: 监听（Running）
 ```
 
 ### 5.4 失败与关闭
 
 - Prepare 失败：直接返回（尚无已构造值）。
-- Construct 之后发生失败或退出（Verify/Init/Start 阶段失败，或运行中收到退出信号）：对全部已构造组件按**逆拓扑序** `Close`（恰好一次），错误聚合返回。构造失败返回 `ErrComponentFailed`，携带阶段、组件、原因与已回滚清单。
-- **关闭拆两拍**：`Stop` 只发信号（非阻塞、失败忽略），`Close` 真正等待与释放（错误聚合）——scheduler 停在 Stop，queue 排空在 Close 完成。
+- Construct 之后发生失败或退出（Verify/Init/Start/Serve 阶段失败，或运行中收到退出信号）：对全部已构造组件按**逆拓扑序** `Close`（恰好一次），错误聚合返回。构造失败返回 `ErrComponentFailed`，携带阶段、组件、原因与已回滚清单。
+- **关闭拆两拍**：`Stop` 只发信号（非阻塞、失败忽略；两拍——先 Serve 声明者），`Close` 真正等待与释放（错误聚合）——scheduler 停在 Stop，queue 排空在 Close 完成。
 
 ### 5.5 关闭时序
 
@@ -333,7 +345,7 @@ sequenceDiagram
     participant P as 各组件（回调）
 
     H->>R: Stop(ctx)（信号触发）
-    R->>P: 逆拓扑序：非阻塞停止通知（停接单、开始排空；失败忽略）
+    R->>P: 逆拓扑序两拍：先 Serve 声明者（停接单、开始排空），再其余；失败忽略
     H->>R: Close(ctx)
     loop 逆拓扑序
         R->>P: Close：等待排空、释放资源（错误聚合）
@@ -484,7 +496,7 @@ components:
 - **observability**：标准组件（引擎提供、默认参与）：`Prepare`（拍③首位）初始化 OTel（配置经 loader 同路装载）、`Close` 关停并 flush——引擎不再在装配之前自行初始化观察面。
 - **config（配置服务）**：`go/config` 模块的组件，只承担运行期配置服务。依赖 db（存在 Sensitive 项时还需 cipher）与 tenancy 的解析数据；`Init` 发布配置服务；`Start` 做 schema 冻结校验。
 - **db**：模块 `db`，实现 `db.sqlite` / `db.postgres`（方言注册表，database/sql 式）。`New` 完成连接；`Verify` 应用选中组件的迁移（零依赖 → 序最先）；`Close` 关库；产物 `(*gorm.DB)`。
-- **app（宿主应用，宿主提供）**：`New` 产出应用对象；**`Init` 组装 face——从 10 席收集路由并完成订阅**（拓扑序最后，彼时声明齐备；订阅先于一切 Start，运行期事件不致丢失）；`Start` 起监听（异步）；`Stop` 停接单；`Close` 等待排空、释放监听。对外 HTTP 服务是组件行为。引擎（`go/app`）的边界：**只做编排**——提供 `Run` 糖（创建注册表、按序驱动七阶段、信号等待与两拍关闭），路由组装与监听生命周期全部属于 app 组件。
+- **app（宿主应用，宿主提供）**：`New` 产出应用对象；**`Init` 组装 face——从 10 席收集路由并完成订阅**（拓扑序最后，彼时声明齐备；订阅先于一切 Start，运行期事件不致丢失）；`Start` 起组件自身服务；入口（对外监听）在 `Serve` 阶段开始（异步）；`Stop` 停止通知（第一拍停接单）；`Close` 等待排空、释放监听。对外 HTTP 服务是组件行为。引擎（`go/app`）的边界：**只做编排**——提供 `Run` 糖（创建注册表、按序驱动八阶段、信号等待与两拍关闭），路由组装与监听生命周期全部属于 app 组件。
 - **中间件不设组件注册面（刻意）**：face 级**固定链**（认证 → 模拟 → 租户 → 授权）的顺序是安全属性——由 **app 组件（宿主策略）**经标准链组装（授权表、管理前缀、模拟装饰、租户状态门、pre-auth 附加白名单都是它的构造输入），不向任意组件开放注入，**跨组件中间件顺序永不进依赖图**。组件影响 face 的行为一律走**声明面**：豁免子树、pre-auth 白名单、逐路由授权在**挂载时**由链按固定规则织入；组件自有的请求级逻辑（限流、签名校验等）在自己的 handler 组合里完成，随路由经 `MountedRoutes` 声明。
 - **模块组件**（如 authn）：`Requires` 声明 db、pki 等依赖；`BootstrapKeys` 声明密钥材料、`Prepare` 经材料源自建 cipher 并注册 serializer；`Init` 声明与发布服务；`Verify` 校验自身前提；示例见附录 B。
 - **cipher 不设共享句柄**：各组件经材料源读取自己的密钥材料、在需要时自建——密钥分离天然成立。
@@ -503,8 +515,8 @@ components:
 ## 12 关键决策
 
 1. **依赖用接口 token，不用每模块 typed 结构体**——一套机制覆盖模块与实现，装配器可推导依赖图，与 database/sql 式自注册同构。
-2. **七阶段**：声明与挂接/服务发布并入 `Init`；`Verify` 独立承载“迁移应用 + 需求自验”；`Stop` 与 `Close` 拆分，把“通知”与“等待释放”分开。
-3. **生命周期回调放描述符七字段，而非产物实现接口**——零分支、一个结构，产物为纯值；代价是回调中的类型断言从编译期移到装配期（`Get` 失败点名组件）。
+2. **八阶段**：声明与挂接/服务发布并入 `Init`；`Verify` 独立承载“迁移应用 + 需求自验”；`Start` 与 `Serve` 拆分，把“组件自身启动”与“入口开始接受外部请求”分开（入口须排在全体 `Start` 之后，拓扑序表达不了）；`Stop` 与 `Close` 拆分，把“通知”与“等待释放”分开。
+3. **生命周期回调放描述符八字段，而非产物实现接口**——零分支、一个结构，产物为纯值；代价是回调中的类型断言从编译期移到装配期（`Get` 失败点名组件）。
 4. **核心结构合一**：注册信息、组装信息与生命周期同属 `ComponentRegistry`；隔离由实例承担（每次装配一个新实例）。`Get[T]` 因泛型不可为方法而保持自由函数。
 5. **auto-pull 默认开启**，歧义一律显式报错；`strict` 提供钉死装配集的手段。
 6. **组件配置结构化**（`ComponentConfig`：键寻址、严格解码、类型化 Value），替代扁平字符串边界。
@@ -530,6 +542,7 @@ type Component struct {
     Verify       func(ctx context.Context, reg *ComponentRegistry, instance any) error
     Init         func(ctx context.Context, reg *ComponentRegistry, instance any) error
     Start        func(ctx context.Context, reg *ComponentRegistry, instance any) error
+    Serve        func(ctx context.Context, reg *ComponentRegistry, instance any) error
     Stop         func(ctx context.Context, reg *ComponentRegistry, instance any) error
     Close        func(ctx context.Context, reg *ComponentRegistry, instance any) error
     Requires       []Requirement
@@ -574,8 +587,11 @@ func (r *ComponentRegistry) Construct(ctx context.Context) error // 阶段 1：d
 func (r *ComponentRegistry) Verify(ctx context.Context) error    // 阶段 2：迁移 + 自验
 func (r *ComponentRegistry) Init(ctx context.Context) error      // 阶段 3：声明/挂接/服务
 func (r *ComponentRegistry) Start(ctx context.Context) error     // 阶段 4
-func (r *ComponentRegistry) Stop(ctx context.Context) error   // 阶段 5：非阻塞
-func (r *ComponentRegistry) Close(ctx context.Context) error     // 阶段 6：恰好一次
+func (r *ComponentRegistry) Serve(ctx context.Context) error     // 阶段 5：入口开始接受外部请求
+func (r *ComponentRegistry) Stop(ctx context.Context) error   // 阶段 6：非阻塞（两拍）
+func (r *ComponentRegistry) Close(ctx context.Context) error     // 阶段 7：恰好一次
+
+func (r *ComponentRegistry) Stage() Stage // 当前阶段只读读法（装配契约）
 
 // ── 配置 ─────────────────────────────────────────────────
 type ComponentConfig struct{ /* 有序键值；值层不可变 */ }
@@ -597,7 +613,7 @@ func Assets(r *ComponentRegistry) []Asset
 
 ```go
 // ── 引擎侧：一次完整装配 ─────────────────────────────────
-// 宿主薄壳只做三件事：注册本地组件（含 app 组件）、创建注册表、按序驱动七阶段。
+// 宿主薄壳只做三件事：注册本地组件（含 app 组件）、创建注册表、按序驱动八阶段。
 func Run(ctx context.Context) error {
     reg := pkgcore.NewComponentRegistry() // 以全局注册为初值
     reg.Register(appComponent())          // 宿主提供的应用组件：组装路由、监听、停接单、排空
@@ -611,10 +627,11 @@ func Run(ctx context.Context) error {
 
     if err := reg.Verify(ctx); err != nil { return fail(err) } // 迁移应用（最先）+ 需求自验
     if err := reg.Init(ctx); err != nil { return fail(err) }   // 声明/挂接/发布服务 + 收尾校验
-    if err := reg.Start(ctx); err != nil { return fail(err) }  // app 组件在此起监听
+    if err := reg.Start(ctx); err != nil { return fail(err) }  // Worker/scheduler 启动
+    if err := reg.Serve(ctx); err != nil { return fail(err) }  // 入口开始接受外部请求
 
     <-ctx.Done()          // 等待退出信号
-    _ = reg.Stop(ctx)     // 非阻塞停止通知（app 停接单、scheduler 停）
+    _ = reg.Stop(ctx)     // 非阻塞停止通知（两拍：先入口停接单，再其余；scheduler 停）
     return reg.Close(ctx) // 逆拓扑序等待排空、释放资源（错误聚合）
 }
 ```

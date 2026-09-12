@@ -7,7 +7,7 @@ reference app (examples/reference-app) and the project skeleton
 `saasctl new` materializes from the embedded tree under
 go/saasctl/internal/template/project. The host-neutral half of that
 composition -- the application assembly engine (the configuration load,
-the composition plan and the seven-stage drive, all in the platform
+the composition plan and the eight-stage drive, all in the platform
 module go/app), authn's mount path, the serve timeouts, the pre-auth
 allowlist set and the middleware chain (go/app/chain) -- lives in go/app,
 imported by both hosts. (The liveness route set itself is observability's,
@@ -154,7 +154,7 @@ HOST_COMPOSITION_PATHS = (
 
 # Assembly calls the application engine (go/app) owns: their appearance in
 # a non-test .go file inside either host tree means a host re-issued a step
-# of the shared assembly -- the seven-stage component drive, the loader's
+# of the shared assembly -- the eight-stage component drive, the loader's
 # composition merge and the lifecycle helpers alike. Each entry is
 # (label, regex, scope, allowed):
 #

@@ -54,7 +54,7 @@
 | [26 bootstrap 键声明与参考应用 loader 迁移](26-bootstrap-keys-loader-migration.md) | 模块级 bootstrap 键声明席位、loader 前缀选项与 env 钉、启动/运行时双层边界、reference-app 迁移与两阶段落地 |
 | [27 注册触发供给链与两个平台件](27-provisioning-chain-and-two-seams.md) | 注册供给链的归属裁定与链契约(顺序、前向收敛与终局语义)、notification 静态地址解析器与 billing 订阅 EnsureActive 两件的形状、reference-app 迁移计划 |
 | [28 jobs 终态信号与周期调度席位](28-job-terminal-signal-and-periodic-schedule.md) | 终态信号缺口的机制裁定(总线终态事件 + 行内 outbox 的失败面闭合)、七处重复周期形态收编为声明制调度席位、信用结算与周期循环的迁移计划与轮次划分 |
-| [29 配置驱动的组件装配](29-config-driven-component-assembly.md) | 终态设计:模块(接口/契约)与组件(一个实现)二分;核心数据结构 ComponentRegistry(注册信息+组装信息+生命周期);组合配置与来源分层;七阶段生命周期 Prepare/Construct/Verify/Init/Start/PreStop/Close(回调=描述符七字段;连接在 Construct、迁移在 Verify);一切皆组件(config/db/app);接口 token 依赖与能力位;资产与目录式模块取用 |
+| [29 配置驱动的组件装配](29-config-driven-component-assembly.md) | 终态设计:模块(接口/契约)与组件(一个实现)二分;核心数据结构 ComponentRegistry(注册信息+组装信息+生命周期);组合配置与来源分层;八阶段生命周期 Prepare/Construct/Verify/Init/Start/Serve/Stop/Close(回调=描述符八字段;连接在 Construct、迁移在 Verify);一切皆组件(config/db/app);接口 token 依赖与能力位;资产与目录式模块取用 |
 | [16 验证方式](16-verification.md) | 各能力的验收标准与 CI 强制项 |
 | [17 风险登记](17-risks.md) | 已识别风险与缓解措施 |
 

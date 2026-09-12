@@ -1,7 +1,7 @@
 ---
 title: app
 weight: 1
-description: "应用装配层:解析配置与 composition 的装载器、七阶段组件驱动、固定中间件链,以及每个宿主启动都经其组装的、无 import 桥接。"
+description: "应用装配层:解析配置与 composition 的装载器、八阶段组件驱动、固定中间件链,以及每个宿主启动都经其组装的、无 import 桥接。"
 ---
 
 # app
@@ -10,7 +10,7 @@ app 是 speed 的**应用装配层**:每个应用自己的启动代码所基于�
 [总体架构页](/zh-cn/docs/developer-docs/architecture/)把它画在模块图
 的顶层节点;它也是唯一**没有业务域**的模块:没有表、没有路由、没有
 权限、不实现任何模块契约。它拥有的是宿主启动中本来会在每个宿
-主里被手写一遍的那一半:配置装载、composition 计划、七阶段组件驱
+主里被手写一遍的那一半:配置装载、composition 计划、八阶段组件驱
 动、关停时序与 HTTP 帮手(为什么无域模块仍然成立,见
 [设计页](/zh-cn/docs/developer-docs/modules/app/))。
 
@@ -25,7 +25,7 @@ app 是 speed 的**应用装配层**:每个应用自己的启动代码所基于�
   bootstrap key,然后把三者都发布进注册表——composition 尚不存在
   时,装配根本无从选择组件。
 - **驱动器**把注册表依次走过装配各阶段:
-  **Prepare → Construct → Verify → Init → Start**。
+  **Prepare → Construct → Verify → Init → Start → Serve**。
 - **`app.Shutdown`** 执行两相关停:逆序的非阻塞 **Stop** 通知,然后
   是逆序的 **Close**,释放资源并聚合错误。
 - **`app.RunAssembly`** 是进程的 Run 糖:建注册表、驱动、调用宿主的
@@ -90,7 +90,7 @@ spec := app.LoadSpec{
     Args: os.Args[1:],                       // composition flag 从这里扫描
 }
 
-// 3. 驱动:先装载器,再 Prepare → Construct → Verify → Init → Start。
+// 3. 驱动:先装载器,再 Prepare → Construct → Verify → Init → Start → Serve。
 if err := app.Assemble(ctx, reg, spec); err != nil {
     return err   // Construct 起的失败已自带回滚
 }

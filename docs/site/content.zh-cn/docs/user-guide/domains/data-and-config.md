@@ -195,7 +195,7 @@ func main() {
 	ctx := context.Background()
 
 	// 宿主的装配:组合选中 db 组件、config 组件和上面注册的
-	// subscriptions 组件;引擎逐个构造并驱动七个阶段。Register 在
+	// subscriptions 组件;引擎逐个构造并驱动八个阶段。Register 在
 	// Init 阶段运行,config 组件的 Start 回合附着 schema 快照并发布
 	// *Service。(hostConfig、loaderOpts 与指名这些选择的组合覆盖层,
 	// 是宿主自己的引导接线——本示意程序里用占位符表示。)真实服务的

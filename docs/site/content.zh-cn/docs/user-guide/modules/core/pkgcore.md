@@ -95,7 +95,7 @@ spec := app.LoadSpec{
     Options:   []app.ConfigOption{app.ConfigEnvPrefix("BILLING")},
     Overrides: &app.CompositionOverrides{Config: composition},
 }
-// 七阶段驱动;拒绝会点名组件与原因(能力不足报
+// 八阶段驱动;拒绝会点名组件与原因(能力不足报
 // ErrCapabilityUnsatisfied,带组件、缺失的能力位与模式)。
 if err := app.Assemble(ctx, reg, spec); err != nil {
     return err

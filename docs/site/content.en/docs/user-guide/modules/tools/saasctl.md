@@ -156,7 +156,7 @@ wiring; `config.go` is shared verbatim — and two tokens,
 `__APP_NAME__` (the module path) and `__SPEED_ROOT__` (the checkout
 path), are substituted at materialisation. The host-neutral
 composition itself (the assembly engine — the configuration load, the
-composition plan and the seven-stage component drive — plus authn's
+composition plan and the eight-stage component drive — plus authn's
 mount path, the serve timeouts, the pre-auth allowlist set and the fixed
 middleware chain; the liveness endpoints are `go/observability`'s and
 the route-mount rule `pkgcore`'s) lives once, in the platform module

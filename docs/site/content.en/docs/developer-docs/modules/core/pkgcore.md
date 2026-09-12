@@ -118,7 +118,7 @@ The composition is assembled from a configuration, not a mode
 argument: the composition configuration names the components the
 binary selects (one entry per component under its `components` block,
 `nil` selecting and `false` deselecting) and carries the `deployment`
-key; `app.Assemble` then drives the whole seven-stage lifecycle over
+key; `app.Assemble` then drives the whole eight-stage lifecycle over
 the registry. Two design consequences follow.
 First, the framework ships no "production" or "test" composition —
 which composition counts as production is the assembling application's
@@ -212,7 +212,7 @@ platform need no containers.
 
 The frozen contracts consumers build against: the `Component`
 descriptor and the `ComponentRegistry` seats; the `Requires`/`Provides`
-resolution, the seven-stage lifecycle and `app.Assemble`/`app.Shutdown`
+resolution, the eight-stage lifecycle and `app.Assemble`/`app.Shutdown`
 semantics; the module interfaces and their
 observable semantics (TTL expiry rules, `IncrByFloat` never extending
 a live key's expiry, capability bits); the built-in implementation

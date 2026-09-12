@@ -106,7 +106,7 @@ spec := app.LoadSpec{
     Options:   []app.ConfigOption{app.ConfigEnvPrefix("BILLING")},
     Overrides: &app.CompositionOverrides{Config: composition},
 }
-// The seven-stage drive; a refusal names the component and the reason
+// The eight-stage drive; a refusal names the component and the reason
 // (a capability shortfall reports as ErrCapabilityUnsatisfied with the
 // component, the missing bits and the mode).
 if err := app.Assemble(ctx, reg, spec); err != nil {

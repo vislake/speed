@@ -160,10 +160,10 @@ no chain at all. The choice of entry point is the host's, and that
 flexibility is deliberate: `Standard` for the registry's route set as
 the face, `Chain` when the layout is the host's own.
 
-## The seven-stage drive and its failure semantics
+## The eight-stage drive and its failure semantics
 
 The driver only orchestrates. `Assemble` runs the loader and walks the
-registry through Prepare, Construct, Verify, Init and Start; `Shutdown`
+registry through Prepare, Construct, Verify, Init, Start and Serve; `Shutdown`
 performs the two-phase close (the non-blocking Stop notification, then
 the reverse-order Close, errors aggregated); `RunAssembly` is the sugar
 that creates the registry from the global registration plus extras,

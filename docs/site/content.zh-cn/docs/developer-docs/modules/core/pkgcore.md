@@ -32,7 +32,7 @@ pkgcore 是所有 Go 模块共同 import、却不 import 任何其它 speed 模�
 
 机制:每套实现声明自己能做什么(`MultiReplicaSafe`、`SurvivesRestart`、`Stateless`——第三个位是后加的,让 console 邮件器这类无状态实现免于一条对它而言不指称任何损失的"重启丢失"警告横幅——外加 go/pki 的 `Signer` 实现经自己的注册表声明的 `KeyNeverLeavesBoundary`,装配的能力校验刻意不与它作比较),每种模式声明自己要求什么(分布式要求所有承载共享状态的模块都 `MultiReplicaSafe`,单进程不要求任何能力),装配的 Prepare 阶段是唯一逐组件比较两集合的地方。无法在声明模式下运行的组装在启动时失败,报 `ErrCapabilityUnsatisfied`,点名组件、缺失的能力位与模式——刻意不是一族按模式硬编码的哨兵,因为实现一旦有 N 套,"缺少分布式实现"这种说法本身就不成立。仅缺 `SurvivesRestart` 时是启动横幅而非失败:操作者必须确切知道哪些数据不跨重启存活。
 
-组合由配置组装,而非模式参数:组合配置在 `components` 块下列出二进制选择的组件(每组件一项,`nil` 选中、`false` 剔除)并携带 `deployment` 键;`app.Assemble` 随后驱动整条七阶段生命周期。两个设计后果由此而来。其一,框架不预设"生产""测试"之类组合——哪组组装算生产是应用组装者的判断,`deployment` 键默认 standalone。其二,业务代码根本拿不到模式值,"业务逻辑里不许 `if mode == standalone`"这条纪律靠"无物可分支"来执行。
+组合由配置组装,而非模式参数:组合配置在 `components` 块下列出二进制选择的组件(每组件一项,`nil` 选中、`false` 剔除)并携带 `deployment` 键;`app.Assemble` 随后驱动整条八阶段生命周期。两个设计后果由此而来。其一,框架不预设"生产""测试"之类组合——哪组组装算生产是应用组装者的判断,`deployment` 键默认 standalone。其二,业务代码根本拿不到模式值,"业务逻辑里不许 `if mode == standalone`"这条纪律靠"无物可分支"来执行。
 
 ```mermaid
 flowchart TD
@@ -62,7 +62,7 @@ flowchart TD
 
 ## 对外的稳定面
 
-消费者可依赖的冻结契约:`Component` 描述符与 `ComponentRegistry` 座席;`Requires`/`Provides` 解析、七阶段生命周期与 `app.Assemble`/`app.Shutdown` 语义;模块接口及其可观察语义(TTL 过期规则、`IncrByFloat` 不延长存活 key 的过期、能力位及其声明);包级全局注册上的内置实现名;租户上下文与 Actor 上下文原语;`apperr` 契约(码、params、`SensitiveParams`、装饰派生新值);config loader 与 i18n 契约;以及本模块的错误码族。锁步之下,改动其中任何一项都是破坏性变更。
+消费者可依赖的冻结契约:`Component` 描述符与 `ComponentRegistry` 座席;`Requires`/`Provides` 解析、八阶段生命周期与 `app.Assemble`/`app.Shutdown` 语义;模块接口及其可观察语义(TTL 过期规则、`IncrByFloat` 不延长存活 key 的过期、能力位及其声明);包级全局注册上的内置实现名;租户上下文与 Actor 上下文原语;`apperr` 契约(码、params、`SensitiveParams`、装饰派生新值);config loader 与 i18n 契约;以及本模块的错误码族。锁步之下,改动其中任何一项都是破坏性变更。
 
 ## Source
 

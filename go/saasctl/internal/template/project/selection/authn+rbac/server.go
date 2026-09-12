@@ -132,7 +132,7 @@ func runServer(baseCtx context.Context, cfg serverConfig, hc hostConfig) error {
 	// the global registration -- the override copies read the module
 	// descriptors from that seed -- and the engine assembles the set on the
 	// registry it owns. The engine's RunAssembly drives the whole boot: the
-	// loader, the seven stages, this host's serve step and the two-beat
+	// loader, the eight stages, this host's serve step and the two-beat
 	// close, with SIGINT and SIGTERM overlaid on baseCtx. baseCtx itself
 	// stays the request base context the composed face hands its listener,
 	// so a shutdown signal never cancels in-flight requests ahead of the

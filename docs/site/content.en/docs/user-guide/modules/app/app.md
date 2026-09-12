@@ -1,7 +1,7 @@
 ---
 title: app
 weight: 1
-description: "The application assembly layer: the loader that resolves configuration and composition, the seven-stage component drive, the fixed middleware chain, and the no-import bridges every host boot composes through."
+description: "The application assembly layer: the loader that resolves configuration and composition, the eight-stage component drive, the fixed middleware chain, and the no-import bridges every host boot composes through."
 ---
 
 # app
@@ -13,7 +13,7 @@ the module graph, and it is the one module with **no business domain**: no table
 no routes, no permissions, no module contract. What it
 owns is the half of a host's boot that would otherwise be written by
 hand in every host: the configuration load, the composition plan, the
-seven-stage component drive, the shutdown sequence and the HTTP helpers
+eight-stage component drive, the shutdown sequence and the HTTP helpers
 (see the [design page](/docs/developer-docs/modules/app/) for why a
 domain-less module is still warranted).
 
@@ -30,7 +30,7 @@ infrastructure implementations and the host's own pieces, each a
   keys, then publishes all three into the registry — so the assembly
   cannot even choose its components until the composition exists.
 - **The driver** walks the registry through the assembly's stages:
-  **Prepare → Construct → Verify → Init → Start**.
+  **Prepare → Construct → Verify → Init → Start → Serve**.
 - **`app.Shutdown`** performs the two-phase close: the non-blocking
   **Stop** notification in reverse order, then the reverse-order
   **Close** that releases resources and aggregates errors.
@@ -105,7 +105,7 @@ spec := app.LoadSpec{
     Args: os.Args[1:],                       // the composition flags are scanned here
 }
 
-// 3. Drive: loader, then Prepare → Construct → Verify → Init → Start.
+// 3. Drive: loader, then Prepare → Construct → Verify → Init → Start → Serve.
 if err := app.Assemble(ctx, reg, spec); err != nil {
     return err   // a failure from Construct on already rolled back
 }

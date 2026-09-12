@@ -133,7 +133,7 @@ SQLite 路径行报告生效文件,相对路径解析出不同结果时原始值
 集合与 `server.go` 的接线;`config.go` 逐字共享——并在生成时替换
 两个 token:`__APP_NAME__`(module path)与 `__SPEED_ROOT__`
 (checkout 路径)。宿主中性的组装本身(装配引擎:配置装载、组合配置
-解析与七阶段组件驱动;以及 authn 的挂载路径、服务超时、预认证允许
+解析与八阶段组件驱动;以及 authn 的挂载路径、服务超时、预认证允许
 列表与固定中间件链——存活探针端点归 `go/observability`、路由挂载
 规则归 `pkgcore`)只有一份,位于平台模块
 [`github.com/vislake/speed/go/app`](/zh-cn/docs/user-guide/modules/app/),每个生成项目与参考应用一样直接
