@@ -32,7 +32,7 @@ build their instrumentation for them.
 | `Middleware` (per-request span + request-count/duration metrics) + `AnnotateTenant` + `RegisterMountedRoutes` (the host route-table registration that seeds `Middleware`'s route limiter with its mount prefixes) | `middleware.go` |
 | The OTLP/gRPC trace and metric exporters (`otlptracegrpc`, `otlpmetricgrpc`), registered via `init()` | `exporter/otlp/otlp.go` |
 | The local, pull-based Prometheus metrics reader and its `/metrics` handler (`github.com/prometheus/client_golang`, `go.opentelemetry.io/otel/exporters/prometheus`), registered via `init()` | `exporter/prometheus/prometheus.go` |
-| The module's assembly component (init self-registration, the `service_name`/`otlp_endpoint` schema, the Prepare/New/Close lifecycle) | `component.go` |
+| The module's assembly component (init self-registration, the `service_name`/`otlp_endpoint` schema, the `Prepare`/`New`/`Init`/`Close` lifecycle — `Init` declares the module's `Middleware` on the registry's `Middleware` seat) | `component.go` |
 
 ## Component declaration (`component.go`)
 
@@ -53,16 +53,28 @@ through the assembly's five-source chain like any component's block. Its
 (so a host that registered a renamed copy gets the copy's block, never a
 stale literal lookup), calls `Init` with whichever option halves the block
 set, and publishes the returned shutdown function as the runtime value its
-`New` hands to the instance; `Close` shuts the providers down and flushes
-on a `context.WithoutCancel` copy, so a cancelled drain context cannot cut
-the final export short. The descriptor declares `MultiReplicaSafe` — each
-replica exports its own spans and metrics — and carries no dependencies and
-no assets.
+`New` hands to the instance; its `Init` callback declares the module's
+`Middleware` on the component registry's `Middleware` seat — the platform's
+one middleware layer outside the fixed chain — so an engine-assembled host
+composing its chain through `go/app/chain.Standard` gets the
+instrumentation applied around the whole chain (every request the chain
+handles, including one authn or tenancy refuses) with no hand-wiring. A
+host that composes no `Standard` chain reads `reg.Middlewares()` itself
+if it wants the layer
+(see `pkgcore.MiddlewareRegistrar` for the seat's boundary), and a host
+that serves a composed face with this component deselected — the reference
+app's `BuildServer` drive, the telemetry lifecycle belonging to the
+process that owns the listener — wraps `Middleware` at serve time itself.
+`Close` shuts the providers down and flushes on a `context.WithoutCancel`
+copy, so a cancelled drain context cannot cut the final export short. The
+descriptor declares `MultiReplicaSafe` — each replica exports its own spans
+and metrics — and carries no dependencies and no assets.
 
 Its suite is `component_test.go` (internal `observability` package, the
 same white-box placement as `factory_vars_test.go`): the init
 self-registration, the descriptor contract (`componenttest.AssertWellFormed`),
-the whole lifecycle through the registry's own stages, the strict decode
+the whole lifecycle through the registry's own stages (including the
+`Middleware`-seat declaration its `Init` makes), the strict decode
 refusal, the no-registered-exporter wiring refusal, the renamed-copy
 overlay pin, and the `New`/`Close` refusals. What a successful `Init`
 installs stays pinned by the external suite (`init_test.go`).

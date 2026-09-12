@@ -14,6 +14,7 @@ package observability
 import (
 	"context"
 	"errors"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -63,7 +64,8 @@ func TestObservabilityComponent_SelfRegisters(t *testing.T) {
 // through the stages its descriptor fills: selected with its configuration
 // block, its Prepare initializes the providers and publishes the runtime,
 // Construct builds the instance carrying that runtime's shutdown function,
-// and Close shuts the providers down.
+// Init declares the module's middleware on the Middleware seat, and Close
+// shuts the providers down.
 func TestObservabilityComponent_RunsItsWholeLifecycle(t *testing.T) {
 	ctx := context.Background()
 	reg := pkgcore.NewComponentRegistry()
@@ -87,8 +89,48 @@ func TestObservabilityComponent_RunsItsWholeLifecycle(t *testing.T) {
 	if instance.shutdown == nil {
 		t.Error("the constructed instance carries no shutdown function, want the one Prepare's Init returned")
 	}
+	if err := reg.Verify(ctx); err != nil {
+		t.Fatalf("Verify() error = %v", err)
+	}
+	if err := reg.Init(ctx); err != nil {
+		t.Fatalf("Init() error = %v", err)
+	}
 	if err := reg.Close(ctx); err != nil {
 		t.Fatalf("Close() error = %v, want the providers flushed cleanly", err)
+	}
+}
+
+// TestObservabilityComponent_DeclaresTheMiddlewareSeat pins the component's
+// Init declaration: driving a real assembly through Init leaves the
+// registry's Middleware seat holding exactly the module's Middleware -- the
+// layer go/app/chain.Standard wraps around the fixed chain -- so the
+// component's instrumentation rides every served request without any host
+// hand-wiring it.
+func TestObservabilityComponent_DeclaresTheMiddlewareSeat(t *testing.T) {
+	ctx := context.Background()
+	reg := pkgcore.NewComponentRegistry()
+	reg.Put(observabilityComposition(map[string]any{"observability": nil}))
+
+	if err := reg.Prepare(ctx); err != nil {
+		t.Fatalf("Prepare() error = %v", err)
+	}
+	if err := reg.Construct(ctx); err != nil {
+		t.Fatalf("Construct() error = %v", err)
+	}
+	if err := reg.Verify(ctx); err != nil {
+		t.Fatalf("Verify() error = %v", err)
+	}
+	if err := reg.Init(ctx); err != nil {
+		t.Fatalf("Init() error = %v", err)
+	}
+	t.Cleanup(func() { _ = reg.Close(context.Background()) })
+
+	mws := reg.Middleware.Middlewares()
+	if len(mws) != 1 {
+		t.Fatalf("Middleware seat entries after Init = %d, want exactly the module's Middleware", len(mws))
+	}
+	if got, want := reflect.ValueOf(mws[0]).Pointer(), reflect.ValueOf(Middleware).Pointer(); got != want {
+		t.Fatal("the Middleware seat does not hold the module's own Middleware function")
 	}
 }
 

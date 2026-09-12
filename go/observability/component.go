@@ -9,10 +9,12 @@ package observability
 // configuration layer deselects it.
 //
 // The component's Prepare initializes OTel from the configuration the same
-// loader loaded; its Close shuts the providers down and flushes. The builtin
-// composition names it explicitly and first, so the plan puts it first and
-// its Close runs last in the reverse-order close. Nothing else initializes
-// observability: the whole telemetry lifecycle is this component's.
+// loader loaded; its Init declares the module's middleware on the
+// registry's Middleware seat; its Close shuts the providers down and
+// flushes. The builtin composition names it explicitly and first, so the
+// plan puts it first and its Close runs last in the reverse-order close.
+// Nothing else initializes observability: the whole telemetry lifecycle is
+// this component's.
 
 import (
 	"context"
@@ -25,6 +27,17 @@ import (
 // as any component package does.
 func init() {
 	pkgcore.MustRegister(observabilityComponent())
+}
+
+// initObservability declares the middleware on the registry's Middleware
+// seat: the seat's contract is that a middleware registered there wraps the
+// whole assembled chain from the outside, so this component's middleware
+// wraps every request the chain handles -- including one authn or tenancy
+// refuses before any route is reached, which is the reason the declaration
+// lives here rather than in a host's serve wiring. The write is legal only
+// while the Init stage runs, which is where the engine drives it.
+func initObservability(_ context.Context, reg *pkgcore.ComponentRegistry, _ any) error {
+	return reg.Middleware.Add(Middleware)
 }
 
 // observabilityConfig is the component's configuration schema, resolved
@@ -56,7 +69,11 @@ type observabilityInstance struct {
 }
 
 // observabilityComponent returns the descriptor. It takes no dependencies
-// and carries no assets. It declares MultiReplicaSafe: each replica exports
+// and carries no assets. Its Init declares Middleware -- the module's
+// tracing/metrics middleware -- on the registry's Middleware seat, so a
+// host composing its chain through go/app/chain.Standard gets the
+// instrumentation applied to every request without hand-wiring it (see
+// initObservability). It declares MultiReplicaSafe: each replica exports
 // its own spans and metrics, sharing no state with any sibling, so several
 // replicas running it split nothing -- and telemetry stays optional by
 // nature, so a composition that deselects the component still assembles.
@@ -67,6 +84,7 @@ func observabilityComponent() pkgcore.Component {
 		Capabilities: pkgcore.MultiReplicaSafe,
 		Prepare:      prepareObservability,
 		New:          newObservability,
+		Init:         initObservability,
 		Close:        closeObservability,
 	}
 }

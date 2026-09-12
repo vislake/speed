@@ -228,25 +228,28 @@ func methodMetricLabel(method string) string {
 // record two metrics -- request count and request duration -- labeled by
 // HTTP method, route and status code ONLY.
 //
-// # Where this sits in the chain, and why
+// # Where this layer sits, and why
 //
-// The fixed middleware chain order is recover -> request-id/log-context ->
-// observability -> tenancy.Middleware -> authn.Middleware ->
-// rbac.RequirePermission -> handler, and is not to be casually adjusted.
-// tenancy.Middleware's own doc comment (go/tenancy/middleware.go) says
-// nothing about tracing middleware specifically, so that fixed chain is
-// the tie-breaker this package follows: Middleware is meant to wrap
-// OUTSIDE tenancy.Middleware, not inside it. See
-// examples/reference-app/internal/app/server.go's BuildServer for where this
-// is actually wired, with the same reasoning repeated at the call site.
+// Middleware is the layer this module's component declares on the
+// registry's Middleware seat (see component.go's initObservability), and
+// go/app/chain.Standard applies the seat around the finished chain it
+// builds: the assembled handler is this layer outside the whole chain --
+// outside authn.Middleware, outside the AdminRoutes and AuthnRoutes
+// branches, outside tenancy.Middleware and outside the protected routes'
+// own gates. The chain's internal order belongs to go/app/chain; the seat
+// can only wrap that chain's output, never enter it (see
+// pkgcore.MiddlewareRegistrar for the seat's contract).
 //
-// That position is deliberate, not incidental: a request tenancy.Middleware
-// (or authn.Middleware / rbac.RequirePermission) REJECTS
-// never reaches a handler at all, so if this middleware ran further in, a
-// flood of 403s or 401s -- exactly the signal an operator most needs during
-// an attack or a misconfigured client -- would be invisible to both the
-// span and the metrics. Every request gets counted here, including ones
-// that never reach a tenant-scoped handler.
+// That position is deliberate, not incidental: a request authn.Middleware,
+// tenancy.Middleware or a route's permission gate REJECTS never reaches a
+// handler at all, so if this middleware ran further in, a flood of 403s or
+// 401s -- exactly the signal an operator most needs during an attack or a
+// misconfigured client -- would be invisible to both the span and the
+// metrics. Every request the chain handles gets counted here, including
+// ones that never reach a tenant-scoped handler. A host that serves
+// requests outside the chain -- the reference app's SPA file server,
+// wrapped around its composed face when it serves a frontend directory --
+// keeps those requests outside this layer too.
 //
 // # The one cost of that position: tenant_id is not reliably available here
 //
@@ -256,13 +259,13 @@ func methodMetricLabel(method string) string {
 // value it adds is visible to everything it calls next but never bubbles
 // back up to a middleware wrapping it from outside. Concretely: by the
 // time this middleware's own request-handling code runs
-// pkgcore.TenantFromContext against the context it was actually given, in
-// the position this package is documented to be mounted at, there usually
-// is no tenant yet -- tenancy.Middleware resolves one two layers further
-// in. This middleware still checks defensively (see the tenant handling
-// below), which costs nothing and covers a caller that mounts it
-// differently, but the honest expectation for the documented position is
-// that this check is a no-op in production traffic.
+// pkgcore.TenantFromContext against the context it was actually given --
+// at the seat layer, outside the chain -- there usually is no tenant yet:
+// tenancy.Middleware resolves one further down the chain. This middleware
+// still checks defensively (see the tenant handling below), which costs
+// nothing and covers a caller that mounts it differently, but the honest
+// expectation for this layer's position is that the check is a no-op in
+// production traffic.
 //
 // This is why AnnotateTenant exists as a separate, exported function
 // (see its own doc comment): a trace Span, unlike a plain context value,
@@ -500,13 +503,13 @@ func Middleware(next http.Handler) http.Handler {
 
 		// The recording block below runs in a defer, not after
 		// next.ServeHTTP returns, so a handler that panics is still
-		// counted: the reference app's chain has no recover middleware
-		// above this one (net/http's per-connection recovery is the first
-		// thing a panic reaches), so without the defer a panicking handler
-		// would unwind straight past this middleware and vanish from both
-		// the metrics and the span status -- contradicting this
-		// middleware's own "Every request gets counted here" contract in
-		// its doc comment's "Where this sits in the chain" section.
+		// counted: nothing above this layer recovers a panic (net/http's
+		// per-connection recovery is the first thing a panic reaches), so
+		// without the defer a panicking handler would unwind straight past
+		// this middleware and vanish from both the metrics and the span
+		// status -- contradicting this middleware's own "Every request the
+		// chain handles gets counted here" contract in its doc comment's
+		// "Where this layer sits" section.
 		panicked := true
 		defer func() {
 			// A handler that panicked before writing any response produced
@@ -627,9 +630,9 @@ func Middleware(next http.Handler) http.Handler {
 //
 // # Why this exists as its own function
 //
-// Middleware, per its own doc comment, is mounted OUTSIDE
-// tenancy.Middleware in the fixed chain and therefore does not reliably
-// see a tenant on the request context it
+// Middleware, per its own doc comment, stands OUTSIDE the whole chain
+// (the Middleware seat's layer) and therefore does not reliably see a
+// tenant on the request context it
 // is handed. A trace Span, unlike a plain context value, is a shared
 // mutable object reachable from every context that descends from the one
 // it was placed on -- including ones produced by an intervening
