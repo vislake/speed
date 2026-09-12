@@ -787,6 +787,7 @@ table -- read the file when it matters.
 | `harness-failure-guards.spec.ts` | The suite's own failure guards: a browser crash and a lost session are named by the wait they stopped; the enabled-state wait is satisfied by enablement, not visibility; a route still fetching when its test ends does not fail the run |
 | `test-utils/accounts.ts` | The seeded demo accounts and the grants each one carries |
 | `test-utils/journeys.ts` | Shared journey steps and every en-US string the specs assert on |
+| `test-utils/cases.ts` | The case journey's shared steps: opening a case with the patient's photograph, and reaching a generated simulation |
 | `test-utils/servers.ts` | Booting a server one spec owns, for the specs whose subject is a server's own lifecycle or configuration; and the `test` whose fixture retires a test's routes with the test |
 | `test-utils/invitations.ts` | Setting up a real invitation, including reading its token from the mail the server prints |
 | `test-utils/fake-image-provider.mjs` | The stand-in for the vendor the smile simulation calls, with a refusal mode |
