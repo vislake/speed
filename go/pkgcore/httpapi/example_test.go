@@ -33,6 +33,24 @@ func ExampleWriteError() {
 	// {"code":"org.node_not_found","params":{"id":"node_42"}}
 }
 
+// ExampleWriteJSON shows the shared JSON success response: the caller's
+// status, the shared content type, and the encoded body the encoder
+// terminates with a newline.
+func ExampleWriteJSON() {
+	rec := httptest.NewRecorder()
+
+	httpapi.WriteJSON(rec, http.StatusCreated, map[string]string{"id": "note_7"})
+
+	fmt.Println(rec.Code)
+	fmt.Println(rec.Result().Header.Get("Content-Type"))
+	fmt.Print(rec.Body.String())
+
+	// Output:
+	// 201
+	// application/json; charset=utf-8
+	// {"id":"note_7"}
+}
+
 // ExampleDecodeJSON shows both halves of the bounded request decode: a
 // legitimate body decodes into the caller's request type, and a body past
 // the bound answers the module's own coded invalid-request-body refusal --

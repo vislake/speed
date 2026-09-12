@@ -43,7 +43,7 @@ The two Chinese-cloud carriers have no free-text send at all: every message inst
 
 `safehttp` is the outbound-request guard those adapters (and go/authn's own federation client) dial through: it refuses any destination that is not public unicast at the moment of connection, so a DNS-rebinding answer cannot slip past. It moved from go/authn's `internal/` when the SMS transports made it shared -- its package doc records the destinations it fronts and the move.
 
-`httpapi` is the shared HTTP surface convention every module's request handlers answer refusals through: `WriteError` builds the coded error envelope (the `{"code", "params"}` body under the error's own suggested status, with a caller-supplied fallback for an error something below the handler did not classify), and `DecodeJSON` bounds and decodes a JSON request body, mapping every decode failure -- an oversized body included -- onto the calling module's coded invalid-request-body refusal. It is stdlib-and-`apperr`-only, carries its own unit tests and `example_test.go`, and is described under its own section in Public API below.
+`httpapi` is the shared HTTP surface convention every module's request handlers write responses and read requests through: `WriteJSON` writes a success body (the shared JSON content type, the caller's status and the encoded value), `WriteError` builds the coded error envelope (the `{"code", "params"}` body under the error's own suggested status, with a caller-supplied fallback for an error something below the handler did not classify), and `DecodeJSON` bounds and decodes a JSON request body, mapping every decode failure -- an oversized body included -- onto the calling module's coded invalid-request-body refusal. It is stdlib-and-`apperr`-only, carries its own unit tests and `example_test.go`, and is described under its own section in Public API below.
 
 **Out of scope.** Database access (`dbkit`), tenant enforcement in SQL (`tenancy`), logging and tracing (`observability`), runtime and tenant-overridable configuration (the `config` *module*, not this `config` package), job execution (`jobs`). pkgcore declares contracts; it does not implement business behaviour.
 
@@ -229,7 +229,9 @@ The contract on `WithParam`'s write side (its doc comment states it in full, and
 
 ### `pkgcore/httpapi`
 
-`func WriteError(w http.ResponseWriter, err error, fallback *apperr.Error)` and `func DecodeJSON(w http.ResponseWriter, r *http.Request, maxBytes int64, dst any, invalid *apperr.Error) bool`.
+`func WriteJSON(w http.ResponseWriter, status int, v any)`, `func WriteError(w http.ResponseWriter, err error, fallback *apperr.Error)` and `func DecodeJSON(w http.ResponseWriter, r *http.Request, maxBytes int64, dst any, invalid *apperr.Error) bool`; the const `JSONContentType` (`"application/json; charset=utf-8"`) is the media type of every JSON response the shared surface writes.
+
+`WriteJSON` writes the shared JSON success response: the status the caller gave, the shared content type (set unconditionally -- a response whose contract pins a different media type writes that body itself), and the JSON encoding of the value, which the encoder terminates with a newline. An encode failure after the status line went out is a broken client connection, not a response defect, and is dropped.
 
 `WriteError` writes the coded error envelope every HTTP refusal is: the body `{"code": ..., "params": ...}` under the HTTP status the error's `apperr` constructor suggested, with `Content-Type: application/json; charset=utf-8` unless the caller set its own first (an endpoint whose contract pins a different content type sets it before the call). An err that is not, and does not wrap, an `*apperr.Error` is written as `fallback` instead, so raw Go error text never reaches a caller either way; the cause never crosses the wire, and a parameter-less error omits the `params` key rather than emitting `null`.
 

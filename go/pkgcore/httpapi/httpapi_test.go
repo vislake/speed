@@ -40,21 +40,21 @@ func TestWriteError_EnvelopeBytes(t *testing.T) {
 			err:         apperr.Forbidden("rbac.permission_denied").WithParam("permission", "billing:write").WithParam("action", "read"),
 			wantStatus:  http.StatusForbidden,
 			wantBody:    `{"code":"rbac.permission_denied","params":{"action":"read","permission":"billing:write"}}` + "\n",
-			wantContent: jsonContentType,
+			wantContent: JSONContentType,
 		},
 		{
 			name:        "coded error without params omits the key",
 			err:         apperr.NotFound("org.node_not_found"),
 			wantStatus:  http.StatusNotFound,
 			wantBody:    `{"code":"org.node_not_found"}` + "\n",
-			wantContent: jsonContentType,
+			wantContent: JSONContentType,
 		},
 		{
 			name:        "uncoded error takes the fallback envelope",
 			err:         errors.New("dial tcp 10.0.0.7:5432: connection refused"),
 			wantStatus:  http.StatusInternalServerError,
 			wantBody:    `{"code":"test.internal_error"}` + "\n",
-			wantContent: jsonContentType,
+			wantContent: JSONContentType,
 		},
 	}
 
@@ -130,6 +130,96 @@ func TestWriteError_CallerContentType_IsPreserved(t *testing.T) {
 
 	if got := rec.Result().Header.Get("Content-Type"); got != "application/problem+json" {
 		t.Errorf("WriteError Content-Type = %q, want the caller's own", got)
+	}
+}
+
+// TestWriteJSON_ResponseBytes pins the bytes every shared JSON success
+// response carries: the status the caller gave, the shared JSON content
+// type, and the encoded body including the encoder's trailing newline.
+func TestWriteJSON_ResponseBytes(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		status   int
+		value    any
+		wantBody string
+	}{
+		{
+			name:   "object body",
+			status: http.StatusCreated,
+			value: struct {
+				ID   string `json:"id"`
+				Name string `json:"name"`
+			}{ID: "note_7", Name: "first"},
+			wantBody: `{"id":"note_7","name":"first"}` + "\n",
+		},
+		{
+			name:     "list body",
+			status:   http.StatusOK,
+			value:    []string{"a", "b"},
+			wantBody: `["a","b"]` + "\n",
+		},
+		{
+			name:     "empty list body stays []",
+			status:   http.StatusOK,
+			value:    []string{},
+			wantBody: `[]` + "\n",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			rec := httptest.NewRecorder()
+
+			WriteJSON(rec, tc.status, tc.value)
+
+			if rec.Code != tc.status {
+				t.Errorf("WriteJSON status = %d, want %d", rec.Code, tc.status)
+			}
+			if got := rec.Result().Header.Get("Content-Type"); got != JSONContentType {
+				t.Errorf("WriteJSON Content-Type = %q, want %q", got, JSONContentType)
+			}
+			if got := rec.Body.String(); got != tc.wantBody {
+				t.Errorf("WriteJSON body = %q, want %q", got, tc.wantBody)
+			}
+		})
+	}
+}
+
+// TestWriteJSON_SetsTheContentTypeUnconditionally pins the write contract
+// every call site relied on: the shared type replaces whatever a caller had
+// set, so a pre-set header cannot silently change the media type of a
+// shared JSON response.
+func TestWriteJSON_SetsTheContentTypeUnconditionally(t *testing.T) {
+	t.Parallel()
+
+	rec := httptest.NewRecorder()
+	rec.Header().Set("Content-Type", "application/problem+json")
+
+	WriteJSON(rec, http.StatusOK, map[string]string{"ok": "yes"})
+
+	if got := rec.Result().Header.Get("Content-Type"); got != JSONContentType {
+		t.Errorf("WriteJSON Content-Type = %q, want the shared %q", got, JSONContentType)
+	}
+}
+
+// TestWriteJSON_UnencodableValue_KeepsTheStatusLine pins the dropped-error
+// contract: a value the encoder cannot marshal leaves the committed status
+// line and the content type alone -- no panic, no second write.
+func TestWriteJSON_UnencodableValue_KeepsTheStatusLine(t *testing.T) {
+	t.Parallel()
+
+	rec := httptest.NewRecorder()
+
+	WriteJSON(rec, http.StatusOK, make(chan int))
+
+	if rec.Code != http.StatusOK {
+		t.Errorf("WriteJSON status = %d, want %d", rec.Code, http.StatusOK)
+	}
+	if got := rec.Result().Header.Get("Content-Type"); got != JSONContentType {
+		t.Errorf("WriteJSON Content-Type = %q, want %q", got, JSONContentType)
 	}
 }
 

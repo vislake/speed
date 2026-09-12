@@ -1,6 +1,13 @@
-// Package httpapi carries the two HTTP conventions every module's request
-// handlers share: the coded error envelope a refusal is written as, and the
-// bounded decode of a JSON request body.
+// Package httpapi carries the three HTTP conventions every module's request
+// handlers share: how a success body is written as JSON (WriteJSON), the
+// coded error envelope a refusal is written as (WriteError), and the bounded
+// decode of a JSON request body (DecodeJSON).
+//
+// A JSON response is the one shape every module's surface answers with:
+// WriteJSON sets the shared content type, writes the status and encodes the
+// value in one place, so success bodies -- like the refusals below -- answer
+// identically, byte for byte, across every module and every generated
+// fragment.
 //
 // The envelope is how a structured application error crosses the HTTP
 // boundary. APIs never return localized text: a refusal is a stable code
@@ -30,9 +37,30 @@ import (
 	"github.com/vislake/speed/go/pkgcore/apperr"
 )
 
-// jsonContentType is the shared JSON content type of the envelope and of the
-// responses around it.
-const jsonContentType = "application/json; charset=utf-8"
+// JSONContentType is the media type of every JSON response the shared
+// surface writes: the success bodies of WriteJSON and the coded error
+// envelope of WriteError both carry it.
+const JSONContentType = "application/json; charset=utf-8"
+
+// WriteJSON writes v to w as the shared JSON response: the shared JSON
+// content type, the status line, and the JSON encoding of v -- which the
+// encoder terminates with a newline, so a JSON body always ends the same
+// way regardless of what wrote it.
+//
+// The content type is set unconditionally: every JSON response on the
+// shared surface carries JSONContentType, and a response whose contract
+// pins a different media type writes that body itself rather than going
+// through here (the PEM and octet-stream paths among the modules' own
+// handlers).
+//
+// An encode failure after the status line went out is a broken client
+// connection, not a response defect -- the status is already committed, so
+// there is nothing left to answer with and the error is dropped.
+func WriteJSON(w http.ResponseWriter, status int, v any) {
+	w.Header().Set("Content-Type", JSONContentType)
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(v)
+}
 
 // errorEnvelope is the wire shape WriteError emits. The two fields marshal
 // in declaration order ("code" before "params"), which is also the order a
@@ -67,7 +95,7 @@ func WriteError(w http.ResponseWriter, err error, fallback *apperr.Error) {
 		appErr = fallback
 	}
 	if w.Header().Get("Content-Type") == "" {
-		w.Header().Set("Content-Type", jsonContentType)
+		w.Header().Set("Content-Type", JSONContentType)
 	}
 	w.WriteHeader(appErr.Status)
 	_ = json.NewEncoder(w).Encode(errorEnvelope{Code: appErr.Code, Params: appErr.Params})
