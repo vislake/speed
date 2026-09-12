@@ -629,7 +629,8 @@ func (b *serverBuild) authnComponent(reg *pkgcore.ComponentRegistry) (pkgcore.Co
 // orgComponent returns org's descriptor with this project's own
 // construction: the invitation blind indexer built from the module's own
 // declared key material -- the same construction the module's descriptor
-// performs -- plus the one decision the skeleton must make itself,
+// performs -- the feature gate that makes org's declared flags effective at
+// request time, plus the one decision the skeleton must make itself,
 // invitation emailing disabled: sending needs a mail transport, a
 // mail-from address and a frontend acceptance page a skeleton must not
 // demand at Register, and the module's own email-invitation requirement
@@ -650,11 +651,27 @@ func (b *serverBuild) orgComponent(reg *pkgcore.ComponentRegistry) (pkgcore.Comp
 		if err != nil {
 			return nil, fmt.Errorf("__APP_NAME__: build the org email indexer: %w", err)
 		}
+		// The config module's construction product: this construction wires
+		// its lazy handle as org's feature gate below, and the required edge
+		// declared at the bottom orders this component after the config
+		// module's, so the product is in the by-type context here.
+		cfgModule, err := pkgcore.Get[*config.Module](reg)
+		if err != nil {
+			return nil, err
+		}
 		return org.NewModule(db,
 			org.WithEmailIndexer(indexer),
 			org.WithInvitationEmailDisabled(),
+			// The feature gate, off the same lazy handle: org's declared
+			// feature flags are enforced at request time, so a tenant whose
+			// configuration disables invitations is refused at the endpoint,
+			// matching the flag values the config module reports through its
+			// features endpoints.
+			org.WithFeatureGate(cfgModule.Handle()),
 		), nil
-	})
+	},
+		pkgcore.Requirement{Token: (*config.Module)(nil)},
+	)
 }
 
 // configComponent returns config's descriptor declaring only: its schema
