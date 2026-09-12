@@ -131,7 +131,7 @@ func (neverQueue) Cancel(context.Context, jobs.JobID) error {
 }
 
 // emptyAddressResolver is a notification.UserAddressResolver that knows no
-// addresses. The selected modules' components require the seam to exist -- a
+// addresses. The selected modules' components require the module to exist -- a
 // delivery's addresses are resolved at send time, and this host never sends
 // -- so every user resolving to no addresses is the honest answer here.
 type emptyAddressResolver struct{}

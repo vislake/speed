@@ -8,13 +8,13 @@
 #
 # The deployment-composition retrofit (docs/internal/03-deployment-modes.md)
 # turned the mode from a selector into a constraint: the assembly takes no
-# per-call deployment mode, each seam value comes from a selected component
+# per-call deployment mode, each module's value comes from a selected component
 # declaring its own capabilities, and Prepare fails assembly when a selected
 # component cannot satisfy the configured mode's RequiredCapabilities().
 # What survives of the mode is a few wiring-time sites -- the
 # RequiredCapabilities() dispatch in deployment_mode.go, the
 # consumer binary's command entry reading APP_DEPLOYMENT_MODE, and the
-# assembly-time seam check go/authn performs against the mode a host wired
+# assembly-time module check go/authn performs against the mode a host wired
 # (module.go, below) -- plus the mode constants themselves, still part of
 # the public API and still comparable. Business modules receive
 # already-resolved, capability-checked infrastructure through the Registry
@@ -33,7 +33,7 @@
 #     bootstrap: the loader target pins the variable, the transform parses
 #     the value) and defaults it to standalone
 #   * examples/reference-app/internal/app/host_wiring.go -- the assembly's
-#     authn construction: the host-side "SMS sender" seam three-way (a
+#     authn construction: the host-side "SMS sender" module three-way (a
 #     configured gateway URL always wins; absent it, a non-distributed
 #     mode falls back to the console transport while the distributed
 #     mode is left deliberately UNWIRED), whose distributed branch
@@ -44,7 +44,7 @@
 #     (ErrMissingDistributedSMSSender) instead of silently defaulting to
 #     the console sender nobody in that deployment mode reads. It is
 #     authn's construction-time counterpart of the assembly's own
-#     resolveMailer/resolveObjectStore: authn owns its SMSSender seam and
+#     resolveMailer/resolveObjectStore: authn owns its SMSSender module and
 #     does not register it on the pkgcore registry, so the assembly-time
 #     constraint lives in the module's own constructor -- wiring-time only,
 #     never in Service's request path, per WithDeploymentMode's own doc
@@ -63,7 +63,7 @@
 #   * go/saasctl/internal/template/project/selection/{authn,authn+org,
 #     authn+rbac,authn+org+rbac}/server.go -- the saasctl-distributed-mode
 #     round's port of the reference-app's own authn "SMS sender"
-#     seam three-way conditional injection (an unreachable-under-
+#     module three-way conditional injection (an unreachable-under-
 #     distributed-mode console fallback would leave a distributed replica
 #     pool silently unwarned) into each authn-containing selection's own
 #     command-entry wiring. Byte-for-byte the same wiring-time decision the
@@ -72,7 +72,7 @@
 #     "template, not library code, materializes outside this tree" argument
 #     config.go's own entry above makes -- these four files just carry the
 #     comparison in server.go instead of config.go because the SMS-sender
-#     seam is authn-specific, and the `none` selection (no authn module) has
+#     module is authn-specific, and the `none` selection (no authn module) has
 #     no such comparison to make at all.
 # The other former entries are deliberately NOT exempted: registry.go,
 # observability's init.go and the reference-app main.go no longer carry a
@@ -81,7 +81,7 @@
 # own command-entry gate is the same story one round later: the
 # standalone-only refusal this header used to exempt was removed once its
 # premise was shown false (a generated project's deployment mode changes
-# which infrastructure seams its server composes, never which SQL dialect
+# which infrastructure modules its server composes, never which SQL dialect
 # its own database speaks), so migrate.go's paths.exclude entry went with
 # it -- a comparison re-added there must fire on sight too. The reference
 # app's own server.go is the same story: it carries the resolved mode into
