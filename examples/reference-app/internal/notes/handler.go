@@ -2,7 +2,6 @@ package notes
 
 import (
 	"context"
-	"encoding/json"
 	"net/http"
 	"strings"
 	"time"
@@ -18,10 +17,6 @@ import (
 	"github.com/vislake/speed/go/pkgcore/apperr"
 	"github.com/vislake/speed/go/pkgcore/httpapi"
 )
-
-// jsonContentType is the Content-Type every response below writes, the
-// same JSON type the coded refusals carry (see pkgcore/httpapi).
-const jsonContentType = "application/json; charset=utf-8"
 
 // ErrTextRequired is returned when a create-note request's text is empty
 // or all whitespace. Its localized text lives in this module's Locales()
@@ -257,9 +252,7 @@ func (h *Handler) NotesCreateNote(w http.ResponseWriter, r *http.Request) {
 	// here the way it would have to be with a bare slog.Default() call.
 	obs.FromContext(ctx).Info("note created", "note_id", note.ID)
 
-	w.Header().Set("Content-Type", jsonContentType)
-	w.WriteHeader(http.StatusCreated)
-	_ = json.NewEncoder(w).Encode(toNoteResponse(note))
+	httpapi.WriteJSON(w, http.StatusCreated, toNoteResponse(note))
 }
 
 // resolveSubject resolves the HTTP caller's user id through the host's
@@ -472,9 +465,7 @@ func (h *Handler) NotesListNotes(w http.ResponseWriter, r *http.Request) {
 	// already did, instead of none at all.
 	obs.FromContext(ctx).Info("notes listed", "note_count", len(items))
 
-	w.Header().Set("Content-Type", jsonContentType)
-	w.WriteHeader(http.StatusOK)
-	_ = json.NewEncoder(w).Encode(resp)
+	httpapi.WriteJSON(w, http.StatusOK, resp)
 }
 
 // NotesDeleteNote implements api.ServerInterface: it handles DELETE
