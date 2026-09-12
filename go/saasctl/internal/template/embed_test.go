@@ -836,22 +836,22 @@ func TestOrgFeatureGateThroughTheConfigHandle_DrivesTheThreeInvitationArms(t *te
 	// The host-side registration the org-bearing selections' server.go
 	// performs: org's Invitation.Email column is encrypted at rest under
 	// the platform cipher.
-	if err := org.RegisterEmailSerializer(cipher); err != nil {
-		t.Fatalf("register org's email serializer: %v", err)
+	if serializerErr := org.RegisterEmailSerializer(cipher); serializerErr != nil {
+		t.Fatalf("register org's email serializer: %v", serializerErr)
 	}
 	configModule := config.NewModule(db, config.WithCipher(cipher), config.WithPollInterval(0))
 
 	// Both modules' real migration sets, the same SQL `saasctl db migrate`
 	// applies to a generated project's database.
 	migrations := dbkit.NewMigrationRegistry()
-	if err := migrations.Register(org.NewModule(db)); err != nil {
-		t.Fatalf("register the org migrations: %v", err)
+	if orgMigrationErr := migrations.Register(org.NewModule(db)); orgMigrationErr != nil {
+		t.Fatalf("register the org migrations: %v", orgMigrationErr)
 	}
-	if err := migrations.Register(configModule); err != nil {
-		t.Fatalf("register the config migrations: %v", err)
+	if configMigrationErr := migrations.Register(configModule); configMigrationErr != nil {
+		t.Fatalf("register the config migrations: %v", configMigrationErr)
 	}
-	if err := migrations.Apply(ctx, db, dbkit.DialectSQLite); err != nil {
-		t.Fatalf("apply the migrations: %v", err)
+	if applyErr := migrations.Apply(ctx, db, dbkit.DialectSQLite); applyErr != nil {
+		t.Fatalf("apply the migrations: %v", applyErr)
 	}
 
 	// The gated module, carried through the templates' own reader
@@ -869,7 +869,7 @@ func TestOrgFeatureGateThroughTheConfigHandle_DrivesTheThreeInvitationArms(t *te
 	recorder := &invitationMailRecorder{}
 	reg.Put(recorder)
 	var svc *config.Service
-	if err := componenttest.DeclareAll(reg,
+	if declareErr := componenttest.DeclareAll(reg,
 		gated.Register,
 		configModule.Register,
 		func(r *pkgcore.ComponentRegistry) error {
@@ -877,8 +877,8 @@ func TestOrgFeatureGateThroughTheConfigHandle_DrivesTheThreeInvitationArms(t *te
 			svc = attached
 			return attachErr
 		},
-	); err != nil {
-		t.Fatalf("declare the org and config modules and attach config: %v", err)
+	); declareErr != nil {
+		t.Fatalf("declare the org and config modules and attach config: %v", declareErr)
 	}
 
 	// Arm 1, the default state an operator who wrote no row gets: the
@@ -906,8 +906,8 @@ func TestOrgFeatureGateThroughTheConfigHandle_DrivesTheThreeInvitationArms(t *te
 			t.Fatalf("pending invitations %s = %d, want %d", where, len(pending), want)
 		}
 	}
-	if res, err := invite("ada@example.test"); err != nil {
-		t.Fatalf("Invite in the default gated state = %v, want success: WithInvitationEmailDisabled declares %s off, so the delivery leg stays quiet", err, org.FeatureInvitationEmail)
+	if res, inviteErr := invite("ada@example.test"); inviteErr != nil {
+		t.Fatalf("Invite in the default gated state = %v, want success: WithInvitationEmailDisabled declares %s off, so the delivery leg stays quiet", inviteErr, org.FeatureInvitationEmail)
 	} else if res == nil || res.Token == "" {
 		t.Fatalf("Invite in the default gated state returned %+v, want a real pending invitation", res)
 	}
