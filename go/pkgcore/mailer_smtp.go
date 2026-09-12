@@ -470,10 +470,10 @@ type smtpComponentConfig struct {
 // mailerSMTPComponent is the component descriptor for "mailer.smtp", the
 // relay-backed mailer a composition configuration selects as the "mailer"
 // module's implementation; it registers itself from this file's init. The
-// capabilities are the seam registration's own declaration, documented
-// there: MultiReplicaSafe (any number of replicas sharing one relay) and
-// Stateless (every Send dials a fresh connection and the struct holds only
-// its config, so a restart drops nothing). Its New funnels through
+// capabilities are the descriptor's own declaration, with the bits documented
+// in capability.go: MultiReplicaSafe (any number of replicas sharing one
+// relay) and Stateless (every Send dials a fresh connection and the struct
+// holds only its config, so a restart drops nothing). Its New funnels through
 // newSMTPMailerFromFields, so an unusable resolved value -- an empty host, a
 // port outside the range, a ReplyTo carrying a control character -- comes
 // back as a configuration error rather than the constructor's panic.
