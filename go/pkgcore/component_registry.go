@@ -16,7 +16,7 @@ import (
 
 // component_registry.go carries the assembly half of the config-driven
 // component assembly: the ComponentRegistry, its by-type value store (Put
-// and Get), its eleven declaration seats, and the seven-stage lifecycle the
+// and Get), its eleven declaration seats, and the eight-stage lifecycle the
 // engine drives over it. The descriptor half lives in component.go, the
 // structured configuration in config.go, and the Prepare stage's
 // parse-resolve-validate-plan pipeline in component_assembly.go.
@@ -65,40 +65,64 @@ var ErrStageViolation = errors.New("pkgcore: stage violation")
 // The error names the component and wraps the cause.
 var ErrInvalidAsset = errors.New("pkgcore: invalid component asset")
 
-// stage names one of the seven lifecycle stages the assembly walks through.
-type stage int
+// Stage identifies the lifecycle position of the assembly: one of the eight
+// stages the component lifecycle walks through, or StageIdle before the
+// first stage has run.
+//
+// The type is exported because the current stage is part of the assembly
+// contract rather than a registry internal: a component that owns a
+// declaration face of its own -- a write surface whose gate is "writes only
+// while this stage runs", the shape this registry's built-in seats take --
+// enforces that gate by comparing the reading of (*ComponentRegistry).Stage
+// against the stage it allows, instead of re-deriving the lifecycle
+// position from its own bookkeeping.
+type Stage string
 
 const (
-	stageIdle stage = iota
-	stagePrepare
-	stageConstruct
-	stageVerify
-	stageInit
-	stageStart
-	stageStop
-	stageClose
+	// StageIdle is the assembly before any stage has run (and after a failed
+	// Prepare, which leaves the registry as it was). Its value is empty, so
+	// a zero Stage also reads as idle; String renders it as "not started".
+	StageIdle Stage = ""
+	// StagePrepare is the first stage: the loader's configuration load, the
+	// assembly plan and its validation, then the components' Prepare
+	// callbacks.
+	StagePrepare Stage = "prepare"
+	// StageConstruct is the second stage: every planned component's New
+	// callback, in dependency order.
+	StageConstruct Stage = "construct"
+	// StageVerify is the third stage: the database component applies the
+	// assembled migrations first, then every constructed component checks
+	// its own preconditions.
+	StageVerify Stage = "verify"
+	// StageInit is the fourth stage: the declaration seats open, the
+	// components' Init callbacks declare, wire and publish, and the closing
+	// validation runs.
+	StageInit Stage = "init"
+	// StageStart is the fifth stage: the components' Start callbacks --
+	// workers, schedulers, seeds, everything that starts the component up
+	// without admitting outside traffic.
+	StageStart Stage = "start"
+	// StageServe is the sixth stage: the components' Serve callbacks -- the
+	// entry points that accept external requests (HTTP listeners, queue
+	// consumption, scheduler triggering) -- after every Start callback of
+	// the assembly has completed.
+	StageServe Stage = "serve"
+	// StageStop is the seventh stage: the non-blocking stop notification, in
+	// the two beats Stop documents.
+	StageStop Stage = "stop"
+	// StageClose is the eighth stage: the release pass, waiting out the
+	// drain Stop announced.
+	StageClose Stage = "close"
 )
 
-// String renders the stage name used in error text.
-func (s stage) String() string {
-	switch s {
-	case stagePrepare:
-		return "prepare"
-	case stageConstruct:
-		return "construct"
-	case stageVerify:
-		return "verify"
-	case stageInit:
-		return "init"
-	case stageStart:
-		return "start"
-	case stageStop:
-		return "stop"
-	case stageClose:
-		return "close"
-	default:
+// String renders the stage name used in error text: the stage's own value,
+// and "not started" for StageIdle (whose empty value would otherwise render
+// as nothing).
+func (s Stage) String() string {
+	if s == StageIdle {
 		return "not started"
 	}
+	return string(s)
 }
 
 // plannedComponent is one member of the assembled set: the selected
@@ -194,14 +218,15 @@ type ComponentRegistry struct {
 	planByName map[string]int
 
 	// cur is the stage currently running (or the last one entered);
-	// prepared through started record stage completion, and closed records
+	// prepared through served record stage completion, and closed records
 	// the terminal state Close establishes.
-	cur         stage
+	cur         Stage
 	prepared    bool
 	constructed bool
 	verified    bool
 	inited      bool
 	started     bool
+	served      bool
 	closed      bool
 
 	// seats is the registrar set behind the seats, non-nil once Init has
@@ -415,7 +440,7 @@ func GetOptional[T any](r *ComponentRegistry) (T, bool, error) {
 // a failed Prepare leaves the registry as it was, ready to retry with a
 // corrected composition.
 func (r *ComponentRegistry) Prepare(ctx context.Context) error {
-	if err := r.beginStage(stagePrepare); err != nil {
+	if err := r.beginStage(StagePrepare); err != nil {
 		return err
 	}
 	if err := r.planAssembly(ctx); err != nil {
@@ -441,7 +466,7 @@ func (r *ComponentRegistry) Prepare(ctx context.Context) error {
 		}
 	}
 
-	r.markStageDone(stagePrepare)
+	r.markStageDone(StagePrepare)
 	return nil
 }
 
@@ -456,22 +481,22 @@ func (r *ComponentRegistry) Prepare(ctx context.Context) error {
 // component in reverse order, exactly once, and returns ErrComponentFailed
 // naming the stage, the component, the cause and the rolled-back set.
 func (r *ComponentRegistry) Construct(ctx context.Context) error {
-	if err := r.beginStage(stageConstruct); err != nil {
+	if err := r.beginStage(StageConstruct); err != nil {
 		return err
 	}
 
 	for _, p := range r.plannedComponents() {
 		name := p.component.Name
 		if err := ctx.Err(); err != nil {
-			return r.failStage(ctx, stageConstruct, name, err)
+			return r.failStage(ctx, StageConstruct, name, err)
 		}
 		before := r.valueCount()
 		instance, err := p.component.New(ctx, r, p.cfg)
 		if err != nil {
-			return r.failStage(ctx, stageConstruct, name, err)
+			return r.failStage(ctx, StageConstruct, name, err)
 		}
 		if nilValue(instance) {
-			return r.failStage(ctx, stageConstruct, name, errors.New("the New callback returned no product (a nil or typed nil pointer value)"))
+			return r.failStage(ctx, StageConstruct, name, errors.New("the New callback returned no product (a nil or typed nil pointer value)"))
 		}
 		// The values the New callback put itself are, by construction, this
 		// component's own additional deliveries: the stage drives one New at
@@ -479,10 +504,10 @@ func (r *ComponentRegistry) Construct(ctx context.Context) error {
 		// count above and now was put by this call.
 		put := r.valuesFrom(before)
 		if err := productDeliversDeclarations(p.component, instance, put); err != nil {
-			return r.failStage(ctx, stageConstruct, name, err)
+			return r.failStage(ctx, StageConstruct, name, err)
 		}
 		if err := memberDeliversDeclarations(p.component, instance, put); err != nil {
-			return r.failStage(ctx, stageConstruct, name, err)
+			return r.failStage(ctx, StageConstruct, name, err)
 		}
 		r.recordConstructed(p.component, instance)
 		if len(p.component.ProvidesMember) == 0 {
@@ -490,7 +515,7 @@ func (r *ComponentRegistry) Construct(ctx context.Context) error {
 		}
 	}
 
-	r.markStageDone(stageConstruct)
+	r.markStageDone(StageConstruct)
 	return nil
 }
 
@@ -499,21 +524,21 @@ func (r *ComponentRegistry) Construct(ctx context.Context) error {
 // component applies the assembled migration set here, before any other
 // Verify callback runs.
 func (r *ComponentRegistry) Verify(ctx context.Context) error {
-	if err := r.beginStage(stageVerify); err != nil {
+	if err := r.beginStage(StageVerify); err != nil {
 		return err
 	}
 	for _, e := range r.constructedList() {
 		if err := ctx.Err(); err != nil {
-			return r.failStage(ctx, stageVerify, e.name, err)
+			return r.failStage(ctx, StageVerify, e.name, err)
 		}
 		if e.component.Verify == nil {
 			continue
 		}
 		if err := e.component.Verify(ctx, r, e.instance); err != nil {
-			return r.failStage(ctx, stageVerify, e.name, err)
+			return r.failStage(ctx, StageVerify, e.name, err)
 		}
 	}
-	r.markStageDone(stageVerify)
+	r.markStageDone(StageVerify)
 	return nil
 }
 
@@ -530,84 +555,139 @@ func (r *ComponentRegistry) Verify(ctx context.Context) error {
 // ConfigSchema derive fields) and the runtime configuration seat, and the
 // feature-graph check (ValidateFeatureGraph over the Features seat).
 func (r *ComponentRegistry) Init(ctx context.Context) error {
-	if err := r.beginStage(stageInit); err != nil {
+	if err := r.beginStage(StageInit); err != nil {
 		return err
 	}
 
 	if err := r.registerSystemPurposes(); err != nil {
-		return r.failStage(ctx, stageInit, "", err)
+		return r.failStage(ctx, StageInit, "", err)
 	}
 
 	r.openSeats()
 	for _, e := range r.constructedList() {
 		if err := ctx.Err(); err != nil {
-			return r.failStage(ctx, stageInit, e.name, err)
+			return r.failStage(ctx, StageInit, e.name, err)
 		}
 		if e.component.Init == nil {
 			continue
 		}
 		if err := e.component.Init(ctx, r, e.instance); err != nil {
-			return r.failStage(ctx, stageInit, e.name, err)
+			return r.failStage(ctx, StageInit, e.name, err)
 		}
 	}
 	r.closeSeats()
 
 	if err := r.validateOneLayerPerKey(); err != nil {
-		return r.failStage(ctx, stageInit, "", err)
+		return r.failStage(ctx, StageInit, "", err)
 	}
 	if err := ValidateFeatureGraph(r.Features); err != nil {
-		return r.failStage(ctx, stageInit, "", err)
+		return r.failStage(ctx, StageInit, "", err)
 	}
 
-	r.markStageDone(stageInit)
+	r.markStageDone(StageInit)
 	return nil
 }
 
 // Start runs the fifth stage: every constructed component's Start callback
-// in dependency order, after the closing validation of Init -- listeners,
-// workers, schedulers. A Start failure rolls the assembly back exactly like
-// a Construct, Verify or Init failure.
+// in dependency order, after the closing validation of Init -- workers,
+// schedulers, seeds, everything that starts the component up without
+// admitting outside traffic. A component whose action begins accepting
+// outside traffic belongs to the Serve stage instead, so it runs after
+// every component's Start rather than merely after its own dependencies;
+// see Serve. A Start failure rolls the assembly back exactly like a
+// Construct, Verify or Init failure.
 func (r *ComponentRegistry) Start(ctx context.Context) error {
-	if err := r.beginStage(stageStart); err != nil {
+	if err := r.beginStage(StageStart); err != nil {
 		return err
 	}
 	for _, e := range r.constructedList() {
 		if err := ctx.Err(); err != nil {
-			return r.failStage(ctx, stageStart, e.name, err)
+			return r.failStage(ctx, StageStart, e.name, err)
 		}
 		if e.component.Start == nil {
 			continue
 		}
 		if err := e.component.Start(ctx, r, e.instance); err != nil {
-			return r.failStage(ctx, stageStart, e.name, err)
+			return r.failStage(ctx, StageStart, e.name, err)
 		}
 	}
-	r.markStageDone(stageStart)
+	r.markStageDone(StageStart)
 	return nil
 }
 
-// Stop runs the sixth stage: the non-blocking stop notification to every
-// constructed component, in reverse dependency order. Failures are ignored,
-// because a notification that cannot be delivered must not keep the Close
-// that waits for the drain from running; Stop releases nothing itself.
-func (r *ComponentRegistry) Stop(ctx context.Context) error {
-	if err := r.checkNotClosed(stageStop); err != nil {
+// Serve runs the sixth stage: every constructed component's Serve callback
+// in dependency order, as one round that begins only after every Start
+// callback of the assembly has completed. The stage's members are the
+// entry points that accept external requests -- HTTP listening, queue
+// consumption, scheduler triggering, every action that starts admitting
+// outside traffic into the process.
+//
+// It is a stage of its own rather than part of Start because dependency
+// order cannot express its requirement: an entry's traffic can reach any
+// component, not only the components the entry declares as dependencies,
+// so the entry must run after everyone -- "after all Starts" -- while a
+// dependency edge only ever says "after my dependencies". A component that
+// declares no Serve callback is unaffected by the stage. A Serve failure
+// rolls the assembly back exactly like a Start failure.
+func (r *ComponentRegistry) Serve(ctx context.Context) error {
+	if err := r.beginStage(StageServe); err != nil {
 		return err
 	}
-	r.setStage(stageStop)
-
-	entries := r.constructedList()
-	for i := len(entries) - 1; i >= 0; i-- {
-		e := entries[i]
-		if e.component.Stop == nil {
+	for _, e := range r.constructedList() {
+		if err := ctx.Err(); err != nil {
+			return r.failStage(ctx, StageServe, e.name, err)
+		}
+		if e.component.Serve == nil {
 			continue
+		}
+		if err := e.component.Serve(ctx, r, e.instance); err != nil {
+			return r.failStage(ctx, StageServe, e.name, err)
+		}
+	}
+	r.markStageDone(StageServe)
+	return nil
+}
+
+// Stop runs the seventh stage: the non-blocking stop notification, in two
+// beats. The first beat reaches the components that declared a Serve
+// callback -- the entry points stop accepting new requests first, so the
+// requests in flight drain against a still-complete system -- and only then
+// does the second beat reach every other constructed component. Each beat
+// runs in reverse dependency order among its own members. Failures are
+// ignored in both beats, because a notification that cannot be delivered
+// must not keep the Close that waits for the drain from running; Stop
+// releases nothing itself.
+func (r *ComponentRegistry) Stop(ctx context.Context) error {
+	if err := r.checkNotClosed(StageStop); err != nil {
+		return err
+	}
+	r.setStage(StageStop)
+
+	notify := func(e constructedEntry) {
+		if e.component.Stop == nil {
+			return
 		}
 		_ = e.component.Stop(ctx, r, e.instance)
 	}
+	entries := r.constructedList()
+	// First beat: the entry points -- the components that declared Serve --
+	// in reverse dependency order.
+	for i := len(entries) - 1; i >= 0; i-- {
+		if entries[i].component.Serve != nil {
+			notify(entries[i])
+		}
+	}
+	// Second beat: every remaining constructed component, in reverse
+	// dependency order.
+	for i := len(entries) - 1; i >= 0; i-- {
+		if entries[i].component.Serve == nil {
+			notify(entries[i])
+		}
+	}
 	return nil
 }
 
-// Close runs the seventh stage: every constructed component's release in
+// Close runs the eighth stage: every constructed component's release in
 // reverse dependency order, waiting out the drain Stop announced. It runs
 // exactly once -- a second call reports the first call's result -- and
 // aggregates the failures of every release rather than stopping at the
@@ -624,7 +704,7 @@ func (r *ComponentRegistry) Close(ctx context.Context) error {
 	}
 	r.closed = true
 	r.seatsOpen = false
-	r.cur = stageClose
+	r.cur = StageClose
 	entries := append([]constructedEntry(nil), r.constructedEntries...)
 	r.mu.Unlock()
 
@@ -672,7 +752,7 @@ func (r *ComponentRegistry) closeEntries(ctx context.Context, entries []construc
 // validation with no single owner), cause, and the rolled-back set. The
 // Close errors of the rollback join the result, so nothing a Close callback
 // reports is lost on the failure path.
-func (r *ComponentRegistry) failStage(ctx context.Context, s stage, name string, cause error) error {
+func (r *ComponentRegistry) failStage(ctx context.Context, s Stage, name string, cause error) error {
 	_ = r.Close(ctx) // rollback: exactly once, cached for any later Close call
 
 	r.mu.RLock()
@@ -792,7 +872,7 @@ func (r *ComponentRegistry) constructedInstance(name string) (any, bool) {
 
 // beginStage validates that s may run now and records it as the current
 // stage.
-func (r *ComponentRegistry) beginStage(s stage) error {
+func (r *ComponentRegistry) beginStage(s Stage) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if err := r.checkStageOrder(s); err != nil {
@@ -803,7 +883,7 @@ func (r *ComponentRegistry) beginStage(s stage) error {
 }
 
 // checkNotClosed refuses a stage once the registry is closed.
-func (r *ComponentRegistry) checkNotClosed(s stage) error {
+func (r *ComponentRegistry) checkNotClosed(s Stage) error {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	if !r.closed {
@@ -815,7 +895,7 @@ func (r *ComponentRegistry) checkNotClosed(s stage) error {
 // checkStageOrder reports whether s may run given the completed stages,
 // naming the stage the call needed and the state observed. The caller holds
 // the write lock.
-func (r *ComponentRegistry) checkStageOrder(s stage) error {
+func (r *ComponentRegistry) checkStageOrder(s Stage) error {
 	if r.closed {
 		return fmt.Errorf("%w: the %s stage cannot run: the assembly is closed", ErrStageViolation, s)
 	}
@@ -826,37 +906,44 @@ func (r *ComponentRegistry) checkStageOrder(s stage) error {
 		return nil
 	}
 	switch s {
-	case stagePrepare:
+	case StagePrepare:
 		if r.prepared {
 			return fmt.Errorf("%w: the Prepare stage already ran", ErrStageViolation)
 		}
-	case stageConstruct:
+	case StageConstruct:
 		if err := need(r.prepared, "a completed Prepare stage"); err != nil {
 			return err
 		}
 		if r.constructed {
 			return fmt.Errorf("%w: the Construct stage already ran", ErrStageViolation)
 		}
-	case stageVerify:
+	case StageVerify:
 		if err := need(r.constructed, "a completed Construct stage"); err != nil {
 			return err
 		}
 		if r.verified {
 			return fmt.Errorf("%w: the Verify stage already ran", ErrStageViolation)
 		}
-	case stageInit:
+	case StageInit:
 		if err := need(r.verified, "a completed Verify stage"); err != nil {
 			return err
 		}
 		if r.inited {
 			return fmt.Errorf("%w: the Init stage already ran", ErrStageViolation)
 		}
-	case stageStart:
+	case StageStart:
 		if err := need(r.inited, "a completed Init stage"); err != nil {
 			return err
 		}
 		if r.started {
 			return fmt.Errorf("%w: the Start stage already ran", ErrStageViolation)
+		}
+	case StageServe:
+		if err := need(r.started, "a completed Start stage"); err != nil {
+			return err
+		}
+		if r.served {
+			return fmt.Errorf("%w: the Serve stage already ran", ErrStageViolation)
 		}
 	}
 	return nil
@@ -864,20 +951,22 @@ func (r *ComponentRegistry) checkStageOrder(s stage) error {
 
 // markStageDone records a completed stage and advances the current stage
 // marker.
-func (r *ComponentRegistry) markStageDone(s stage) {
+func (r *ComponentRegistry) markStageDone(s Stage) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	switch s {
-	case stagePrepare:
+	case StagePrepare:
 		r.prepared = true
-	case stageConstruct:
+	case StageConstruct:
 		r.constructed = true
-	case stageVerify:
+	case StageVerify:
 		r.verified = true
-	case stageInit:
+	case StageInit:
 		r.inited = true
-	case stageStart:
+	case StageStart:
 		r.started = true
+	case StageServe:
+		r.served = true
 	}
 	r.cur = s
 }
@@ -887,12 +976,12 @@ func (r *ComponentRegistry) markStageDone(s stage) {
 func (r *ComponentRegistry) abandonStage() {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	r.cur = stageIdle
+	r.cur = StageIdle
 }
 
 // setStage records the stage currently running without completion
 // bookkeeping (Stop is a terminal notification, not a gated stage).
-func (r *ComponentRegistry) setStage(s stage) {
+func (r *ComponentRegistry) setStage(s Stage) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.cur = s
@@ -1190,8 +1279,26 @@ func ComponentCapabilities(r *ComponentRegistry, name string) (Capability, error
 	return p.component.Capabilities, nil
 }
 
+// Stage returns the stage the assembly is currently in: the stage whose
+// callback is running, or the last one entered once a stage has completed.
+// Before the first stage -- and after a failed Prepare, which leaves the
+// registry as it was -- it reads StageIdle.
+//
+// This is the read-only reading of the assembly's lifecycle position, and
+// it belongs to the assembly contract rather than to the registry's
+// internals: a component that owns a declaration face of its own -- a
+// write surface gated to one stage, the shape the registry's built-in
+// declaration seats take -- enforces that gate by comparing this reading
+// against the stage it admits, which is why the gate can live with the
+// component that owns the face instead of only with the registry. The
+// reading never fails and never blocks a stage; a caller observes the
+// position, it cannot move it.
+func (r *ComponentRegistry) Stage() Stage {
+	return r.currentStage()
+}
+
 // currentStage reads the current stage marker for error text.
-func (r *ComponentRegistry) currentStage() stage {
+func (r *ComponentRegistry) currentStage() Stage {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	return r.cur

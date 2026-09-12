@@ -111,6 +111,10 @@ func recordingComponent(log *stageLog, name, module string, product any, hooks f
 			log.record(name + ".start")
 			return nil
 		},
+		Serve: func(context.Context, *ComponentRegistry, any) error {
+			log.record(name + ".serve")
+			return nil
+		},
 		Stop: func(context.Context, *ComponentRegistry, any) error {
 			log.record(name + ".stop")
 			return nil
@@ -335,7 +339,7 @@ func TestSeatsClosedOutsideInit(t *testing.T) {
 	}
 }
 
-// runStages drives Prepare through Start.
+// runStages drives Prepare through Serve.
 func runStages(ctx context.Context, reg *ComponentRegistry) error {
 	if err := reg.Prepare(ctx); err != nil {
 		return err
@@ -349,7 +353,10 @@ func runStages(ctx context.Context, reg *ComponentRegistry) error {
 	if err := reg.Init(ctx); err != nil {
 		return err
 	}
-	return reg.Start(ctx)
+	if err := reg.Start(ctx); err != nil {
+		return err
+	}
+	return reg.Serve(ctx)
 }
 
 func TestSeatVoidWritesPanicOutsideInit(t *testing.T) {
@@ -499,6 +506,9 @@ func TestStageOrderViolations(t *testing.T) {
 	if err := reg.Start(ctx); !errors.Is(err, ErrStageViolation) || !strings.Contains(err.Error(), "requires a completed Init stage") {
 		t.Errorf("Start before Init = %v, want ErrStageViolation", err)
 	}
+	if err := reg.Serve(ctx); !errors.Is(err, ErrStageViolation) || !strings.Contains(err.Error(), "requires a completed Start stage") {
+		t.Errorf("Serve before Start = %v, want ErrStageViolation", err)
+	}
 	if err := reg.Close(ctx); err != nil {
 		t.Fatalf("Close = %v", err)
 	}
@@ -543,6 +553,7 @@ func TestStageCallOrderGolden(t *testing.T) {
 		"aaa.verify", "bbb.verify",
 		"aaa.init", "bbb.init",
 		"aaa.start", "bbb.start",
+		"aaa.serve", "bbb.serve",
 		"bbb.stop", "aaa.stop",
 		"bbb.close", "aaa.close",
 	}
@@ -569,6 +580,302 @@ func assertPlanOrder(t *testing.T, reg *ComponentRegistry, names []string) {
 	}
 	if !reflect.DeepEqual(got, names) {
 		t.Errorf("plan order = %v, want %v", got, names)
+	}
+}
+
+// TestServeStageRunsAfterEveryStartInDependencyOrder pins the Serve stage's
+// membership and position: only the components that declared a Serve
+// callback participate, they run in dependency order among themselves, and
+// the round begins only after every Start callback of the assembly has
+// completed -- including the Start of a component no Serve declarer depends
+// on, which is the ordering requirement a dependency edge cannot express.
+func TestServeStageRunsAfterEveryStartInDependencyOrder(t *testing.T) {
+	ctx := context.Background()
+	log := &stageLog{}
+
+	first := recordingComponent(log, "first", "", &compTokenA{}, func(c *Component) {
+		c.Provides = []any{(*compTokenA)(nil)}
+	})
+	second := recordingComponent(log, "second", "", &compTokenB{}, func(c *Component) {
+		c.Requires = []Requirement{{Token: (*compTokenA)(nil)}}
+		c.Provides = []any{(*compTokenB)(nil)}
+	})
+	// observer depends on nothing either Serve declarer provides and
+	// declares no Serve callback of its own: its Start runs after both
+	// declarers' Starts, and neither declarer may enter Serve before it.
+	observer := recordingComponent(log, "observer", "", new(int), func(c *Component) {
+		c.Serve = nil
+	})
+
+	reg := newTestRegistry(t, first, second, observer)
+	reg.Put(testComposition(
+		configEntry{key: "first", value: nil},
+		configEntry{key: "second", value: nil},
+		configEntry{key: "observer", value: nil},
+	))
+	if err := runStages(ctx, reg); err != nil {
+		t.Fatalf("stages = %v", err)
+	}
+
+	want := []string{
+		"first.prepare", "second.prepare", "observer.prepare",
+		"first.new", "second.new", "observer.new",
+		"first.verify", "second.verify", "observer.verify",
+		"first.init", "second.init", "observer.init",
+		"first.start", "second.start", "observer.start",
+		"first.serve", "second.serve",
+	}
+	if got := log.all(); !reflect.DeepEqual(got, want) {
+		t.Errorf("stage call order =\n  %v\nwant\n  %v", got, want)
+	}
+
+	// The stage runs at most once per drive.
+	if err := reg.Serve(ctx); !errors.Is(err, ErrStageViolation) || !strings.Contains(err.Error(), "the Serve stage already ran") {
+		t.Errorf("second Serve = %v, want ErrStageViolation naming the stage that already ran", err)
+	}
+}
+
+// TestStopFirstBeatReachesServeDeclarersFirst pins the two beats of Stop:
+// the components that declared Serve -- the entry points, which must stop
+// accepting new requests before anything else is notified -- are reached in
+// the first beat, and only then every other constructed component, each
+// beat in reverse dependency order among its own members.
+func TestStopFirstBeatReachesServeDeclarersFirst(t *testing.T) {
+	ctx := context.Background()
+	log := &stageLog{}
+
+	first := recordingComponent(log, "first", "", &compTokenA{}, func(c *Component) {
+		c.Provides = []any{(*compTokenA)(nil)}
+	})
+	second := recordingComponent(log, "second", "", new(int), func(c *Component) {
+		c.Requires = []Requirement{{Token: (*compTokenA)(nil)}}
+	})
+	observer := recordingComponent(log, "observer", "", new(int), func(c *Component) {
+		c.Serve = nil
+	})
+
+	reg := newTestRegistry(t, first, second, observer)
+	reg.Put(testComposition(
+		configEntry{key: "first", value: nil},
+		configEntry{key: "second", value: nil},
+		configEntry{key: "observer", value: nil},
+	))
+	if err := runStages(ctx, reg); err != nil {
+		t.Fatalf("stages = %v", err)
+	}
+	if err := reg.Stop(ctx); err != nil {
+		t.Fatalf("Stop = %v", err)
+	}
+
+	var stops []string
+	for _, e := range log.all() {
+		if strings.HasSuffix(e, ".stop") {
+			stops = append(stops, e)
+		}
+	}
+	if want := []string{"second.stop", "first.stop", "observer.stop"}; !reflect.DeepEqual(stops, want) {
+		t.Errorf("stop order = %v, want the Serve declarers first in reverse dependency order, then the rest: %v", stops, want)
+	}
+}
+
+// TestServeStageSkipsBackgroundCompositions pins the stage's absence
+// tolerance: a composition in which no component declares Serve -- a pure
+// background process -- assembles with the Serve round a no-op and shuts
+// down cleanly, so an entry-less process pays nothing for the stage.
+func TestServeStageSkipsBackgroundCompositions(t *testing.T) {
+	ctx := context.Background()
+	log := &stageLog{}
+
+	background := func(c *Component) { c.Serve = nil }
+	aaa := recordingComponent(log, "aaa", "", &compTokenA{}, background)
+	bbb := recordingComponent(log, "bbb", "", &compTokenB{}, background)
+
+	reg := newTestRegistry(t, aaa, bbb)
+	reg.Put(testComposition(
+		configEntry{key: "aaa", value: nil},
+		configEntry{key: "bbb", value: nil},
+	))
+	if err := runStages(ctx, reg); err != nil {
+		t.Fatalf("stages = %v", err)
+	}
+	if got := reg.Stage(); got != StageServe {
+		t.Errorf("Stage() after the empty Serve round = %q, want %q (the round still advances the stage)", got, StageServe)
+	}
+	for _, e := range log.all() {
+		if strings.HasSuffix(e, ".serve") {
+			t.Fatalf("stage log = %v, want no Serve callback to have run", log.all())
+		}
+	}
+	if err := reg.Stop(ctx); err != nil {
+		t.Fatalf("Stop = %v", err)
+	}
+	if err := reg.Close(ctx); err != nil {
+		t.Fatalf("Close = %v", err)
+	}
+}
+
+// TestStageReadingFollowsTheDrive pins the exported stage reading as the
+// assembly-contract reading: it advances with the drive -- idle before the
+// first stage, the running stage inside every callback, close once the
+// release ran -- and a stage-scoped write gate can be enforced from it,
+// which is the shape a component owning its own declaration face takes.
+func TestStageReadingFollowsTheDrive(t *testing.T) {
+	ctx := context.Background()
+	log := &stageLog{}
+	var serveSeatErr error
+
+	for _, tc := range []struct {
+		stage Stage
+		name  string
+	}{
+		{StageIdle, "not started"},
+		{StagePrepare, "prepare"},
+		{StageConstruct, "construct"},
+		{StageVerify, "verify"},
+		{StageInit, "init"},
+		{StageStart, "start"},
+		{StageServe, "serve"},
+		{StageStop, "stop"},
+		{StageClose, "close"},
+	} {
+		if got := tc.stage.String(); got != tc.name {
+			t.Errorf("Stage(%q).String() = %q, want %q", string(tc.stage), got, tc.name)
+		}
+	}
+
+	probe := recordingComponent(log, "probe", "", &compTokenA{}, func(c *Component) {
+		c.Prepare = func(_ context.Context, reg *ComponentRegistry) error {
+			log.record("prepare:" + reg.Stage().String())
+			return nil
+		}
+		c.New = func(_ context.Context, reg *ComponentRegistry, _ ComponentConfig) (any, error) {
+			log.record("new:" + reg.Stage().String())
+			return &compTokenA{}, nil
+		}
+		c.Verify = func(_ context.Context, reg *ComponentRegistry, _ any) error {
+			log.record("verify:" + reg.Stage().String())
+			return nil
+		}
+		c.Init = func(_ context.Context, reg *ComponentRegistry, _ any) error {
+			log.record("init:" + reg.Stage().String())
+			return nil
+		}
+		c.Start = func(_ context.Context, reg *ComponentRegistry, _ any) error {
+			log.record("start:" + reg.Stage().String())
+			return nil
+		}
+		c.Serve = func(_ context.Context, reg *ComponentRegistry, _ any) error {
+			log.record("serve:" + reg.Stage().String())
+			// The reading is what a component-owned write gate consults: a
+			// declaration admitted only during Init must be refused here,
+			// named by the stage the reading reports.
+			serveSeatErr = reg.Config.Add(ConfigItem{Key: "probe.late", Type: "string", Description: "d"})
+			return nil
+		}
+		c.Stop = func(_ context.Context, reg *ComponentRegistry, _ any) error {
+			log.record("stop:" + reg.Stage().String())
+			return nil
+		}
+		c.Close = func(_ context.Context, reg *ComponentRegistry, _ any) error {
+			log.record("close:" + reg.Stage().String())
+			return nil
+		}
+	})
+
+	reg := newTestRegistry(t, probe)
+	reg.Put(testComposition(configEntry{key: "probe", value: nil}))
+
+	if got := reg.Stage(); got != StageIdle || got.String() != "not started" {
+		t.Fatalf("Stage() before the drive = %q, want the idle stage rendered %q", got, "not started")
+	}
+	for _, stage := range []struct {
+		run  func(context.Context) error
+		want Stage
+	}{
+		{reg.Prepare, StagePrepare},
+		{reg.Construct, StageConstruct},
+		{reg.Verify, StageVerify},
+		{reg.Init, StageInit},
+		{reg.Start, StageStart},
+		{reg.Serve, StageServe},
+		{reg.Stop, StageStop},
+		{reg.Close, StageClose},
+	} {
+		if err := stage.run(ctx); err != nil {
+			t.Fatalf("stage %s = %v", stage.want, err)
+		}
+		if got := reg.Stage(); got != stage.want {
+			t.Errorf("Stage() after %s = %q, want %q", stage.want, got, stage.want)
+		}
+	}
+
+	want := []string{
+		"prepare:prepare", "new:construct", "verify:verify", "init:init",
+		"start:start", "serve:serve", "stop:stop", "close:close",
+	}
+	if got := log.all(); !reflect.DeepEqual(got, want) {
+		t.Errorf("stage readings inside the callbacks = %v, want %v", got, want)
+	}
+	if !errors.Is(serveSeatErr, ErrStageViolation) || !strings.Contains(serveSeatErr.Error(), "current stage is serve") {
+		t.Errorf("seat write during Serve = %v, want ErrStageViolation naming serve", serveSeatErr)
+	}
+}
+
+// TestServeFailureRollsBackInReverseOrder pins the Serve failure semantics:
+// a refusing Serve callback fails the stage exactly as a Start failure does
+// -- the error names the stage and the component, every constructed
+// component is closed once in reverse order, and a later Close reports the
+// cached rollback without repeating it.
+func TestServeFailureRollsBackInReverseOrder(t *testing.T) {
+	ctx := context.Background()
+	log := &stageLog{}
+	boom := errors.New("serve boom")
+
+	aaa := recordingComponent(log, "aaa", "", &compTokenA{}, nil)
+	bbb := recordingComponent(log, "bbb", "", &compTokenB{}, func(c *Component) {
+		c.Serve = func(context.Context, *ComponentRegistry, any) error {
+			log.record("bbb.serve")
+			return boom
+		}
+	})
+
+	reg := newTestRegistry(t, aaa, bbb)
+	reg.Put(testComposition(
+		configEntry{key: "aaa", value: nil},
+		configEntry{key: "bbb", value: nil},
+	))
+	for _, stage := range []func(context.Context) error{reg.Prepare, reg.Construct, reg.Verify, reg.Init, reg.Start} {
+		if err := stage(ctx); err != nil {
+			t.Fatalf("stage before Serve = %v", err)
+		}
+	}
+
+	err := reg.Serve(ctx)
+	if !errors.Is(err, ErrComponentFailed) {
+		t.Fatalf("Serve = %v, want ErrComponentFailed", err)
+	}
+	if !errors.Is(err, boom) {
+		t.Errorf("Serve error %v does not wrap the cause", err)
+	}
+	for _, want := range []string{"(stage serve)", `component "bbb"`, "serve boom", "rolled back: bbb, aaa"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error %q does not carry %q", err, want)
+		}
+	}
+	if got := log.count("aaa.close"); got != 1 {
+		t.Errorf("aaa closed %d times, want exactly once", got)
+	}
+	if got := log.count("bbb.close"); got != 1 {
+		t.Errorf("bbb closed %d times, want exactly once", got)
+	}
+
+	// A host that joins Close into the failure observes the cached result
+	// without a second release pass.
+	if closeErr := reg.Close(ctx); closeErr != nil {
+		t.Fatalf("Close() after the rollback error = %v, want the cached clean rollback", closeErr)
+	}
+	if got := log.count("aaa.close") + log.count("bbb.close"); got != 2 {
+		t.Errorf("close callbacks ran %d times, want exactly once each", got)
 	}
 }
 

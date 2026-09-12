@@ -14,7 +14,7 @@ import (
 // assembly: the Component type, its dependency declaration (Requirement and
 // Provides), and the package-level registration entry points every component
 // package calls from init to make itself part of the binary. The assembly
-// half -- the ComponentRegistry, its value store and its seven-stage
+// half -- the ComponentRegistry, its value store and its eight-stage
 // lifecycle -- lives in component_registry.go; the structured configuration a
 // component receives lives in config.go.
 
@@ -50,18 +50,18 @@ var ErrInvalidComponent = errors.New("pkgcore: invalid component")
 //
 // # Declaring a callback means participating in that stage
 //
-// The seven callbacks are the component's participation in the seven-stage
+// The eight callbacks are the component's participation in the eight-stage
 // lifecycle ComponentRegistry drives (see its Prepare through Close methods
 // for what each stage does as a whole). New is the one required callback --
 // it produces the component's product; every other callback is optional, and
 // a component that does not declare one simply skips that stage, with the
 // one Close exception the Close field itself documents: a product carrying
 // its own Close() error is released by the registry even without a declared
-// callback. Verify, Init, Start, Stop and Close receive the instance New
-// produced as their third parameter, so a callback acts on its own product
-// directly instead of retrieving it from the registry; Prepare runs before
-// any instance exists and New is the callback that creates one, so neither
-// receives it.
+// callback. Verify, Init, Start, Serve, Stop and Close receive the instance
+// New produced as their third parameter, so a callback acts on its own
+// product directly instead of retrieving it from the registry; Prepare runs
+// before any instance exists and New is the callback that creates one, so
+// neither receives it.
 //
 // # What a component provides and requires
 //
@@ -136,15 +136,36 @@ type Component struct {
 	// callback the assembly runs its final cross-seat validation.
 	Init func(ctx context.Context, reg *ComponentRegistry, instance any) error
 
-	// Start begins serving: listeners, workers, schedulers. It runs after
-	// the Init stage's closing validation, so everything declared in Init
-	// is complete when a Start callback reads the seats.
+	// Start begins the component's own service: workers, schedulers, seeds,
+	// everything that starts the component up without admitting outside
+	// traffic. It runs after the Init stage's closing validation, so
+	// everything declared in Init is complete when a Start callback reads
+	// the seats. An action that begins accepting external requests -- an
+	// HTTP listener, queue consumption, a scheduler trigger -- belongs to
+	// Serve instead, so it runs after every component's Start rather than
+	// merely after its own dependencies.
 	Start func(ctx context.Context, reg *ComponentRegistry, instance any) error
 
+	// Serve runs in the sixth stage, after every component's Start callback
+	// has completed: the entry points that accept external requests -- HTTP
+	// listening, queue consumption, scheduler triggering, every action that
+	// starts admitting outside traffic into the process. Serve is a stage
+	// of its own rather than part of Start because an entry's traffic can
+	// reach any component, not only the components the entry declares as
+	// dependencies: dependency order expresses "after my dependencies",
+	// while an entry needs "after everyone". A component that declares no
+	// Serve callback is unaffected by the stage, and a Serve failure rolls
+	// the assembly back exactly as a Start failure does.
+	Serve func(ctx context.Context, reg *ComponentRegistry, instance any) error
+
 	// Stop is the non-blocking half of shutdown: stop accepting new work,
-	// begin draining. Stop callbacks run in reverse dependency order and
-	// their failures are ignored, because a stop notification that fails
-	// must not block the Close that follows it.
+	// begin draining. Stop callbacks run in reverse dependency order, in
+	// two beats -- the components that declared Serve first (the entry
+	// points stop accepting new requests before anything else is notified,
+	// so the requests in flight drain against a still-complete system),
+	// then every other component -- and their failures are ignored, because
+	// a stop notification that fails must not block the Close that follows
+	// it.
 	Stop func(ctx context.Context, reg *ComponentRegistry, instance any) error
 
 	// Close releases resources, once, in reverse dependency order after the
