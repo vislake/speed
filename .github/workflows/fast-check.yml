@@ -182,10 +182,11 @@ name: fast-check
 # DELIBERATELY NOT WIRED HERE -- checks whose tooling or venue lies
 # elsewhere (wiring them here would be fake checks or budget waste):
 #   * oasdiff: that tooling does not exist yet. Playwright e2e exists --
-#     it has its own pipeline (e2e.yml: a daily schedule plus
-#     workflow_dispatch) and deliberately does not run here: it is not
-#     a per-PR leg, so wiring it in would blow this fast check's
-#     8-minute budget. The nightly pipeline remains a gated stub
+#     it has its own pipeline (e2e.yml: workflow_dispatch, a daily
+#     schedule, and every push to main) and deliberately does not run
+#     here: it is not a per-PR leg, so wiring it in would blow this
+#     fast check's 8-minute budget. The nightly pipeline remains a
+#     gated stub
 #     carrying its own plan; security.yml is live and release.yml is
 #     its own live pipeline, dispatched manually. Spec merging and the
 #     redocly naming lint are real, but they run in the API-contract
