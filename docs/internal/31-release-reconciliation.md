@@ -347,6 +347,14 @@
 - **登记理由**：宿主可见面新增（`go/pkgcore` 两个新导出符号），按"宿主可见面变更须带 `!BREAKING` footer 或登记本清单"的纪律登记（纯新增，不带 footer）。
 - **出处**：`86a0d7a8`（`feat(pkgcore): export the host-wiring descriptor derivation`）+ `3d09fc6c`（`style(pkgcore): group and unshadow the override test fixtures`）+ `0e1a209d`（`refactor(reference-app): derive the host overrides through the pkgcore API`）。
 
+### 5.31. go/observability：observability 组件改由其自身包声明（非破坏，组装面登记）
+
+- **面**：observability 组件的描述符（`observabilityComponent`）、配置 schema（`service_name` / `otlp_endpoint`）与三个回调（`Prepare`/`New`/`Close`）从 `go/app/component_observability.go` 迁至 `go/observability/component.go`，注册点随之为该包自身的 `init`（`pkgcore.MustRegister`）——与其余模块"组件在自己包内声明"的惯例一致，`go/app` 不再是仓库里唯一替模块代声组件的地方。函数体逐行等价（仅包限定去除、错误前缀 `app:` → `observability:`、一处变量改名 `observability` → `component`）；旧文件全部符号未导出，公共符号面无增删改；依赖边不变（`go/observability` 本就依赖 `pkgcore`，`go/app` 经 `kernel.go` 继续导入 `go/observability`，触发其 init 自注册的链路由此保持）。随搬家测试面一同引入 `pkgcore/componenttest` 的测试引用，`go/observability/go.mod` 按仓库既有惯例补上 `replace github.com/vislake/speed/go/pkgcore => ../pkgcore`（该 replace 在其他引入 componenttest 的模块中已普遍存在；依赖的 require 集合不变，仅该模块自身 standalone 构建的解析源指向 sibling，`GOWORK=off` 的 vet 实测通过）。
+- **消费者影响**：① 经 `go/app` 组装（`Assemble`/`RunAssembly`）的宿主：全局注册集合逐名不变（`observability` 仍在且唯一），内置组合按名选择、plan 序、构造与关闭序、配置块地址（`components.observability`）与 `service_name`/`otlp_endpoint` 五源解析逐项不变（reference-app `--help` 实测：除组件块次序中 observability 前移一位——次序事实见③——外输出逐行相同，`stderr` 逐字相同、退出码同 0）；② 只导入 `go/observability`、不经 `go/app` 的二进制：全局注册集合新增 `observability` 组件（此前该注册只在导入 go/app 的进程中出现）——此类二进制若自行全局注册同名组件会与之撞名（`MustRegister` 对重复名 panic），是升级时唯一需核对的形状；③ 进程内注册顺序前移（该包在 import 图中位于 config 等模块之下），组件间 `Prepare` 回调按注册序执行的相对次序因此可能变化（reference-app `--help` 的组件块次序中 observability 由 config 之后前移一位）——各组件 `Prepare` 相互独立且 observability 无依赖者，行为面不变，`Close` 按构造逆序仍最后关闭（内置组合显式第一选择，plan 序与关闭序不受注册序影响）。
+- **替代路径**：无（纯搬家，无行为替身可言）；宿主无需任何升级动作。
+- **登记理由**：宿主可见面变更（组装面事实：组件的声明来源包、注册触发面与注册时序），无导出符号、环境变量或组装契约变化，按"宿主可见面变更须带 `!BREAKING` footer 或登记本清单"的纪律登记（非破坏，不带 footer）。同轮两模块（go/app、go/observability）套件（含 `-race`）、lint、CJK 扫描、覆盖率基线、reference-app `--help` 实测与 `tidy`（依赖无变化）全绿。
+- **出处**：`14eb140b`（`refactor(observability): declare the observability component in its own package`）+ `26202c9f`（`docs: record the observability component's home and the engine's real shape`）+ `7e082996`（`fix(observability): build standalone against the sibling pkgcore`）。
+
 ## 6. D 组：configrefgen 工具内部迁移（工具面，非宿主面）
 
 - **面**：`tools/configrefgen` 的内部实现从旧内核面迁到组件面（工具自身不在消费者依赖面内）。
