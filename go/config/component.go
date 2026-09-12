@@ -33,13 +33,43 @@ import (
 	"github.com/vislake/speed/go/config/migrations"
 )
 
+// CipherKeyPath is the key path of the AES key config's cipher is built
+// from: the derive field "cipher_key" under the component's own "config"
+// namespace, so the key resolves at the platform key path it has always
+// carried (Pkgcore.BootstrapKeyPurpose embeds the path, and a rename would
+// silently rotate every Sensitive value's key). It is also the material
+// address a host's wiring reads the key from.
+const CipherKeyPath = "config.cipher_key"
+
 // componentConfig is config's configuration schema in the assembly: the
-// construction-time knobs NewModule's options carry. PollInterval is a
-// pointer because an explicit zero is meaningful -- it disables the
-// anti-loss poller outright (WithPollInterval's documented contract) -- and
-// the omitted key must leave the module's own default in place.
+// construction-time knobs NewModule's options carry, and the process-start
+// cipher key as a derive field. The component's namespace is "config", so the
+// key resolves at CipherKeyPath rather than under the default
+// components.config. prefix. PollInterval is a pointer because an explicit
+// zero is meaningful -- it disables the anti-loss poller outright
+// (WithPollInterval's documented contract) -- and the omitted key must leave
+// the module's own default in place.
 type componentConfig struct {
+	// CipherKey seals every Sensitive dynamic-configuration value (the
+	// configs table stores base64 ciphertext). It is a process-start key
+	// rather than a configuration item for the reason the table states
+	// structurally: the key that encrypts the configs table cannot live in
+	// the configs table. The derive option resolves it through the
+	// five-source chain (an explicit flag/environment/file value, the
+	// root-key derivation, the declared defaults table).
+	CipherKey    []byte         `json:"cipher_key" config:"derive,sensitive,group=config"`
 	PollInterval *time.Duration `json:"poll_interval"`
+}
+
+// ConfigDocs implements pkgcore.Documented: the operator-facing contract of
+// the schema's sensitive key-material field.
+func (*componentConfig) ConfigDocs() map[string]pkgcore.FieldDoc {
+	return map[string]pkgcore.FieldDoc{
+		"cipher_key": {
+			Description: "The AES cipher key the config module seals every Sensitive dynamic-configuration value with (the configs table stores base64 ciphertext); the key that encrypts the table cannot live in the table, so it comes from the host's process-start input.",
+			Default:     "documented non-secret development default",
+		},
+	}
 }
 
 // component returns config's component descriptor: the value init registers,
@@ -81,10 +111,10 @@ func component() pkgcore.Component {
 		// configuration write -- is descriptor data the assembly registers
 		// at the Init stage's entry, before any Init callback runs.
 		SystemPurposes: []pkgcore.SystemPurpose{SystemPurposeSystemWrite},
-		// The process-start key material the module's cipher is built from.
-		// It is descriptor data: the loader resolves it before anything is
-		// constructed.
-		BootstrapKeys: []pkgcore.BootstrapKey{bootstrapKeyDecl},
+		// The "config" namespace keeps the schema's cipher_key field at the
+		// platform key path the key has always carried (CipherKeyPath)
+		// instead of the default components.config. prefix.
+		ConfigNamespace: "config",
 		// config ships no user-facing messages: its endpoints return
 		// structured codes, and the copy of any console rendering its items
 		// belongs to whichever module owns that surface.

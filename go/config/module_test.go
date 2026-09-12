@@ -501,37 +501,44 @@ func TestModule_Register_ReportsSeatRefusals(t *testing.T) {
 	})
 }
 
-// TestModule_Register_DeclaresItsBootstrapKey pins the one process-start key
+// TestComponent_SchemaDeclaresItsCipherKey pins the one process-start key
 // this module's contract names: the cipher key behind the cipher that seals
-// Sensitive values. It is declared on the bootstrap layer precisely because the
-// key that encrypts the configs table cannot be a row in it, so the runtime
-// schema must stay free of the identifier.
-func TestModule_Register_DeclaresItsBootstrapKey(t *testing.T) {
+// Sensitive values, declared as a derive-tagged []byte field resolving at
+// exactly the platform key path the module exports -- so a schema rename
+// cannot silently rotate every sealed value's key. Key material must stay
+// off the runtime layer precisely because the key that encrypts the configs
+// table cannot be a row in it, so the runtime schema must stay free of the
+// identifier.
+func TestComponent_SchemaDeclaresItsCipherKey(t *testing.T) {
 	reg := newPlainRegistry()
 	if err := componenttest.DeclareInto(reg, NewModule(nil)); err != nil {
 		t.Fatalf("Register: %v", err)
 	}
 
-	declared := component().BootstrapKeys
-	if len(declared) != 1 {
-		t.Fatalf("the config component declared %d bootstrap keys (%v), want exactly the cipher key", len(declared), declared)
+	descriptors, err := pkgcore.DescribeComponentSchema(moduleName, component().ConfigSchema)
+	if err != nil {
+		t.Fatalf("DescribeComponentSchema() error = %v", err)
 	}
-	key := declared[0]
-	if key.Key != "config.cipher_key" {
-		t.Errorf("declared key = %q, want config.cipher_key", key.Key)
+	byKey := make(map[string]pkgcore.FieldDescriptor, len(descriptors))
+	for _, d := range descriptors {
+		byKey[d.Key] = d
 	}
-	if key.Format != "hexkey" || !key.Sensitive {
-		t.Errorf("declaration = %+v, want a Sensitive hexkey", key)
+	field, ok := byKey[CipherKeyPath]
+	if !ok {
+		t.Fatalf("the config component did not declare key material at %q", CipherKeyPath)
 	}
-	if key.Group != moduleName {
-		t.Errorf("declaration group = %q, want the module name %q", key.Group, moduleName)
+	if !field.Derive || field.Type != "[]byte" || !field.Sensitive {
+		t.Errorf("field = %+v, want a Sensitive derive-tagged []byte key", field)
 	}
-	if key.Default == "" || key.Description == "" || key.Example != "" {
-		t.Errorf("declaration = %+v, want a documented fallback and contract text, and no suggested value", key)
+	if field.Group != moduleName {
+		t.Errorf("field group = %q, want the module name %q", field.Group, moduleName)
+	}
+	if field.Doc.Default == "" || field.Doc.Description == "" || field.Doc.Example != "" {
+		t.Errorf("field doc = %+v, want a documented fallback and contract text, and no suggested value", field.Doc)
 	}
 	for _, item := range reg.ConfigSeat().Items() {
-		if item.Key == key.Key {
-			t.Errorf("key %q is declared on both the bootstrap seat and the runtime schema", item.Key)
+		if item.Key == CipherKeyPath {
+			t.Errorf("key %q is declared on both the key-material layer and the runtime schema", item.Key)
 		}
 	}
 }

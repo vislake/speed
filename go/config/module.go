@@ -22,23 +22,6 @@ const (
 	moduleName = "config"
 )
 
-// bootstrapKeyDecl is the process-start key material this module's cipher
-// depends on: the AES cipher key the host builds its dbkit.Cipher from
-// (WithCipher) and every Sensitive item's stored value is sealed with.
-//
-// It is a bootstrap key rather than a configuration item for the reason the
-// table states structurally: the key that encrypts the configs table cannot
-// live in the configs table. It is also its own secret, never a value derived
-// from another module's key material.
-var bootstrapKeyDecl = pkgcore.BootstrapKey{
-	Key:         "config.cipher_key",
-	Format:      "hexkey",
-	Default:     "documented non-secret development default",
-	Sensitive:   true,
-	Description: "The AES cipher key the config module seals every Sensitive dynamic-configuration value with (the configs table stores base64 ciphertext); the key that encrypts the table cannot live in the table, so it comes from the host's process-start input.",
-	Group:       moduleName,
-}
-
 // SystemPurposeSystemWrite is the audited system purpose a host declares
 // when it builds the system context that authorizes platform-wide
 // configuration writes: a ScopeSystem Set requires the context to carry a
