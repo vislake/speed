@@ -605,10 +605,16 @@ func TestLoad_RefusesABadCompositionValue(t *testing.T) {
 	}
 }
 
-// TestObservabilityComponent_RunsItsWholeLifecycle pins the engine's
-// observability component end to end: selected with its configuration block,
-// its Prepare initializes the providers and publishes the runtime, New hands
-// the runtime back, and Close shuts the providers down.
+// TestObservabilityComponent_RunsItsWholeLifecycle drives the engine's
+// observability path end to end: importing go/app carries go/observability
+// (kernel.go's PreAuthAllowlist), so the component's init self-registration
+// lands in this binary's global set, the seeded registry carries a component
+// the loader's builtin composition can select by name -- without the
+// registration the assembly would fail on the unknown-component refusal --
+// and its Prepare/New/Close run inside the engine's own stage drive. The
+// component's internals are pinned by go/observability's own suite; what
+// this test owns is that the engine's default participation holds with
+// go/app declaring nothing.
 func TestObservabilityComponent_RunsItsWholeLifecycle(t *testing.T) {
 	var host testHostConfig
 	spec := driverLoadSpec(t, &host)
@@ -617,11 +623,18 @@ func TestObservabilityComponent_RunsItsWholeLifecycle(t *testing.T) {
 			With("service_name", "app-observability-test")))}
 
 	reg := pkgcore.NewComponentRegistry()
+	var registered bool
+	for _, c := range pkgcore.RegisteredComponents(reg) {
+		if c.Name == "observability" {
+			registered = true
+			break
+		}
+	}
+	if !registered {
+		t.Fatal("the seeded registry does not carry the observability component: importing go/app must keep reaching go/observability's self-registration")
+	}
 	if err := Assemble(context.Background(), reg, spec); err != nil {
 		t.Fatalf("Assemble() with the observability component selected error = %v", err)
-	}
-	if _, err := pkgcore.Get[*observabilityRuntime](reg); err != nil {
-		t.Fatalf("Get[*observabilityRuntime] error = %v, want the runtime its Prepare published", err)
 	}
 	if err := Shutdown(context.Background(), reg); err != nil {
 		t.Fatalf("Shutdown() error = %v, want the providers flushed cleanly", err)

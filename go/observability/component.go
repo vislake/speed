@@ -1,29 +1,28 @@
-package app
+package observability
+
+// component.go carries the module's component: the standard component that
+// initializes the process's telemetry. It is registered into the global
+// component set when this package initializes -- every binary that imports
+// go/observability carries it, go/app's kernel.go (PreAuthAllowlist) among
+// the importers -- and the engine loader's builtin composition defaults
+// select it by name, so it participates in every assembly unless a higher
+// configuration layer deselects it.
+//
+// The component's Prepare initializes OTel from the configuration the same
+// loader loaded; its Close shuts the providers down and flushes. The builtin
+// composition names it explicitly and first, so the plan puts it first and
+// its Close runs last in the reverse-order close. Nothing else initializes
+// observability: the whole telemetry lifecycle is this component's.
 
 import (
 	"context"
 	"fmt"
 
-	obs "github.com/vislake/speed/go/observability"
 	"github.com/vislake/speed/go/pkgcore"
 )
 
-// component_observability.go carries the engine's observability component:
-// the standard component that initializes the process's telemetry. It is
-// registered into the global component set when go/app initializes -- every
-// binary that imports the engine carries it -- and the loader's builtin
-// composition defaults select it, so it participates in every assembly
-// unless a higher configuration layer deselects it.
-//
-// The component's Prepare runs first among the components' Prepare callbacks
-// (the engine registers it before any other component), which is where OTel
-// gets initialized from the configuration the same loader loaded; its Close
-// shuts the providers down and flushes, last in the reverse-order close
-// because it is planned first. The engine never initializes observability
-// itself: the whole telemetry lifecycle is this component's.
-
-// The engine's observability component self-registers at package
-// initialization, exactly as any component package does.
+// The module's component self-registers at package initialization, exactly
+// as any component package does.
 func init() {
 	pkgcore.MustRegister(observabilityComponent())
 }
@@ -40,7 +39,7 @@ type observabilityConfig struct {
 }
 
 // observabilityRuntime is the bridge Prepare publishes: the shutdown
-// function obs.Init returned. The instance does not exist yet when Prepare
+// function Init returned. The instance does not exist yet when Prepare
 // runs, so the runtime travels through the registry's by-type context; New
 // reads it back and hands its own instance type the shutdown function, so
 // Close shuts down exactly the providers this assembly's Prepare
@@ -83,22 +82,22 @@ func observabilityComponent() pkgcore.Component {
 func prepareObservability(ctx context.Context, reg *pkgcore.ComponentRegistry) error {
 	block, err := pkgcore.OwnComponentConfig(reg)
 	if err != nil {
-		return fmt.Errorf("app: read the observability component's own configuration block: %w", err)
+		return fmt.Errorf("observability: read the component's own configuration block: %w", err)
 	}
 	var cfg observabilityConfig
 	if decodeErr := block.Decode(&cfg); decodeErr != nil {
-		return fmt.Errorf("app: the observability component configuration: %w", decodeErr)
+		return fmt.Errorf("observability: the component's configuration: %w", decodeErr)
 	}
-	var opts []obs.Option
+	var opts []Option
 	if cfg.ServiceName != "" {
-		opts = append(opts, obs.WithServiceName(cfg.ServiceName))
+		opts = append(opts, WithServiceName(cfg.ServiceName))
 	}
 	if cfg.OTLPEndpoint != "" {
-		opts = append(opts, obs.WithOTLPEndpoint(cfg.OTLPEndpoint))
+		opts = append(opts, WithOTLPEndpoint(cfg.OTLPEndpoint))
 	}
-	shutdown, err := obs.Init(ctx, opts...)
+	shutdown, err := Init(ctx, opts...)
 	if err != nil {
-		return fmt.Errorf("app: init observability: %w", err)
+		return fmt.Errorf("observability: init: %w", err)
 	}
 	reg.Put(&observabilityRuntime{shutdown: shutdown})
 	return nil
@@ -109,7 +108,7 @@ func prepareObservability(ctx context.Context, reg *pkgcore.ComponentRegistry) e
 func newObservability(_ context.Context, reg *pkgcore.ComponentRegistry, _ pkgcore.ComponentConfig) (any, error) {
 	runtime, err := pkgcore.Get[*observabilityRuntime](reg)
 	if err != nil {
-		return nil, fmt.Errorf("app: the observability runtime is missing; its Prepare callback publishes it before construction: %w", err)
+		return nil, fmt.Errorf("observability: the component runtime is missing; its Prepare callback publishes it before construction: %w", err)
 	}
 	return &observabilityInstance{shutdown: runtime.shutdown}, nil
 }
@@ -119,12 +118,12 @@ func newObservability(_ context.Context, reg *pkgcore.ComponentRegistry, _ pkgco
 // cancellation, so a cancelled drain context cannot cut the final export
 // short; the exporters' bounds are go/observability's own.
 func closeObservability(ctx context.Context, _ *pkgcore.ComponentRegistry, instance any) error {
-	observability, ok := instance.(*observabilityInstance)
+	component, ok := instance.(*observabilityInstance)
 	if !ok {
-		return fmt.Errorf("app: the observability component holds an instance of type %T", instance)
+		return fmt.Errorf("observability: the component holds an instance of type %T", instance)
 	}
-	if observability.shutdown == nil {
+	if component.shutdown == nil {
 		return nil
 	}
-	return observability.shutdown(context.WithoutCancel(ctx))
+	return component.shutdown(context.WithoutCancel(ctx))
 }
