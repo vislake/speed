@@ -313,11 +313,15 @@ bind one explicitly before rendering.
   plus the app's declared three and renders `ProductShell` as the app's
   view machine over the real session and client composition, and
   the server serves the production build from disk under `APP_WEB_DIST`.
-  What does not exist is browser automation driving that served page —
-  the e2e pipeline is a gated stub, so rendering under test harnesses
-  and the dev-server page are the shipped browser story; the package's
-  own suite (`src/usage-example.test.tsx`) stays the in-form consumer
-  proof.
+  Browser automation drives that composition from the host's side: the
+  app's e2e suite (`examples/reference-app/web/e2e`, run by
+  `.github/workflows/e2e.yml` on dispatch, daily and every push to
+  main) drives the composed app in a real browser against a real,
+  freshly booted server — the default and `@budget` tiers over the
+  dev-server page, and the `@deployment` gates
+  (`deployment-serves-the-app.spec.ts` among them) against a deployed,
+  server-served page via `E2E_BASE_URL`. The package's own suite
+  (`src/usage-example.test.tsx`) stays the in-form consumer proof.
 - **Storybook.** No preview harness exists; components are covered by
   jsdom tests + axe, and color-contrast verification is done nowhere —
   jsdom computes no layout, and no browser-side visual harness exists —

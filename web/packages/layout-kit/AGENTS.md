@@ -194,8 +194,11 @@ at all (see the Storybook deferral below).
   server's rbac layer answers a caller without `notes:read` with 403,
   failing the gate closed to `denied`), the exact host-injected shape
   this package's rules require. The package-level proof
-  (`src/usage-example.test.tsx`) is the in-form leg; a browser driving
-  the real server is not shipped.
+  (`src/usage-example.test.tsx`) is the in-form leg; the
+  browser-driving leg ships in the reference app's e2e suite
+  (`examples/reference-app/web/e2e/authorization.spec.ts` drives the
+  composed frame's gate to its real 403 refusal against a real,
+  freshly booted server).
 - **Storybook**: no preview harness exists; components are covered by
   jsdom tests + axe, and color-contrast verification is not
   implemented, same as `ui-kit`.

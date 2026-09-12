@@ -171,24 +171,28 @@ error could only fake -- and `useFeature` null-guards
 render-time throw), because the response shape is this
 hand-maintained contract and a payload violating it must fail softly.
 
+The browser page leg is real and consumed: the reference app's
+consumer shell (`examples/reference-app/web`, an external member of
+the web workspace, never versioned) binds one real `createClient`
+over the environment's own fetch into the api-sdk binding --
+`@speed/api-sdk`, the orval-generated typed surface, calls into this
+runtime through its `src/runtime.ts` binding, and `@speed/auth-core`
+compile-consumes both in-workspace (its session layer imports this
+package's `AccessTokenStore` interface, calls the generated authn
+operations through the bound request function, and fills the
+`refreshAccessToken` hook with `() => session.refresh()`). The
+shell's home view reads the server's effective Public values and
+feature flags through `usePublicConfig`/`useFeature` on that same
+bound client, the shape a `requiredFeature`-style consumer needs.
+Browser automation drives that composition for real: the app's e2e
+suite (`examples/reference-app/web/e2e`) drives the composed shell in
+a real browser against a real, freshly booted server, its
+`@deployment` gates additionally against a deployed, server-served
+page via `E2E_BASE_URL`.
+
 Deferred with reasons:
 
 - Uploads and SSE transports -- not shipped.
-- A browser-page consumer -- a real browser driving the real server.
-  The consumer shell (`examples/reference-app/web`, an external
-  member of the web workspace, never versioned) already binds one
-  real `createClient` over the environment's own fetch into the
-  api-sdk binding: `@speed/api-sdk`, the orval-generated typed surface,
-  calls into this runtime through its `src/runtime.ts` binding, and
-  `@speed/auth-core` compile-consumes both in-workspace (its session
-  layer imports this package's `AccessTokenStore` interface, calls the
-  generated authn operations through the bound request function, and
-  fills the `refreshAccessToken` hook with `() => session.refresh()`).
-  The shell's home view reads the server's effective Public values
-  and feature flags through `usePublicConfig`/`useFeature` on that
-  same bound client, the shape a `requiredFeature`-style consumer
-  needs. What is not shipped is browser automation driving the
-  server-served page.
 
 ## Known limitations
 

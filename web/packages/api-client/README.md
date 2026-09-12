@@ -336,8 +336,11 @@ function useAppChrome(clientApi: RequestFn): AppChrome {
   seam, and its home view reads the server's effective Public values
   and feature flags through `usePublicConfig`/`useFeature` on that same
   bound client -- the shape a `requiredFeature`-style consumer needs.
-  What is not shipped is the browser page leg: a browser driving the
-  real server.
+  The browser page leg ships too: the app's e2e suite
+  (`examples/reference-app/web/e2e`) drives that composed shell in a
+  real browser against a real, freshly booted server (its
+  `@deployment` gates additionally against a deployed, server-served
+  page via `E2E_BASE_URL`).
 - **i18n resources** -- error codes map to bilingual text in the
   consuming package's catalogs; nothing here emits user-facing text.
 

@@ -154,11 +154,14 @@ its real host: the consumer shell.
   operations through the app-owned SDK (`src/app-api`), which rides
   this same seam and QueryClient. Its vitest suites run
   that composition over a scripted demo-server double whose mirrored
-  facts the Go-side suites pin against the real composed server. The
-  browser-page leg -- a browser driving the real server -- is not
-  shipped, and neither is release-time packaging of the published SDK
+  facts the Go-side suites pin against the real composed server, and
+  the browser-page leg is a browser driving the real server: the
+  app's e2e suite (`examples/reference-app/web/e2e`) drives the
+  composed shell against a real, freshly booted server, its
+  `@deployment` gates additionally against a deployed, server-served
+  page via `E2E_BASE_URL`. Release-time packaging of the published SDK
   (generated from the merged `speed.yaml`, versioned alongside the doc
-  site): both are release-machinery work.
+  site) is not shipped -- release-machinery work.
 
 ## Development
 

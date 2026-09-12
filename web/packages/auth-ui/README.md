@@ -625,9 +625,12 @@ the `speed/no-literal-text` rule enforces the namespace discipline over
   answer). The package-level proof remains the in-form leg --
   `src/usage-example.test.tsx` drives the composed family over a real
   `@speed/api-client` bound through the same seam a host binds, with a
-  scripted fetch answering genuine `Response` objects. A browser
-  driving the real server is not wired; the in-form leg and the
-  consumer shell's composed-tree suites are the shipped evidence.
+  scripted fetch answering genuine `Response` objects. The
+  browser-driving leg ships in the reference app's e2e suite
+  (`examples/reference-app/web/e2e` -- `password-sign-in.spec.ts` and
+  `registration.spec.ts` drive this family against a real, freshly
+  booted server); the in-form leg and the consumer shell's
+  composed-tree suites remain the in-package evidence.
 - **Auth-core hooks stay host-side by design.** Components in this
   family take the session as a prop and fire callbacks; the host
   observes session transitions with `useAuthState` and friends. A

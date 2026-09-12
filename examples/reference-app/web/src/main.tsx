@@ -52,9 +52,11 @@
  * reference-app server itself serves in a deployed shape: the
  * Dockerfile builds this directory's dist/ into the image and the
  * server serves it from disk under APP_WEB_DIST
- * (internal/app/frontend.go). What does not ship is browser automation
- * driving that server-served page; the shipped browser story is the
- * dev-server page plus rendering under test harnesses.
+ * (internal/app/frontend.go). Browser automation driving the served
+ * page ships as this directory's e2e @deployment gates
+ * (e2e/deployment-serves-the-app.spec.ts), run against a deployment
+ * via E2E_BASE_URL; the suite's booted runs drive the dev-server page
+ * against a freshly booted server.
  */
 
 import { ACCOUNT_UI_NAMESPACE, accountUiResources } from '@speed/account-ui'

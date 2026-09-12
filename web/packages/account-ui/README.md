@@ -712,9 +712,12 @@ absent from the rule's one whitelist, `packages/api-client`); the
   package-level proof remains the in-form leg --
   `src/usage-example.test.tsx` drives the composed family over a real
   `@speed/api-client` bound through the same seam a host binds, with a
-  scripted fetch answering genuine `Response` objects. A browser
-  driving the real server is not wired; the in-form leg and the
-  consumer shell's composed-tree suites are the shipped evidence.
+  scripted fetch answering genuine `Response` objects. The
+  browser-driving leg ships in the reference app's e2e suite
+  (`examples/reference-app/web/e2e/account-surface.spec.ts` drives this
+  family's sections against a real, freshly booted server); the
+  in-form leg and the consumer shell's composed-tree suites remain the
+  in-package evidence.
 - **Reads deliberately go through generated react-query hooks, not
   session operations.** The account surfaces read lists (sessions,
   history, identities) that are cacheable shared state and invalidate

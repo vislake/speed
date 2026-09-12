@@ -429,9 +429,12 @@ the `speed/no-literal-text` rule enforces the namespace discipline over
   demo-server double. The package-level proof remains the in-form leg
   -- `src/usage-example.test.tsx` drives the composed switcher over a
   real `@speed/api-client` bound through the same seam a host binds,
-  with a scripted fetch answering genuine `Response` objects. A browser
-  driving the real server is not wired; the in-form leg and the
-  consumer shell's composed-tree suites are the shipped evidence.
+  with a scripted fetch answering genuine `Response` objects. The
+  browser-driving leg ships in the reference app's e2e suite
+  (`examples/reference-app/web/e2e/current-clinic-is-visible.spec.ts`
+  commits a switch through the composed switcher against a real,
+  freshly booted server); the in-form leg and the consumer shell's
+  composed-tree suites remain the in-package evidence.
 - **The tenant list has no in-package source.** No endpoint answers
   "which tenants may this principal switch between" in the shipped
   surface, so the list is host data by contract.

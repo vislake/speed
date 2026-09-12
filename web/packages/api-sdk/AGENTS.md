@@ -92,6 +92,17 @@ through `bindRequestFn` -- the same binding a host's real client binds --
 so a spec change whose regenerated surface outgrows auth-core's calls
 fails that package's typecheck.
 
+The browser page is a real consumer at its own tier: the reference
+app's e2e suite (`examples/reference-app/web/e2e`) drives the composed
+shell -- every platform operation through this package's generated
+surface over the bound client -- in a real browser against a real,
+freshly booted server, and its `@deployment` gates drive a deployed,
+server-served page via `E2E_BASE_URL`. Below that tier the consumer
+shell's vitest suites drive the composed operations through the real
+client over a scripted server double, and this package's own unit
+tests bind a fake request function and never touch a network. Tenant
+query-key namespacing stays a consumer-shell discipline by contract.
+
 Deferred with reasons:
 
 - The oasdiff breaking-change gate -- not implemented: a
@@ -109,12 +120,6 @@ Deferred with reasons:
   forward()). A host that must move bytes uses its own mechanism --
   browser navigation for a share link, a byte-capable client of its
   own -- never this JSON transport.
-- Browser automation over the server-served page (a browser driving
-  the real server) -- not shipped. The consumer shell drives the
-  composed operations through the real client over a scripted
-  server double; the package's own unit tests bind a fake request
-  function and never touch a network. Tenant query-key namespacing
-  stays a consumer-shell discipline by contract.
 - Release-time packaging of the merged spec into the published SDK --
   not implemented (release machinery); do not claim it lives here.
 

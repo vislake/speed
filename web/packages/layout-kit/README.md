@@ -248,7 +248,10 @@ package -- see the AGENTS.md non-negotiable rules.
   `notes:read` with 403, failing the gate closed to `denied`) -- the
   exact host-injected shape this package's rules require; the
   package-level proof (`src/usage-example.test.tsx`) is the in-form
-  leg, and a browser driving the real server is not shipped.
+  leg, and the browser-driving leg ships in the reference app's e2e
+  suite (`examples/reference-app/web/e2e/authorization.spec.ts` drives
+  the composed frame's gate to its real 403 refusal against a real,
+  freshly booted server).
 - **Storybook / browser-side visual verification**: no preview
   harness exists, the same deferral `ui-kit` carries; `color-contrast`
   stays axe-disabled for the same jsdom reason.
