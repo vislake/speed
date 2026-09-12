@@ -433,7 +433,7 @@ func TestAssemble_ComposesAndClosesTheWholeApplication(t *testing.T) {
 	if members := pkgcore.Members[aigateway.ChatProvider](reg); len(members) != 1 || members[0].Name != aigateway.ProviderOpenAICompatible {
 		t.Errorf("Members[ChatProvider] = %+v, want the selected %s member", members, aigateway.ProviderOpenAICompatible)
 	}
-	if _, err := pkgcore.Get[aigateway.ChatProvider](reg); err == nil {
+	if _, getErr := pkgcore.Get[aigateway.ChatProvider](reg); getErr == nil {
 		t.Error("Get[ChatProvider] resolved a catalog member; member products are not put into the by-type context")
 	}
 	provider, err := pkgcore.Build[aigateway.ChatProvider](context.Background(), reg, aigateway.ProviderOpenAICompatible, nil)
