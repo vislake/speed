@@ -281,10 +281,10 @@ export async function expectNoAxeViolationsForPage(
  * with no ancestor heading at all, so the full run above can never reach
  * a heading-order violation regardless of what level they render as.
  * Scoping to one rule lets those tests supply a real h1 ancestor and
- * assert on the skip directly,
- * without adopting the page-level rules (document-title, html-has-lang,
- * region) the shared harness disables for good reason (see its own
- * header comment) but that are irrelevant to heading-order anyway.
+ * assert on the skip directly, without adopting the page-level rules
+ * (document-title, html-has-lang, region) the shared harness disables
+ * for good reason (see its own header comment) but that are irrelevant
+ * to heading-order anyway.
  */
 export async function runHeadingOrderCheck(): Promise<readonly axe.Result[]> {
   const result = await runAxeScan({

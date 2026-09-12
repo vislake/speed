@@ -26,15 +26,15 @@ import { makeHarness } from './session-harness'
 
 describe('session-harness script dispatch', () => {
   it('refuses a request whose method names a prototype-chain function', async () => {
-    // The harness looks its handler up at `${method} ${path}`, so the
-    // request below derives the key
-    // 'constructor /api/v1/authn/login/password'. A script built over
-    // a prototype that carries a callable under exactly that derived
-    // key must not be dispatched onto: the request answers with the
-    // same missing-handler error an unknown key produces, and the
-    // inherited callable never runs. The method value lies outside the
-    // spec's HttpMethod vocabulary by design -- a prototype-chain
-    // method name is the adversarial input the gate exists for.
+    // The harness looks its handler up at `${method} ${path}`, so
+    // this request derives the key 'constructor /api/v1/authn/login/password'.
+    // A script built over a prototype that carries a callable under
+    // exactly that derived key must not be dispatched onto: the request
+    // answers with the same missing-handler error an unknown key
+    // produces, and the inherited callable never runs. The method value
+    // lies outside the spec's HttpMethod vocabulary by design -- a
+    // prototype-chain method name is the adversarial input the gate
+    // exists for.
     const inheritedRuns: string[] = []
     makeHarness(
       Object.create({
