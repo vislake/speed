@@ -267,6 +267,14 @@
 - **登记理由**：宿主可见面（已声明特性开关的默认值随宿主接线改变，features 查询的报告随之改变）的行为修正，按"宿主可见面变更须带 `!BREAKING` footer 或登记本清单"的纪律登记（签名不变，不带 footer）。
 - **出处**：`01bf3405`（`fix(org): declare the email flag off for a host without a mail transport`）+ `1bc68db1`（`test(saasctl): pin the three invitation arms a gated generated project produces`）。
 
+### （待编号）（收编阶段 2）pki：模块的签名者改由组合选中的 signer 成员绑定（行为登记）
+
+- **面**：`go/pki` 的模块组件不再无条件使用自身内置的 `LocalSigner` 默认：其描述符新增一条**可选** `(*Signer)(nil)` 依赖，组合中恰好选中一个 `signer.*` 成员时，该成员的构造排到模块自身之前，模块以**该成员的实例**为准签名（成员名去掉族前缀 `signer.` 即模块记录的签名者名——`signer.local` 读作 `local`，与其行内一直记录的签名者名一致；`signer.vault` / `signer.aws-kms` / `signer.vault-direct` 等按各自后缀记录）；选中两个成员在计划期即以歧义提供者失败（绑定式模块由选择强制）。不选任何 signer 成员时模块保持原默认，行为与既有组合一致。导出符号零变化（`WithSigner` 保留）。
+- **消费者影响**：对既选 `signer.local`（或任一 `signer.*` 成员）又选 `pki` 的组合，**实现来源变化而结果等价**：`signer.local` 成员与模块默认都构造同一 `LocalSigner`（类型、共享连接、签名者名 `local` 逐项相同），行内容不变；差别只在从此"组合选中什么就签什么"——此前该选中对模块无效果，宿主若想换实现只能走 `SignerRegistry`/`BuildSignerRequiring` 的名字路径 + `WithSigner` 注入。选 `signer.vault` 等成员而不注入的自定义组合，从"静默用本地签名者"改为"用选中的实现"（这正是绑定式组件的语义）。未选 signer 成员的组合零影响。
+- **替代路径**：无（行为修正）；要维持内置默认即不选任何 signer 成员；要指定实现即在组合中选中对应 `signer.*` 成员（或在组装之外自行构造并经 `WithSigner` 注入，二者保留）。
+- **登记理由**：宿主可见面（组合选中的语义由"装饰"变为"生效"、绑定式模块的选中约束）的行为变更，按"宿主可见面变更须带 `!BREAKING` footer 或登记本清单"的纪律登记（非破坏——既有组合结果等价，不带 footer）。
+- **出处**：`03e8b297`（`feat(pki): bind the module's signer to the composition-selected member`）。
+
 ## 6. D 组：configrefgen 工具内部迁移（工具面，非宿主面）
 
 - **面**：`tools/configrefgen` 的内部实现从旧内核面迁到组件面（工具自身不在消费者依赖面内）。
