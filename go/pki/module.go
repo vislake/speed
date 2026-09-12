@@ -262,8 +262,8 @@ var configItemDecls = []pkgcore.ConfigItem{
 // Without WithSigner, NewModule wires LocalSigner over db -- the
 // zero-external-dependency signer, which is also what "task dev" runs.
 // KMS-backed implementations (vault/kmsaws) reach the module either through
-// the same WithSigner option or through pki.SignerRegistry's registered
-// names (signer_registry.go).
+// the same WithSigner option or by selecting their component (see the
+// module's own descriptor, component.go).
 type Module struct {
 	db *gorm.DB
 

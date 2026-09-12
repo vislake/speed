@@ -73,8 +73,8 @@ type signer struct {
 // deliberate departure from pkgcore's own S3/SMTP constructors (which
 // panic on an unusable Config): those are called only from trusted,
 // hand-written host wiring, while this constructor is also reachable from
-// registerFromConfig (register.go), itself reachable from
-// pkgcore.SeamRegistry.Build -- a call site whose contract is "return an
+// the descriptors' New callbacks (component.go through the per-name
+// adapters) -- call sites whose contract is "return an
 // error", never "panic", the same reason objectstore.s3's own
 // objectStoreFromConfig checks its required fields before ever calling the
 // panicking NewObjectStore.

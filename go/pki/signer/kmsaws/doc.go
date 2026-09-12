@@ -11,12 +11,12 @@
 // default-credential-chain resolver (SSO/STS/OIDC and their own
 // transitive closure) -- see config.go's doc comment for why.
 //
-// Importing this package registers two names on pki.SignerRegistry as a
-// side effect (see register.go): "signer.aws-kms" (envelope mode) and
+// Importing this package makes its two components selectable in a
+// composition (see component.go): "signer.aws-kms" (envelope mode) and
 // "signer.aws-kms-direct" (direct-sign mode) -- the identical two-names-
 // per-provider shape go/pki/signer/vault uses, and for the identical
-// reason (see that package's own doc comment: pkgcore.SeamRegistry[T]
-// pairs one fixed Capability with one name, so a capability that depends
+// reason (see that package's own doc comment: a component descriptor
+// pairs one fixed Capabilities with one name, so a capability that depends
 // on a runtime Mode needs two names, not one that lies about it depending
 // on what a given Config selected).
 //

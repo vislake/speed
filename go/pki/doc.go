@@ -43,6 +43,7 @@
 // revoked key from every read path immediately, and CAService revocation
 // is database-arbitrated through an append-only ledger that every chain
 // walk consults -- alongside CRL generation, two JWKS exports, an HTTP
-// surface at /api/v1/pki, and SignerRegistry (a pkgcore.SeamRegistry[Signer])
-// carrying LocalSigner plus the vault and kmsaws provider implementations.
+// surface at /api/v1/pki, and the signer implementation components
+// ("signer.local" plus the vault and kmsaws providers), each selected
+// through the composition configuration.
 package pki

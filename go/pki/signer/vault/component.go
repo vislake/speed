@@ -3,14 +3,14 @@ package vault
 // component.go registers the "signer.vault" and "signer.vault-direct"
 // components with pkgcore's global component registration: the descriptors
 // a composition configuration selects as the "signer" module's members.
-// They live beside the implementation they adapt, the same file-locality
-// the package's own seam registration (register.go) keeps. Each component
-// carries the identical name as its seam registration -- the two faces are
-// two resolution paths to the same implementation, and the registration
-// stays the name-based path a Preset-shaped caller resolves through.
+// They live beside the implementation they adapt, and each descriptor's
+// New funnels through the matching adapter below -- this package's one
+// construction path per name -- so a composition block and a flat
+// pkgcore.Config cannot diverge on validation or on the forced mode.
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/vislake/speed/go/pkgcore"
 
@@ -18,9 +18,9 @@ import (
 )
 
 // signerComponentConfig is the configuration schema both vault signer
-// components share: one field per key the seam registration documents, so a
+// components share: one field per key the flat construction path reads, so a
 // composition block spells the same settings a flat pkgcore.Config carries
-// and neither face grows a setting the other lacks.
+// and neither shape grows a setting the other lacks.
 type signerComponentConfig struct {
 	Address         string `json:"address"`
 	Token           string `json:"token"`
@@ -86,6 +86,77 @@ var signerVaultDirectComponent = pkgcore.Component{
 			"wrapping_key_name": c.WrappingKeyName,
 		})
 	},
+}
+
+// envelopeSignerFromConfig adapts a flat pkgcore.Config onto NewSigner with
+// Mode forced to ModeEnvelope, regardless of what a caller puts in cfg --
+// the Mode is what the component NAME already promised (Capabilities: 0
+// above), so nothing here reads a "mode" key out of cfg; see doc.go for why
+// mode selection happens by name, not by configuration value.
+func envelopeSignerFromConfig(cfg pkgcore.Config) (pki.Signer, error) {
+	c, err := configFromFlat(cfg)
+	if err != nil {
+		return nil, err
+	}
+	c.Mode = ModeEnvelope
+	return NewSigner(c)
+}
+
+// directSignerFromConfig mirrors envelopeSignerFromConfig for
+// "signer.vault-direct".
+//
+// A note on the Transit key's LIFECYCLE, current state of the pin doc.go's
+// "in-place Transit key rotation" section describes: this name governs the
+// key through the pki module's own state machine (pending -> active ->
+// retiring -> retired), which rotates by creating NEW Transit key names and
+// never rotates one in place. An in-place rotation of the key through
+// Vault's own rotate endpoint (the one way a managed name acquires a
+// version other than the one this package created it at) cannot silently
+// change which version signs or which public key is served: sign requests
+// pin key_version to the created version, public-key reads serve that same
+// version, and a sign answer naming any other version is refused. What the
+// pin does NOT do is make the in-place-rotated version usable: signatures
+// and exports stay on the created version forever, and a host that wants a
+// NEW key version live must rotate through the pki module's own lifecycle
+// (a new name per stage). The pin's behaviour is proven against stubbed
+// clients only -- no real-Vault integration leg exists (go/pki/AGENTS.md's
+// Known limitations) -- so a host choosing "signer.vault-direct" should
+// still read doc.go's section.
+func directSignerFromConfig(cfg pkgcore.Config) (pki.Signer, error) {
+	c, err := configFromFlat(cfg)
+	if err != nil {
+		return nil, err
+	}
+	c.Mode = ModeDirectSign
+	return NewSigner(c)
+}
+
+// configFromFlat adapts a flat pkgcore.Config onto Config. "address" and
+// "token" have no safe default -- there is no such thing as a generic
+// Vault server -- so a Config missing either is rejected with
+// pkgcore.ErrMissingSeamConfig before NewSigner is even called, the same
+// early-check convention go/pkgcore's own smtpMailerFromConfig and
+// objectstore/s3's objectStoreFromConfig use for their own required
+// fields. "wrapping_key_name" is NOT checked here even though ModeEnvelope
+// requires it -- NewSigner already validates that, and duplicating the
+// check here would just be two places that could disagree about the
+// message.
+func configFromFlat(cfg pkgcore.Config) (Config, error) {
+	address := cfg["address"]
+	token := cfg["token"]
+	if address == "" || token == "" {
+		return Config{}, fmt.Errorf(
+			"pki/signer/vault: builtin signer.vault component: %w: requires \"address\" and \"token\"",
+			pkgcore.ErrMissingSeamConfig,
+		)
+	}
+	return Config{
+		Address:         address,
+		Token:           token,
+		Namespace:       cfg["namespace"],
+		MountPath:       cfg["mount_path"],
+		WrappingKeyName: cfg["wrapping_key_name"],
+	}, nil
 }
 
 func init() {

@@ -3,14 +3,14 @@ package kmsaws
 // component.go registers the "signer.aws-kms" and "signer.aws-kms-direct"
 // components with pkgcore's global component registration: the descriptors
 // a composition configuration selects as the "signer" module's members.
-// They live beside the implementation they adapt, the same file-locality
-// the package's own seam registration (register.go) keeps. Each component
-// carries the identical name as its seam registration -- the two faces are
-// two resolution paths to the same implementation, and the registration
-// stays the name-based path a Preset-shaped caller resolves through.
+// They live beside the implementation they adapt, and each descriptor's
+// New funnels through the matching adapter below -- this package's one
+// construction path per name -- so a composition block and a flat
+// pkgcore.Config cannot diverge on validation or on the forced mode.
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/vislake/speed/go/pkgcore"
 
@@ -18,9 +18,9 @@ import (
 )
 
 // signerComponentConfig is the configuration schema both kmsaws signer
-// components share: one field per key the seam registration documents, so a
+// components share: one field per key the flat construction path reads, so a
 // composition block spells the same settings a flat pkgcore.Config carries
-// and neither face grows a setting the other lacks.
+// and neither shape grows a setting the other lacks.
 type signerComponentConfig struct {
 	Region          string `json:"region"`
 	AccessKeyID     string `json:"access_key_id"`
@@ -87,6 +87,55 @@ var signerAWSKMSDirectComponent = pkgcore.Component{
 			"wrapping_key_id":   c.WrappingKeyID,
 		})
 	},
+}
+
+// envelopeSignerFromConfig adapts pkgcore.Config onto NewSigner with Mode
+// forced to ModeEnvelope -- see go/pki/signer/vault's identical function
+// for why mode is fixed by the component name, not read from cfg.
+func envelopeSignerFromConfig(cfg pkgcore.Config) (pki.Signer, error) {
+	c, err := configFromFlat(cfg)
+	if err != nil {
+		return nil, err
+	}
+	c.Mode = ModeEnvelope
+	return NewSigner(c)
+}
+
+// directSignerFromConfig mirrors envelopeSignerFromConfig for
+// "signer.aws-kms-direct".
+func directSignerFromConfig(cfg pkgcore.Config) (pki.Signer, error) {
+	c, err := configFromFlat(cfg)
+	if err != nil {
+		return nil, err
+	}
+	c.Mode = ModeDirectSign
+	return NewSigner(c)
+}
+
+// configFromFlat adapts a flat pkgcore.Config onto Config. "region",
+// "access_key_id" and "secret_access_key" have no safe default, so a
+// Config missing any of them is rejected with pkgcore.ErrMissingSeamConfig
+// before NewSigner is even called -- the same early-check convention
+// go/pkgcore's own smtpMailerFromConfig and objectstore/s3's
+// objectStoreFromConfig use. "wrapping_key_id" is NOT checked here even
+// though ModeEnvelope requires it -- NewSigner already validates that.
+func configFromFlat(cfg pkgcore.Config) (Config, error) {
+	region := cfg["region"]
+	accessKeyID := cfg["access_key_id"]
+	secretAccessKey := cfg["secret_access_key"]
+	if region == "" || accessKeyID == "" || secretAccessKey == "" {
+		return Config{}, fmt.Errorf(
+			"pki/signer/kmsaws: builtin signer.aws-kms component: %w: requires \"region\", \"access_key_id\" and \"secret_access_key\"",
+			pkgcore.ErrMissingSeamConfig,
+		)
+	}
+	return Config{
+		Region:          region,
+		AccessKeyID:     accessKeyID,
+		SecretAccessKey: secretAccessKey,
+		SessionToken:    cfg["session_token"],
+		WrappingKeyID:   cfg["wrapping_key_id"],
+	}, nil
 }
 
 func init() {

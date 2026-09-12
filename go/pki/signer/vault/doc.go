@@ -6,11 +6,11 @@
 // codebase is measured: a throwaway module, GOWORK=off go mod tidy, count
 // "// indirect" entries).
 //
-// Importing this package registers two names on pki.SignerRegistry as a
-// side effect (see register.go): "signer.vault" (envelope mode) and
+// Importing this package makes its two components selectable in a
+// composition (see component.go): "signer.vault" (envelope mode) and
 // "signer.vault-direct" (direct-sign mode). A host that wants either either
-// blank-imports this package (`import _ ".../pki/signer/vault"`) so
-// pki.SignerRegistry.Build resolves the name, or calls NewSigner directly
+// blank-imports this package (`import _ ".../pki/signer/vault"`) so a
+// composition can select the name, or calls NewSigner directly
 // and wires the result with pki.WithSigner -- the same two paths
 // go/pkgcore/objectstore/s3's own doc comment describes for its own split.
 //
@@ -20,9 +20,9 @@
 // encrypted by Vault, held locally -- see Config's Mode field) and
 // direct-sign mode (the private key generated inside, and never exported
 // by, Vault -- earning pkgcore.KeyNeverLeavesBoundary).
-// pkgcore.SeamRegistry[T]'s own contract
-// pairs one FIXED Capability value with one registered name -- Build
-// returns the Capability recorded on the Registration at init() time, never
+// A component descriptor
+// pairs one FIXED Capabilities value with one name -- the assembly reads the
+// declaration off the descriptor, never
 // something read back off the constructed value -- so a single
 // "signer.vault" name cannot correctly answer "does this have
 // KeyNeverLeavesBoundary" when that answer depends on which Mode a
@@ -96,7 +96,7 @@
 // calling NewSigner (which dials nothing: the underlying Vault client,
 // like every other built-in seam's client in this codebase, connects
 // lazily on first use), and resolving "signer.vault"/"signer.vault-direct"
-// through pki.SignerRegistry.Build -- never an actual GenerateKey/Sign
+// through the component face -- never an actual GenerateKey/Sign
 // round trip against a live Transit engine. The
 // Sign/GenerateKey/Public/Destroy logic itself is proven instead by
 // signer_test.go against a stubbed transitClient -- the same stubbed-SDK

@@ -3,7 +3,6 @@ package vault
 import (
 	"context"
 	"errors"
-	"reflect"
 	"strings"
 	"testing"
 
@@ -72,22 +71,20 @@ func TestComponentsAssembleThroughRegistry(t *testing.T) {
 	}
 }
 
-// TestComponentAndSeamRegistrationAgree pins the coexistence of the two
-// resolution paths under one name: both build the same implementation from
-// the same settings, and the component-face capability read reports exactly
-// what the registry-face requirement check enforces -- the two comparisons
-// a capability-requiring caller can perform must never disagree.
-func TestComponentAndSeamRegistrationAgree(t *testing.T) {
+// TestComponentCapabilityDeclarations pins the component-face capability
+// read per name: the envelope mode declares 0 and the direct-sign mode the
+// boundary bit -- the declaration a capability-requiring caller compares
+// against.
+func TestComponentCapabilityDeclarations(t *testing.T) {
 	ctx := context.Background()
 	settings := vaultComponentSettings()
 
+	want := map[string]pkgcore.Capability{
+		"signer.vault":        0,
+		"signer.vault-direct": pkgcore.KeyNeverLeavesBoundary,
+	}
 	for _, name := range []string{"signer.vault", "signer.vault-direct"} {
 		t.Run(name, func(t *testing.T) {
-			seamSigner, seamCaps, err := pki.SignerRegistry.Build(name, settings)
-			if err != nil {
-				t.Fatalf("SignerRegistry.Build(%s) error = %v", name, err)
-			}
-
 			reg := pkgcore.NewComponentRegistry()
 			reg.Put(pkgcore.NewComponentConfig(map[string]any{
 				"components": map[string]any{name: componentBlock(settings)},
@@ -100,41 +97,20 @@ func TestComponentAndSeamRegistrationAgree(t *testing.T) {
 			}
 			t.Cleanup(func() { _ = reg.Close(context.Background()) })
 
-			componentSigner, err := pkgcore.Get[pki.Signer](reg)
-			if err != nil {
-				t.Fatalf("Get[pki.Signer] error = %v", err)
-			}
-			if reflect.TypeOf(componentSigner) != reflect.TypeOf(seamSigner) {
-				t.Errorf("component built %T, seam registration built %T; the two faces must resolve the same implementation", componentSigner, seamSigner)
-			}
-
 			caps, err := pkgcore.ComponentCapabilities(reg, name)
-			if err != nil || caps != seamCaps {
-				t.Errorf("ComponentCapabilities(%s) = (%v, %v), want the seam registration's %v", name, caps, err, seamCaps)
-			}
-
-			required := pkgcore.KeyNeverLeavesBoundary
-			_, seamErr := pki.BuildSignerRequiring(name, settings, required)
-			if (seamErr == nil) != caps.Has(required) {
-				t.Errorf("BuildSignerRequiring(%s) error = %v while the component-face read says Has(%v) = %v; the two capability comparisons must agree", name, seamErr, required, caps.Has(required))
+			if err != nil || caps != want[name] {
+				t.Errorf("ComponentCapabilities(%s) = (%v, %v), want %v", name, caps, err, want[name])
 			}
 		})
 	}
 }
 
-// TestComponentConfigRefusalMatchesTheRegistry pins the refusal parity for
-// missing configuration: both faces fail with pkgcore.ErrMissingSeamConfig
-// for an empty block, and both name the missing wrapping key for an
-// envelope-mode config that carries no wrapping_key_name.
-func TestComponentConfigRefusalMatchesTheRegistry(t *testing.T) {
+// TestComponentConfigRefusal pins the refusal for missing configuration:
+// an empty block fails with pkgcore.ErrMissingSeamConfig, and an
+// envelope-mode config that carries no wrapping key names the missing
+// WrappingKeyName.
+func TestComponentConfigRefusal(t *testing.T) {
 	ctx := context.Background()
-
-	if _, _, err := pki.SignerRegistry.Build("signer.vault", pkgcore.Config{}); !errors.Is(err, pkgcore.ErrMissingSeamConfig) {
-		t.Errorf("SignerRegistry.Build with an empty Config = %v, want it to wrap ErrMissingSeamConfig", err)
-	}
-	if _, _, err := pki.SignerRegistry.Build("signer.vault", pkgcore.Config{"address": "https://vault.example.test:8200", "token": "t"}); err == nil || !strings.Contains(err.Error(), "WrappingKeyName") {
-		t.Errorf("SignerRegistry.Build without a wrapping key = %v, want NewSigner's envelope-mode error", err)
-	}
 
 	for _, tt := range []struct {
 		name  string

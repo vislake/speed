@@ -30,12 +30,9 @@ package pki_test
 //     layer's JWKS export.
 //   - ExampleService_ExportJWKS and ExampleService_RevokeSigningKey cover
 //     the key-lifecycle layer's JWKS export and revocation halves.
-//   - ExampleSignerRegistry resolves a Signer by registered name through
-//     pki.SignerRegistry and signs with the resolved signer.
-//   - ExampleBuildSignerRequiring resolves a Signer under a required
-//     capability (BuildSignerRequiring): signer.local refused under a
-//     KeyNeverLeavesBoundary requirement, accepted under none, and used to
-//     sign.
+//   - Example_signerLocalComponent selects the "signer.local" component in a
+//     composition, reads its declared capabilities through the component
+//     face, and signs with the resolved signer.
 
 import (
 	"bytes"
@@ -67,8 +64,9 @@ import (
 //
 // The keepAlive handle is returned because a shared-cache in-memory SQLite
 // database disappears once its last connection closes, and one example
-// below (ExampleSignerRegistry) opens a SECOND connection to the same
-// database through SignerRegistry.Build. Callers defer keepAlive.Close();
+// below (Example_signerLocalComponent) opens a SECOND connection to the same
+// database for the *gorm.DB its component requires. Callers defer
+// keepAlive.Close();
 // an example whose database only ever has one connection is unaffected by
 // holding it.
 func newExampleModule(name string) (*pki.Module, *sql.DB, error) {
@@ -553,24 +551,24 @@ func ExampleService_RevokeSigningKey() {
 	// keys after revoke: 0
 }
 
-// ExampleSignerRegistry shows resolving a Signer by registered name through
-// pki.SignerRegistry -- the database/sql-style driver pattern -- with the
-// module's own zero-external-dependency "signer.local" registration, which
-// builds an offline-runnable LocalSigner from a flat pkgcore.Config naming
-// a database. The resolved signer then generates a key and signs with it
-// for real; an unknown name is refused with
-// pkgcore.ErrUnknownImplementation.
+// Example_signerLocalComponent shows selecting the module's own
+// zero-external-dependency "signer.local" component in a composition: the
+// component face builds an offline-runnable LocalSigner over the *gorm.DB
+// the assembly carries, its declared capabilities are read with
+// pkgcore.ComponentCapabilities, and the resolved signer then generates a
+// key and signs with it for real. An unselected name is refused with
+// pkgcore.ErrUnknownComponent.
 //
 // The vault and kmsaws provider names ("signer.vault",
 // "signer.vault-direct", "signer.aws-kms", "signer.aws-kms-direct")
-// execute the same Build path in their own packages' example tests
+// execute the same assembly path in their own packages' example tests
 // (go/pki/signer/vault and go/pki/signer/kmsaws), which run under the same
 // `go test`. Only client construction can run there: a real Vault server
 // or AWS account is not reachable from the unit-test tier, so no example
 // in either package performs a Sign against a live backend -- each
 // package's doc.go records that boundary.
-func ExampleSignerRegistry() {
-	module, keepAlive, err := newExampleModule("pki_example_registry")
+func Example_signerLocalComponent() {
+	_, keepAlive, err := newExampleModule("pki_example_registry")
 	if err != nil {
 		fmt.Println("setup:", err)
 		return
@@ -579,27 +577,40 @@ func ExampleSignerRegistry() {
 
 	ctx := context.Background()
 
-	// Build opens its OWN connection to the same in-memory database the
-	// module above migrated; keepAlive (deferred above) is what keeps the
-	// database alive for it -- signer_registry.go's localSignerFromConfig
-	// doc comment explains why this registry entry cannot share the
-	// module's *gorm.DB.
-	signer, caps, err := pki.SignerRegistry.Build("signer.local", pkgcore.Config{
-		"dialect": string(dbkit.DialectSQLite),
-		"dsn":     "file:pki_example_registry?mode=memory&cache=shared",
-	})
-	if err != nil {
-		fmt.Println("build signer.local:", err)
+	// The composition selects the database component -- whose product is
+	// the *gorm.DB the signer descriptor requires, over the same in-memory
+	// database the module above migrated (keepAlive, deferred above, keeps
+	// it alive) -- plus signer.local itself.
+	reg := pkgcore.NewComponentRegistry()
+	reg.Put(pkgcore.NewComponentConfig(map[string]any{
+		"components": map[string]any{
+			"signer.local": nil,
+			"db.sqlite":    map[string]any{"dsn": "file:pki_example_registry?mode=memory&cache=shared"},
+		},
+	}))
+	if err = reg.Prepare(ctx); err != nil {
+		fmt.Println("prepare:", err)
 		return
 	}
+	if err = reg.Construct(ctx); err != nil {
+		fmt.Println("construct:", err)
+		return
+	}
+	defer func() { _ = reg.Close(ctx) }()
+
+	signer, err := pkgcore.Get[pki.Signer](reg)
+	if err != nil {
+		fmt.Println("get signer.local:", err)
+		return
+	}
+	caps, err := pkgcore.ComponentCapabilities(reg, "signer.local")
 	fmt.Println("signer.local:", err, signer != nil, caps)
 
-	if _, _, lookupErr := pki.SignerRegistry.Build("signer.no-such-provider", nil); lookupErr == nil {
-		fmt.Println("unknown registered name refused: false")
+	if _, buildErr := pkgcore.Build[pki.Signer](ctx, reg, "signer.no-such-provider", nil); buildErr == nil {
+		fmt.Println("unselected name refused: false")
 		return
 	}
-	fmt.Println("unknown registered name refused: true")
-	_ = module
+	fmt.Println("unselected name refused: true")
 
 	keyRef, pub, err := signer.GenerateKey(ctx, pki.AlgorithmEd25519)
 	if err != nil {
@@ -619,77 +630,12 @@ func ExampleSignerRegistry() {
 	}
 	working := bytes.Equal(gotPub.(ed25519.PublicKey), pub.(ed25519.PublicKey)) &&
 		ed25519.Verify(pub.(ed25519.PublicKey), message, sig)
-	fmt.Println("registry-resolved signer signs and verifies:", working)
+	fmt.Println("signer.local component signs and verifies:", working)
 
 	// Output:
 	// signer.local: <nil> true none
-	// unknown registered name refused: true
-	// registry-resolved signer signs and verifies: true
-}
-
-// ExampleBuildSignerRequiring demonstrates the pki-local capability check a
-// host that intends to require pkgcore.KeyNeverLeavesBoundary of the signer
-// it wires resolves its signer through: BuildSignerRequiring behaves exactly
-// like pki.SignerRegistry.Build, and additionally refuses a resolution whose
-// registration's declared capability cannot satisfy the requirement -- the
-// comparison the assembly performs for its selected components but has no
-// knowledge of for pki.Signer (signer_registry.go's
-// BuildSignerRequiring doc comment, and go/pki/AGENTS.md's Known
-// limitations, have the full account). "signer.local" does not declare the
-// capability -- LocalSigner decrypts key material into process memory to
-// sign -- so resolving it under a KeyNeverLeavesBoundary requirement is
-// refused with an error naming the signer and the missing capability. The
-// registered names that DO carry the capability are the direct-sign
-// provider names a host blank-imports (go/pki/signer/vault's
-// "signer.vault-direct", go/pki/signer/kmsaws's "signer.aws-kms-direct");
-// resolving one of those under the same requirement succeeds. A zero
-// requirement (the shape a host with no boundary intent passes) accepts any
-// signer, "signer.local" included, and the resolution then signs normally.
-func ExampleBuildSignerRequiring() {
-	module, keepAlive, err := newExampleModule("pki_example_requiring")
-	if err != nil {
-		fmt.Println("setup:", err)
-		return
-	}
-	defer keepAlive.Close()
-
-	ctx := context.Background()
-	cfg := pkgcore.Config{
-		"dialect": string(dbkit.DialectSQLite),
-		"dsn":     "file:pki_example_requiring?mode=memory&cache=shared",
-	}
-
-	signer, err := pki.BuildSignerRequiring("signer.local", cfg, pkgcore.KeyNeverLeavesBoundary)
-	if err == nil {
-		fmt.Println("signer.local under KeyNeverLeavesBoundary refused: false")
-		return
-	}
-	fmt.Println("signer.local under KeyNeverLeavesBoundary refused: true")
-
-	signer, err = pki.BuildSignerRequiring("signer.local", cfg, 0)
-	if err != nil {
-		fmt.Println("signer.local with no requirement:", err)
-		return
-	}
-
-	keyRef, pub, err := signer.GenerateKey(ctx, pki.AlgorithmEd25519)
-	if err != nil {
-		fmt.Println("generate key:", err)
-		return
-	}
-	message := []byte("speed requirement example")
-	sig, err := signer.Sign(ctx, keyRef, message)
-	if err != nil {
-		fmt.Println("sign:", err)
-		return
-	}
-	fmt.Println("requirement-free signer signs and verifies:",
-		ed25519.Verify(pub.(ed25519.PublicKey), message, sig))
-	_ = module
-
-	// Output:
-	// signer.local under KeyNeverLeavesBoundary refused: true
-	// requirement-free signer signs and verifies: true
+	// unselected name refused: true
+	// signer.local component signs and verifies: true
 }
 
 // parsePEM decodes a single PEM-encoded certificate, the form every
