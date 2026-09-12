@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"regexp"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/vislake/speed/go/authn"
@@ -684,6 +685,16 @@ func TestOrgSelectionsBuildTheInvitationIndexerOverEmailIndexColumn(t *testing.T
 // must carry none of it. The reader is the read the reference app's org
 // gate performs (a method value over the identical handle), so both hosts
 // enforce one semantic.
+//
+// The override must also carry WithInvitationEmailDisabled and NO mail
+// transport (WithMailFrom, WithInvitationLinkBuilder): the option declares
+// org.invitation_email off, and the transport's absence is what makes the
+// skeleton's explicit-on arm a loud org.invitation_mail_required refusal.
+// Both are premises of
+// TestOrgFeatureGateThroughTheConfigHandle_DrivesTheThreeInvitationArms,
+// which composes this shape with the real modules, so a variant that wired
+// a transport (or dropped the option) would leave that pin describing a
+// product neither variant materializes.
 func TestOrgSelectionsWireTheDeclaredFeatureFlags(t *testing.T) {
 	for _, key := range []string{"authn+org+rbac", "authn+org"} {
 		override := orgOverrideSource(t, key)
@@ -693,6 +704,14 @@ func TestOrgSelectionsWireTheDeclaredFeatureFlags(t *testing.T) {
 		} {
 			if !strings.Contains(override, want) {
 				t.Errorf("%s: the org override is missing %q; without the handle as the gate's reader, org's declared flags stay declarations with no enforcement", key, want)
+			}
+		}
+		if !strings.Contains(override, "org.WithInvitationEmailDisabled()") {
+			t.Errorf("%s: the org override does not call org.WithInvitationEmailDisabled(); without it the boot guard demands mail wiring the skeleton does not have, and the declared email default would contradict the delivery leg", key)
+		}
+		for _, banned := range []string{"org.WithMailFrom", "org.WithInvitationLinkBuilder"} {
+			if strings.Contains(override, banned) {
+				t.Errorf("%s: the org override wires %q; the skeleton has no mail transport, and the behavioral pin's explicit-on arm assumes that absence", key, banned)
 			}
 		}
 	}
@@ -733,21 +752,68 @@ func orgOverrideSource(t *testing.T, key string) string {
 	return rest
 }
 
-// TestOrgFeatureGateThroughTheConfigHandle_RefusesDisabledInvitations is
+// invitationMailRecorder is the Mailer the behavioral org-gate test seats in
+// place of the console mailer: it records every send, so the quiet arms
+// assert over a record instead of inferring silence from a success code. It
+// occupies the registry's single Mailer seat, the same seat the generated
+// host fills with its transport.
+type invitationMailRecorder struct {
+	mu   sync.Mutex
+	sent []pkgcore.Mail
+}
+
+// Send implements pkgcore.Mailer.
+func (r *invitationMailRecorder) Send(_ context.Context, mail pkgcore.Mail) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.sent = append(r.sent, mail)
+	return nil
+}
+
+// count returns how many messages the recorder holds.
+func (r *invitationMailRecorder) count() int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return len(r.sent)
+}
+
+// TestOrgFeatureGateThroughTheConfigHandle_DrivesTheThreeInvitationArms is
 // the behavioral half of the org gate pin: it composes the real config and
 // org modules in the shape the org-bearing selections' server.go produce --
-// org.WithFeatureGate over configModule.Handle(), the same reader the
-// reference app's org gate wraps -- and disables org.invitations through
-// the real config surface: a system-tier row written through
+// org.WithInvitationEmailDisabled() plus org.WithFeatureGate over
+// configModule.Handle(), the same reader the reference app's org gate wraps
+// -- and drives the three arms a generated project can be in. Each arm is
+// entered through the real config surface: system-tier rows written through
 // config.Service.Set under the audited system purpose config's own
 // descriptor declares, the write an operator's console action ultimately
-// lands. With the flag off, Invite must refuse with
-// org.invitations_disabled. The comparison leg proves the wire is the
-// enforcement point: the same row with NO gate wired leaves the invite
-// through, because an unwired gate applies the flags' declared defaults --
-// so the row an operator writes changes nothing unless the host hands the
-// module a reader.
-func TestOrgFeatureGateThroughTheConfigHandle_RefusesDisabledInvitations(t *testing.T) {
+// lands.
+//
+//  1. Default state (no rows): Invite succeeds and sends nothing. This is
+//     the skeleton's pre-gate behavior -- the invitation is created and
+//     announced, only org's own delivery leg stays quiet -- because
+//     WithInvitationEmailDisabled declares org.invitation_email off and
+//     the gate resolves that declared default. A declared default of true
+//     would instead fail the invite with org.invitation_mail_required:
+//     delivery would be attempted and rediscover that the skeleton wired
+//     no transport.
+//  2. org.invitation_email explicitly on: delivery is now demanded, and
+//     the missing wiring refuses the invite with
+//     org.invitation_mail_required, revoking the invitation it just
+//     created rather than leaving a token nobody can act on. This is where
+//     the skeleton differs from the reference app: there the same flag
+//     drives a wired transport and mail goes out; here the operator has
+//     turned on a feature whose prerequisites Register would have refused
+//     at boot.
+//  3. org.invitations off: Invite is refused with org.invitations_disabled
+//     before anything is stored -- the flag the config module's features
+//     endpoints already report as off.
+//
+// The comparison leg proves the wire is the enforcement point: with NO gate
+// wired the module falls back to its own option state -- which mirrors the
+// flags' declared defaults, so go/org's featureFlagDecls and the module
+// cannot disagree -- and the same rows an operator writes are simply not
+// read.
+func TestOrgFeatureGateThroughTheConfigHandle_DrivesTheThreeInvitationArms(t *testing.T) {
 	ctx := context.Background()
 	db, err := dbkit.Open(ctx, dbkit.Options{Dialect: dbkit.DialectSQLite, DSN: t.TempDir() + "/org-gate.db"})
 	if err != nil {
@@ -789,13 +855,19 @@ func TestOrgFeatureGateThroughTheConfigHandle_RefusesDisabledInvitations(t *test
 	}
 
 	// The gated module, carried through the templates' own reader
-	// expression: the config module's lazy handle IS the gate.
+	// expression: the config module's lazy handle IS the gate. The registry
+	// seats the in-process bus and KV store componenttest.NewRegistry puts,
+	// with a recording mailer in place of the console one.
 	gated := org.NewModule(db,
 		org.WithEmailIndexer(indexer),
 		org.WithInvitationEmailDisabled(),
 		org.WithFeatureGate(configModule.Handle()),
 	)
-	reg := componenttest.NewRegistry()
+	reg := pkgcore.NewComponentRegistry()
+	reg.Put(pkgcore.NewMemoryEventBus())
+	reg.Put(pkgcore.NewMemoryKVStore())
+	recorder := &invitationMailRecorder{}
+	reg.Put(recorder)
 	var svc *config.Service
 	if err := componenttest.DeclareAll(reg,
 		gated.Register,
@@ -809,12 +881,46 @@ func TestOrgFeatureGateThroughTheConfigHandle_RefusesDisabledInvitations(t *test
 		t.Fatalf("declare the org and config modules and attach config: %v", err)
 	}
 
-	// Disable invitations the way an operator's write would: a system-tier
-	// row through the module's real Set path, under the audited system
-	// purpose config's own descriptor declares. The purpose is descriptor
-	// data the assembly registers when the Init stage closes; the
-	// seat-level declaration window this test drives does not reach that
-	// closing step, so register it directly.
+	// Arm 1, the default state an operator who wrote no row gets: the
+	// declared default is off, so delivery is never attempted and the
+	// invitation is created and announced into a pending row.
+	tenantCtx := pkgcore.WithTenant(context.Background(), "tenant-gate")
+	root, err := gated.Tree().CreateRoot(tenantCtx, "group", "group")
+	if err != nil {
+		t.Fatalf("CreateRoot: %v", err)
+	}
+	invite := func(email string) (*org.InviteResult, error) {
+		return gated.Invitations().Invite(tenantCtx, org.InviteRequest{
+			Email:         email,
+			NodeID:        root.ID,
+			InviterUserID: "u-inviter",
+		})
+	}
+	assertPending := func(want int, where string) {
+		t.Helper()
+		pending, listErr := gated.Invitations().List(tenantCtx)
+		if listErr != nil {
+			t.Fatalf("List %s: %v", where, listErr)
+		}
+		if len(pending) != want {
+			t.Fatalf("pending invitations %s = %d, want %d", where, len(pending), want)
+		}
+	}
+	if res, err := invite("ada@example.test"); err != nil {
+		t.Fatalf("Invite in the default gated state = %v, want success: WithInvitationEmailDisabled declares %s off, so the delivery leg stays quiet", err, org.FeatureInvitationEmail)
+	} else if res == nil || res.Token == "" {
+		t.Fatalf("Invite in the default gated state returned %+v, want a real pending invitation", res)
+	}
+	if n := recorder.count(); n != 0 {
+		t.Fatalf("the default gated state sent %d messages, want 0", n)
+	}
+	assertPending(1, "in the default gated state")
+
+	// The rows an operator writes go through the module's real Set path,
+	// under the audited system purpose config's own descriptor declares.
+	// The purpose is descriptor data the assembly registers when the Init
+	// stage closes; the seat-level declaration window this test drives does
+	// not reach that closing step, so register it directly.
 	pkgcore.RegisterSystemPurpose(config.SystemPurposeSystemWrite)
 	sysCtx, err := pkgcore.WithSystemContext(context.Background(), pkgcore.SystemReason{
 		Actor:   "org-gate-pin",
@@ -823,25 +929,36 @@ func TestOrgFeatureGateThroughTheConfigHandle_RefusesDisabledInvitations(t *test
 	if err != nil {
 		t.Fatalf("build system context: %v", err)
 	}
+
+	// Arm 2: org.invitation_email explicitly on. The prerequisites -- a
+	// mail transport, the mail-from address, the link builder -- are not
+	// wired in the skeleton, so delivery is refused the way Register
+	// refuses such a boot, and the invitation just created is revoked
+	// instead of left as a token nobody can act on.
+	if err := svc.Set(sysCtx, config.ScopeSystem, org.FeatureInvitationEmail, config.Value{Data: true}, "org-gate-pin"); err != nil {
+		t.Fatalf("enable %s: %v", org.FeatureInvitationEmail, err)
+	}
+	if _, err := invite("grace@example.test"); !apperr.HasCode(err, org.ErrInvitationMailRequired.Code) {
+		t.Fatalf("Invite with %s explicitly on and no mail wiring = %v, want %v", org.FeatureInvitationEmail, err, org.ErrInvitationMailRequired)
+	}
+	if n := recorder.count(); n != 0 {
+		t.Fatalf("the refused invite sent %d messages, want 0", n)
+	}
+	assertPending(1, "after the refused invite")
+
+	// Arm 3: org.invitations off. The gate runs before anything is stored,
+	// so the refusal leaves the pending set untouched.
 	if err := svc.Set(sysCtx, config.ScopeSystem, org.FeatureInvitations, config.Value{Data: false}, "org-gate-pin"); err != nil {
 		t.Fatalf("disable %s: %v", org.FeatureInvitations, err)
 	}
-
-	tenantCtx := pkgcore.WithTenant(context.Background(), "tenant-gate")
-	root, err := gated.Tree().CreateRoot(tenantCtx, "group", "group")
-	if err != nil {
-		t.Fatalf("CreateRoot: %v", err)
-	}
-	if _, err := gated.Invitations().Invite(tenantCtx, org.InviteRequest{
-		Email:         "ada@example.test",
-		NodeID:        root.ID,
-		InviterUserID: "u-inviter",
-	}); !apperr.HasCode(err, org.ErrInvitationsDisabled.Code) {
+	if _, err := invite("linus@example.test"); !apperr.HasCode(err, org.ErrInvitationsDisabled.Code) {
 		t.Fatalf("Invite over the config handle with %s off = %v, want %v", org.FeatureInvitations, err, org.ErrInvitationsDisabled)
 	}
+	assertPending(1, "with invitations off")
 
-	// The comparison leg: with no gate wired the identical row enforces
-	// nothing, because the module falls back to the flag's declared default.
+	// The comparison leg: with no gate wired the identical rows enforce
+	// nothing, because the module never reads them -- it falls back to its
+	// own option state, which mirrors the flags' declared defaults.
 	ungated := org.NewModule(db,
 		org.WithEmailIndexer(indexer),
 		org.WithInvitationEmailDisabled(),
@@ -850,11 +967,11 @@ func TestOrgFeatureGateThroughTheConfigHandle_RefusesDisabledInvitations(t *test
 		t.Fatalf("declare the ungated org module: %v", err)
 	}
 	if _, err := ungated.Invitations().Invite(tenantCtx, org.InviteRequest{
-		Email:         "grace@example.test",
+		Email:         "alan@example.test",
 		NodeID:        root.ID,
 		InviterUserID: "u-inviter",
 	}); err != nil {
-		t.Fatalf("Invite with no gate wired = %v, want success: an unwired gate applies the flags' declared defaults, so the row alone cannot refuse", err)
+		t.Fatalf("Invite with no gate wired = %v, want success: the module falls back to its own option state, which mirrors the flags' declared defaults, so the rows alone cannot refuse", err)
 	}
 }
 
