@@ -10,8 +10,10 @@ import (
 
 // exampleTimezone and exampleBuzzer are the contract types the Override
 // example's requirement tokens name.
-type exampleTimezone struct{}
-type exampleBuzzer struct{}
+type (
+	exampleTimezone struct{}
+	exampleBuzzer   struct{}
+)
 
 // ExampleLookupComponent reads a registered descriptor back by name: the
 // reading a host wiring performs before deriving its own construction for a

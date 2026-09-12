@@ -238,7 +238,7 @@ func TestLookupComponent_FindsRegisteredAndReportsAbsence(t *testing.T) {
 	if !sameCallback(found.New, local.New) {
 		t.Error("LookupComponent returned a descriptor whose New callback is not the registered one")
 	}
-	if _, ok := globalComponent(local.Name); ok {
+	if _, inGlobal := globalComponent(local.Name); inGlobal {
 		t.Fatalf("fixture %q leaked into the global registration", local.Name)
 	}
 
