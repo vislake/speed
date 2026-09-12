@@ -580,7 +580,13 @@ func (m *Module) Register(reg *pkgcore.ComponentRegistry) error {
 	// audit.Emit against the exact registrar AuditActionCreate was
 	// declared on (Emit validates the action string against it).
 	m.handler = NewHandler(m.repo, reg.EventBus(), reg.AuditActionsSeat())
-	reg.RoutesSeat().Mount(apiPath, m.handler)
+	// The route is mounted through the http component's route face
+	// (pkgcore.RouteRegistrar, provided by go/app/httpserve): MountRoute is
+	// a no-op in a composition that serves no HTTP, so this module's
+	// descriptor declares the face as an OPTIONAL dependency.
+	if err := pkgcore.MountRoute(reg, apiPath, m.handler); err != nil {
+		return err
+	}
 
 	if err := reg.PermissionsSeat().Add(PermissionRead, PermissionWrite); err != nil {
 		return err

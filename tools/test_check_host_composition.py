@@ -17,13 +17,14 @@ rules' living proof, in the same shape as the sibling checker suites:
   * a re-grown kernel sentinel in a non-test file fires, while the same
     text in a test file stays silent;
   * the sentinel and call-ban allowances stay scoped to the named files
-    (each host's assembly core and application component): the sanctioned
-    shapes there stay silent, and the same shapes in any other host file
-    still fire;
+    (each host's assembly core and the reference app's seed-mux
+    component): the sanctioned shapes there stay silent, and the same
+    shapes in any other host file still fire;
   * a re-issued engine-owned assembly call (pkgcore.NewComponentRegistry,
-    dbkit.Open, http.NewServeMux, chain.Chain under any alias, obs.Init,
-    ...) in a non-test file fires, while the sanctioned register-and-
-    Assemble shape and the same text in a test file stay silent;
+    dbkit.Open, http.NewServeMux, chain.Chain and chain.Standard under any
+    alias, obs.Init, ...) in a non-test file fires, while the sanctioned
+    register-and-Assemble shape and the same text in a test file stay
+    silent;
   * a host's Go test-support packages (internal/testutil,
     internal/apptest) are exempt from the sentinel and call-ban scans the
     way test files are, while the same calls from any other path fire, a
@@ -127,19 +128,20 @@ class NoForkRules(unittest.TestCase):
         )
         self.assertEqual(m.scan(root), [])
 
-    def test_the_application_component_may_serve_its_own_face(self):
-        # The reference app's application component owns the host's face:
-        # the mux it composes and the request base context its listener
-        # carries are sanctioned in that one file.
+    def test_the_application_component_may_build_its_seed_mux(self):
+        # The reference app's application component owns the host's seed
+        # route table -- the mux the demo seeds drive the accumulated
+        # declarations through before any listener exists -- and that
+        # mux is sanctioned in that one file. The served face itself is
+        # the http component's, so the request base context carries no
+        # allowance anywhere.
         root = make_tree(
             {
                 "examples/reference-app/internal/app/component.go": (
                     "package app\n\n"
                     "func compose() {\n"
                     "\tmux := http.NewServeMux()\n"
-                    "\tsrv := &http.Server{BaseContext: baseContext}\n"
                     "\t_ = mux\n"
-                    "\t_ = srv\n"
                     "}\n"
                 ),
             }
@@ -171,6 +173,12 @@ class NoForkRules(unittest.TestCase):
         self.assertTrue(any("BaseContext" in f for f in findings), findings)
         self.assertEqual(
             sum("http.NewServeMux" in f for f in findings), 2, findings
+        )
+        # BaseContext carries no allowance at all any more: the listener
+        # is the http component's, so the file spelling it fires like any
+        # other host file.
+        self.assertEqual(
+            sum("BaseContext" in f for f in findings), 1, findings
         )
 
 
@@ -220,19 +228,40 @@ class EngineOwnedCallRules(unittest.TestCase):
             sum("calls chain.Chain" in f for f in findings), 2, findings
         )
 
+    def test_chain_standard_fires_under_every_alias(self):
+        # The fixed chain's assembly belongs to the http component now:
+        # no host file issues chain.Standard, so both alias spellings
+        # fire like any other engine-owned call.
+        root = make_tree(
+            {
+                "examples/reference-app/internal/app/server.go": (
+                    "package app\n\n"
+                    "import speedchain \"github.com/vislake/speed/go/app/chain\"\n\n"
+                    "func chain() { _, _ = speedchain.Standard(src, verifier, mux) }\n"
+                ),
+                "go/saasctl/internal/template/project/selection/authn/server.go": (
+                    "package main\n\n"
+                    "func chain() { _, _ = chain.Standard(src, verifier, mux) }\n"
+                ),
+            }
+        )
+        findings = m.scan(root)
+        self.assertEqual(
+            sum("calls chain.Standard" in f for f in findings), 2, findings
+        )
+
     def test_the_component_assembly_stays_silent(self):
-        # The sanctioned host shape: the assembly core creates the registry,
-        # drives the engine's Assemble and composes its chain -- none of it
-        # banned. This is the positive control for the whole ban set.
+        # The sanctioned host shape: the assembly core creates the registry
+        # and drives the engine's Assemble -- none of it banned, and no
+        # chain call of its own to issue (the http component assembles the
+        # fixed chain). This is the positive control for the whole ban set.
         root = make_tree(
             {
                 "go/saasctl/internal/template/project/selection/authn/server.go": (
                     "package main\n\n"
-                    "import speedchain \"github.com/vislake/speed/go/app/chain\"\n\n"
                     "func boot() {\n"
                     "\treg := pkgcore.NewComponentRegistry()\n"
                     "\t_ = speedapp.Assemble(ctx, reg, speedapp.LoadSpec{})\n"
-                    "\t_ = speedchain.Standard(reg, verifier, mux)\n"
                     "\t_ = reg\n"
                     "}\n"
                 ),
@@ -345,8 +374,8 @@ class ComponentAssemblyRules(unittest.TestCase):
 
 class AllowedFileRules(unittest.TestCase):
     """The one-file allowances the two hosts' assembly relies on: each
-    host's assembly core builds its own component set off a fresh registry
-    (the descriptor-read seed) and composes its own HTTP face, and the
+    host's assembly files build their own component set off a fresh
+    registry (the descriptor-read seed), and the
     reference app's database component opens the connection with its
     write-capture scope. Each stays silent in its own file and fires from
     any other -- while the signal overlay, which the engine's RunAssembly
@@ -364,11 +393,7 @@ class AllowedFileRules(unittest.TestCase):
             "package main\n\n"
             "func assemble(ctx *Context) {\n"
             "\treg := pkgcore.NewComponentRegistry()\n"
-            "\tmux := http.NewServeMux()\n"
-            "\tsrv := &http.Server{BaseContext: baseContext}\n"
             "\t_ = reg\n"
-            "\t_ = mux\n"
-            "\t_ = srv\n"
             "}\n"
         ),
         "examples/reference-app/internal/app/host_wiring.go": (

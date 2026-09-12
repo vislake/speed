@@ -9,11 +9,13 @@ go/saasctl/internal/template/project. The host-neutral half of that
 composition -- the application assembly engine (the configuration load,
 the composition plan and the eight-stage drive, all in the platform
 module go/app), authn's mount path, the serve timeouts, the pre-auth
-allowlist set and the middleware chain (go/app/chain) -- lives in go/app,
-imported by both hosts. (The liveness route set itself is observability's,
-obs.MountLiveness; the mounted-route label seed is observability's
-obs.RegisterMountedRoutes; the module-route mounting rule is
-pkgcore.MountRoutes; this header lists what the scan below protects.)
+allowlist set, the middleware chain (go/app/chain) and the process's HTTP
+face itself (go/app/httpserve, the `http` component that assembles the
+routes and owns the listener) -- lives in go/app, imported by both hosts.
+(The liveness route set itself is observability's, obs.MountLiveness; the
+mounted-route label seed is observability's obs.RegisterMountedRoutes; the
+module-route mounting rule is pkgcore.MountRoutes; this header lists what
+the scan below protects.)
 
 Because the kernel is imported rather than copied, copy drift is
 impossible by construction -- there are no two copies to compare. What
@@ -117,22 +119,14 @@ HOST_COMPOSITION_IDENTIFIERS = (
 # obs.MetricsPath, and app.AuthnAPIPath respectively). Each entry is
 # (sentinel, allowed), read as the call bans' allowed tuple is:
 #
-#   * BaseContext -- allowed in the reference app's application component
-#     (examples/reference-app/internal/app/component.go) and in each
-#     selection server.go template (TEMPLATE_SELECTION_SERVERS): both
-#     compose and serve the host's own HTTP face, and the request base
-#     context handed to a listener is that face's own contract, not a
-#     re-grown copy of the engine's serve loop. Every other host file still
-#     fires, and the ListenAndServe entry stays unconditionally banned (the
-#     face calls net.Listen plus Serve, so no host file spells the engine's
-#     listen call).
+#   * BaseContext and ListenAndServe carry no allowance at all: the
+#     listener is the `http` component's (go/app/httpserve/serve.go
+#     derives the request base context and calls net.Listen plus Serve),
+#     so no host file has a sanctioned spelling of either -- both entries
+#     are unconditionally banned.
 HOST_COMPOSITION_SENTINELS = (
     ("ListenAndServe", ()),
-    (
-        "BaseContext",
-        ("examples/reference-app/internal/app/component.go",)
-        + TEMPLATE_SELECTION_SERVERS,
-    ),
+    ("BaseContext", ()),
     ('"/healthz"', ()),
     ('"/metrics"', ()),
     ('"/api/v1/authn"', ()),
@@ -161,12 +155,13 @@ HOST_COMPOSITION_PATHS = (
 #   * label  -- the human-readable call the finding names;
 #   * regex  -- what to look for. Most regexes guard the leading boundary so
 #     a longer package name ending in the same letters cannot match; the
-#     chain entry is the deliberate exception -- both hosts import the chain
-#     package under the `speedchain` alias, so the pattern matches any
-#     single selector ending in "chain" (the real spelling `chain.Chain(`,
-#     the in-tree `speedchain.Chain(` and any other alias of the same
-#     package), while the sanctioned entry point is `speedchain.Standard`
-#     and never matches;
+#     chain entries are the deliberate exception -- the chain package has
+#     been imported under the `speedchain` alias in this tree before, so the
+#     patterns match any single selector ending in "chain" in either
+#     spelling (the real `chain.Chain(`/`chain.Standard(` and any alias of
+#     the same package). No host file issues either call: the `http`
+#     component assembles the fixed chain, and a host is not a caller of it
+#     any more, sanctioned or otherwise;
 #   * scope  -- "tree" (any non-test .go file under the host tree) or
 #     "composition" (only HOST_COMPOSITION_PATHS above);
 #   * allowed -- repo-relative files where the call is the sanctioned,
@@ -187,12 +182,13 @@ HOST_COMPOSITION_PATHS = (
 #         serve step receives the overlaid context), so no host file issues
 #         the call and the entry carries no allowance.
 #       - http.NewServeMux in the reference app's application component
-#         (examples/reference-app/internal/app/component.go) and in each
-#         selection server.go template (TEMPLATE_SELECTION_SERVERS): the mux
-#         the application component's Init composes IS the host's own face
-#         -- the platform liveness routes, the protected-face composition
-#         and the SPA wrap hang off it there -- so those files own the call.
-#         Any other composition-path file still fires.
+#         (examples/reference-app/internal/app/component.go): the mux the
+#         pre-serve step builds there is the host's own seed route table --
+#         the demo seeds drive the accumulated declarations through it
+#         before any listener exists. The served face itself is the `http`
+#         component's, so the selection server.go templates carry no mux
+#         and no longer appear here. Any other composition-path file still
+#         fires.
 #       - pkgcore.NewComponentRegistry: the reference app's assembly core
 #         (examples/reference-app/internal/app/server.go) and each selection
 #         server.go template (TEMPLATE_SELECTION_SERVERS) are the allowed
@@ -223,8 +219,7 @@ HOST_COMPOSITION_CALL_BANS = (
         "http.NewServeMux",
         r"(?<![A-Za-z0-9_.])http\.NewServeMux\(",
         "composition",
-        ("examples/reference-app/internal/app/component.go",)
-        + TEMPLATE_SELECTION_SERVERS,
+        ("examples/reference-app/internal/app/component.go",),
     ),
     (
         "jobs.NewStandaloneQueue",
@@ -245,6 +240,7 @@ HOST_COMPOSITION_CALL_BANS = (
         (),
     ),
     ("chain.Chain", r"(?<![A-Za-z0-9_.])[A-Za-z0-9_]*chain\.Chain\(", "tree", ()),
+    ("chain.Standard", r"(?<![A-Za-z0-9_.])[A-Za-z0-9_]*chain\.Standard\(", "tree", ()),
     ("obs.Init", r"(?<![A-Za-z0-9_.])obs\.Init\(", "tree", ()),
 )
 
