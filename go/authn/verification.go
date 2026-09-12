@@ -8,19 +8,14 @@ import (
 	"errors"
 	"fmt"
 	"math/big"
+	"slices"
 	"strconv"
-	"strings"
-	"sync"
 	"time"
 
 	"gorm.io/gorm"
 
-	"github.com/BurntSushi/toml"
-
 	"github.com/vislake/speed/go/pkgcore"
 	"github.com/vislake/speed/go/pkgcore/i18n"
-
-	"github.com/vislake/speed/go/authn/locales"
 
 	obs "github.com/vislake/speed/go/observability"
 )
@@ -406,7 +401,7 @@ func (s *Service) deliverSMSCode(ctx context.Context, in RequestSMSCodeInput, in
 	}
 
 	minutes := int(smsTTL / time.Minute)
-	text, usedLocale, err := renderSMSCode(smsLocale(in.AcceptLanguage, user.Locale), code, minutes)
+	text, usedLocale, err := s.renderSMSCode(smsLocale(in.AcceptLanguage, user.Locale), code, minutes)
 	if err != nil {
 		// The same registered-only shape as the persist branch above and
 		// the transport branch below: only a registered number ever
@@ -730,56 +725,12 @@ func hashVerificationCode(code string) string {
 
 // smsVerificationCodeMessageID is the locale message id the SMS body is
 // rendered from. Both locales/zh-CN.toml and locales/en-US.toml carry it,
-// with placeholders "{{.code}}" and "{{.minutes}}", following the same
-// convention as every parameterized error message in this module's own
-// catalog (see errors.go's authn.password_too_short, for instance).
+// with the go-i18n placeholders "{{.code}}" and "{{.minutes}}", following
+// the same convention as every parameterized error message in this
+// module's own catalog (see errors.go's authn.password_too_short, for
+// instance); renderSMSCode supplies both values through the merged
+// catalog's template params.
 const smsVerificationCodeMessageID = "authn.sms.verification_code"
-
-var (
-	smsLocaleOnce     sync.Once
-	smsLocaleMessages map[string]map[string]string
-	smsLocaleErr      error
-)
-
-// loadSMSLocaleMessages parses this module's OWN embedded locale files
-// once, independently of the merged pkgcore/i18n catalog Registry.Locales()
-// exposes.
-//
-// This is a deliberate, narrower choice than routing through the merged
-// catalog, and it is safe only because the message this module renders
-// through it never needs another module's text: an SMS body is composed
-// and delivered synchronously, inside the request that asked for the code,
-// from a bundle whose files (and their key parity) this module already
-// owns and already tests in errors_test.go's sibling assertions. Reaching
-// for the shared Registry here would mean threading a *pkgcore.ComponentRegistry
-// reference into Service for the sole benefit of one message, when the
-// files this function reads are already right here.
-//
-// The language set is supportedLocales(), the module's single statement of
-// which languages it ships -- the same set the preference validation and
-// the Accept-Language negotiation read (preferences.go) -- so adding a
-// language cannot update one consumer and miss this one.
-func loadSMSLocaleMessages() (map[string]map[string]string, error) {
-	smsLocaleOnce.Do(func() {
-		languages := supportedLocales()
-		result := make(map[string]map[string]string, len(languages))
-		for _, language := range languages {
-			raw, err := locales.FS.ReadFile(language + ".toml")
-			if err != nil {
-				smsLocaleErr = fmt.Errorf("authn: read embedded %s locale: %w", language, err)
-				return
-			}
-			var flat map[string]string
-			if err := toml.Unmarshal(raw, &flat); err != nil {
-				smsLocaleErr = fmt.Errorf("authn: parse embedded %s locale: %w", language, err)
-				return
-			}
-			result[language] = flat
-		}
-		smsLocaleMessages = result
-	})
-	return smsLocaleMessages, smsLocaleErr
-}
 
 // smsLocale applies the SMS body's language chain. Its shape is the
 // "requester is recipient" tier of the module's locale chains: the request
@@ -803,6 +754,12 @@ func smsLocale(acceptLanguage, stored string) string {
 // renderSMSCode composes the SMS body for a phone-login verification code
 // in locale, and reports the locale it ACTUALLY rendered in.
 //
+// The body renders through the host's merged message catalog (hostSeams's
+// Locales, read at call time), the same pkgcore/i18n mechanism every
+// module's backend-generated content renders through: the text a delivery
+// carries is exactly the text the catalog serves, so this module's
+// templates cannot drift from the locale files the assembly merged.
+//
 // An unknown or empty locale falls back to DefaultLocale rather than
 // erroring -- the "never an error, fall back to the platform default" rule
 // go/config's own pre-authentication endpoints follow for the same reason:
@@ -813,21 +770,21 @@ func smsLocale(acceptLanguage, stored string) string {
 // adapter maps templates by the locale the body was really rendered in, so
 // reporting an unsupported requested locale would fail a delivery the
 // render itself handled.
-func renderSMSCode(locale, code string, minutes int) (text string, usedLocale string, err error) {
-	messages, err := loadSMSLocaleMessages()
-	if err != nil {
-		return "", "", err
+func (s *Service) renderSMSCode(locale, code string, minutes int) (text string, usedLocale string, err error) {
+	catalog := s.catalog()
+	if catalog == nil {
+		return "", "", errors.New("authn: no message catalog is wired for the SMS body render")
 	}
 	usedLocale = locale
-	bundle, ok := messages[locale]
-	if !ok {
+	if !slices.Contains(catalog.Locales(), locale) {
 		usedLocale = DefaultLocale
-		bundle = messages[DefaultLocale]
 	}
-	template, ok := bundle[smsVerificationCodeMessageID]
-	if !ok {
-		return "", "", fmt.Errorf("authn: locale bundle carries no %q message", smsVerificationCodeMessageID)
+	text, err = catalog.Lookup(usedLocale, smsVerificationCodeMessageID, map[string]any{
+		"code":    code,
+		"minutes": strconv.Itoa(minutes),
+	})
+	if err != nil {
+		return "", "", fmt.Errorf("authn: render %s: %w", smsVerificationCodeMessageID, err)
 	}
-	replacer := strings.NewReplacer("{{.code}}", code, "{{.minutes}}", strconv.Itoa(minutes))
-	return replacer.Replace(template), usedLocale, nil
+	return text, usedLocale, nil
 }

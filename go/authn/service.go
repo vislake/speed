@@ -17,6 +17,7 @@ import (
 	"github.com/vislake/speed/go/dbkit"
 	"github.com/vislake/speed/go/pkgcore"
 	"github.com/vislake/speed/go/pkgcore/apperr"
+	"github.com/vislake/speed/go/pkgcore/i18n"
 	"github.com/vislake/speed/go/tenancy"
 
 	obs "github.com/vislake/speed/go/observability"
@@ -261,6 +262,32 @@ type TokenPair struct {
 	Principal Principal
 }
 
+// hostSeams is the read-only view of the host's *pkgcore.ComponentRegistry
+// that Service reads AT CALL TIME rather than capturing during Register.
+//
+// The distinction is not stylistic. Registry.Locales() is documented to be
+// nil while modules are registering -- the assembly installs the merged
+// catalog only after every module's Register has returned -- so a service
+// that captured the catalog in Register would capture nil and fail on its
+// first rendered SMS body. Holding the registry itself and asking it for
+// the catalog when the body renders makes that mistake unrepresentable.
+//
+// *pkgcore.ComponentRegistry satisfies this interface structurally; Service
+// declares it rather than taking the concrete type so that a test can
+// substitute a host without driving an assembly.
+type hostSeams interface {
+	// Locales is the merged message catalog the SMS body renders from.
+	// Nil until the assembly installs it, which is exactly why this is a
+	// method call and not a field.
+	Locales() *i18n.Catalog
+}
+
+// compile-time check that the host's own registry satisfies the seam view
+// Service reads it through. It is what makes Module.Register's single
+// assignment legal without authn depending on anything the registry does
+// not already offer.
+var _ hostSeams = (*pkgcore.ComponentRegistry)(nil)
+
 // Service is authn's business logic: registration, password sign-in, token
 // refresh, sign-out and tenant switching.
 type Service struct {
@@ -307,6 +334,14 @@ type Service struct {
 	recoveryCodes      *RecoveryCodeRepository
 	issuer             string
 
+	// host is the host's declaration face, read AT CALL TIME for the
+	// merged message catalog renderSMSCode renders the SMS body through.
+	// Stored as the registry itself, never the catalog behind it -- see
+	// hostSeams for why, and nil when a Service was assembled without an
+	// assembly (a bare NewService), which the render reports as its own
+	// failure to the swallow-and-log caller.
+	host hostSeams
+
 	// secureCookies is WithSecureCookies' value: whether Handler must
 	// force Secure on the pre-authentication OAuth cookie regardless of
 	// r.TLS. See that option's doc comment.
@@ -342,6 +377,17 @@ type Service struct {
 	// go/jobs.StandaloneQueue's own metric fields document.
 	authCount    metric.Int64Counter
 	authDuration metric.Float64Histogram
+}
+
+// catalog reads the merged message catalog from the host seam. It is a
+// method, not a field, for the reason hostSeams documents at length:
+// Registry.Locales() is nil during Register, so a captured catalog is a
+// nil catalog.
+func (s *Service) catalog() *i18n.Catalog {
+	if s.host == nil {
+		return nil
+	}
+	return s.host.Locales()
 }
 
 // NewService assembles a Service over db, using bus and kv -- the pkgcore

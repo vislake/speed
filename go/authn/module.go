@@ -859,18 +859,20 @@ func (m *Module) Service() *Service { return m.svc }
 // registry; nothing here opens a connection, sends a request or touches the
 // database. Note also that reg.Locales() is deliberately not consulted: the
 // merged catalog is installed only after every module has registered, so it
-// is nil at this point by design. The module's own system purpose -- the
-// sign-in tenant enumeration -- is descriptor data, not a declaration made
-// here: the component descriptor (component.go) carries it as
-// SystemPurposes, and the assembly registers it when its Init stage closes
-// (the transition bridge registers it inside the module's own registration
-// turn on the module path).
+// is nil at this point by design -- the service holds the registry itself
+// and reads the catalog when it renders (hostSeams, renderSMSCode). The
+// module's own system purpose -- the sign-in tenant enumeration -- is
+// descriptor data, not a declaration made here: the component descriptor
+// (component.go) carries it as SystemPurposes, and the assembly registers
+// it when its Init stage closes (the transition bridge registers it inside
+// the module's own registration turn on the module path).
 func (m *Module) Register(reg *pkgcore.ComponentRegistry) error {
 	svc, err := NewService(m.db, reg.EventBus(), reg.KVStore(), m.opts...)
 	if err != nil {
 		return err
 	}
 	m.svc = svc
+	svc.host = reg
 
 	if err := reg.AuditActionsSeat().Add(auditActions...); err != nil {
 		return err
