@@ -212,6 +212,14 @@
 - **登记理由**：宿主可见面（已设配置行由死声明变为生效开关）的行为修正，按"宿主可见面变更须带 `!BREAKING` footer 或登记本清单"的纪律登记（非破坏，不带 footer）。
 - **出处**：`b66b51ea`（`feat(config): add typed lazy reads to the read handle`）+ `ecc9bbc0`（`feat(authn): make the declared dynamic config items effective at runtime`）+ `96e3479c`（`feat(metering): read the declared config items through a settings seam`）+ `4fb481d7`（`feat(reference-app): wire the config handle as authn's settings reader`）+ `fdbb0de1`（`feat(saasctl): wire the config handle as authn's settings reader in the templates`）。
 
+### （待编号）pki：配置声明项接真实读点（行为变更登记）
+
+- **面**：`go/pki` 在 `ConfigSeat` 上声明的 8 项动态配置由"仅入 schema、无读点"变为运行期生效；模块新增导出缝 `SettingsReader` / `WithSettingsReader`（新增面，无导出符号删除），组件描述符新增可选 `(*config.Module)` 依赖并在 config 组件在场时自接线其 `Handle`（`go/pki` 的 `go.mod` 因此直接 require `go/config` 并补 replace）。读点与语义：`pki.propagation_window` 与 `pki.renewal_lead_time` 在 `ScanExpiry`/`PromoteNow` 的解析链（调用参数 → 显式行 → 构造期值 → 包常量）；`pki.crl_validity` 在 `GenerateCRL` 自身 validity<=0 的回落处（`RegenerateAllCRLs` 内部传 0 的路径随之生效）；`pki.crl_distribution_point` 在 `CreateRootCA`/`CreateIntermediateCA` 写行前补齐 caller 的空值（仅影响新建 authority，存量行不重写）；`pki.ca_default_validity`/`pki.ca_max_validity` 与 `pki.certificate_default_validity`/`pki.certificate_max_validity` 在签发路径补齐两套保护语义——`NotAfter` 零值回落对应 default（不再视为残缺输入），超过对应 max 的请求**钳制到上限**（贴合声明原文 "regardless of what the caller requests"）。读规则与 authn/metering 两项同形：显式行优先；未设行 / 未接缝 / 读失败回落构造期值或包常量（包常量即 schema 默认值本身）。
+- **消费者影响**：对已写入这些配置行的宿主，行的语义从"记录在案"变为"控制行为"——已设 `pki.crl_validity` 会开始改变生成 CRL 的有效窗口，已设 `pki.ca_max_validity`/`pki.certificate_max_validity` 会开始钳制超限的签发请求，已设 `pki.crl_distribution_point` 会开始填入新建 authority。宿主代码无需改动；带 config 组件的装配自动生效（reference-app 的组合选中 config 组件，无 pki 覆盖组件，无需任何宿主接线），不带 config 组件的组合对这些行完全无感。与行无关的签发语义收窄对**所有**宿主生效：零值 `NotAfter` 现在回落包默认（CA 10 年 / 端实体 1 年）而非直通一张无效证书，超限请求钳制到包默认上限（15 年 / 2 年）——一切显式且未超限的请求不变（reference-app 的 root 10 年、intermediate 5 年均在上限内，无行为变化）。
+- **替代路径**：无（行为修正）；不装配 config 组件可让动态行无感，但零值回落与上限钳制是签发路径的包默认语义，无法关闭——需要更长上限的宿主须装配 config 组件并显式设置对应的 max 行。
+- **登记理由**：宿主可见面（已设配置行由死声明变为生效开关 + 签发语义收窄）的行为变更，按"宿主可见面变更须带 `!BREAKING` footer 或登记本清单"的纪律登记（非破坏，不带 footer）。
+- **出处**：`221672b3`（`feat(pki): read the declared config items at their read points`）+ `f237410d`（`test(pki): pin the config-item read points end to end`）+ `0c7b7df6`（`docs(pki): describe the configuration read points in the module guide`）。
+
 ## 6. D 组：configrefgen 工具内部迁移（工具面，非宿主面）
 
 - **面**：`tools/configrefgen` 的内部实现从旧内核面迁到组件面（工具自身不在消费者依赖面内）。
