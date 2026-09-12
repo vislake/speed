@@ -39,9 +39,11 @@ import (
 // The dispatch-suppression decision itself (marker present -> skip; marker
 // unreadable -> refuse, fail closed) is pinned at the unit tier against a
 // bare Queue by queue/asynq's marker_fail_closed_test.go's
-// TestQueue_DispatchAfterMarkerRead_FailsClosedOnUnreadableMarker; this
-// file proves the same decision holds for a task asynq's own scheduler,
-// forwarder and processor deliver.
+// TestQueue_DispatchAfterMarkerRead_FailsClosedOnUnreadableMarker. What
+// this file proves on asynq's own delivery path -- scheduler, forwarder
+// and processor -- is the skip half: a marker present suppresses the run.
+// The refuse half on that same path is the sibling
+// marker_read_fail_closed_test.go's.
 
 // TestRedisQueue_Cancel_ScheduledJob_SuppressedAtDueTime proves the
 // marker-suppression path end to end: a Job cancelled while still
