@@ -112,21 +112,10 @@ const (
 	AuditActionCertificateRevoke = "pki.certificate.revoke"
 )
 
-// The configuration keys pki contributes.
-//
-// ConfigCRLDistributionPoint and ConfigCRLValidity follow the identical
-// declare-but-do-not-read discipline every config item in this file
-// follows: ConfigCRLDistributionPoint's own value is never consulted
-// anywhere -- a caller passes CRLDistributionPoint directly on
-// CAParams (ca.go), so this item exists purely as
-// a declared, admin-visible schema entry, for a host that wants to show or
-// validate the value before passing it through its own wiring.
-// ConfigCRLValidity's real default lives as DefaultCRLValidity (crl.go),
-// which GenerateCRL actually falls back to; a caller wanting the config
-// value honored passes it through GenerateCRL's own validity parameter,
-// exactly as ConfigPropagationWindow/ConfigRenewalLeadTime's callers pass
-// through WithPropagationWindow/WithRenewalLeadTime rather than pki
-// reading config itself.
+// The configuration keys pki contributes. Every one of them is read at
+// runtime through the module's settings seam (settings.go): an explicit row
+// wins, and a read with no row (or no reader wired at all) falls back to
+// the construction-time or package value the read point documents.
 //
 // ConfigPropagationWindow and ConfigRenewalLeadTime duplicate neither the
 // retiring overlap period: the module does not know a credential's maximum
@@ -140,50 +129,56 @@ const (
 const (
 	// ConfigCADefaultValidity is how long a CA certificate (root or
 	// intermediate) is valid for when a caller does not specify one.
+	// CreateRootCA/CreateIntermediateCA resolve it (settings.go's
+	// boundedNotAfter); unset, defaultCADefaultValidity stands.
 	ConfigCADefaultValidity = "pki.ca_default_validity"
 	// ConfigCAMaxValidity bounds how long a CA certificate may be issued
-	// for, regardless of what a caller requests.
+	// for, regardless of what a caller requests: a NotAfter farther out
+	// than this from issuance is clamped to it (boundedNotAfter). Unset,
+	// defaultCAMaxValidity stands.
 	ConfigCAMaxValidity = "pki.ca_max_validity"
 	// ConfigCertificateDefaultValidity is how long an end-entity
 	// certificate is valid for when a caller does not specify one.
+	// IssueCertificate resolves it (boundedNotAfter); unset,
+	// defaultCertificateDefaultValidity stands.
 	ConfigCertificateDefaultValidity = "pki.certificate_default_validity"
 	// ConfigCertificateMaxValidity bounds how long an end-entity
-	// certificate may be issued for, regardless of what a caller requests.
+	// certificate may be issued for, regardless of what a caller requests:
+	// a NotAfter farther out than this from issuance is clamped to it
+	// (boundedNotAfter). Unset, defaultCertificateMaxValidity stands.
 	ConfigCertificateMaxValidity = "pki.certificate_max_validity"
 	// ConfigPropagationWindow is how long a newly staged pending key waits
-	// before the expiry scan promotes it to active -- see
-	// DefaultPropagationWindow.
+	// before the expiry scan promotes it to active -- the middle layer of
+	// the resolution chain, between a per-call override and the
+	// Service's construction-time value; see DefaultPropagationWindow.
 	ConfigPropagationWindow = "pki.propagation_window"
 	// ConfigRenewalLeadTime is how far ahead of a signing key's expiry the
-	// expiry scan stages its replacement -- see DefaultRenewalLeadTime.
+	// expiry scan stages its replacement -- resolved through the same
+	// chain as ConfigPropagationWindow; see DefaultRenewalLeadTime.
 	ConfigRenewalLeadTime = "pki.renewal_lead_time"
-	// ConfigCRLDistributionPoint is the default CRL distribution point URL
-	// a host may want to show or validate before passing it through
-	// CAParams.CRLDistributionPoint -- see this
-	// const block's own doc comment for why the module's code never reads
-	// it directly.
+	// ConfigCRLDistributionPoint is the CRL distribution point URL newly
+	// created authorities record when CAParams.CRLDistributionPoint is
+	// empty. CreateRootCA/CreateIntermediateCA read it at authority
+	// creation (crlDistributionPointFor); existing authority rows are
+	// never rewritten by a change to this item.
 	ConfigCRLDistributionPoint = "pki.crl_distribution_point"
-	// ConfigCRLValidity is how long a generated CRL claims to be current --
-	// see DefaultCRLValidity.
+	// ConfigCRLValidity is how long a generated CRL claims to be current.
+	// GenerateCRL reads it when its own validity argument is zero
+	// (crlValidityFor); unset, DefaultCRLValidity stands.
 	ConfigCRLValidity = "pki.crl_validity"
 )
 
-// Default validity periods backing the CA/certificate config items above.
-// No issuance method (CreateRootCA, CreateIntermediateCA, IssueCertificate)
-// reads these through the config schema: Register only declares the schema,
-// per pkgcore.Module.Register's own "must not perform I/O; it only
-// declares" contract, and pki carries no config.Service dependency to read
-// a live value with. A caller passes NotAfter directly (see
-// CAParams/CertificateParams); wiring the declared
-// config keys into that decision is the host's job.
+// Default validity periods backing the CA/certificate config items above:
+// the package constants the settings seam falls back to when no explicit
+// config row applies, and the values the declared schema defaults in
+// configItemDecls spell. The read points live in settings.go's
+// boundedNotAfter.
 //
-// ConfigPropagationWindow and ConfigRenewalLeadTime follow the identical
-// declare-but-do-not-read discipline: their defaults are
+// ConfigPropagationWindow and ConfigRenewalLeadTime's backing constants are
 // DefaultPropagationWindow and DefaultRenewalLeadTime (lifecycle.go), read
 // by NewModule (via WithPropagationWindow/WithRenewalLeadTime, or those
-// package defaults when the host passes neither) rather than through a live
-// config lookup, for the same reason -- no config.Service dependency exists
-// to read one with.
+// package defaults when the host passes neither) as the construction-time
+// layer their resolution chain falls back to.
 const (
 	defaultCADefaultValidity          = 10 * 365 * 24 * time.Hour
 	defaultCAMaxValidity              = 15 * 365 * 24 * time.Hour
@@ -289,6 +284,14 @@ type Module struct {
 	renewalLeadTime   time.Duration
 	expiryScanWindow  time.Duration
 
+	// settings is the reader the module's declared dynamic configuration
+	// items are resolved through at runtime (WithSettingsReader, or the
+	// descriptor's automatic wiring when a config component is assembled).
+	// It reaches the Service and CAService at construction, which is where
+	// the read sites are (settings.go). Nil is legal: every read falls back
+	// to the construction-time value.
+	settings SettingsReader
+
 	signingKeys  *SigningKeyRepository
 	authorities  *AuthorityRepository
 	certificates *CertificateRepository
@@ -344,13 +347,19 @@ func WithCacheTTL(ttl time.Duration) Option {
 // WithPropagationWindow overrides DefaultPropagationWindow: how long a
 // newly staged pending key waits before the expiry scan promotes it to
 // active. See lifecycle.go's "pending" state doc comment for why the wait
-// exists at all.
+// exists at all. The value is the construction-time layer of the
+// resolution chain a lifecycle operation applies: an explicit
+// pki.propagation_window config row, when the settings seam is wired,
+// supersedes it (settings.go's propagationWindowFor).
 func WithPropagationWindow(d time.Duration) Option {
 	return func(m *Module) { m.propagationWindow = d }
 }
 
 // WithRenewalLeadTime overrides DefaultRenewalLeadTime: how far ahead of a
-// signing key's expiry the expiry scan stages its replacement.
+// signing key's expiry the expiry scan stages its replacement. Like
+// WithPropagationWindow, the value is the construction-time layer an
+// explicit pki.renewal_lead_time config row supersedes (settings.go's
+// renewalLeadTimeFor).
 func WithRenewalLeadTime(d time.Duration) Option {
 	return func(m *Module) { m.renewalLeadTime = d }
 }
@@ -398,6 +407,11 @@ func NewModule(db *gorm.DB, opts ...Option) *Module {
 
 	m.service = NewService(m.signer, m.signerName, m.signingKeys, m.cacheTTL, m.propagationWindow, m.renewalLeadTime, m.expiryScanWindow)
 	m.ca = NewCAService(m.signer, m.signerName, m.authorities, m.certificates, m.revocations)
+	// The dynamic-configuration reader reaches the two services that carry
+	// the read sites, so WithSettingsReader's value is in force for the
+	// whole module regardless of the option order a host used.
+	m.service.settings = m.settings
+	m.ca.settings = m.settings
 	return m
 }
 

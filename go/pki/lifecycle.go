@@ -36,9 +36,13 @@ const DefaultPropagationWindow = 5 * DefaultCacheTTL
 const DefaultRenewalLeadTime = 30 * 24 * time.Hour
 
 // RotationConfig configures one ScanExpiry call. A zero value for either
-// field falls back to the Service's own configured default (the
-// propagationWindow/renewalLeadTime NewService, or Module's
-// WithPropagationWindow/WithRenewalLeadTime options, were built with).
+// field resolves through the Service's own chain (settings.go's
+// propagationWindowFor/renewalLeadTimeFor): the declared
+// pki.propagation_window / pki.renewal_lead_time config row (when a
+// settings reader is wired), then the construction-time value
+// (propagationWindow/renewalLeadTime at NewService, or Module's
+// WithPropagationWindow/WithRenewalLeadTime options), then the package
+// default.
 type RotationConfig struct {
 	// PropagationWindow overrides DefaultPropagationWindow for this call.
 	PropagationWindow time.Duration
@@ -75,20 +79,8 @@ type ScanReport struct {
 // any process, or verifies that a host's own rollout succeeded -- pushing
 // to any external system is never this module's job.
 func (s *Service) ScanExpiry(ctx context.Context, cfg RotationConfig) (ScanReport, error) {
-	propagationWindow := cfg.PropagationWindow
-	if propagationWindow <= 0 {
-		propagationWindow = s.propagationWindow
-	}
-	if propagationWindow <= 0 {
-		propagationWindow = DefaultPropagationWindow
-	}
-	renewalLeadTime := cfg.RenewalLeadTime
-	if renewalLeadTime <= 0 {
-		renewalLeadTime = s.renewalLeadTime
-	}
-	if renewalLeadTime <= 0 {
-		renewalLeadTime = DefaultRenewalLeadTime
-	}
+	propagationWindow := s.propagationWindowFor(ctx, cfg.PropagationWindow)
+	renewalLeadTime := s.renewalLeadTimeFor(ctx, cfg.RenewalLeadTime)
 
 	var report ScanReport
 
@@ -185,16 +177,13 @@ func (s *Service) PromoteDuePending(ctx context.Context, propagationWindow time.
 //
 // ErrKeyNotFound if purpose has no pending key at all.
 // ErrPropagationWindowNotElapsed if one exists but was staged less than
-// propagationWindow ago. A zero propagationWindow argument falls back to
-// s.propagationWindow (the Service's own configured default), the same
-// per-call-override-with-fallback shape ScanExpiry itself uses.
+// propagationWindow ago. A zero propagationWindow argument resolves
+// through the Service's own chain (settings.go's propagationWindowFor: the
+// declared pki.propagation_window row, then the construction-time value,
+// then DefaultPropagationWindow), the same per-call-override-with-fallback
+// shape ScanExpiry itself uses.
 func (s *Service) PromoteNow(ctx context.Context, purpose string, propagationWindow time.Duration) (string, error) {
-	if propagationWindow <= 0 {
-		propagationWindow = s.propagationWindow
-	}
-	if propagationWindow <= 0 {
-		propagationWindow = DefaultPropagationWindow
-	}
+	propagationWindow = s.propagationWindowFor(ctx, propagationWindow)
 
 	pendingRows, err := s.signingKeys.ListByPurposeAndStatuses(ctx, purpose, SigningKeyStatusPending)
 	if err != nil {

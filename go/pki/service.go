@@ -139,6 +139,12 @@ type Service struct {
 	// identical "a nil queue makes the schedule point fail with a plain
 	// error" contract for its own optional sweep.
 	queue jobs.Queue
+
+	// settings is the reader the module's declared dynamic configuration
+	// items are resolved through (settings.go), assigned at Module
+	// construction. Nil is legal: every read falls back to the
+	// construction-time value.
+	settings SettingsReader
 }
 
 // NewService returns a Service that creates keys through signer (recorded

@@ -151,6 +151,13 @@ type CAService struct {
 	// key covers (DefaultCRLRegenerateWindow; see that constant's doc
 	// comment for the window semantics and the sizing obligation).
 	crlRegenerateWindow time.Duration
+
+	// settings is the reader the module's declared dynamic configuration
+	// items (the CA/certificate validity bounds, the CRL distribution
+	// point default and the CRL validity period) are resolved through
+	// (settings.go), assigned at Module construction. Nil is legal: every
+	// read falls back to the construction-time or package value.
+	settings SettingsReader
 }
 
 // NewCAService returns a CAService that signs through signer (recorded on
@@ -212,17 +219,26 @@ type CAParams struct {
 	// intermediate's, whichever authority the call issues.
 	Subject pkix.Name
 	// NotAfter is when the issued CA certificate stops being valid.
-	// NotBefore is always time.Now() at issuance.
+	// NotBefore is always time.Now() at issuance. A zero value takes the
+	// declared pki.ca_default_validity (falling back to the package
+	// default the schema declares when no explicit row applies), and a
+	// request beyond pki.ca_max_validity is clamped to it -- the declared
+	// bounds apply "regardless of what the caller requests" (module.go's
+	// own item descriptions; settings.go's boundedNotAfter).
 	NotAfter time.Time
 	// CRLDistributionPoint is the URL this authority's own CRL will be
 	// served at, recorded on the resulting Authority row and read at
 	// issuance time by CreateIntermediateCA/IssueCertificate to populate
 	// each certificate THIS authority signs with a CRLDistributionPoints
-	// extension pointing back here. Empty means no extension is ever
-	// written into a child certificate, never a broken placeholder URL,
-	// matching every other unset-value convention this module already
-	// follows (see Authority.CRLDistributionPoint's own model.go doc
-	// comment for the full "child cert names ITS issuer's CRL" argument).
+	// extension pointing back here. Empty takes the declared
+	// pki.crl_distribution_point default when an explicit row applies
+	// (settings.go's crlDistributionPointFor, at the two Create calls --
+	// existing authority rows are never rewritten); when the value stays
+	// empty, no extension is ever written into a child certificate, never
+	// a broken placeholder URL, matching every other unset-value
+	// convention this module already follows (see
+	// Authority.CRLDistributionPoint's own model.go doc comment for the
+	// full "child cert names ITS issuer's CRL" argument).
 	// The root certificate's OWN CertificatePEM never carries this
 	// extension -- nothing signs the root, so it has no meaningful "my
 	// issuer's CRL" to name -- and an intermediate's own certificate
@@ -249,11 +265,12 @@ func (s *CAService) CreateRootCA(ctx context.Context, params CAParams) (*Authori
 	}
 
 	notBefore := time.Now().UTC()
+	notAfter := s.caCertificateNotAfter(ctx, notBefore, params.NotAfter)
 	template := &x509.Certificate{
 		SerialNumber:          serial,
 		Subject:               params.Subject,
 		NotBefore:             notBefore,
-		NotAfter:              params.NotAfter,
+		NotAfter:              notAfter,
 		IsCA:                  true,
 		BasicConstraintsValid: true,
 		KeyUsage:              x509.KeyUsageCertSign | x509.KeyUsageCRLSign,
@@ -276,8 +293,8 @@ func (s *CAService) CreateRootCA(ctx context.Context, params CAParams) (*Authori
 		KeyRef:               keyRef,
 		Status:               AuthorityStatusActive,
 		NotBefore:            notBefore,
-		NotAfter:             params.NotAfter,
-		CRLDistributionPoint: params.CRLDistributionPoint,
+		NotAfter:             notAfter,
+		CRLDistributionPoint: s.crlDistributionPointFor(ctx, params.CRLDistributionPoint),
 	}
 	if err := s.authorities.Create(ctx, authority); err != nil {
 		return nil, fmt.Errorf("pki: store root CA: %w", err)
@@ -389,11 +406,12 @@ func (s *CAService) CreateIntermediateCA(ctx context.Context, parentID string, p
 	}
 
 	notBefore := time.Now().UTC()
+	notAfter := s.caCertificateNotAfter(ctx, notBefore, params.NotAfter)
 	template := &x509.Certificate{
 		SerialNumber:          serial,
 		Subject:               params.Subject,
 		NotBefore:             notBefore,
-		NotAfter:              params.NotAfter,
+		NotAfter:              notAfter,
 		IsCA:                  true,
 		BasicConstraintsValid: true,
 		MaxPathLen:            0,
@@ -421,8 +439,8 @@ func (s *CAService) CreateIntermediateCA(ctx context.Context, parentID string, p
 		KeyRef:               keyRef,
 		Status:               AuthorityStatusActive,
 		NotBefore:            notBefore,
-		NotAfter:             params.NotAfter,
-		CRLDistributionPoint: params.CRLDistributionPoint,
+		NotAfter:             notAfter,
+		CRLDistributionPoint: s.crlDistributionPointFor(ctx, params.CRLDistributionPoint),
 	}
 	if err := s.authorities.Create(ctx, authority); err != nil {
 		return nil, fmt.Errorf("pki: store intermediate CA: %w", err)
@@ -444,7 +462,11 @@ type CertificateParams struct {
 	Subject pkix.Name
 	// DNSNames are the certificate's subject alternative names.
 	DNSNames []string
-	// NotAfter is when the certificate stops being valid.
+	// NotAfter is when the certificate stops being valid. A zero value
+	// takes the declared pki.certificate_default_validity (falling back to
+	// the package default the schema declares when no explicit row
+	// applies), and a request beyond pki.certificate_max_validity is
+	// clamped to it (settings.go's boundedNotAfter).
 	NotAfter time.Time
 }
 
@@ -496,12 +518,13 @@ func (s *CAService) IssueCertificate(ctx context.Context, authorityID string, pa
 	}
 
 	notBefore := time.Now().UTC()
+	notAfter := s.endEntityCertificateNotAfter(ctx, notBefore, params.NotAfter)
 	template := &x509.Certificate{
 		SerialNumber: serial,
 		Subject:      params.Subject,
 		DNSNames:     params.DNSNames,
 		NotBefore:    notBefore,
-		NotAfter:     params.NotAfter,
+		NotAfter:     notAfter,
 		IsCA:         false,
 		KeyUsage:     x509.KeyUsageDigitalSignature,
 	}
@@ -533,7 +556,7 @@ func (s *CAService) IssueCertificate(ctx context.Context, authorityID string, pa
 		Status:         CertificateStatusActive,
 		KeyDelivered:   false,
 		NotBefore:      notBefore,
-		NotAfter:       params.NotAfter,
+		NotAfter:       notAfter,
 	}
 	if err := s.certificates.Create(ctx, cert); err != nil {
 		return nil, fmt.Errorf("pki: store certificate: %w", err)

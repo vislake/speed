@@ -23,6 +23,13 @@ replace github.com/vislake/speed/go/dbkit => ../dbkit
 // standalone builds only.
 replace github.com/vislake/speed/go/pkgcore => ../pkgcore
 
+// go/config is required for the component descriptor's optional config-module
+// dependency and the settings seam's compile-time handle assertion, both of
+// which are unreleased surfaces, so this module resolves config from the
+// sibling checkout. A replace directive in a dependency is ignored by
+// consumers, so this affects this module's own standalone builds only.
+replace github.com/vislake/speed/go/config => ../config
+
 require (
 	github.com/BurntSushi/toml v1.6.0
 	github.com/aws/aws-sdk-go-v2 v1.45.1
@@ -32,6 +39,7 @@ require (
 	github.com/google/uuid v1.6.0
 	github.com/hashicorp/vault/api v1.23.0
 	github.com/oapi-codegen/runtime v1.7.0
+	github.com/vislake/speed/go/config v0.0.1
 	github.com/vislake/speed/go/dbkit v0.0.1
 	github.com/vislake/speed/go/jobs v0.0.1
 	github.com/vislake/speed/go/observability v0.0.1
@@ -115,6 +123,7 @@ require (
 	github.com/testcontainers/testcontainers-go/modules/postgres v0.44.0 // indirect
 	github.com/tklauser/go-sysconf v0.4.0 // indirect
 	github.com/tklauser/numcpus v0.12.0 // indirect
+	github.com/vislake/speed/go/ratelimit v0.0.1 // indirect
 	github.com/yusufpapurcu/wmi v1.2.4 // indirect
 	go.opentelemetry.io/auto/sdk v1.2.1 // indirect
 	go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp v0.69.0 // indirect

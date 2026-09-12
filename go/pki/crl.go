@@ -18,13 +18,13 @@ import (
 
 // DefaultCRLValidity is how long a generated CRL claims to be current
 // (NextUpdate - ThisUpdate) when GenerateCRL's own validity argument is
-// zero. A named package-level constant, not a config item read at call
-// time -- the module declares the validity period as a config item for
-// host visibility and resolves its default as this Go constant (module.go's
-// ConfigCRLValidity item documents why). Seven days is a deliberately short
-// refresh cadence for an internal CA that serves revocation through CRL
-// rather than an OCSP responder: a week keeps a verifier that caches its
-// last fetch from trusting a month-stale revocation list.
+// zero AND the declared pki.crl_validity item carries no explicit row (or
+// no settings reader is wired at all): the package-level constant backing
+// the declared item's schema default, which settings.go's crlValidityFor
+// resolves through. Seven days is a deliberately short refresh cadence for
+// an internal CA that serves revocation through CRL rather than an OCSP
+// responder: a week keeps a verifier that caches its last fetch from
+// trusting a month-stale revocation list.
 const DefaultCRLValidity = 7 * 24 * time.Hour
 
 // maxGenerateCRLAttempts is how many read-sign-persist rounds GenerateCRL
@@ -50,8 +50,10 @@ func encodeCRLPEM(der []byte) string {
 // key, and persists it onto the Authority row (CRLPEM/CRLNumber/
 // CRLIssuedAt/CRLNextUpdate).
 //
-// validity controls NextUpdate - ThisUpdate; a value <=0 falls back to
-// DefaultCRLValidity. CRLNumber (RFC 5280 §5.2.3) increases by exactly one
+// validity controls NextUpdate - ThisUpdate; a value <=0 resolves through
+// the declared pki.crl_validity item, falling back to DefaultCRLValidity
+// when no explicit row applies (settings.go's crlValidityFor).
+// CRLNumber (RFC 5280 §5.2.3) increases by exactly one
 // on every SUCCESSFUL call, including a call that finds zero revocations --
 // an empty CRL is still a valid, meaningfully-refreshed document (its
 // NextUpdate tells a verifier when to check again), never skipped just
@@ -86,9 +88,7 @@ func encodeCRLPEM(der []byte) string {
 // ErrSignerUnavailable -- see errors.go's own doc comment for the code's
 // full accounting.
 func (s *CAService) GenerateCRL(ctx context.Context, authorityID string, validity time.Duration) (*Authority, error) {
-	if validity <= 0 {
-		validity = DefaultCRLValidity
-	}
+	validity = s.crlValidityFor(ctx, validity)
 
 	// The read-sign-persist cycle runs inside this loop because the persist
 	// step is a guarded CAS: a call that loses it must not overwrite the
@@ -168,8 +168,10 @@ func (s *CAService) GenerateCRL(ctx context.Context, authorityID string, validit
 	}
 }
 
-// RegenerateAllCRLs runs GenerateCRL, with DefaultCRLValidity, for every
-// authority this deployment has -- the batch operation the registered
+// RegenerateAllCRLs runs GenerateCRL with a zero validity argument for
+// every authority this deployment has -- so each document resolves its
+// window through the declared pki.crl_validity item (DefaultCRLValidity
+// when no explicit row applies) -- the batch operation the registered
 // regeneration handler drives on a schedule (below) and a host may also
 // call directly for an on-demand, deployment-wide refresh. It is best-effort: one authority's
 // failure does not stop the others from being attempted, and every failure

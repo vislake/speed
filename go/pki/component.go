@@ -23,6 +23,7 @@ import (
 
 	"gorm.io/gorm"
 
+	"github.com/vislake/speed/go/config"
 	"github.com/vislake/speed/go/jobs"
 	"github.com/vislake/speed/go/pkgcore"
 
@@ -62,6 +63,15 @@ func component() pkgcore.Component {
 			// synchronous surface and only automatic rotation is
 			// unavailable, the shape WithQueue documents.
 			{Token: (*jobs.Queue)(nil), Optional: true},
+			// The configuration module, whose Handle this descriptor wires
+			// as the module's SettingsReader: the seam that makes pki's
+			// declared dynamic config items (the CA/certificate validity
+			// bounds, the CRL distribution point default, the CRL validity
+			// period and the two lifecycle rotation settings) effective at
+			// runtime. Optional -- a composition without a config module
+			// keeps every construction-time or package value, which is why
+			// the read sites all carry documented fallbacks (settings.go).
+			{Token: (*config.Module)(nil), Optional: true},
 		},
 		// The construction deliveries are the *Module plus the *Service
 		// baked into it -- the signing-key lifecycle authn's own
@@ -109,6 +119,19 @@ func component() pkgcore.Component {
 			}
 			if ok {
 				opts = append(opts, WithQueue(queue))
+			}
+			// The dynamic-configuration reader: the config module's lazy
+			// handle satisfies pki.SettingsReader structurally (the
+			// compile-time assertion in settings.go), and the handle
+			// exists from the config module's own construction, so wiring
+			// it here -- long before either module's reads ever run -- is
+			// a plain value capture, not a resolution.
+			cfgModule, ok, err := pkgcore.GetOptional[*config.Module](reg)
+			if err != nil {
+				return nil, err
+			}
+			if ok {
+				opts = append(opts, WithSettingsReader(cfgModule.Handle()))
 			}
 			m := NewModule(db, opts...)
 			// The Service is a construction value (NewModule builds it
