@@ -32,10 +32,9 @@
  */
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { test } from '@playwright/test'
 import { DEMO_OWNER } from './test-utils/accounts.js'
 import { RESTART_API_PORT } from '../playwright.config.js'
-import { bootServer, routeApiTo, type OwnedServer } from './test-utils/servers.js'
+import { bootServer, routeApiTo, test, type OwnedServer } from './test-utils/servers.js'
 import {
   expectSignedIn,
   submitPasswordSignIn,

@@ -12,8 +12,9 @@
  * server can produce is the surface's generic fallback -- the text a
  * response outside the client's mapped error codes degrades to. A wait
  * blind to that answer sits until the whole test budget is spent and
- * reports a timeout. This spec pins the three branches a journey cannot
- * otherwise prove cheaply:
+ * reports a timeout. This spec pins the four guards below -- three a
+ * journey cannot otherwise prove cheaply, and the one that is a
+ * property of the run rather than of any single test:
  *
  *   - the crash branch must NAME the crash it observed, not leave the
  *     missing control as the whole story;
@@ -23,15 +24,32 @@
  *     visibility: a control that is on screen but disabled (the
  *     case-create submit before its photo's upload settles) is exactly
  *     the shape that used to burn a whole test budget as a click
- *     timeout.
+ *     timeout;
+ *   - a route handler still fetching when its test ends must not fail
+ *     the run: page-level interception outlives the assertions it was
+ *     registered for, and Playwright reports a handler call still in
+ *     flight at context teardown as an unhandled error -- a red for a
+ *     test that had already passed, landing on whichever test the
+ *     worker happens to be running when it arrives. The teardown in
+ *     test-utils/servers.ts is what retires routes with their test; the
+ *     case below constructs the in-flight handler deterministically,
+ *     and its green is a run-level property (no unhandled error), so
+ *     the test itself asserts nothing. e2e/README.md records the shape
+ *     under "How a gate here has gone wrong".
  *
  * Nothing here touches the product: no navigation, no server surface,
  * no sign-in, so the spec runs in the default tier on every engine
  * without spending the login budget. What it drives is a blank page, a
- * fabricated alert, and the console messages a dying browser prints.
+ * fabricated alert, a listener that never answers, and the console
+ * messages a dying browser prints.
  */
-import { expect, test } from '@playwright/test'
+import { createServer, type AddressInfo } from 'node:net'
+import { expect } from '@playwright/test'
 import { DEMO_READER } from './test-utils/accounts.js'
+// This spec's fourth case registers a page route of its own, so it is
+// the routing-aware `test` -- the one whose fixture retires a test's
+// routes with the test (test-utils/servers.ts).
+import { test } from './test-utils/servers.js'
 import {
   AUTH_ERROR_TEXT,
   awaitSignInAnswer,
@@ -130,4 +148,47 @@ test('the enabled guard is satisfied by enablement, not by visibility', async ({
     element.disabled = false
   })
   await settled
+})
+
+test('a route still fetching when the test ends does not fail the run', async ({ page }) => {
+  // The in-flight handler is constructed, not raced. A TCP listener
+  // that accepts a connection and never answers holds the handler's
+  // route.fetch open for as long as this test needs it to be -- the
+  // state the app reaches on a slow enough sign-in is reached here on
+  // every run, on every engine.
+  //
+  // It is unref'd and never closed: the process must be free to exit
+  // with the listener still up, exactly as it is free to exit with the
+  // request still pending.
+  const neverAnswers = createServer(() => {})
+  neverAnswers.unref()
+  const port = await new Promise<number>((resolve) => {
+    neverAnswers.listen(0, '127.0.0.1', () => {
+      resolve((neverAnswers.address() as AddressInfo).port)
+    })
+  })
+  const url = `http://127.0.0.1:${port}/api/v1/authn/me/preferences`
+
+  let intercepted: () => void = () => {}
+  const handlerStarted = new Promise<void>((resolve) => {
+    intercepted = resolve
+  })
+
+  await page.route(url, async (route) => {
+    intercepted()
+    const response = await route.fetch()
+    await route.fulfill({ response })
+  })
+
+  // Fired the way the app fires its own background reads: nothing the
+  // test asserts on waits for it, so the test body ends with the
+  // handler mid-fetch. From here the outcome belongs to the harness --
+  // the route has to be retired by the teardown that ends this test
+  // (test-utils/servers.ts), not by the context being torn out from
+  // under it.
+  await page.setContent('<p>probe</p>')
+  await page.evaluate((target) => {
+    void fetch(target, { mode: 'no-cors' }).catch(() => {})
+  }, url)
+  await handlerStarted
 })

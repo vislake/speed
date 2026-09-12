@@ -34,11 +34,13 @@
  * it makes a generation fail and then asks the product what it did about
  * the money.
  */
-import { expect, test } from '@playwright/test'
+import { expect } from '@playwright/test'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { REFUND_API_PORT, REFUSING_IMAGE_PORT } from '../playwright.config.js'
-import { bootImageProvider, bootServer, routeApiTo } from './test-utils/servers.js'
+// routeApiTo's interception is retired with the test -- this module's
+// own `test` fixture, not the context torn out from under it.
+import { bootImageProvider, bootServer, routeApiTo, test } from './test-utils/servers.js'
 import { DEMO_OWNER } from './test-utils/accounts.js'
 import {
   expectSignedIn,

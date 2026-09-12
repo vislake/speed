@@ -1,5 +1,6 @@
 /**
- * Booting a reference-app server that one spec owns.
+ * Booting a reference-app server that one spec owns, and the `test` a
+ * spec uses when it intercepts the page's network.
  *
  * Two journeys need a server of their own rather than the one
  * playwright.config.ts starts for the whole run, and for the same
@@ -16,9 +17,19 @@
  * The boot-and-wait routine lives here, shared by the two journeys, so
  * its failure diagnosis is written once rather than copied between
  * specs -- two copies would drift in exactly the way that costs a day.
+ *
+ * routeApiTo below is how a spec's page reaches a server of its own,
+ * and it is why this module also owns the `test` export: an
+ * interception is state that has to end with the test that registered
+ * it, because the product keeps making requests of its own (a signed-in
+ * frame reads its data) while a spec's last assertion settles -- so
+ * "the assertions are done" and "nothing is in flight" are different
+ * moments. The `test` export carries that retirement; its own comment
+ * says what happens without it.
  */
 import { spawn, type ChildProcess } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
+import { test as base, type Page } from '@playwright/test'
 import { DEMO_PASSWORD } from '../../playwright.config.js'
 
 /** The reference-app Go module directory. */
@@ -199,10 +210,7 @@ export async function bootImageProvider(options: {
  * would render "No network connection", which reads exactly like the
  * defect a gate is looking for on an engine where nothing is wrong.
  */
-export async function routeApiTo(
-  page: import('@playwright/test').Page,
-  port: string,
-): Promise<void> {
+export async function routeApiTo(page: Page, port: string): Promise<void> {
   await page.route('**/api/**', async (route) => {
     const url = new URL(route.request().url())
     url.protocol = 'http:'
@@ -211,3 +219,57 @@ export async function routeApiTo(
     await route.fulfill({ response })
   })
 }
+
+/**
+ * The suite's own `test`, for every spec that intercepts the page's
+ * network. It is `@playwright/test`'s, extended with one automatic
+ * fixture: a test's routes are retired when that test ends.
+ *
+ * WHY A FIXTURE AND NOT A LINE AT THE END OF EACH SPEC
+ *
+ * A route handler is resolved by Playwright for every matching request,
+ * and a handler call can still be awaiting route.fetch() at the moment
+ * its test ends -- the product keeps making background requests while
+ * the spec's last assertion settles, so the spec cannot know whether
+ * one is in flight without waiting on requests it does not care about.
+ * At test end the context is closed, that pending fetch is aborted with
+ * a target-closed error, and the runner reports the handler's rejection
+ * as an unhandled error: the run goes red for a test that had already
+ * passed, and the red lands on whichever test the worker happens to be
+ * running when the error arrives. Nothing about that red is about the
+ * product, and nothing in the spec that forgot a teardown line would
+ * say so.
+ *
+ * `page.unrouteAll({ behavior: 'ignoreErrors' })` is Playwright's own
+ * answer to this shape ("all errors thrown by the handlers after
+ * unrouting are silently caught"). Running it as an automatic fixture
+ * is what makes it unmissable: it applies to every test in a file that
+ * imports this `test`, whether or not that test called routeApiTo, and
+ * a spec that adds a page.route of its own is covered without knowing
+ * the fixture exists.
+ *
+ * WHY IT CANNOT WEAKEN A GATE
+ *
+ * Fixture teardown runs after the test body and after its hooks, once
+ * the test's result is decided: the assertions have already spoken, so
+ * there is no assertion left for it to relax, and no failure it can
+ * turn green -- a test that failed keeps its failure. What it stops
+ * reporting is the one error that is ABOUT the harness rather than
+ * about anything the test drove.
+ *
+ * The page is left alone when it is already closed: a page or context
+ * disposed underneath a running test has taken its interception with
+ * it, and asking again can only add a second error to a report whose
+ * first error is the one worth reading.
+ */
+export const test = base.extend<{ routesEndWithTheTest: void }>({
+  routesEndWithTheTest: [
+    async ({ page }, use) => {
+      await use()
+      if (!page.isClosed()) {
+        await page.unrouteAll({ behavior: 'ignoreErrors' })
+      }
+    },
+    { auto: true },
+  ],
+})

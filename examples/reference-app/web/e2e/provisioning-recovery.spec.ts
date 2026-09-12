@@ -33,11 +33,13 @@
  * assertions is what makes this a gate about recovery rather than about
  * registration.
  */
-import { expect, test } from '@playwright/test'
+import { expect } from '@playwright/test'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { INJECT_API_PORT } from '../playwright.config.js'
-import { bootServer, routeApiTo } from './test-utils/servers.js'
+// routeApiTo's interception is retired with the test -- this module's
+// own `test` fixture, not the context torn out from under it.
+import { bootServer, routeApiTo, test } from './test-utils/servers.js'
 import {
   APP_TEXT,
   expectOutsideDemoOrganizations,

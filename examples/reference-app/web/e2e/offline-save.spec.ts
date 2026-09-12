@@ -27,8 +27,12 @@
  * the suite's backend happens to be run -- and so it works identically
  * against a local server and against a real deployment.
  */
-import { expect, test } from '@playwright/test'
+import { expect } from '@playwright/test'
 import { DEMO_OWNER } from './test-utils/accounts.js'
+// Both tests cut the network with a page route, so they are the
+// routing-aware `test` -- the one whose fixture retires a test's routes
+// with the test (test-utils/servers.ts).
+import { test } from './test-utils/servers.js'
 import { APP_TEXT, openSurface, signInAs } from './test-utils/journeys.js'
 
 /** What a clinician must be told, in substance rather than in wording. */

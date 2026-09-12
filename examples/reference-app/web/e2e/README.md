@@ -574,6 +574,22 @@ scanner sees because it walks the tree rather than the index. Where an
 authoritative tool exists, a quick check can locate but must not
 conclude.
 
+**A red the harness produced after the test had passed.** A page-level
+route is state that outlives the assertions it was registered for: the
+app keeps reading its own data while a spec's last wait settles, so a
+handler can still be mid-`route.fetch()` at the moment the test ends.
+The context is closed at test end, that fetch is aborted with a
+target-closed error, and the runner reports the handler's rejection as
+an unhandled error -- a red on a run whose every test passed, landing
+on whichever test the worker happened to be running when the error
+arrived. `page.unrouteAll({ behavior: 'ignoreErrors' })` is Playwright's
+own answer for the shape, and test-utils/servers.ts carries it as the
+automatic fixture on its `test` export, so it applies to every test in
+a file that registers a route. The teardown runs after the test's
+result is decided, which is why it cannot turn a failure green: what it
+stops reporting is the one error that is about the harness rather than
+about anything the test drove.
+
 **A gate that runs nowhere.** One test skipped itself unless
 `E2E_BASE_URL` was set and did not carry `@deployment`, so the
 deployment run filtered it out and the local run skipped it. Excluded at
@@ -759,10 +775,10 @@ table -- read the file when it matters.
 | `deployment-serves-the-app.spec.ts` | The address serves the app, mounts it, and loads without a failed asset |
 | `offered-channels-work.spec.ts` | A channel the product offers either works or says why it cannot |
 | `core-journey.pending.spec.ts` | The product's reason to exist, in four blocks: case and photo, generate and compare, share with the patient, what it cost |
-| `harness-failure-guards.spec.ts` | The suite's own failure guards: a browser crash and a lost session are named by the wait they stopped; the enabled-state wait is satisfied by enablement, not visibility |
+| `harness-failure-guards.spec.ts` | The suite's own failure guards: a browser crash and a lost session are named by the wait they stopped; the enabled-state wait is satisfied by enablement, not visibility; a route still fetching when its test ends does not fail the run |
 | `test-utils/accounts.ts` | The seeded demo accounts and the grants each one carries |
 | `test-utils/journeys.ts` | Shared journey steps and every en-US string the specs assert on |
-| `test-utils/servers.ts` | Booting a server one spec owns, for the specs whose subject is a server's own lifecycle or configuration |
+| `test-utils/servers.ts` | Booting a server one spec owns, for the specs whose subject is a server's own lifecycle or configuration; and the `test` whose fixture retires a test's routes with the test |
 | `test-utils/invitations.ts` | Setting up a real invitation, including reading its token from the mail the server prints |
 | `test-utils/fake-image-provider.mjs` | The stand-in for the vendor the smile simulation calls, with a refusal mode |
 
