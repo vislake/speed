@@ -91,15 +91,15 @@
 // tenant half of the WHERE clause injected by dbkit's tenant-scoping
 // plugin, never written by hand (the semgrep handwritten-tenant-id-filter
 // rule stays silent), and no query reaches a raw bypass entry point
-// (.Table/.Model/.Raw -- the raw-gorm-bypass rule stays silent; the only
-// imperative SQL is the CREATE TABLE IF NOT EXISTS schema bootstrap, the
-// same EnsureSchema shape smilesim's stores use, executed through Exec
-// like theirs). Both repositories run the mandatory tenancytest.AssertIsolated
-// suite (repository_test.go). Table creation follows the app's CREATE
-// TABLE IF NOT EXISTS pattern (the precedent internal/smilesim's
-// simulation_store.go sets and documents), not dbkit.MigrationRegistry:
-// these tables are bookkeeping specific to one reference-app package,
-// with no other consumer and nothing shipped to a consuming project.
+// (.Table/.Model/.Raw -- the raw-gorm-bypass rule stays silent: the
+// package's SQL lives in its migration set, never in a query). Both
+// repositories run the mandatory tenancytest.AssertIsolated suite
+// (repository_test.go). The two tables and their three lookup indexes are
+// the domain's versioned migrations (internal/cases/migrations), carried
+// by the "cases" component (component.go) and applied by the database
+// component during the assembly's Verify stage -- the same
+// dbkit.ApplyMigrations path every module's schema takes, so this app's
+// own bookkeeping tables are versioned, ledgered schema like the rest.
 //
 // # Known limitations
 //

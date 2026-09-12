@@ -48,10 +48,11 @@ const MaxAttestedBytes = 20 << 20
 // account).
 //
 // The zero value is not ready to use; construct one with NewService. A
-// Service is usable only after its two boot steps have run, in order:
-// EnsureSchema (the app table) and EnsureAuthorityChain (the app's CA
-// chain in pki_authorities, once per database); cmd/server runs both at
-// every boot, right after the assembly's declaration turn applied pki's migrations.
+// Service is usable only after its one boot step has run:
+// EnsureAuthorityChain (the app's CA chain in pki_authorities, once per
+// database); cmd/server runs it at every boot, right after the assembly's
+// Verify stage applied the attestation module's own migrations (the
+// attestations table) and pki's.
 type Service struct {
 	db *gorm.DB
 
@@ -85,8 +86,11 @@ type Service struct {
 // through chain, reads its own tenant certificate rows through
 // certificates, opens output bytes through content and persists
 // attestations in store. Constructing one performs no I/O; call
-// EnsureSchema and EnsureAuthorityChain once each, before first use
-// (internal/app's wiring does this at every boot).
+// EnsureAuthorityChain once before first use (internal/app's wiring does
+// this at every boot), and the attestations table exists once the
+// attestation module's migrations have been applied (the host's
+// attestation component carries them, and the assembly's Verify stage
+// applies them at every boot).
 func NewService(chain *pki.CAService, certificates *pki.CertificateRepository, content ContentOpener, store *AttestationStore, db *gorm.DB) *Service {
 	return &Service{
 		chain:        chain,
@@ -95,14 +99,6 @@ func NewService(chain *pki.CAService, certificates *pki.CertificateRepository, c
 		store:        store,
 		db:           db,
 	}
-}
-
-// EnsureSchema creates the attestations table and its index if they do
-// not already exist -- see AttestationStore.EnsureSchema. Call it once,
-// before any attestation runs (internal/app's wiring does this at every
-// boot, immediately before EnsureAuthorityChain).
-func (s *Service) EnsureSchema(ctx context.Context) error {
-	return s.store.EnsureSchema(ctx)
 }
 
 // EnsureAuthorityChain makes sure this database carries the app's CA

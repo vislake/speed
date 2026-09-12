@@ -9,64 +9,6 @@ import (
 	"github.com/vislake/speed/go/dbkit"
 )
 
-// createCasesTableSQL is executed imperatively, with a plain CREATE TABLE
-// IF NOT EXISTS -- the exact bootstrapping pattern smilesim's stores use
-// and document (see internal/smilesim/simulation_store.go's
-// createSimulationsTableSQL doc comment for why this app's own bookkeeping
-// tables do not go through dbkit.MigrationRegistry's cross-module
-// machinery; the package doc comment's "House discipline" section restates
-// it for this package). The statement is portable across both dbkit
-// dialects like its sibling: VARCHAR/TIMESTAMP columns,
-// application-generated ids, no PostgreSQL- or SQLite-specific syntax. The
-// column set and types match the GORM model tags in model.go exactly.
-const createCasesTableSQL = `CREATE TABLE IF NOT EXISTS ` + casesTable + ` (
-	id              VARCHAR(36)  NOT NULL PRIMARY KEY,
-	tenant_id       VARCHAR(64)  NOT NULL,
-	patient_name    VARCHAR(200) NOT NULL,
-	patient_ref     VARCHAR(64)  NOT NULL DEFAULT '',
-	creator_user_id VARCHAR(64)  NOT NULL DEFAULT '',
-	created_at      TIMESTAMP    NOT NULL
-)`
-
-// createCasePhotosTableSQL is case_photos' sibling of
-// createCasesTableSQL -- same imperative CREATE TABLE IF NOT EXISTS, same
-// dual-dialect-portable shapes, same exact match to casePhotoRecord's model
-// tags. position is an INTEGER because it is a number, and "position" is a
-// non-reserved word on both dialects (it is a function name in
-// PostgreSQL's grammar, never a keyword a column cannot use).
-const createCasePhotosTableSQL = `CREATE TABLE IF NOT EXISTS ` + casePhotosTable + ` (
-	id         VARCHAR(36) NOT NULL PRIMARY KEY,
-	tenant_id  VARCHAR(64) NOT NULL,
-	case_id    VARCHAR(36) NOT NULL,
-	object_id  VARCHAR(64) NOT NULL,
-	position   INTEGER     NOT NULL,
-	created_at TIMESTAMP   NOT NULL
-)`
-
-// createCasesTenantListIndexSQL is the lookup index behind
-// Service.List's clinic-wide enumeration -- every case of one tenant,
-// newest first. Kept as its own statement (CREATE INDEX IF NOT EXISTS is
-// accepted by both SQLite and PostgreSQL) because indexes cannot be
-// declared portably inside the CREATE TABLE statements above, and the
-// model tags' index declarations only matter to AutoMigrate, which this
-// app never runs. The tenant-wide newest-first read is the query the
-// clinic's list runs: it is tenant-scoped, never creator-scoped, so
-// (tenant_id, created_at) is the lookup the read needs.
-const createCasesTenantListIndexSQL = `CREATE INDEX IF NOT EXISTS idx_cases_tenant_created ON ` + casesTable + ` (tenant_id, created_at DESC)`
-
-// createCasePhotosCaseIndexSQL is the lookup index behind listing one
-// case's photos, ordered by position. It also backs the
-// (tenant_id, case_id, position) scan order of the detail read.
-const createCasePhotosCaseIndexSQL = `CREATE INDEX IF NOT EXISTS idx_case_photos_tenant_case ON ` + casePhotosTable + ` (tenant_id, case_id)`
-
-// createCasePhotosObjectUniqueIndexSQL is the uniqueness index behind the
-// "one tenant, one case per photo object" rule: within a tenant, an object
-// id may be attached to at most one case (casePhotoRecord's own doc
-// comment and the package doc comment's "Shape decision" section give the
-// reasoning). It is UNIQUE where the other two are plain indexes because
-// it enforces a domain rule, not merely a lookup shape.
-const createCasePhotosObjectUniqueIndexSQL = `CREATE UNIQUE INDEX IF NOT EXISTS uq_case_photos_tenant_object ON ` + casePhotosTable + ` (tenant_id, object_id)`
-
 // Repository is cases' tenant-scoped data-access type. It embeds
 // dbkit.Repository[caseRecord] instead of holding a *gorm.DB directly
 // (the multi-tenant isolation discipline) --
@@ -117,36 +59,17 @@ type Repository struct {
 // NewRepository returns a Repository backed by db. db is expected to come
 // from dbkit.Open (directly, or through dbkit/dbtest in tests) -- see
 // dbkit.Repository's own doc comment for why db is expected to come from
-// Open specifically. It performs no I/O; call EnsureSchema once before
-// first use.
+// Open specifically. It performs no I/O; the two tables and their three
+// lookup indexes are this domain's migrations (internal/cases/migrations),
+// which the assembly applies before anything can query -- the cases
+// component carries the set and the database component applies it during
+// the Verify stage. Tests apply the same set through dbtest.Migrate.
 func NewRepository(db *gorm.DB) *Repository {
 	return &Repository{
 		Repository: dbkit.NewRepository[caseRecord](db),
 		photos:     dbkit.NewRepository[casePhotoRecord](db),
 		db:         db,
 	}
-}
-
-// EnsureSchema creates both tables and their three lookup indexes if they
-// do not already exist -- see the CREATE statements' own doc comments for
-// why this is a plain, idempotent CREATE rather than a versioned
-// dbkit.MigrationRegistry migration. Call it once, before any Service
-// method ever runs (internal/app's own wiring does this alongside the
-// smilesim stores' EnsureSchema calls).
-func (r *Repository) EnsureSchema(ctx context.Context) error {
-	statements := []string{
-		createCasesTableSQL,
-		createCasePhotosTableSQL,
-		createCasesTenantListIndexSQL,
-		createCasePhotosCaseIndexSQL,
-		createCasePhotosObjectUniqueIndexSQL,
-	}
-	for _, statement := range statements {
-		if err := r.db.WithContext(ctx).Exec(statement).Error; err != nil {
-			return err
-		}
-	}
-	return nil
 }
 
 // createCaseWithPhotos inserts the case row and all of its photo rows in

@@ -430,9 +430,10 @@ type Service struct {
 // through entitlements before any credit reservation opens (nil is legal --
 // Simulate then skips the pre-flight; see Service's own doc comment on the
 // entitlements field for why a wired one must be the very seam gateway was
-// built with). Constructing one performs no I/O; call each store's own
-// EnsureSchema once, separately, before first use (internal/app's wiring does
-// this).
+// built with). Constructing one performs no I/O; both stores' tables exist
+// once the domain's migrations have been applied (internal/smilesim/
+// component.go carries them, and the assembly's Verify stage applies them
+// at every boot).
 func NewService(gateway *aigateway.Gateway, credits *billing.CreditService, bus pkgcore.EventBus, queue jobs.Queue, store *ReservationStore, simulations *SimulationStore, entitlements aigateway.Entitlements) *Service {
 	return &Service{
 		gateway:      gateway,

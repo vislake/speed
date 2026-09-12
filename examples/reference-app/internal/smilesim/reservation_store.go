@@ -33,26 +33,6 @@ const creditReservationsTable = "smilesim_credit_reservations"
 // settled real reservation.
 const orphanRefundJobIDPrefix = "smilesim-orphan:"
 
-// createCreditReservationsTableSQL is executed imperatively, with a plain
-// CREATE TABLE IF NOT EXISTS, the same bootstrapping pattern go/jobs' own
-// jobRecord uses for its jobsTable (see go/jobs/store.go's
-// createJobsTableSQL doc comment) rather than going through
-// dbkit.MigrationRegistry's cross-module, Atlas-generated, versioned
-// migration machinery: this table is an implementation detail specific to
-// this one reference-app package's own bookkeeping, with no other
-// consumer and nothing shipped to a consuming project, so routing it
-// through the machinery built for schema that ships and evolves across
-// modules would be disproportionate. The statement is written to be
-// portable across both dbkit dialects anyway (VARCHAR/TIMESTAMP,
-// application-generated ids, no PostgreSQL- or SQLite-specific syntax),
-// even though only SQLite is exercised by this app today.
-const createCreditReservationsTableSQL = `CREATE TABLE IF NOT EXISTS ` + creditReservationsTable + ` (
-	job_id     VARCHAR(64) NOT NULL PRIMARY KEY,
-	tenant_id  VARCHAR(64) NOT NULL,
-	credit_key VARCHAR(128) NOT NULL,
-	created_at TIMESTAMP NOT NULL
-)`
-
 // creditReservation is the durable record of one credit reservation
 // Simulate opened and that no settlement driver has yet acted on -- the
 // terminal signal's subscriber, the poll-driven leg or the reconciliation
@@ -126,20 +106,13 @@ type ReservationStore struct {
 // NewReservationStore returns a ReservationStore backed by db, expected to
 // come from dbkit.Open (directly, or through dbkit/dbtest in tests) --
 // mirroring go/jobs.NewStandaloneQueue's own doc comment on why. It
-// performs no I/O; call EnsureSchema once before first use.
+// performs no I/O; the table is this domain's migrations
+// (internal/smilesim/migrations), which the assembly applies before
+// anything can write -- the smilesim component carries the set and the
+// database component applies it during the Verify stage. Tests apply the
+// same set through dbtest.Migrate.
 func NewReservationStore(db *gorm.DB) *ReservationStore {
 	return &ReservationStore{db: db}
-}
-
-// EnsureSchema creates ReservationStore's table if it does not already
-// exist -- see createCreditReservationsTableSQL's own doc comment for why
-// this is a plain, idempotent CREATE TABLE rather than a versioned
-// dbkit.MigrationRegistry migration. Call it once, before Simulate or
-// NotifyOnCompletion ever runs (internal/app's own wiring does this
-// immediately after opening the shared database, alongside the other
-// modules' migrationRegistry.Apply call).
-func (s *ReservationStore) EnsureSchema(ctx context.Context) error {
-	return s.db.WithContext(ctx).Exec(createCreditReservationsTableSQL).Error
 }
 
 // save durably records that jobID's reservation, opened under tenant and

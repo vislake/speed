@@ -21,8 +21,9 @@ import (
 // tenant-scoping plugin from the ctx tenant -- never written by hand.
 //
 // The zero value is not ready to use; construct one with
-// NewAttestationStore. EnsureSchema must run once before first use
-// (internal/app's wiring calls it at every boot).
+// NewAttestationStore. The table behind it is the attestation module's
+// migrations (internal/attestation/migrations), applied by the assembly
+// before anything can read or write.
 type AttestationStore struct {
 	*dbkit.Repository[attestationRecord]
 
@@ -34,23 +35,14 @@ type AttestationStore struct {
 }
 
 // NewAttestationStore returns an AttestationStore backed by db, expected
-// to come from dbkit.Open. It performs no I/O; call EnsureSchema once
-// before first use.
+// to come from dbkit.Open. It performs no I/O; the table and its
+// per-tenant newest-row index are the attestation module's migrations
+// (internal/attestation/migrations), which the assembly applies before
+// anything can attest -- the host's attestation component carries the set
+// and the database component applies it during the Verify stage. Tests
+// apply the same set through dbtest.Migrate.
 func NewAttestationStore(db *gorm.DB) *AttestationStore {
 	return &AttestationStore{Repository: dbkit.NewRepository[attestationRecord](db), db: db}
-}
-
-// EnsureSchema creates the attestations table and its per-tenant
-// newest-row index if they do not already exist -- see
-// createAttestationsTableSQL's own doc comment for why this is a plain,
-// idempotent CREATE rather than a versioned dbkit.MigrationRegistry
-// migration. Call it once, before any attestation read or write runs
-// (internal/app's wiring does this at every boot).
-func (s *AttestationStore) EnsureSchema(ctx context.Context) error {
-	if err := s.db.WithContext(ctx).Exec(createAttestationsTableSQL).Error; err != nil {
-		return err
-	}
-	return s.db.WithContext(ctx).Exec(createAttestationsTenantCreatedIndexSQL).Error
 }
 
 // getByObject returns ctx's tenant's attestation row for objectID, and

@@ -240,49 +240,36 @@ func (b *serverBuild) runPostBootstrap(ctx context.Context, reg *pkgcore.Compone
 // handlers is the queue component's own Start. The host's post-attach
 // component calls it.
 func (b *serverBuild) runPostAttach(ctx context.Context, view assemblyView) error {
-	// The attestation layer's two boot steps run here, after the assembly (the
-	// pki migrations the CA chain's pki_authorities rows live in were
+	// The attestation layer's boot step runs here, after the assembly (the
+	// attestation module's own migrations -- the attestations table -- and
+	// the pki migrations the CA chain's pki_authorities rows live in were
 	// applied there) and before any request can reach the surfaces that
-	// attest or gate: EnsureSchema creates the app table, and
-	// EnsureAuthorityChain creates -- once per database, idempotently, by
-	// the chain's fixed subject names -- the app's root and issuing
-	// intermediate authorities. A failure stops the boot: an app whose AI
-	// outputs cannot be attested must not start serving shares of them.
-	if err := b.attestationService.EnsureSchema(ctx); err != nil {
-		return fmt.Errorf("reference-app: ensure attestation schema: %w", err)
-	}
+	// attest or gate: EnsureAuthorityChain creates -- once per database,
+	// idempotently, by the chain's fixed subject names -- the app's root
+	// and issuing intermediate authorities. A failure stops the boot: an
+	// app whose AI outputs cannot be attested must not start serving shares
+	// of them.
 	if err := b.attestationService.EnsureAuthorityChain(ctx); err != nil {
 		return fmt.Errorf("reference-app: ensure the attestation CA chain: %w", err)
 	}
 
-	// smileSimReservationStore shares this app's own db connection and gets
-	// its own tiny table created imperatively via EnsureSchema, mirroring
-	// go/jobs.StandaloneQueue's own "create the persistence schema if it
-	// does not already exist" pattern rather than joining the migration
-	// registry (reservation_store.go's own doc comment). The simulation
-	// store is the per-photo result index, same EnsureSchema-before-first-
-	// use shape.
+	// The two smilesim stores share this app's own db connection; their
+	// tables are the smilesim component's migrations, applied at the
+	// assembly's Verify stage, so this step constructs the stores only:
+	// the reservation store is the durable credit-reservation ledger and
+	// the simulation store the per-photo result index.
 	smileSimReservationStore := smilesim.NewReservationStore(b.db)
-	if err := smileSimReservationStore.EnsureSchema(ctx); err != nil {
-		return fmt.Errorf("reference-app: ensure smilesim credit reservation schema: %w", err)
-	}
 	smileSimulationStore := smilesim.NewSimulationStore(b.db)
-	if err := smileSimulationStore.EnsureSchema(ctx); err != nil {
-		return fmt.Errorf("reference-app: ensure smilesim simulation index schema: %w", err)
-	}
 
 	// The last argument is gatewayEntitlements -- the same adapter instance
 	// aiGatewayModule's WithEntitlements gate runs -- so Simulate can
 	// pre-flight the model-access gate before its credit reservation opens.
 	b.smileSimService = smilesim.NewService(b.aiGatewayModule.Gateway(), b.billingModule.Credits(), view.bus, b.standaloneQueue, smileSimReservationStore, smileSimulationStore, b.gatewayEntitlements)
 
-	// The case domain's repository shares this app's own db connection and
-	// creates its two tiny tables imperatively via EnsureSchema -- the same
-	// CREATE TABLE IF NOT EXISTS pattern the smilesim stores above use.
+	// The case domain's repository shares this app's own db connection; its
+	// two tables are the cases component's migrations, applied at the
+	// assembly's Verify stage.
 	b.caseRepository = cases.NewRepository(b.db)
-	if err := b.caseRepository.EnsureSchema(ctx); err != nil {
-		return fmt.Errorf("reference-app: ensure cases schema: %w", err)
-	}
 
 	// The ai-gateway platform credentials: written only when the matching
 	// API key is set (an empty default is the zero-setup posture).

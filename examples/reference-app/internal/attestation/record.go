@@ -9,30 +9,6 @@ import (
 // attestationsTable is this package's persisted table name.
 const attestationsTable = "smilesim_attestations"
 
-// createAttestationsTableSQL is executed imperatively, with a plain CREATE
-// TABLE IF NOT EXISTS -- the exact bootstrapping pattern
-// internal/smilesim's own stores use and document (simulation_store.go's
-// createSimulationsTableSQL: this app's own bookkeeping tables do not go
-// through dbkit.MigrationRegistry's cross-module machinery). The statement
-// is portable across both dbkit dialects: VARCHAR/TIMESTAMP columns,
-// application-generated values, no PostgreSQL- or SQLite-specific syntax.
-// The column set and types match the GORM model tags below exactly.
-const createAttestationsTableSQL = `CREATE TABLE IF NOT EXISTS ` + attestationsTable + ` (
-	object_id      VARCHAR(64)  NOT NULL PRIMARY KEY,
-	tenant_id      VARCHAR(64)  NOT NULL,
-	certificate_id VARCHAR(36)  NOT NULL,
-	message        VARCHAR(512) NOT NULL,
-	signature      VARCHAR(256) NOT NULL,
-	created_at     TIMESTAMP    NOT NULL
-)`
-
-// createAttestationsTenantCreatedIndexSQL backs latestCertificate's
-// per-tenant newest-row lookup (store.go). Kept as its own statement
-// (CREATE INDEX IF NOT EXISTS is accepted by both SQLite and PostgreSQL)
-// because the composite index cannot be declared portably inside the
-// CREATE TABLE above.
-const createAttestationsTenantCreatedIndexSQL = `CREATE INDEX IF NOT EXISTS idx_smilesim_attestations_tenant_created ON ` + attestationsTable + ` (tenant_id, created_at)`
-
 // attestationRecord is the durable record of one output's attestation:
 // that the platform vouches for the bytes of objectID (a go/storage object
 // id) under the tenant, by certificateID, at the moment created_at

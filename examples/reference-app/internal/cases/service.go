@@ -188,9 +188,10 @@ type Service struct {
 	repo *Repository
 }
 
-// NewService returns a Service backed by repo (whose EnsureSchema the
-// caller must have run once -- internal/app's wiring does this). Constructing
-// one performs no I/O.
+// NewService returns a Service backed by repo. Constructing one performs
+// no I/O; the tables behind repo exist once the domain's migrations have
+// been applied (internal/cases/component.go carries them, and the
+// assembly's Verify stage applies them at every boot).
 func NewService(repo *Repository) *Service {
 	return &Service{repo: repo}
 }

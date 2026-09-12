@@ -15,30 +15,6 @@ import (
 // simulationsTable is SimulationStore's persisted table name.
 const simulationsTable = "smilesim_simulations"
 
-// createSimulationsTableSQL is executed imperatively, with a plain CREATE
-// TABLE IF NOT EXISTS -- the exact bootstrapping pattern ReservationStore's
-// own createCreditReservationsTableSQL uses and documents (see that
-// constant's doc comment for why this app's own bookkeeping tables do not
-// go through dbkit.MigrationRegistry's cross-module machinery). The
-// statement is portable across both dbkit dialects, like its sibling:
-// VARCHAR/TIMESTAMP columns, application-generated ids, no PostgreSQL- or
-// SQLite-specific syntax. The column set and types match the GORM model
-// tags below exactly.
-const createSimulationsTableSQL = `CREATE TABLE IF NOT EXISTS ` + simulationsTable + ` (
-	job_id          VARCHAR(64)  NOT NULL PRIMARY KEY,
-	tenant_id       VARCHAR(64)  NOT NULL,
-	photo_object_id VARCHAR(64)  NOT NULL,
-	options_json    VARCHAR(256) NOT NULL,
-	created_at      TIMESTAMP    NOT NULL
-)`
-
-// createSimulationsTenantPhotoIndexSQL is the lookup index behind
-// ListSimulationsByPhoto's per-photo enumeration. Kept as its own statement
-// (CREATE INDEX IF NOT EXISTS is accepted by both SQLite and PostgreSQL)
-// because the composite index cannot be declared portably inside the CREATE
-// TABLE above.
-const createSimulationsTenantPhotoIndexSQL = `CREATE INDEX IF NOT EXISTS idx_smilesim_simulations_tenant_photo ON ` + simulationsTable + ` (tenant_id, photo_object_id)`
-
 // simulationRecord is the durable record of one simulation generation
 // request: which photo it was generated from, which effective option set
 // produced it, and which image-generation job carries its outcome. The row
@@ -145,24 +121,13 @@ type SimulationStore struct {
 // come from dbkit.Open (directly, or through dbkit/dbtest in tests) --
 // mirroring NewReservationStore's identical contract, and see
 // dbkit.Repository's own doc comment for why db is expected to come from
-// Open specifically. It performs no I/O; call EnsureSchema once before
-// first use.
+// Open specifically. It performs no I/O; the table and its per-photo lookup
+// index are this domain's migrations (internal/smilesim/migrations), which
+// the assembly applies before anything can query -- the smilesim component
+// carries the set and the database component applies it during the Verify
+// stage. Tests apply the same set through dbtest.Migrate.
 func NewSimulationStore(db *gorm.DB) *SimulationStore {
 	return &SimulationStore{Repository: dbkit.NewRepository[simulationRecord](db), db: db}
-}
-
-// EnsureSchema creates SimulationStore's table and its per-photo lookup
-// index if they do not already exist -- see
-// createSimulationsTableSQL's own doc comment for why this is a plain,
-// idempotent CREATE rather than a versioned dbkit.MigrationRegistry
-// migration. Call it once, before Simulate or ListSimulationsByPhoto ever
-// run (internal/app's own wiring does this alongside
-// ReservationStore.EnsureSchema).
-func (s *SimulationStore) EnsureSchema(ctx context.Context) error {
-	if err := s.db.WithContext(ctx).Exec(createSimulationsTableSQL).Error; err != nil {
-		return err
-	}
-	return s.db.WithContext(ctx).Exec(createSimulationsTenantPhotoIndexSQL).Error
 }
 
 // save durably records that one generation request -- jobID over

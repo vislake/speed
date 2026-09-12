@@ -66,6 +66,7 @@ import (
 
 	"github.com/vislake/speed/examples/reference-app/internal/app/demo"
 	"github.com/vislake/speed/examples/reference-app/internal/attestation"
+	attestationmigrations "github.com/vislake/speed/examples/reference-app/internal/attestation/migrations"
 	"github.com/vislake/speed/examples/reference-app/internal/consult"
 	"github.com/vislake/speed/examples/reference-app/internal/notes"
 	"github.com/vislake/speed/examples/reference-app/internal/smilesim"
@@ -901,14 +902,20 @@ func (b *serverBuild) complianceSharingComponent() pkgcore.Component {
 
 // attestationComponent returns this app's AI-output attestation layer: the
 // real consumer of go/pki's X.509 layer, issuing each tenant's certificate
-// through the pki module and gating public shares on chain verification. Its
-// two boot steps (EnsureSchema, EnsureAuthorityChain) run in the
+// through the pki module and gating public shares on chain verification.
+// The component carries the layer's versioned migration set
+// (internal/attestation/migrations) -- the schema of the attestations table
+// its Service owns -- and declares Module "attestation" so the migration
+// ledger keys the set by the module name rather than the host-prefixed
+// component name. Its one boot step (EnsureAuthorityChain) runs in the
 // post-attach step.
 func (b *serverBuild) attestationComponent() pkgcore.Component {
 	return pkgcore.Component{
 		Name:         hostComponentPrefix + "attestation",
+		Module:       "attestation",
 		Capabilities: pkgcore.MultiReplicaSafe,
 		Provides:     []any{(*attestation.Service)(nil)},
+		Migrations:   attestationmigrations.FS,
 		Requires: []pkgcore.Requirement{
 			{Token: (*pki.Module)(nil)},
 			{Token: (*storage.Module)(nil)},

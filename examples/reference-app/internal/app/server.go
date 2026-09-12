@@ -723,6 +723,8 @@ func (b *serverBuild) composition(live bool) pkgcore.ComponentConfig {
 		With("compliance", nil).
 		With("audit", nil).
 		With("notes", nil).
+		With("cases", nil).
+		With("smilesim", nil).
 		// rbac is the one host override left among these: its config
 		// attach must run in the post-bootstrap step, because this host's
 		// Init-stage consumers (the demo seeds, the self-service chain)
