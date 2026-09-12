@@ -7,6 +7,7 @@ package postgres
 import (
 	"context"
 	"fmt"
+	"io"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
@@ -24,15 +25,20 @@ const Capabilities pkgcore.Capability = pkgcore.MultiReplicaSafe | pkgcore.Survi
 
 // closableKVStore is the value the "kv.postgres" component's New returns:
 // the store itself (whose promoted methods satisfy pkgcore.KVStore) plus the
-// Close() error method that releases the pool that New built, and the
-// component's own Close callback releases it through this method. A host
-// that calls NewKVStore itself gets the bare *Store and keeps owning its
-// pool, exactly as that constructor's own doc comment promises; only the
-// component-built value carries this closer.
+// Close() error method that releases the pool that New built, which the
+// assembly's close stage runs since the component descriptor declares no
+// Close callback. A host that calls NewKVStore itself gets the bare *Store
+// and keeps owning its pool, exactly as that constructor's own doc comment
+// promises; only the component-built value carries this closer.
 type closableKVStore struct {
 	pkgcore.KVStore
 	closePool func()
 }
+
+// The product's Close() error is the ownership declaration the assembly's
+// close stage reads, so the compile-time assertion keeps it from being
+// dropped silently.
+var _ io.Closer = (*closableKVStore)(nil)
 
 // Close releases the pool the component's New built.
 func (s *closableKVStore) Close() error {

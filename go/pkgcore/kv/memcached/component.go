@@ -24,8 +24,9 @@ type kvMemcachedConfig struct {
 // kind, so no SurvivesRestart -- see the package doc comment). Its New
 // funnels through newClient, the package's shared construction path, so the
 // same "localhost:11211" fallback and comma-splitting apply. The client is
-// built here, so the component owns it: Close releases its idle pooled
-// connections through the closable value's own Close.
+// built here, so the component owns it: the value New returns carries the
+// closer, which the assembly's close stage runs in place of a declared
+// Close callback.
 var kvMemcachedComponent = pkgcore.Component{
 	Name:         "kv.memcached",
 	Module:       "kv",
@@ -39,12 +40,6 @@ var kvMemcachedComponent = pkgcore.Component{
 		}
 		client := newClient(c.Addrs)
 		return &closableKVStore{KVStore: NewKVStore(client), closeClient: client.Close}, nil
-	},
-	Close: func(_ context.Context, _ *pkgcore.ComponentRegistry, instance any) error {
-		if closable, ok := instance.(interface{ Close() error }); ok {
-			return closable.Close()
-		}
-		return nil
 	},
 }
 

@@ -6,6 +6,7 @@ package nats
 // the file-locality this package always had.
 import (
 	"fmt"
+	"io"
 
 	"github.com/nats-io/nats.go"
 
@@ -29,15 +30,20 @@ const Capabilities pkgcore.Capability = pkgcore.MultiReplicaSafe | pkgcore.Survi
 
 // closableKVStore is the value the "kv.nats" component's New returns: the
 // store itself (whose promoted methods satisfy pkgcore.KVStore) plus the
-// Close() error method that releases the connection that New dialed, and
-// the component's own Close callback releases it through this method. A
-// host that calls NewKVStore itself gets the bare store and keeps owning its
-// connection, exactly as that constructor's own doc comment promises; only
-// the component-built value carries this closer.
+// Close() error method that releases the connection that New dialed, which
+// the assembly's close stage runs since the component descriptor declares
+// no Close callback. A host that calls NewKVStore itself gets the bare
+// store and keeps owning its connection, exactly as that constructor's own
+// doc comment promises; only the component-built value carries this closer.
 type closableKVStore struct {
 	pkgcore.KVStore
 	closeConn func()
 }
+
+// The product's Close() error is the ownership declaration the assembly's
+// close stage reads, so the compile-time assertion keeps it from being
+// dropped silently.
+var _ io.Closer = (*closableKVStore)(nil)
 
 // Close releases the connection the component's New dialed.
 func (s *closableKVStore) Close() error {

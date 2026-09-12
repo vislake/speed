@@ -26,9 +26,10 @@ type kvPostgresConfig struct {
 // declaring the package's exported Capabilities. Its New funnels through
 // newPool, the package's shared construction path, passing the component's
 // own context down to pgxpool.New. The pool is built here, so the component
-// owns it: Close releases it through the closable value's own Close. Its
-// Migrations carry the package's postgres-only entry-table DDL for the
-// assembly's database component to apply in the Verify stage.
+// owns it: the value New returns carries the closer, which the assembly's
+// close stage runs in place of a declared Close callback. Its Migrations
+// carry the package's postgres-only entry-table DDL for the assembly's
+// database component to apply in the Verify stage.
 var kvPostgresComponent = pkgcore.Component{
 	Name:         "kv.postgres",
 	Module:       "kv",
@@ -46,12 +47,6 @@ var kvPostgresComponent = pkgcore.Component{
 			return nil, err
 		}
 		return &closableKVStore{KVStore: NewKVStore(pool), closePool: pool.Close}, nil
-	},
-	Close: func(_ context.Context, _ *pkgcore.ComponentRegistry, instance any) error {
-		if closable, ok := instance.(interface{ Close() error }); ok {
-			return closable.Close()
-		}
-		return nil
 	},
 }
 

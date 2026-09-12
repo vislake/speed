@@ -5,6 +5,7 @@ package memcached
 // (component.go) builds from -- kept beside the implementation they adapt,
 // the file-locality this package always had.
 import (
+	"io"
 	"strings"
 
 	"github.com/bradfitz/gomemcache/memcache"
@@ -24,17 +25,22 @@ const Capabilities pkgcore.Capability = pkgcore.MultiReplicaSafe
 
 // closableKVStore is the value the "kv.memcached" component's New returns:
 // the store itself (whose promoted methods satisfy pkgcore.KVStore) plus the
-// Close() error method that releases the client that New built, and the
-// component's own Close callback releases it through this method. A host
-// that calls NewKVStore itself gets the bare store and keeps owning its
-// client, exactly as that constructor's own doc comment promises; only the
-// component-built value carries this closer. Close releases the client's
-// idle pooled connections -- gomemcache dials per operation, so there is no
-// other long-lived state to stop.
+// Close() error method that releases the client that New built, which the
+// assembly's close stage runs since the component descriptor declares no
+// Close callback. A host that calls NewKVStore itself gets the bare store
+// and keeps owning its client, exactly as that constructor's own doc
+// comment promises; only the component-built value carries this closer.
+// Close releases the client's idle pooled connections -- gomemcache dials
+// per operation, so there is no other long-lived state to stop.
 type closableKVStore struct {
 	pkgcore.KVStore
 	closeClient func() error
 }
+
+// The product's Close() error is the ownership declaration the assembly's
+// close stage reads, so the compile-time assertion keeps it from being
+// dropped silently.
+var _ io.Closer = (*closableKVStore)(nil)
 
 // Close releases the client the component's New built.
 func (s *closableKVStore) Close() error {

@@ -18,15 +18,18 @@ import (
 	"testing"
 	"time"
 
+	"github.com/redis/go-redis/v9"
+
 	"github.com/vislake/speed/go/pkgcore"
 	"github.com/vislake/speed/go/pkgcore/componenttest"
 
 	// The eight distributed implementation subpackages self-register their
 	// components from their own init(): importing them here is what puts
-	// them in this binary's golden roster.
-	_ "github.com/vislake/speed/go/pkgcore/eventbus/nats"
-	_ "github.com/vislake/speed/go/pkgcore/eventbus/postgres"
-	_ "github.com/vislake/speed/go/pkgcore/eventbus/redis"
+	// them in this binary's golden roster. The three eventbus packages are
+	// imported by name, for the closed-bus sentinels the close probes assert.
+	eventbusnats "github.com/vislake/speed/go/pkgcore/eventbus/nats"
+	eventbuspostgres "github.com/vislake/speed/go/pkgcore/eventbus/postgres"
+	eventbusredis "github.com/vislake/speed/go/pkgcore/eventbus/redis"
 	_ "github.com/vislake/speed/go/pkgcore/kv/memcached"
 	_ "github.com/vislake/speed/go/pkgcore/kv/nats"
 	_ "github.com/vislake/speed/go/pkgcore/kv/postgres"
@@ -87,18 +90,74 @@ func TestBuiltinComponents_GlobalRosterIsWellFormed(t *testing.T) {
 // success path), each with the decodable configuration its block takes.
 // One implementation per seam is an assembly's shape under the single-value
 // delivery rule, so every entry is assembled on its own.
+//
+// closed is the release proof each entry may declare: it runs after the
+// registry's Close and drives the product into the observable state its own
+// release produces -- a closed bus refusing a publish, a closed client or
+// pool refusing a read -- so the descriptor's missing Close callback is
+// proven not to leave the resource behind. kv.memcached declares none:
+// gomemcache's Close only drops idle pooled connections and leaves the
+// client usable, so its release has no offline observable; the compile-time
+// io.Closer assertion beside the type (its construction.go) plus pkgcore's
+// own close-mechanism suite are that implementation's proof.
 var builtinAssemblies = []struct {
 	name       string
 	cfg        any
 	migrations bool // the implementation carries a support-table migration set
+	closed     func(t *testing.T, ctx context.Context, reg *pkgcore.ComponentRegistry)
 }{
 	{name: "eventbus.memory"},
-	{name: "eventbus.redis"},
-	{name: "eventbus.nats"},
-	{name: "eventbus.postgres", cfg: map[string]any{"dsn": assembledPostgresDSN, "replica_id": "assembly-replica"}, migrations: true},
+	{name: "eventbus.redis", closed: func(t *testing.T, ctx context.Context, reg *pkgcore.ComponentRegistry) {
+		t.Helper()
+		bus, err := pkgcore.Get[pkgcore.EventBus](reg)
+		if err != nil {
+			t.Fatalf("Get[pkgcore.EventBus] error = %v", err)
+		}
+		if err := bus.Publish(ctx, pkgcore.Event{Type: "close.probe"}); !errors.Is(err, eventbusredis.ErrEventBusClosed) {
+			t.Errorf("Publish after Close = %v, want ErrEventBusClosed: the close stage must have stopped the bus", err)
+		}
+	}},
+	{name: "eventbus.nats", closed: func(t *testing.T, ctx context.Context, reg *pkgcore.ComponentRegistry) {
+		t.Helper()
+		bus, err := pkgcore.Get[pkgcore.EventBus](reg)
+		if err != nil {
+			t.Fatalf("Get[pkgcore.EventBus] error = %v", err)
+		}
+		if err := bus.Publish(ctx, pkgcore.Event{Type: "close.probe"}); !errors.Is(err, eventbusnats.ErrEventBusClosed) {
+			t.Errorf("Publish after Close = %v, want ErrEventBusClosed: the close stage must have stopped the bus", err)
+		}
+	}},
+	{name: "eventbus.postgres", cfg: map[string]any{"dsn": assembledPostgresDSN, "replica_id": "assembly-replica"}, migrations: true, closed: func(t *testing.T, ctx context.Context, reg *pkgcore.ComponentRegistry) {
+		t.Helper()
+		bus, err := pkgcore.Get[pkgcore.EventBus](reg)
+		if err != nil {
+			t.Fatalf("Get[pkgcore.EventBus] error = %v", err)
+		}
+		if err := bus.Publish(ctx, pkgcore.Event{Type: "close.probe"}); !errors.Is(err, eventbuspostgres.ErrEventBusClosed) {
+			t.Errorf("Publish after Close = %v, want ErrEventBusClosed: the close stage must have stopped the bus", err)
+		}
+	}},
 	{name: "kv.memory"},
-	{name: "kv.redis"},
-	{name: "kv.postgres", cfg: map[string]any{"dsn": assembledPostgresDSN}, migrations: true},
+	{name: "kv.redis", closed: func(t *testing.T, ctx context.Context, reg *pkgcore.ComponentRegistry) {
+		t.Helper()
+		store, err := pkgcore.Get[pkgcore.KVStore](reg)
+		if err != nil {
+			t.Fatalf("Get[pkgcore.KVStore] error = %v", err)
+		}
+		if _, _, err := store.Get(ctx, "close-probe"); !errors.Is(err, redis.ErrClosed) {
+			t.Errorf("Get after Close = %v, want redis.ErrClosed: the close stage must have released the client", err)
+		}
+	}},
+	{name: "kv.postgres", cfg: map[string]any{"dsn": assembledPostgresDSN}, migrations: true, closed: func(t *testing.T, ctx context.Context, reg *pkgcore.ComponentRegistry) {
+		t.Helper()
+		store, err := pkgcore.Get[pkgcore.KVStore](reg)
+		if err != nil {
+			t.Fatalf("Get[pkgcore.KVStore] error = %v", err)
+		}
+		if _, _, err := store.Get(ctx, "close-probe"); err == nil || !strings.Contains(err.Error(), "closed pool") {
+			t.Errorf("Get after Close error = %v, want the closed pool to refuse it", err)
+		}
+	}},
 	{name: "kv.memcached"},
 	{name: "mailer.console"},
 	{name: "mailer.smtp", cfg: map[string]any{"host": "relay.assembly.test"}},
@@ -139,6 +198,12 @@ func TestBuiltinComponents_AssembleAndConstructAll(t *testing.T) {
 				t.Errorf("Close() error = %v, want %s released", err, impl.name)
 			}
 
+			// The declared release proof: the product must observe its
+			// release, not merely accept Close silently.
+			if impl.closed != nil {
+				impl.closed(t, ctx, reg)
+			}
+
 			// The PostgreSQL-backed implementations carry their
 			// support-table migration sets, so the database component's
 			// Verify step has them to apply.
@@ -156,6 +221,44 @@ func TestBuiltinComponents_AssembleAndConstructAll(t *testing.T) {
 				t.Errorf("Assets(reg) carries no migrations for %q, want the package's support-table set", impl.name)
 			}
 		})
+	}
+}
+
+// TestBuiltinComponents_ObjectStoreLocalCloseRemovesTempDir is the
+// objectstore.local release proof in full: the component owns the throwaway
+// temporary directory its New created, a write through the live product
+// succeeds, and after the registry's Close the write is refused -- the
+// observable trace of the product's own Close() error having removed the
+// root, run by the close stage even though the descriptor declares no Close
+// callback.
+func TestBuiltinComponents_ObjectStoreLocalCloseRemovesTempDir(t *testing.T) {
+	ctx := context.Background()
+	reg := pkgcore.NewComponentRegistry()
+	reg.Put(pkgcore.NewComponentConfig(map[string]any{
+		"components": map[string]any{"objectstore.local": nil},
+	}))
+
+	if err := reg.Prepare(ctx); err != nil {
+		t.Fatalf("Prepare() error = %v", err)
+	}
+	if err := reg.Construct(ctx); err != nil {
+		t.Fatalf("Construct() error = %v", err)
+	}
+	store, err := pkgcore.Get[pkgcore.ObjectStore](reg)
+	if err != nil {
+		t.Fatalf("Get[pkgcore.ObjectStore] error = %v", err)
+	}
+	if err := store.PutObject(ctx, "close-probe", strings.NewReader("before-close")); err != nil {
+		t.Fatalf("PutObject before Close error = %v, want the live store to accept it", err)
+	}
+
+	closeCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if err := reg.Close(closeCtx); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+	if err := store.PutObject(ctx, "close-probe", strings.NewReader("after-close")); err == nil {
+		t.Errorf("PutObject after Close succeeded, want the removed temporary directory to refuse it")
 	}
 }
 

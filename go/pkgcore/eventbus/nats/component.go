@@ -26,8 +26,9 @@ type eventBusNATSConfig struct {
 // configuration, declaring the package's exported Capabilities. Its New
 // funnels through newConn, which applies the package's URL fallback and
 // retry-on-failed-connect posture to the connection it dials. The connection
-// is dialed here, so the component owns it: Close releases it through the
-// closable value's own Close, which stops the bus first.
+// is dialed here, so the component owns it: the value New returns carries
+// the closer (it stops the bus first), which the assembly's close stage
+// runs in place of a declared Close callback.
 var eventBusNATSComponent = pkgcore.Component{
 	Name:         "eventbus.nats",
 	Module:       "eventbus",
@@ -44,12 +45,6 @@ var eventBusNATSComponent = pkgcore.Component{
 			return nil, err
 		}
 		return &closableEventBus{EventBus: NewEventBus(conn), closeConn: conn.Close}, nil
-	},
-	Close: func(_ context.Context, _ *pkgcore.ComponentRegistry, instance any) error {
-		if closable, ok := instance.(interface{ Close() error }); ok {
-			return closable.Close()
-		}
-		return nil
 	},
 }
 

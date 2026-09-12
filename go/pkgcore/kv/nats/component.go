@@ -27,8 +27,9 @@ type kvNATSConfig struct {
 // newConn and natsBucketOrDefault, so the package's URL fallback, client
 // name and bucket fallback apply to the connection and bucket it builds, and
 // it passes its own context through to the bucket provisioning. The
-// connection is dialed in New, so the component owns it: Close releases it
-// through the closable value's own Close.
+// connection is dialed in New, so the component owns it: the value New
+// returns carries the closer, which the assembly's close stage runs in
+// place of a declared Close callback.
 var kvNATSComponent = pkgcore.Component{
 	Name:         "kv.nats",
 	Module:       "kv",
@@ -52,12 +53,6 @@ var kvNATSComponent = pkgcore.Component{
 			return nil, err
 		}
 		return &closableKVStore{KVStore: store, closeConn: conn.Close}, nil
-	},
-	Close: func(_ context.Context, _ *pkgcore.ComponentRegistry, instance any) error {
-		if closable, ok := instance.(interface{ Close() error }); ok {
-			return closable.Close()
-		}
-		return nil
 	},
 }
 

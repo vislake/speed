@@ -28,9 +28,11 @@ type objectStoreLocalConfig struct {
 // persistent directory, and under-declaring is the safe direction -- no
 // deployment mode requires the bit, and a host with a persistent directory
 // can select its own provider component when it wants the durability bit
-// declared. Its New funnels through newLocalObjectStoreFromDirectory, and
-// its Close releases the temporary directory when the component created one
-// (a host-supplied directory carries no closer).
+// declared. Its New funnels through newLocalObjectStoreFromDirectory: when
+// the component created the temporary directory, the returned value carries
+// its own Close() error, which the assembly's close stage runs in place of
+// a declared Close callback, while a store over a host-supplied directory
+// carries no closer and has nothing to release.
 var objectStoreLocalComponent = Component{
 	Name:         "objectstore.local",
 	Module:       "objectstore",
@@ -43,12 +45,6 @@ var objectStoreLocalComponent = Component{
 			return nil, err
 		}
 		return newLocalObjectStoreFromDirectory(c.Directory)
-	},
-	Close: func(_ context.Context, _ *ComponentRegistry, instance any) error {
-		if closable, ok := instance.(interface{ Close() error }); ok {
-			return closable.Close()
-		}
-		return nil
 	},
 }
 
@@ -507,14 +503,20 @@ func newLocalObjectStoreFromDirectory(directory string) (ObjectStore, error) {
 // closableObjectStore is the value "objectstore.local" produces when it
 // created the store's directory itself: the store itself (whose promoted
 // methods satisfy ObjectStore) plus the Close() error method that removes
-// the temporary directory the construction created. A host that calls
-// NewLocalObjectStore itself keeps owning its directory, exactly as that
-// constructor's own doc comment promises, and calls Close on the result
-// only when it wants the throwaway tree gone.
+// the temporary directory the construction created, which the assembly's
+// close stage runs since the component descriptor declares no Close
+// callback. A host that calls NewLocalObjectStore itself keeps owning its
+// directory, exactly as that constructor's own doc comment promises, and
+// calls Close on the result only when it wants the throwaway tree gone.
 type closableObjectStore struct {
 	ObjectStore
 	removeRoot func() error
 }
+
+// The product's Close() error is the ownership declaration the assembly's
+// close stage reads, so the compile-time assertion keeps it from being
+// dropped silently.
+var _ io.Closer = (*closableObjectStore)(nil)
 
 // Close removes the temporary directory the construction created. Nothing
 // may use the store after Close; a host shuts its seams down last.

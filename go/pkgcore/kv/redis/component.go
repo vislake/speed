@@ -26,8 +26,8 @@ type kvRedisConfig struct {
 // declaring the package's exported Capabilities. Its New funnels through
 // newClient, the package's shared construction path, so the same
 // "localhost:6379" fallback applies. The client is built here, so the
-// component owns it: Close releases it through the closable value's own
-// Close.
+// component owns it: the value New returns carries the closer, which the
+// assembly's close stage runs in place of a declared Close callback.
 var kvRedisComponent = pkgcore.Component{
 	Name:         "kv.redis",
 	Module:       "kv",
@@ -41,12 +41,6 @@ var kvRedisComponent = pkgcore.Component{
 		}
 		client := newClient(c.Addr, c.Password, c.DB)
 		return &closableKVStore{KVStore: NewKVStore(client), closeClient: client.Close}, nil
-	},
-	Close: func(_ context.Context, _ *pkgcore.ComponentRegistry, instance any) error {
-		if closable, ok := instance.(interface{ Close() error }); ok {
-			return closable.Close()
-		}
-		return nil
 	},
 }
 

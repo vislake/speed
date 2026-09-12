@@ -5,6 +5,8 @@ package redis
 // (component.go) builds from -- kept beside the implementation they adapt,
 // the file-locality this package always had.
 import (
+	"io"
+
 	"github.com/redis/go-redis/v9"
 
 	"github.com/vislake/speed/go/pkgcore"
@@ -22,15 +24,20 @@ const Capabilities pkgcore.Capability = pkgcore.MultiReplicaSafe | pkgcore.Survi
 
 // closableKVStore is the value the "kv.redis" component's New returns: the
 // store itself (whose promoted methods satisfy pkgcore.KVStore) plus the
-// Close() error method that releases the client that New built, and the
-// component's own Close callback releases it through this method. A host
-// that calls NewKVStore itself gets the bare store and keeps owning its
-// client, exactly as that constructor's own doc comment promises; only the
-// component-built value carries this closer.
+// Close() error method that releases the client that New built, which the
+// assembly's close stage runs since the component descriptor declares no
+// Close callback. A host that calls NewKVStore itself gets the bare store
+// and keeps owning its client, exactly as that constructor's own doc
+// comment promises; only the component-built value carries this closer.
 type closableKVStore struct {
 	pkgcore.KVStore
 	closeClient func() error
 }
+
+// The product's Close() error is the ownership declaration the assembly's
+// close stage reads, so the compile-time assertion keeps it from being
+// dropped silently.
+var _ io.Closer = (*closableKVStore)(nil)
 
 // Close releases the client the component's New built.
 func (s *closableKVStore) Close() error {

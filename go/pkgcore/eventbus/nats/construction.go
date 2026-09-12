@@ -5,6 +5,8 @@ package nats
 // (component.go) builds from -- kept beside the implementation they adapt,
 // the file-locality this package always had.
 import (
+	"io"
+
 	"github.com/nats-io/nats.go"
 
 	"github.com/vislake/speed/go/pkgcore"
@@ -21,15 +23,21 @@ const Capabilities pkgcore.Capability = pkgcore.MultiReplicaSafe | pkgcore.Survi
 
 // closableEventBus is the value the "eventbus.nats" component's New returns:
 // the bus itself (whose promoted methods satisfy pkgcore.EventBus) plus the
-// Close() error method that releases the connection that New dialed, and the
-// component's own Close callback releases it through this method. A host
-// that calls NewEventBus itself gets the bare *EventBus and keeps owning
-// its connection, exactly as that constructor's own doc comment promises;
-// only the component-built value carries this closer.
+// Close() error method that releases the connection that New dialed, which
+// the assembly's close stage runs since the component descriptor declares
+// no Close callback. A host that calls NewEventBus itself gets the bare
+// *EventBus and keeps owning its connection, exactly as that constructor's
+// own doc comment promises; only the component-built value carries this
+// closer.
 type closableEventBus struct {
 	*EventBus
 	closeConn func()
 }
+
+// The product's Close() error is the ownership declaration the assembly's
+// close stage reads, so the compile-time assertion keeps it from being
+// dropped silently.
+var _ io.Closer = (*closableEventBus)(nil)
 
 // Close stops the bus and then releases the connection the component's New
 // dialed.

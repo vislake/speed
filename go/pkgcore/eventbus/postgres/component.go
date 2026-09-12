@@ -29,9 +29,10 @@ type eventBusPostgresConfig struct {
 // component's own configuration, declaring the package's exported
 // Capabilities. Its New funnels through newPoolAndReplica, the package's
 // shared construction path, passing the component's own context down to
-// pgxpool.New. The pool is built here, so the component owns it: Close
-// releases it through the closable value's own Close, which stops the bus
-// first. Its Migrations carry the package's postgres-only outbox DDL for the
+// pgxpool.New. The pool is built here, so the component owns it: the value
+// New returns carries the closer (it stops the bus first), which the
+// assembly's close stage runs in place of a declared Close callback. Its
+// Migrations carry the package's postgres-only outbox DDL for the
 // assembly's database component to apply in the Verify stage.
 var eventBusPostgresComponent = pkgcore.Component{
 	Name:         "eventbus.postgres",
@@ -50,12 +51,6 @@ var eventBusPostgresComponent = pkgcore.Component{
 			return nil, err
 		}
 		return &closableEventBus{EventBus: NewEventBus(pool, replicaID), closePool: pool.Close}, nil
-	},
-	Close: func(_ context.Context, _ *pkgcore.ComponentRegistry, instance any) error {
-		if closable, ok := instance.(interface{ Close() error }); ok {
-			return closable.Close()
-		}
-		return nil
 	},
 }
 
