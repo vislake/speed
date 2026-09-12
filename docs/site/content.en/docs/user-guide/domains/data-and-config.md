@@ -112,9 +112,11 @@ closed. The same module declares `support.email` (a public string item)
 and `support.live_chat` (a feature flag) on the registry, and after
 `config`'s `Attach` freezes the schema, reads fall back narrow-to-wide:
 the schema default until a tenant-scoped write overrides it for that
-tenant alone. Everything is self-contained (in-memory SQLite, one
-connection), with every symbol taken from `go/dbkit`'s and `go/config`'s
-real APIs (the same calls their own example suites run).
+tenant alone. Every symbol is taken from the real APIs — `go/dbkit`'s,
+`go/config`'s, `go/pkgcore`'s and `go/app`'s, the same calls their own
+example suites run. The host's own bootstrap wiring (the configuration
+target, the loader options and the composition override that selects
+these components) stays placeholders, since it belongs to each host.
 
 ```go
 package main
@@ -124,6 +126,9 @@ import (
 	"embed"
 	"fmt"
 
+	"gorm.io/gorm"
+
+	"github.com/vislake/speed/go/app"
 	"github.com/vislake/speed/go/config"
 	"github.com/vislake/speed/go/dbkit"
 	_ "github.com/vislake/speed/go/dbkit/dialect/sqlite" // registers DialectSQLite
@@ -142,16 +147,41 @@ type subscription struct {
 func (s subscription) GetTenantID() pkgcore.TenantID { return pkgcore.TenantID(s.TenantID) }
 func (subscription) TableName() string               { return "subscriptions" }
 
-// subscriptionsModule declares the module's configuration items and feature
-// flags during Register; the config module folds them into the one schema.
-type subscriptionsModule struct{}
+// subscriptionsModule is the module carrying both halves of this example:
+// the tenant-scoped repository over the subscriptions table, and the
+// declarations (one public item, one feature flag) its Register folds into
+// config's one schema.
+type subscriptionsModule struct {
+	repo *dbkit.Repository[subscription]
+}
 
-func (subscriptionsModule) Name() string         { return "subscriptions" }
-func (subscriptionsModule) DependsOn() []string  { return nil }
-func (subscriptionsModule) Migrations() embed.FS { return embed.FS{} }
-func (subscriptionsModule) Locales() embed.FS    { return embed.FS{} }
-func (subscriptionsModule) OpenAPISpec() []byte  { return nil }
-func (subscriptionsModule) Register(reg *pkgcore.ComponentRegistry) error {
+// NewSubscriptionsModule builds the module over the database handle.
+func NewSubscriptionsModule(db *gorm.DB) *subscriptionsModule {
+	return &subscriptionsModule{repo: dbkit.NewRepository[subscription](db)}
+}
+
+// Name implements the module contract.
+func (*subscriptionsModule) Name() string { return "subscriptions" }
+
+// DependsOn implements the module contract: infrastructure only, never
+// another business module.
+func (*subscriptionsModule) DependsOn() []string { return nil }
+
+// Migrations implements the module contract; a real module returns its
+// embedded dual-dialect set.
+func (*subscriptionsModule) Migrations() embed.FS { return embed.FS{} }
+
+// Locales implements the module contract.
+func (*subscriptionsModule) Locales() embed.FS { return embed.FS{} }
+
+// OpenAPISpec implements the module contract: nil -- the module mounts no
+// HTTP route here.
+func (*subscriptionsModule) OpenAPISpec() []byte { return nil }
+
+// Register is the module contract's declaration entry point: the assembly's
+// Init stage runs it, and the config module folds what it declares into the
+// one schema.
+func (m *subscriptionsModule) Register(reg *pkgcore.ComponentRegistry) error {
 	if err := reg.ConfigSeat().Add(pkgcore.ConfigItem{
 		Key: "support.email", Type: "string", Default: "support@example.com",
 		Public: true, Description: "The address shown to this tenant's users",
@@ -165,16 +195,60 @@ func (subscriptionsModule) Register(reg *pkgcore.ComponentRegistry) error {
 	})
 }
 
+// subscriptionsComponent is the module's component descriptor: the
+// selection key a composition configuration names, and the callbacks that
+// construct the module and run its one declaration entry point inside the
+// assembly. Without a registered component the module's Register never
+// runs and its declarations never reach the schema.
+var subscriptionsComponent = pkgcore.Component{
+	Name:   "subscriptions",
+	Module: "subscriptions",
+	Requires: []pkgcore.Requirement{
+		{Token: (*gorm.DB)(nil)},
+	},
+	New: func(_ context.Context, reg *pkgcore.ComponentRegistry, _ pkgcore.ComponentConfig) (any, error) {
+		db, err := pkgcore.Get[*gorm.DB](reg)
+		if err != nil {
+			return nil, err
+		}
+		return NewSubscriptionsModule(db), nil
+	},
+	Init: func(_ context.Context, reg *pkgcore.ComponentRegistry, instance any) error {
+		return instance.(*subscriptionsModule).Register(reg)
+	},
+}
+
+func init() { pkgcore.MustRegister(subscriptionsComponent) }
+
 func main() {
 	ctx := context.Background()
 
-	db, err := dbkit.Open(ctx, dbkit.Options{Dialect: dbkit.DialectSQLite, DSN: "file:data_config_example?mode=memory&cache=shared"})
+	// The host's assembly: the composition selects the db component, the
+	// config component and the subscriptions component registered above;
+	// the engine constructs each one and drives the seven stages. Register
+	// runs in the Init stage, and the config component's Start turn attaches
+	// the schema snapshot and publishes the *Service. (hostConfig,
+	// loaderOpts and the composition override that names those selections
+	// are the host's own bootstrap wiring -- placeholders in this schematic
+	// program.) A served host closes the service from its own component's
+	// Close on shutdown.
+	reg := pkgcore.NewComponentRegistry()
+	if err := app.Assemble(ctx, reg, app.LoadSpec{Host: &hostConfig, Options: loaderOpts}); err != nil {
+		panic(err)
+	}
+	svc, err := pkgcore.Get[*config.Service](reg) // the service the assembly attached
+	if err != nil {
+		panic(err)
+	}
+	db, err := pkgcore.Get[*gorm.DB](reg) // the assembled connection
 	if err != nil {
 		panic(err)
 	}
 
 	// Versioned SQL only -- never AutoMigrate. A real module ships its own
-	// dual-dialect migration files; this raw CREATE TABLE stands in for them.
+	// dual-dialect migration files, which the db component applies at the
+	// assembly's Verify stage; this raw CREATE TABLE stands in for the ones
+	// the subscriptions module would declare.
 	if err = db.Exec(`CREATE TABLE subscriptions (
 		id        VARCHAR(26)  NOT NULL,
 		tenant_id VARCHAR(26)  NOT NULL,
@@ -185,45 +259,25 @@ func main() {
 		panic(err)
 	}
 
-	// The config module owns the configs table, so its migrations must be
-	// applied before Attach reads or writes anything.
-	configModule := config.NewModule(db, config.WithPollInterval(0))
-	migrations := dbkit.NewMigrationRegistry()
-	if err = migrations.Register(configModule); err != nil {
-		panic(err)
-	}
-	if err = migrations.Apply(ctx, db, dbkit.DialectSQLite); err != nil {
-		panic(err)
-	}
-
-	// the engine's Assemble drives the composition; each module's Register runs
-	// in the assembly's Init stage, and Attach -- exactly once, afterwards --
-	// freezes the union of every declaration.
-	reg := pkgcore.NewComponentRegistry()
-	if err := app.Assemble(ctx, reg, app.LoadSpec{Host: &hostConfig, Options: loaderOpts}); err != nil {
-		panic(err)
-	}
-	svc, err := configModule.Attach(reg)
+	// Repository half: the module owns the repository over the assembled
+	// connection; the tenant comes from the context, never from an argument,
+	// so a caller without tenant context fails closed.
+	subs, err := pkgcore.Get[*subscriptionsModule](reg)
 	if err != nil {
 		panic(err)
 	}
-	defer func() { _ = svc.Close() }()
-
-	// Repository half: the tenant comes from the context, never from an
-	// argument, so a caller without tenant context fails closed.
-	repo := dbkit.NewRepository[subscription](db)
 	acmeCtx := pkgcore.WithTenant(ctx, "tenant-acme")
 	sub := &subscription{ID: "01ARZ3NDEKTSV4RRFFQ69G5FAV", PlanID: "plan_pro", Status: "active"}
-	if err = repo.Create(acmeCtx, sub); err != nil {
+	if err = subs.repo.Create(acmeCtx, sub); err != nil {
 		panic(err)
 	}
-	got, err := repo.FindByID(acmeCtx, sub.ID)
+	got, err := subs.repo.FindByID(acmeCtx, sub.ID)
 	if err != nil {
 		panic(err)
 	}
 	fmt.Println("subscription:", got.PlanID, got.Status)
 
-	if err = repo.Create(ctx, sub); err != nil {
+	if err = subs.repo.Create(ctx, sub); err != nil {
 		fmt.Println("create without tenant:", err)
 	}
 
@@ -263,20 +317,24 @@ func main() {
 tenant from the context — `pkgcore.WithTenant` stands in for what
 `tenancy.Middleware` injects in a served request — so the uncontexted
 `Create` fails before the database is touched. On the config side,
-`Register` only declares; `Attach` is what freezes the schema and returns
-the `*Service` a host keeps. `svc.Set` writes at one scope tier
+`Register` only declares; the module component's `Start` turn is what
+attaches the schema snapshot, and the host reads the attached `*Service`
+back with `pkgcore.Get`. `svc.Set` writes at one scope tier
 (`config.ScopeTenant` here; a `ScopeSystem` write needs the audited system
 context), and the write publishes `config.item.changed`, which every
-process listens for — plus the poller `WithPollInterval(0)` disabled here
-as the anti-loss backstop.
+process listens for — plus the poller every replica polls as the
+anti-loss backstop.
 
 **How to run it.** From a checkout of this repository, put the file in a
 throwaway module next to the checkout and point the imports at it with
-`replace` lines — one per module the program imports, for example
+`replace` lines — one per module the program imports (`go/app`,
+`go/config`, `go/dbkit`, `go/pkgcore`), for example
 `replace github.com/vislake/speed/go/dbkit => /path/to/checkout/go/dbkit` —
-then run `go mod tidy` and `go run .` with `GOWORK=off` (the checkout's own
-`go.work` must not leak into the build). The tidy step fetches third-party
-dependencies once.
+fill in the host placeholders (`hostConfig`, `loaderOpts` and the
+composition override selecting the db, config and subscriptions
+components), then run `go mod tidy` and `go run .` with `GOWORK=off` (the
+checkout's own `go.work` must not leak into the build). The tidy step
+fetches third-party dependencies once.
 
 **Expected result.** The program prints the six stdout lines below; the
 assembly's own capability-validation log lines go to stderr first:

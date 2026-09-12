@@ -91,9 +91,10 @@ flowchart LR
 关闭。同一个模块在注册时声明 `support.email`(公开的 string 配置项)
 与 `support.live_chat`(功能开关);`config` 的 `Attach` 冻结 schema
 之后,读取按窄到宽回退:schema 默认值一直生效,直到某租户的租户级
-写入只为自己覆盖它。整个示例自足(内存 SQLite、单连接),所用符号全
-部来自 `go/dbkit` 与 `go/config` 的真实 API(与它们自带示例套件运行
-的是同一批调用)。
+写入只为自己覆盖它。所用符号全部来自真实 API——`go/dbkit`、
+`go/config`、`go/pkgcore` 与 `go/app` 的(与它们自带示例套件运行的
+是同一批调用)。宿主自己的引导接线(配置目标、加载器选项,以及指
+名这些组件的组合覆盖层)保持占位符形态,因为它属于每个宿主自己。
 
 ```go
 package main
@@ -103,6 +104,9 @@ import (
 	"embed"
 	"fmt"
 
+	"gorm.io/gorm"
+
+	"github.com/vislake/speed/go/app"
 	"github.com/vislake/speed/go/config"
 	"github.com/vislake/speed/go/dbkit"
 	_ "github.com/vislake/speed/go/dbkit/dialect/sqlite" // 注册 DialectSQLite
@@ -121,16 +125,36 @@ type subscription struct {
 func (s subscription) GetTenantID() pkgcore.TenantID { return pkgcore.TenantID(s.TenantID) }
 func (subscription) TableName() string               { return "subscriptions" }
 
-// subscriptionsModule 在 Register 时声明模块自己的配置项与功能开关;
-// config 模块把它们折进同一个 schema。
-type subscriptionsModule struct{}
+// subscriptionsModule 是同时承载本页两半的模块:subscriptions 表上的
+// 租户级仓库,以及它在 Register 时折进 config 同一份 schema 的声明
+// (一个公开配置项、一个功能开关)。
+type subscriptionsModule struct {
+	repo *dbkit.Repository[subscription]
+}
 
-func (subscriptionsModule) Name() string         { return "subscriptions" }
-func (subscriptionsModule) DependsOn() []string  { return nil }
-func (subscriptionsModule) Migrations() embed.FS { return embed.FS{} }
-func (subscriptionsModule) Locales() embed.FS    { return embed.FS{} }
-func (subscriptionsModule) OpenAPISpec() []byte  { return nil }
-func (subscriptionsModule) Register(reg *pkgcore.ComponentRegistry) error {
+// NewSubscriptionsModule 在数据库句柄上构造模块。
+func NewSubscriptionsModule(db *gorm.DB) *subscriptionsModule {
+	return &subscriptionsModule{repo: dbkit.NewRepository[subscription](db)}
+}
+
+// Name 实现模块契约。
+func (*subscriptionsModule) Name() string { return "subscriptions" }
+
+// DependsOn 实现模块契约:只依赖基础设施,绝不依赖别的业务模块。
+func (*subscriptionsModule) DependsOn() []string { return nil }
+
+// Migrations 实现模块契约;真实模块返回自带的双方言迁移集。
+func (*subscriptionsModule) Migrations() embed.FS { return embed.FS{} }
+
+// Locales 实现模块契约。
+func (*subscriptionsModule) Locales() embed.FS { return embed.FS{} }
+
+// OpenAPISpec 实现模块契约:nil——本模块这里不挂任何 HTTP 路由。
+func (*subscriptionsModule) OpenAPISpec() []byte { return nil }
+
+// Register 是模块契约的声明入口:装配的 Init 阶段运行它,config 模块
+// 把它声明的东西折进同一份 schema。
+func (m *subscriptionsModule) Register(reg *pkgcore.ComponentRegistry) error {
 	if err := reg.ConfigSeat().Add(pkgcore.ConfigItem{
 		Key: "support.email", Type: "string", Default: "support@example.com",
 		Public: true, Description: "The address shown to this tenant's users",
@@ -144,16 +168,54 @@ func (subscriptionsModule) Register(reg *pkgcore.ComponentRegistry) error {
 	})
 }
 
+// subscriptionsComponent 是模块的组件描述符:组合配置指名的选择键,
+// 以及构造模块、在装配内运行它唯一声明入口的回调。没有注册组件,
+// Register 永远不会运行,声明也永远到不了 schema。
+var subscriptionsComponent = pkgcore.Component{
+	Name:   "subscriptions",
+	Module: "subscriptions",
+	Requires: []pkgcore.Requirement{
+		{Token: (*gorm.DB)(nil)},
+	},
+	New: func(_ context.Context, reg *pkgcore.ComponentRegistry, _ pkgcore.ComponentConfig) (any, error) {
+		db, err := pkgcore.Get[*gorm.DB](reg)
+		if err != nil {
+			return nil, err
+		}
+		return NewSubscriptionsModule(db), nil
+	},
+	Init: func(_ context.Context, reg *pkgcore.ComponentRegistry, instance any) error {
+		return instance.(*subscriptionsModule).Register(reg)
+	},
+}
+
+func init() { pkgcore.MustRegister(subscriptionsComponent) }
+
 func main() {
 	ctx := context.Background()
 
-	db, err := dbkit.Open(ctx, dbkit.Options{Dialect: dbkit.DialectSQLite, DSN: "file:data_config_example?mode=memory&cache=shared"})
+	// 宿主的装配:组合选中 db 组件、config 组件和上面注册的
+	// subscriptions 组件;引擎逐个构造并驱动七个阶段。Register 在
+	// Init 阶段运行,config 组件的 Start 回合附着 schema 快照并发布
+	// *Service。(hostConfig、loaderOpts 与指名这些选择的组合覆盖层,
+	// 是宿主自己的引导接线——本示意程序里用占位符表示。)真实服务的
+	// 宿主在关闭时由自己组件的 Close 关闭该服务。
+	reg := pkgcore.NewComponentRegistry()
+	if err := app.Assemble(ctx, reg, app.LoadSpec{Host: &hostConfig, Options: loaderOpts}); err != nil {
+		panic(err)
+	}
+	svc, err := pkgcore.Get[*config.Service](reg) // 装配已附着的服务
+	if err != nil {
+		panic(err)
+	}
+	db, err := pkgcore.Get[*gorm.DB](reg) // 装配好的连接
 	if err != nil {
 		panic(err)
 	}
 
-	// 只走版本化 SQL——绝不 AutoMigrate。真实模块自带双方言迁移文件;
-	// 这里用裸 CREATE TABLE 顶替它们。
+	// 只走版本化 SQL——绝不 AutoMigrate。真实模块自带双方言迁移文件,
+	// 由 db 组件在装配的 Verify 阶段应用;这里用裸 CREATE TABLE 顶替
+	// subscriptions 模块本该声明的那批。
 	if err = db.Exec(`CREATE TABLE subscriptions (
 		id        VARCHAR(26)  NOT NULL,
 		tenant_id VARCHAR(26)  NOT NULL,
@@ -164,45 +226,24 @@ func main() {
 		panic(err)
 	}
 
-	// config 模块拥有 configs 表,所以 Attach 读写任何东西之前必须先
-	// 应用它的迁移。
-	configModule := config.NewModule(db, config.WithPollInterval(0))
-	migrations := dbkit.NewMigrationRegistry()
-	if err = migrations.Register(configModule); err != nil {
-		panic(err)
-	}
-	if err = migrations.Apply(ctx, db, dbkit.DialectSQLite); err != nil {
-		panic(err)
-	}
-
-	// 装配遍历模块图,逐个执行各阶段;Register 在 Init 阶段运行;Attach——恰好一次,在其
-	// 之后——冻结所有声明的并集。
-	reg := pkgcore.NewComponentRegistry()
-if err := app.Assemble(ctx, reg, app.LoadSpec{Host: &hostConfig, Options: loaderOpts}); err != nil { /* handle err */ }
+	// 仓库半场:仓库归模块所有;租户来自上下文,绝不来自参数——没有
+	// 租户上下文的调用者在碰到数据库之前就失败关闭。
+	subs, err := pkgcore.Get[*subscriptionsModule](reg)
 	if err != nil {
 		panic(err)
 	}
-	svc, err := configModule.Attach(reg)
-	if err != nil {
-		panic(err)
-	}
-	defer func() { _ = svc.Close() }()
-
-	// 仓库半场:租户来自上下文,绝不来自参数——没有租户上下文的调用
-	// 者在碰到数据库之前就失败关闭。
-	repo := dbkit.NewRepository[subscription](db)
 	acmeCtx := pkgcore.WithTenant(ctx, "tenant-acme")
 	sub := &subscription{ID: "01ARZ3NDEKTSV4RRFFQ69G5FAV", PlanID: "plan_pro", Status: "active"}
-	if err = repo.Create(acmeCtx, sub); err != nil {
+	if err = subs.repo.Create(acmeCtx, sub); err != nil {
 		panic(err)
 	}
-	got, err := repo.FindByID(acmeCtx, sub.ID)
+	got, err := subs.repo.FindByID(acmeCtx, sub.ID)
 	if err != nil {
 		panic(err)
 	}
 	fmt.Println("subscription:", got.PlanID, got.Status)
 
-	if err = repo.Create(ctx, sub); err != nil {
+	if err = subs.repo.Create(ctx, sub); err != nil {
 		fmt.Println("create without tenant:", err)
 	}
 
@@ -240,18 +281,21 @@ if err := app.Assemble(ctx, reg, app.LoadSpec{Host: &hostConfig, Options: loader
 
 **每段程序在做什么。** 仓库方法从上下文取租户——`pkgcore.WithTenant`
 顶替真实请求里 `tenancy.Middleware` 注入的那一步——所以无上下文的
-`Create` 在碰到数据库之前就失败。配置这边,`Register` 只声明;
-`Attach` 才是冻结 schema 并返回宿主保留的 `*Service` 的一步。
-`svc.Set` 写在一个作用域层级上(这里是 `config.ScopeTenant`;
-`ScopeSystem` 写需要带审计的系统上下文),写入会发布
-`config.item.changed`,每个进程都监听它——`WithPollInterval(0)` 关掉
-的轮询器是防丢兜底。
+`Create` 在碰到数据库之前就失败。配置这边,`Register` 只声明;模块
+组件自己的 `Start` 回合才是附着 schema 快照的一步,宿主用
+`pkgcore.Get` 把附着好的 `*Service` 读回。`svc.Set` 写在一个作用域
+层级上(这里是 `config.ScopeTenant`;`ScopeSystem` 写需要带审计的
+系统上下文),写入会发布 `config.item.changed`,每个进程都监听
+它——轮询器则是每个副本的防丢兜底。
 
 **怎么跑。** 在本仓库的 checkout 旁建一个临时模块,把上面的文件放
 进去,用 `replace` 行把 import 指向 checkout——程序 import 的每个模块
-一行,例如 `replace github.com/vislake/speed/go/dbkit => /path/to/checkout/go/dbkit`——
-然后以 `GOWORK=off` 运行 `go mod tidy` 与 `go run .`(别让 checkout
-自己的 `go.work` 渗进构建)。tidy 会拉取一次第三方依赖。
+一行(`go/app`、`go/config`、`go/dbkit`、`go/pkgcore`),例如
+`replace github.com/vislake/speed/go/dbkit => /path/to/checkout/go/dbkit`——
+补齐宿主占位符(`hostConfig`、`loaderOpts` 与选中 db、config 与
+subscriptions 三个组件的组合覆盖层),然后以 `GOWORK=off` 运行
+`go mod tidy` 与 `go run .`(别让 checkout 自己的 `go.work` 渗进
+构建)。tidy 会拉取一次第三方依赖。
 
 **预期结果。** 程序在 stdout 打印下面六行;装配自己的能力校验日志行
 先打到 stderr:
