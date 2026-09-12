@@ -66,7 +66,6 @@ import {
   useNotesCreateNote,
   useNotesListNotes,
 } from '../app-api/index.js'
-import { useCurrentTenant } from '@speed/auth-core'
 import { useTranslation } from '@speed/i18n'
 import { RouteGuard } from '@speed/layout-kit'
 import type { RouteGuardStatus } from '@speed/layout-kit'
@@ -74,6 +73,7 @@ import type { DataTableColumn } from '@speed/ui-kit'
 import { DataTable, EmptyState, FormField, FormLayout } from '@speed/ui-kit'
 import { useForm } from 'react-hook-form'
 import { REFERENCE_APP_NAMESPACE } from '../resources.js'
+import { useTenantQueryKey } from '../tenant-query-key.js'
 import { usePreferredTimeZone } from '../use-preferred-time-zone.js'
 import { CurrentClinicLine } from './current-clinic.js'
 import {
@@ -152,26 +152,12 @@ export const NOTE_ERROR_TEXT_KEYS: Readonly<Record<string, string>> = {
 export function NotesView(): ReactElement {
   const { t, i18n } = useTranslation(REFERENCE_APP_NAMESPACE)
   const queryClient = useQueryClient()
-  // useCurrentTenant returns { tenantId } | null, not a bare string --
-  // the plain string is what the tenant-namespaced-key convention
-  // documents (['tenant', tenantId, ...]) and what user-menu.tsx's
-  // tenant-switch eviction and the shipped session-end strategy both
-  // key their removeQueries call on, so it is extracted here rather than
-  // embedding the hook's object: the object is a fresh reference per
-  // render, so a key or an eviction built from it could never
-  // structurally match the cached key and would evict nothing --
-  // without a real eviction, only a query key that itself changes (as
-  // it does on an actual tenant switch) would ever produce fresh data.
-  const currentTenant = useCurrentTenant()
-  const tenantId = currentTenant?.tenantId ?? null
 
-  // The tenant-namespaced list key. The view only ever mounts inside
-  // the signed-in frame (where the tenant is always present); a null
-  // tenant disables the query and the gate stays pending, failing
-  // closed rather than inventing a tenant.
-  const notesListKey = useMemo(
-    () => ['tenant', tenantId, ...getNotesListNotesQueryKey()],
-    [tenantId],
+  // The view only ever mounts inside the signed-in frame (where the
+  // tenant is always present); a null tenant disables the query and the
+  // gate stays pending, failing closed rather than inventing a tenant.
+  const { tenantId, queryKey: notesListKey } = useTenantQueryKey(
+    getNotesListNotesQueryKey(),
   )
   const notesQuery = useNotesListNotes({
     query: { queryKey: notesListKey, enabled: tenantId !== null },

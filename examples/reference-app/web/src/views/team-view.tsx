@@ -87,7 +87,7 @@ import {
   orgListNodes,
   useOrgCreateInvitation,
 } from '@speed/api-sdk'
-import { useAuthState, useCurrentTenant } from '@speed/auth-core'
+import { useAuthState } from '@speed/auth-core'
 import { useTranslation } from '@speed/i18n'
 import type { RouteGuardStatus } from '@speed/layout-kit'
 import { RouteGuard } from '@speed/layout-kit'
@@ -98,6 +98,7 @@ import { useAppServices } from '../app-services.js'
 import { REFERENCE_APP_NAMESPACE } from '../resources.js'
 import { fetchTeamMembers } from '../team-api.js'
 import type { TeamMember } from '../team-api.js'
+import { useTenantQueryKey } from '../tenant-query-key.js'
 import { usePreferredTimeZone } from '../use-preferred-time-zone.js'
 import { CurrentClinicLine } from './current-clinic.js'
 
@@ -211,8 +212,6 @@ export function TeamView(): ReactElement {
   const { t, i18n } = useTranslation(REFERENCE_APP_NAMESPACE)
   const queryClient = useQueryClient()
   const { api } = useAppServices()
-  const currentTenant = useCurrentTenant()
-  const tenantId = currentTenant?.tenantId ?? null
   // The signed-in caller's own user id, for the "You" naming of their
   // own membership row (see the file header's naming section). The
   // hook is read-only and fails closed to null while anonymous.
@@ -232,10 +231,7 @@ export function TeamView(): ReactElement {
   // query's own contract is exactly what keeps one loading state, one
   // error state and one gate, and the members leg has no generated
   // hook to ride (it is the host's own route).
-  const teamKey = useMemo(
-    () => ['tenant', tenantId, 'team'],
-    [tenantId],
-  )
+  const { tenantId, queryKey: teamKey } = useTenantQueryKey(['team'])
   const teamQuery = useQuery({
     queryKey: teamKey,
     queryFn: async () => {

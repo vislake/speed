@@ -72,7 +72,6 @@ import Box from '@mui/material/Box'
 import Typography from '@mui/material/Typography'
 import { useAdminGetUsageSummary } from '@speed/api-sdk'
 import type { AdminSubscription } from '@speed/api-sdk'
-import { useCurrentTenant } from '@speed/auth-core'
 import { useTranslation } from '@speed/i18n'
 import type { RouteGuardStatus } from '@speed/layout-kit'
 import { RouteGuard } from '@speed/layout-kit'
@@ -80,6 +79,7 @@ import { EmptyState } from '@speed/ui-kit'
 import { apiErrorCodeOf } from '../cases-errors.js'
 import { demoTenantNameKey } from '../demo-tenants.js'
 import { REFERENCE_APP_NAMESPACE } from '../resources.js'
+import { useTenantQueryKey } from '../tenant-query-key.js'
 import { useDateFormatter } from '../use-date-formatter.js'
 
 /** The read gate's own refusal code: the rbac layer's 403, the only
@@ -125,19 +125,16 @@ function tenantSectionName(
  */
 export function AdminUsageView(): ReactElement {
   const { t, i18n } = useTranslation(REFERENCE_APP_NAMESPACE)
-  const currentTenant = useCurrentTenant()
-  const tenantId = currentTenant?.tenantId ?? null
-
   // The dashboard read under a tenant-namespaced query key, the ledger
   // view's shape: the rows are platform data, but they were fetched
   // under THIS principal's access token, and the app's eviction
   // discipline keys every cached row it may have to drop on a tenant
   // switch or a session end under ['tenant', tenantId, ...] -- so the
   // platform read shares the prefix, exactly like the ledger row does.
-  const summaryKey = useMemo(
-    () => ['tenant', tenantId, 'admin', 'usage'],
-    [tenantId],
-  )
+  const { tenantId, queryKey: summaryKey } = useTenantQueryKey([
+    'admin',
+    'usage',
+  ])
   const summaryQuery = useAdminGetUsageSummary({
     query: { queryKey: summaryKey, enabled: tenantId !== null },
   })

@@ -34,7 +34,6 @@
  */
 
 import type { ReactElement } from 'react'
-import { useMemo } from 'react'
 import Box from '@mui/material/Box'
 import Button from '@mui/material/Button'
 import List from '@mui/material/List'
@@ -46,11 +45,11 @@ import {
   getCasesListCasesQueryKey,
   useCasesListCases,
 } from '../app-api/index.js'
-import { useCurrentTenant } from '@speed/auth-core'
 import { useTranslation } from '@speed/i18n'
 import { RouteGuard } from '@speed/layout-kit'
 import { EmptyState } from '@speed/ui-kit'
 import { REFERENCE_APP_NAMESPACE } from '../resources.js'
+import { useTenantQueryKey } from '../tenant-query-key.js'
 import { useDateFormatter } from '../use-date-formatter.js'
 import { CasesSurfaceHeading } from './case-surface-heading.js'
 
@@ -65,15 +64,12 @@ export function CasesView({
   readonly onOpenCase: (caseId: string) => void
 }): ReactElement {
   const { t, i18n } = useTranslation(REFERENCE_APP_NAMESPACE)
-  const currentTenant = useCurrentTenant()
-  const tenantId = currentTenant?.tenantId ?? null
 
-  // The tenant-namespaced list key (see the file header); a null tenant
-  // disables the query and the gate stays pending, failing closed
-  // rather than inventing a tenant.
-  const casesListKey = useMemo(
-    () => ['tenant', tenantId, ...getCasesListCasesQueryKey()],
-    [tenantId],
+  // A null tenant disables the query and the gate stays pending,
+  // failing closed rather than inventing a tenant (the key's
+  // tenant-namespacing is useTenantQueryKey's; see the file header).
+  const { tenantId, queryKey: casesListKey } = useTenantQueryKey(
+    getCasesListCasesQueryKey(),
   )
   const casesQuery = useCasesListCases({
     query: { queryKey: casesListKey, enabled: tenantId !== null },

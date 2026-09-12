@@ -27,12 +27,12 @@ import { createContext, useContext, useMemo } from 'react'
 import type { ReactElement, ReactNode } from 'react'
 import { usePublicConfig } from '@speed/api-client/react'
 import type { RequestFn } from '@speed/api-client'
-import { useCurrentTenant } from '@speed/auth-core'
 import type { AuthSession } from '@speed/auth-core'
 import { useTranslation } from '@speed/i18n'
 import { demoTenantNameKey } from './demo-tenants.js'
 import { REFERENCE_APP_NAMESPACE } from './resources.js'
 import { clinicNameRequest } from './tenant-name.js'
+import { useTenantQueryKey } from './tenant-query-key.js'
 
 /** The services the shell views compose. */
 export interface AppServices {
@@ -65,8 +65,7 @@ export interface AppServices {
 export function useCurrentTenantName(): string | null {
   const { api } = useAppServices()
   const { t } = useTranslation(REFERENCE_APP_NAMESPACE)
-  const currentTenant = useCurrentTenant()
-  const tenantId = currentTenant?.tenantId ?? null
+  const { tenantId, queryKey: nameQueryKey } = useTenantQueryKey(['clinic-name'])
   const nameKey = demoTenantNameKey(tenantId)
   // The demo roster's copy answers first; the server answer is fetched
   // only for a tenant the copy cannot name. The query key shares the
@@ -74,7 +73,7 @@ export function useCurrentTenantName(): string | null {
   // use, so user-menu's switch-time eviction of the departing tenant
   // (TENANT_QUERY_PREFIX) removes this row with the notes list's.
   const nameQuery = useQuery({
-    queryKey: ['tenant', tenantId, 'clinic-name'],
+    queryKey: nameQueryKey,
     queryFn: () => clinicNameRequest(api),
     enabled: tenantId !== null && nameKey === null,
   })

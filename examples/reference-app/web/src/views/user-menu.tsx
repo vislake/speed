@@ -61,11 +61,7 @@ import type { TenantOption } from '@speed/tenancy-ui'
 import { useAppServices, useCurrentTenantName } from '../app-services.js'
 import { DEMO_TENANTS } from '../demo-tenants.js'
 import { REFERENCE_APP_NAMESPACE } from '../resources.js'
-
-/** The tenant-scoped query-key prefix the app's data queries namespace
- * under (['tenant', tenantId, ...]); the eviction below removes whole
- * prefixes. */
-export const TENANT_QUERY_PREFIX = 'tenant'
+import { TENANT_QUERY_PREFIX } from '../tenant-query-key.js'
 
 /**
  * Evicts the identity-domain queries of the account surface: the

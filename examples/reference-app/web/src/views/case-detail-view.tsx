@@ -27,7 +27,6 @@
  */
 
 import type { ReactElement } from 'react'
-import { useMemo } from 'react'
 import Box from '@mui/material/Box'
 import Button from '@mui/material/Button'
 import Typography from '@mui/material/Typography'
@@ -35,11 +34,11 @@ import {
   getCasesGetCaseQueryKey,
   useCasesGetCase,
 } from '../app-api/index.js'
-import { useCurrentTenant } from '@speed/auth-core'
 import { useTranslation } from '@speed/i18n'
 import { RouteGuard } from '@speed/layout-kit'
 import { EmptyState } from '@speed/ui-kit'
 import { REFERENCE_APP_NAMESPACE } from '../resources.js'
+import { useTenantQueryKey } from '../tenant-query-key.js'
 import { useDateFormatter } from '../use-date-formatter.js'
 import { CasePhoto } from './case-photo.js'
 import { PhotoSimulationPanel } from './photo-simulation-panel.js'
@@ -55,12 +54,8 @@ export function CaseDetailView({
   readonly onBack: () => void
 }): ReactElement {
   const { t, i18n } = useTranslation(REFERENCE_APP_NAMESPACE)
-  const currentTenant = useCurrentTenant()
-  const tenantId = currentTenant?.tenantId ?? null
-
-  const caseKey = useMemo(
-    () => ['tenant', tenantId, ...getCasesGetCaseQueryKey(caseId)],
-    [tenantId, caseId],
+  const { tenantId, queryKey: caseKey } = useTenantQueryKey(
+    getCasesGetCaseQueryKey(caseId),
   )
   const caseQuery = useCasesGetCase(caseId, {
     query: { queryKey: caseKey, enabled: tenantId !== null },

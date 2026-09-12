@@ -59,7 +59,6 @@ import Box from '@mui/material/Box'
 import Typography from '@mui/material/Typography'
 import { useAdminListTenants } from '@speed/api-sdk'
 import type { AdminTenant } from '@speed/api-sdk'
-import { useCurrentTenant } from '@speed/auth-core'
 import { useTranslation } from '@speed/i18n'
 import type { RouteGuardStatus } from '@speed/layout-kit'
 import { RouteGuard } from '@speed/layout-kit'
@@ -67,6 +66,7 @@ import type { DataTableColumn } from '@speed/ui-kit'
 import { DataTable, EmptyState } from '@speed/ui-kit'
 import { demoTenantNameKey } from '../demo-tenants.js'
 import { REFERENCE_APP_NAMESPACE } from '../resources.js'
+import { useTenantQueryKey } from '../tenant-query-key.js'
 import { usePreferredTimeZone } from '../use-preferred-time-zone.js'
 
 /** The read gate's own refusal code: the rbac layer's 403, the only
@@ -98,18 +98,15 @@ function apiErrorCodeOf(error: unknown): string | null {
  */
 export function AdminView(): ReactElement {
   const { t, i18n } = useTranslation(REFERENCE_APP_NAMESPACE)
-  const currentTenant = useCurrentTenant()
-  const tenantId = currentTenant?.tenantId ?? null
 
   // The ledger read under a tenant-namespaced query key, the notes and
   // team shape: the row is platform data, but it was fetched under
   // THIS principal's access token, and the app's eviction discipline
   // keys every cached row it may have to drop on a tenant switch or a
-  // session end under ['tenant', tenantId, ...] (user-menu.tsx's
-  // TENANT_QUERY_PREFIX, the assembly's session-end eviction) -- so the
-  // platform ledger shares the prefix, exactly like the clinic-name
-  // row does.
-  const tenantsKey = useMemo(() => ['tenant', tenantId, 'admin'], [tenantId])
+  // session end under ['tenant', tenantId, ...] (TENANT_QUERY_PREFIX,
+  // the assembly's session-end eviction) -- so the platform ledger
+  // shares the prefix, exactly like the clinic-name row does.
+  const { tenantId, queryKey: tenantsKey } = useTenantQueryKey(['admin'])
   const tenantsQuery = useAdminListTenants(undefined, {
     query: { queryKey: tenantsKey, enabled: tenantId !== null },
   })

@@ -49,7 +49,6 @@ import type {
   SmilesimSimulationOptionsToothShade,
 } from '../app-api/index.js'
 import { useQueryClient } from '@tanstack/react-query'
-import { useCurrentTenant } from '@speed/auth-core'
 import { useTranslation } from '@speed/i18n'
 import { REFERENCE_APP_NAMESPACE } from '../resources.js'
 import {
@@ -57,6 +56,7 @@ import {
   smileSimErrorTextKey,
 } from '../smile-sim-errors.js'
 import { base64ToBytes } from '../base64.js'
+import { useTenantQueryKey } from '../tenant-query-key.js'
 import { useDateFormatter } from '../use-date-formatter.js'
 import { CasePhoto } from './case-photo.js'
 import { SimulationDownloadAction } from './simulation-download-action.js'
@@ -204,19 +204,8 @@ function SimulationResultImage({
   readonly simulation: SmilesimSimulation
 }): ReactElement {
   const { t } = useTranslation(REFERENCE_APP_NAMESPACE)
-  const currentTenant = useCurrentTenant()
-  const tenantId = currentTenant?.tenantId ?? null
-
-  const contentKey = useMemo(
-    () => [
-      'tenant',
-      tenantId,
-      ...getSmilesimGetSimulationContentQueryKey(
-        photoObjectID,
-        simulation.job_id,
-      ),
-    ],
-    [tenantId, photoObjectID, simulation.job_id],
+  const { tenantId, queryKey: contentKey } = useTenantQueryKey(
+    getSmilesimGetSimulationContentQueryKey(photoObjectID, simulation.job_id),
   )
   const contentQuery = useSmilesimGetSimulationContent(
     photoObjectID,
@@ -368,8 +357,6 @@ export function PhotoSimulationPanel({
     return (value: number): string => formatter.format(value)
   }, [i18n.language])
   const queryClient = useQueryClient()
-  const currentTenant = useCurrentTenant()
-  const tenantId = currentTenant?.tenantId ?? null
   const photoObjectID = photo.object_id
 
   // The option state defaults to the service's documented defaults
@@ -393,27 +380,15 @@ export function PhotoSimulationPanel({
   // spend that is no longer going to happen.
   const [autoPreviewRefused, setAutoPreviewRefused] = useState(false)
 
-  const listKey = useMemo(
-    () => [
-      'tenant',
-      tenantId,
-      ...getSmilesimListPhotoSimulationsQueryKey(photoObjectID),
-    ],
-    [tenantId, photoObjectID],
+  const { tenantId, queryKey: listKey } = useTenantQueryKey(
+    getSmilesimListPhotoSimulationsQueryKey(photoObjectID),
   )
   const simulationsQuery = useSmilesimListPhotoSimulations(photoObjectID, {
     query: { queryKey: listKey, enabled: tenantId !== null },
   })
 
-  const jobKey = useMemo(
-    () => [
-      'tenant',
-      tenantId,
-      ...(pollingJobID === null
-        ? []
-        : getSmilesimGetJobQueryKey(pollingJobID)),
-    ],
-    [tenantId, pollingJobID],
+  const { queryKey: jobKey } = useTenantQueryKey(
+    pollingJobID === null ? [] : getSmilesimGetJobQueryKey(pollingJobID),
   )
   const jobQuery = useSmilesimGetJob(pollingJobID ?? '', {
     query: {

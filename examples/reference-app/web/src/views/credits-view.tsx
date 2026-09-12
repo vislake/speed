@@ -52,13 +52,13 @@ import {
   useBillingGetCreditBalance,
   useBillingListCreditTransactions,
 } from '@speed/api-sdk'
-import { useCurrentTenant } from '@speed/auth-core'
 import { useTranslation } from '@speed/i18n'
 import { RouteGuard } from '@speed/layout-kit'
 import type { RouteGuardStatus } from '@speed/layout-kit'
 import { EmptyState } from '@speed/ui-kit'
 import { REFERENCE_APP_NAMESPACE } from '../resources.js'
 import { apiErrorCodeOf } from '../cases-errors.js'
+import { useTenantQueryKey } from '../tenant-query-key.js'
 import { useDateFormatter } from '../use-date-formatter.js'
 import { CurrentClinicLine } from './current-clinic.js'
 
@@ -122,8 +122,6 @@ function signedAmount(
  * notes list. */
 export function CreditsView(): ReactElement {
   const { t, i18n } = useTranslation(REFERENCE_APP_NAMESPACE)
-  const currentTenant = useCurrentTenant()
-  const tenantId = currentTenant?.tenantId ?? null
 
   const formatNumber = useMemo(() => {
     const formatter = new Intl.NumberFormat(i18n.language)
@@ -135,17 +133,11 @@ export function CreditsView(): ReactElement {
   // shape every surface of this host uses. A null tenant disables both
   // queries and the gate stays pending, failing closed rather than
   // inventing a tenant.
-  const balanceKey = useMemo(
-    () => ['tenant', tenantId, ...getBillingGetCreditBalanceQueryKey()],
-    [tenantId],
+  const { tenantId, queryKey: balanceKey } = useTenantQueryKey(
+    getBillingGetCreditBalanceQueryKey(),
   )
-  const transactionsKey = useMemo(
-    () => [
-      'tenant',
-      tenantId,
-      ...getBillingListCreditTransactionsQueryKey(),
-    ],
-    [tenantId],
+  const { queryKey: transactionsKey } = useTenantQueryKey(
+    getBillingListCreditTransactionsQueryKey(),
   )
   const balanceQuery = useBillingGetCreditBalance({
     query: { queryKey: balanceKey, enabled: tenantId !== null },

@@ -25,7 +25,7 @@
  * image belongs -- to speak, never a control that saves an error page.
  */
 
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useState } from 'react'
 import type { ReactElement } from 'react'
 import Box from '@mui/material/Box'
 import Button from '@mui/material/Button'
@@ -34,10 +34,10 @@ import {
   useSmilesimGetSimulationContent,
 } from '../app-api/index.js'
 import type { SmilesimSimulation } from '../app-api/index.js'
-import { useCurrentTenant } from '@speed/auth-core'
 import { useTranslation } from '@speed/i18n'
 import { REFERENCE_APP_NAMESPACE } from '../resources.js'
 import { base64ToBytes } from '../base64.js'
+import { useTenantQueryKey } from '../tenant-query-key.js'
 
 /** The image media types the storage probe can assign, each to the
  * extension its bytes should carry when saved to disk. A type outside
@@ -92,19 +92,8 @@ export function SimulationDownloadAction({
   readonly patientName: string
 }): ReactElement | null {
   const { t } = useTranslation(REFERENCE_APP_NAMESPACE)
-  const currentTenant = useCurrentTenant()
-  const tenantId = currentTenant?.tenantId ?? null
-
-  const contentKey = useMemo(
-    () => [
-      'tenant',
-      tenantId,
-      ...getSmilesimGetSimulationContentQueryKey(
-        photoObjectID,
-        simulation.job_id,
-      ),
-    ],
-    [tenantId, photoObjectID, simulation.job_id],
+  const { tenantId, queryKey: contentKey } = useTenantQueryKey(
+    getSmilesimGetSimulationContentQueryKey(photoObjectID, simulation.job_id),
   )
   const contentQuery = useSmilesimGetSimulationContent(
     photoObjectID,

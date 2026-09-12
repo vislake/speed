@@ -8,7 +8,7 @@
  * the cases reachable-error map), never a broken image.
  */
 
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useState } from 'react'
 import type { ReactElement } from 'react'
 import Box from '@mui/material/Box'
 import Typography from '@mui/material/Typography'
@@ -17,7 +17,6 @@ import {
   useCasesGetPhotoContent,
 } from '../app-api/index.js'
 import type { CasesPhoto } from '../app-api/index.js'
-import { useCurrentTenant } from '@speed/auth-core'
 import { useTranslation } from '@speed/i18n'
 import {
   casesErrorCodeOf,
@@ -25,6 +24,7 @@ import {
 } from '../cases-errors.js'
 import { REFERENCE_APP_NAMESPACE } from '../resources.js'
 import { base64ToBytes } from '../base64.js'
+import { useTenantQueryKey } from '../tenant-query-key.js'
 
 /** One photo of the case: its bytes fetched through the photo-content
  * operation and rendered from a blob URL that this component owns and
@@ -40,16 +40,8 @@ export function CasePhoto({
   readonly index: number
 }): ReactElement {
   const { t } = useTranslation(REFERENCE_APP_NAMESPACE)
-  const currentTenant = useCurrentTenant()
-  const tenantId = currentTenant?.tenantId ?? null
-
-  const contentKey = useMemo(
-    () => [
-      'tenant',
-      tenantId,
-      ...getCasesGetPhotoContentQueryKey(caseId, photo.object_id),
-    ],
-    [tenantId, caseId, photo.object_id],
+  const { tenantId, queryKey: contentKey } = useTenantQueryKey(
+    getCasesGetPhotoContentQueryKey(caseId, photo.object_id),
   )
   const contentQuery = useCasesGetPhotoContent(caseId, photo.object_id, {
     query: { queryKey: contentKey, enabled: tenantId !== null },
