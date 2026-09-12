@@ -162,9 +162,9 @@ func component() pkgcore.Component {
 			// selects no signer member keeps the module's own LocalSigner
 			// default over the shared connection, constructed below.
 			if members := pkgcore.MemberNames(reg, signerModuleName); len(members) == 1 {
-				signer, err := pkgcore.Get[Signer](reg)
-				if err != nil {
-					return nil, err
+				signer, signerErr := pkgcore.Get[Signer](reg)
+				if signerErr != nil {
+					return nil, signerErr
 				}
 				opts = append(opts, WithSigner(signerNameFromMember(members[0]), signer))
 			}
