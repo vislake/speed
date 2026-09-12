@@ -2,10 +2,15 @@ package pki
 
 import (
 	"context"
+	"crypto/x509/pkix"
 	"testing"
+	"time"
 
 	"gorm.io/gorm"
 
+	"github.com/vislake/speed/go/config"
+	configmigrations "github.com/vislake/speed/go/config/migrations"
+	"github.com/vislake/speed/go/dbkit"
 	"github.com/vislake/speed/go/jobs"
 	"github.com/vislake/speed/go/pkgcore"
 	"github.com/vislake/speed/go/pkgcore/componenttest"
@@ -193,6 +198,91 @@ func TestComponentConstructionRefusesBadInputs(t *testing.T) {
 			t.Fatal("construction picked one of two queue values instead of refusing the ambiguity")
 		}
 	})
+}
+
+// TestComponent_SelfWiresTheSettingsReaderFromAConfigComponent drives the
+// pki and config descriptors through one real assembly: pki declares the
+// config module as an optional requirement, so with config selected the
+// descriptor wires the config handle as the module's SettingsReader on its
+// own -- the test never calls WithSettingsReader -- and a system row
+// written through the assembled config service governs issuance through
+// the assembled pki module.
+func TestComponent_SelfWiresTheSettingsReaderFromAConfigComponent(t *testing.T) {
+	ctx := context.Background()
+	db := newTestDB(t)
+	testutil.Migrate(t, db, dbkit.DialectSQLite, "config", configmigrations.FS)
+
+	cipher, cipherErr := dbkit.NewCipher([]byte(testLocalKeyCipherKey))
+	if cipherErr != nil {
+		t.Fatalf("dbkit.NewCipher: %v", cipherErr)
+	}
+
+	reg := pkgcore.NewComponentRegistry()
+	if err := reg.Register(testDBComponent(db)); err != nil {
+		t.Fatalf("registering the database stand-in: %v", err)
+	}
+	// The cipher config's descriptor takes as an optional dependency, Put
+	// before the assembly runs -- the shape a host's own component hands it
+	// over.
+	reg.Put(cipher)
+	reg.Put(pkgcore.NewMemoryEventBus())
+	reg.Put(pkgcore.NewComponentConfig(map[string]any{
+		"components": map[string]any{
+			"pki":     nil,
+			"config":  nil,
+			"test.db": nil,
+		},
+	}))
+
+	for _, stage := range []struct {
+		name string
+		run  func(context.Context) error
+	}{
+		{"prepare", reg.Prepare},
+		{"construct", reg.Construct},
+		{"verify", reg.Verify},
+		{"init", reg.Init},
+		{"start", reg.Start},
+	} {
+		if err := stage.run(ctx); err != nil {
+			t.Fatalf("%s: %v", stage.name, err)
+		}
+	}
+
+	m, err := pkgcore.Get[*Module](reg)
+	if err != nil {
+		t.Fatalf("the assembled pki product is not reachable: %v", err)
+	}
+	cfgSvc, err := pkgcore.Get[*config.Service](reg)
+	if err != nil {
+		t.Fatalf("the assembled config service is not reachable: %v", err)
+	}
+
+	// The config component's descriptor carries the system-write purpose,
+	// which the assembly registered at the Init stage's entry; the write is
+	// the operator's own path.
+	const rowValidity = 45 * 24 * time.Hour
+	sysCtx, err := pkgcore.WithSystemContext(ctx, pkgcore.SystemReason{
+		Actor:   "ops-1",
+		Purpose: config.SystemPurposeSystemWrite,
+		Ticket:  "ticket-42",
+	})
+	if err != nil {
+		t.Fatalf("pkgcore.WithSystemContext: %v", err)
+	}
+	if setErr := cfgSvc.Set(sysCtx, config.ScopeSystem, ConfigCADefaultValidity, config.Value{Data: rowValidity}, "ops-1"); setErr != nil {
+		t.Fatalf("Set %s: %v", ConfigCADefaultValidity, setErr)
+	}
+
+	// Issuance through the descriptor-constructed module must honor the row
+	// without any host-side wiring of the settings seam.
+	authority, err := m.CA().CreateRootCA(ctx, CAParams{Subject: pkix.Name{CommonName: "speed Root CA"}})
+	if err != nil {
+		t.Fatalf("CreateRootCA: %v", err)
+	}
+	if got := authority.NotAfter.Sub(authority.NotBefore); (got - rowValidity).Abs() > 5*time.Second {
+		t.Fatalf("issued validity span = %v; want the assembled config row %v (the descriptor must wire the settings reader itself)", got, rowValidity)
+	}
 }
 
 // TestSignerLocalComponent_WellFormed runs the descriptor through the
