@@ -175,7 +175,7 @@ component beyond the builtin selection.
 | Package | Concern | Dependency closure |
 |---|---|---|
 | `go/app` (root) | the engine: the loader, the driver and the `RunAssembly` sugar, and the HTTP helpers the engine and hand-composing hosts share (`AuthnAPIPath`, `ReadHeaderTimeout`/`ShutdownTimeout`, `PreAuthAllowlist`) | pkgcore (+ its config subpackage), config, observability, tenancy — and, through config, dbkit and its GORM. Every composition carries the root |
-| `go/app/chain` | the fixed middleware chain: `chain.Standard` (the registry-derived derivation, over either registry shape's `RouteSource`: guard the mounted routes through the host's rbac rule table, split the authn and admin subtrees, mount the rest, delegate to `Chain`), `chain.Config`/`chain.Chain` (the direct path for a custom layout) — the order (authn outermost, then the optional impersonation decorator, then tenancy with the pre-auth allowlist), the authn/admin branches dispatched around it, validation (`chain.go`, `standard.go`) | root + authn + rbac + tenancy + pkgcore — bounded by the chain's own participants (the rule table is rbac's, the impersonation decorator stays a `func(http.Handler) http.Handler` the host builds, and no admin import is needed: the admin prefix arrives as `admin.APIPath` through an option) |
+| `go/app/chain` | the fixed middleware chain: `chain.Standard` (the registry-derived derivation over the registry's `RouteSource` — mounted routes plus the `Middleware` seat it applies around the finished chain: guard the mounted routes through the host's rbac rule table, split the authn and admin subtrees, mount the rest, delegate to `Chain`, wrap the seat's middleware outside it all), `chain.Config`/`chain.Chain` (the direct path for a custom layout) — the order (authn outermost, then the optional impersonation decorator, then tenancy with the pre-auth allowlist), the authn/admin branches dispatched around it, validation (`chain.go`, `standard.go`) | root + authn + rbac + tenancy + pkgcore — bounded by the chain's own participants (the rule table is rbac's, the impersonation decorator stays a `func(http.Handler) http.Handler` the host builds, and no admin import is needed: the admin prefix arrives as `admin.APIPath` through an option) |
 | `go/app/bridges` | the no-import bridges: `Entitlements`, `UsageRecorder`, `OrgFeatureGate`, `AuthnFeatureGate`, `ShareExpiryReader` (`bridges.go`, `sharing.go`) | ai-gateway, billing, metering, org, sharing, authn, config — paid only by hosts that wire those modules |
 
 Runnable usage documentation (`example_test.go`) ships one example per
@@ -208,16 +208,31 @@ allowlist entries):
   substitution may run ahead of it (`go/admin/AGENTS.md` states both).
 
 `chain.Standard(reg, verifier, protected, opts...)` derives that whole
-composition from the bootstrapped registry's mounted routes instead of
-taking the pieces pre-assembled (its `RouteSource` parameter is answered by
-both registry shapes — the module Registry and the component assembly's
-`ComponentRegistry`): it admits every mounted route through the host's
+composition from the bootstrapped registry (`*pkgcore.ComponentRegistry`,
+its `RouteSource` parameter: the mounted routes and the registry's
+`Middleware` seat) instead of taking the pieces pre-assembled: it admits
+every mounted route through the host's
 route-authorization table (`WithAuthorization` — `rbac.GuardRoutes` over
 the host's own rules, so the table's exhaustiveness is checked and every
 gated route is wrapped in rbac's fail-closed gate before it is mounted),
 splits the authn subtree out with `authn.ExemptSubtree` and the admin
 subtree out by prefix, and mounts everything else on the host's protected
-mux before delegating the branch structure to `Chain`. The host supplies
+mux before delegating the branch structure to `Chain`. It then wraps the
+registry's `Middleware` seat around the finished chain — the platform's one
+layer OUTSIDE the fixed order (authn.Middleware stays outermost of the
+chain; the seat cannot insert into it, only wrap its output), first
+registered outermost. A middleware on that layer wraps every request the
+chain handles, including one authn or tenancy refuses before any route is
+reached, and therefore runs with no `authn.Principal` and no tenant
+context: stateless bypass work (tracing, metrics, panic recovery) only.
+A request the host answers outside the chain stays outside the layer too:
+the reference app's SPA file server, wrapped around its composed face when
+the boot serves a frontend directory, answers its own traffic without the
+layer seeing it. `go/observability`'s component is the seat's first member
+— its `Init` declares the module's `Middleware` there, which is why a host
+composing through `Standard` no longer hand-wires `obs.Middleware` around
+the served handler (a selection that composes no chain keeps its own
+hand-wire: nothing reads the seat there). The host supplies
 the business half through options: the authorizer and rule table, the
 admin prefix, the impersonation decorator, the tenant-status resolver and
 its extra pre-auth allowlist entries. The billing quota domain does not

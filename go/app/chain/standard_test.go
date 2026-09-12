@@ -4,6 +4,7 @@ import (
 	"context"
 	"embed"
 	"net/http"
+	"slices"
 	"testing"
 
 	"github.com/vislake/speed/go/app"
@@ -32,6 +33,24 @@ func (m *routesModule) Register(reg *pkgcore.ComponentRegistry) error {
 		reg.RoutesSeat().Mount(route.Path, route.Handler)
 	}
 	return nil
+}
+
+// middlewareModule is a module that declares exactly the middleware a test
+// hands it, through the same declaration window a real component's Init
+// uses, so a Standard test can exercise the Middleware seat without any
+// HTTP-facing module of its own.
+type middlewareModule struct {
+	name string
+	mws  []func(http.Handler) http.Handler
+}
+
+func (m *middlewareModule) Name() string         { return m.name }
+func (m *middlewareModule) DependsOn() []string  { return nil }
+func (m *middlewareModule) Migrations() embed.FS { return embed.FS{} }
+func (m *middlewareModule) Locales() embed.FS    { return embed.FS{} }
+func (m *middlewareModule) OpenAPISpec() []byte  { return nil }
+func (m *middlewareModule) Register(reg *pkgcore.ComponentRegistry) error {
+	return reg.Middleware.Add(m.mws...)
 }
 
 // testRegistry drives the assembly over the modules, returning the registry
@@ -232,6 +251,70 @@ func TestStandard_AcceptsAComponentRegistry(t *testing.T) {
 	}
 	if rec := do(handler, http.MethodGet, app.AuthnAPIPath+"/register", nil); authn.hits != 1 {
 		t.Fatalf("GET %s/register: status %d, authn hits %d; the component registry's routes must partition like the module registry's", app.AuthnAPIPath, rec.Code, authn.hits)
+	}
+}
+
+// probeMiddleware returns a middleware recording its enter and exit under
+// name into order, so a test can observe where the seat's layer wrapped and
+// how several registered middlewares nested.
+func probeMiddleware(order *[]string, name string) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			*order = append(*order, name+":in")
+			next.ServeHTTP(w, r)
+			*order = append(*order, name+":out")
+		})
+	}
+}
+
+// TestStandard_AppliesTheMiddlewareSeatOutermost pins the seat layer's
+// position and nesting: the middleware declared on the Middleware seat wraps
+// the finished chain OUTSIDE authn.Middleware -- a request authn itself
+// refuses (an invalid bearer) still passes through every probe -- on both
+// the protected face and the structurally exempt branches, and the first
+// registered middleware wraps outermost.
+func TestStandard_AppliesTheMiddlewareSeatOutermost(t *testing.T) {
+	var order []string
+	authn := &countingHandler{}
+	reg := testRegistry(t,
+		&routesModule{name: "fixture", routes: []pkgcore.MountedRoute{
+			{Path: app.AuthnAPIPath, Handler: authn},
+			{Path: "/api/v1/notes", Handler: &countingHandler{}},
+		}},
+		&middlewareModule{name: "fixture.middleware", mws: []func(http.Handler) http.Handler{
+			probeMiddleware(&order, "outer"),
+			probeMiddleware(&order, "inner"),
+		}},
+	)
+	protected := http.NewServeMux()
+	protected.Handle("/", http.NotFoundHandler())
+
+	handler, err := Standard(reg, newTestVerifier(t), protected)
+	if err != nil {
+		t.Fatalf("Standard: %v", err)
+	}
+
+	// The invalid bearer 401s inside authn.Middleware, before anything else
+	// in the chain runs; the probes still saw the request, so the seat's
+	// layer must sit outside authn -- and it must nest first-registered-
+	// outermost.
+	rec := do(handler, http.MethodGet, "/api/v1/notes", map[string]string{"Authorization": "Bearer not-a-token"})
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("GET /api/v1/notes with an invalid bearer: status %d, want %d", rec.Code, http.StatusUnauthorized)
+	}
+	want := []string{"outer:in", "inner:in", "inner:out", "outer:out"}
+	if !slices.Equal(order, want) {
+		t.Fatalf("probe order for a request authn refused = %v, want %v: the seat's middleware wraps outside authn.Middleware, first registered outermost", order, want)
+	}
+
+	// The structurally exempt branch passes through the same layer: the
+	// probes see a request served by the authn subtree too.
+	order = nil
+	if rec := do(handler, http.MethodGet, app.AuthnAPIPath+"/register", nil); authn.hits != 1 {
+		t.Fatalf("GET %s/register: status %d, authn hits %d; the exempt branch must serve the request", app.AuthnAPIPath, rec.Code, authn.hits)
+	}
+	if !slices.Equal(order, want) {
+		t.Fatalf("probe order for an exempt-branch request = %v, want %v: every request passes through the seat's layer", order, want)
 	}
 }
 

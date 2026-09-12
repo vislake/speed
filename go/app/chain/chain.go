@@ -13,7 +13,11 @@
 // composition from the bootstrapped registry: it admits every mounted route
 // through the host's route-authorization table, partitions the authn
 // subtree and the admin subtree out of it, mounts the rest on the host's
-// protected mux, and delegates to Chain.
+// protected mux, and delegates to Chain; it then wraps the registry's
+// Middleware seat around the finished chain -- the one layer that stands
+// OUTSIDE the fixed order, never inside it (Standard's own doc comment
+// states that boundary and the contract a middleware on that layer holds
+// to).
 package chain
 
 import (

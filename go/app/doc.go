@@ -23,9 +23,9 @@
 //     optional impersonation decorator then tenancy with the pre-auth
 //     allowlist, with the authn subtree and the admin route dispatched around
 //     it by structure. chain.Standard derives the whole composition from a
-//     registry's mounted routes (either registry shape answers its
-//     RouteSource: the module Registry and the component assembly's
-//     ComponentRegistry); chain.Chain is the direct path for a host with a
+//     registry's RouteSource (its mounted routes, plus the Middleware seat
+//     it wraps around the finished chain -- the platform's one layer outside
+//     the fixed order); chain.Chain is the direct path for a host with a
 //     custom layout. Its closure is bounded by the chain's own participants
 //     (authn and rbac included); it imports no module a chain-bearing host
 //     does not already have.

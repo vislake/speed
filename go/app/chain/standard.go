@@ -3,6 +3,7 @@ package chain
 import (
 	"fmt"
 	"net/http"
+	"slices"
 	"strings"
 
 	"github.com/vislake/speed/go/authn"
@@ -11,15 +12,22 @@ import (
 	"github.com/vislake/speed/go/tenancy"
 )
 
-// RouteSource is what Standard derives its route partition from: the
-// mounted route set of a bootstrapped registry. Both registry shapes answer
-// it -- the module Registry (*pkgcore.ComponentRegistry) and the component assembly's
-// ComponentRegistry -- so a host passes whichever one its assembly produced
-// without the chain knowing which.
+// RouteSource is what Standard reads from a bootstrapped registry: the
+// mounted route set it derives the chain's route partition from, and the
+// platform middleware the registry's Middleware seat carries. A host passes
+// the *pkgcore.ComponentRegistry its assembly produced; the chain derives
+// everything else from it.
 type RouteSource interface {
-	// MountedRoutes returns every route the registry's modules (or
-	// components) mounted, in registration order.
+	// MountedRoutes returns every route the registry's components mounted,
+	// in registration order.
 	MountedRoutes() []pkgcore.MountedRoute
+	// Middlewares returns every middleware declared on the registry's
+	// Middleware seat, in registration order: Standard applies them as the
+	// assembled chain's outermost layer, first registered outermost. See
+	// pkgcore.MiddlewareRegistrar for the seat's contract and its boundary --
+	// the layer stands outside the fixed chain, and the seat offers no way
+	// to insert into it.
+	Middlewares() []func(http.Handler) http.Handler
 }
 
 // Standard derives the fixed middleware chain from the bootstrapped registry
@@ -54,6 +62,29 @@ type RouteSource interface {
 // quota mechanism is the entitlements seam checked inside go/ai-gateway
 // before a provider is reached, wired at module construction
 // (aigateway.WithEntitlements), not a route-level decorator.
+//
+// The platform middleware declared on the registry's Middleware seat rides
+// OUTSIDE the derived chain: after Chain produces the fixed composition,
+// Standard wraps the seat's middleware around the finished handler in
+// registration order, first registered outermost. The layer is deliberately
+// outside everything -- outside authn.Middleware, outside the exempt
+// branches -- so a middleware there wraps every request the chain handles,
+// including one authn or tenancy refuses before any route is reached. A
+// request the host answers outside this handler -- a frontend file server
+// wrapped around it, say -- never reaches the layer. At that position the
+// middleware runs on the raw, unauthenticated request: no authn.Principal
+// and no tenant context exist there, so the work must be stateless bypass
+// work (tracing, metrics, panic recovery) -- see pkgcore.MiddlewareRegistrar
+// for the seat's contract.
+//
+// The fixed order inside the chain is NOT reachable through the seat:
+// authn.Middleware stays outermost of the chain, the AdminRoutes and
+// AuthnRoutes branches keep their structural exemptions, and
+// tenancy.Middleware with its pre-auth allowlist keeps its place -- a
+// middleware declared on the seat can only ever wrap the chain's finished
+// output. The chain's own insertion points stay what they are (the
+// impersonation decorator, the tenant-status resolver, the extra allowlist
+// entries); none of them is this seat.
 func Standard(reg RouteSource, verifier *authn.Verifier, protected *http.ServeMux, opts ...Option) (http.Handler, error) {
 	cfg := &standardConfig{}
 	for _, opt := range opts {
@@ -97,7 +128,7 @@ func Standard(reg RouteSource, verifier *authn.Verifier, protected *http.ServeMu
 	}
 	pkgcore.MountRoutes(protected, protectedRoutes...)
 
-	return Chain(Config{
+	handler, err := Chain(Config{
 		Verifier:             verifier,
 		Protected:            protected,
 		AuthnRoutes:          authnRoutes,
@@ -106,6 +137,18 @@ func Standard(reg RouteSource, verifier *authn.Verifier, protected *http.ServeMu
 		TenantStatusResolver: cfg.tenantStatusResolver,
 		ExtraAllowlist:       cfg.extraAllowlist,
 	})
+	if err != nil {
+		return nil, err
+	}
+
+	// The Middleware seat's layer, outside the fixed chain: applied in
+	// reverse so the first registered middleware ends up outermost (see
+	// MiddlewareRegistrar's contract). The seat is closed again after the
+	// Init stage, so this reading is the finished declaration.
+	for _, mw := range slices.Backward(reg.Middlewares()) {
+		handler = mw(handler)
+	}
+	return handler, nil
 }
 
 // routeIsBelow reports whether path is the prefix itself or sits below it.
