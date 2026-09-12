@@ -109,6 +109,7 @@ import (
 	"image/png"
 	"time"
 
+	"github.com/vislake/speed/go/app"
 	_ "github.com/vislake/speed/go/dbkit/dialect/sqlite" // registers DialectSQLite
 	"github.com/vislake/speed/go/pkgcore"
 	"github.com/vislake/speed/go/sharing"
@@ -136,10 +137,10 @@ func uploadDeriveAndShare() {
 	err := app.Assemble(ctx, reg, app.LoadSpec{Host: &hostConfig, Options: loaderOpts})
 	must(err)
 
-	// Read every piece back from the registry. A hand-built module instance
-	// the engine never drove would leave its services lazily unattached:
-	// ObjectService and Service fail closed with ErrServiceNotAttached on
-	// the first call.
+	// Read every piece back from the registry. Both services are built by
+	// NewModule and safe to call right away; before Register attaches the
+	// registry, storage's store-needing methods fail closed with
+	// storage.store_unavailable.
 	media, err := pkgcore.Get[*storage.Module](reg)
 	must(err)
 	links, err := pkgcore.Get[*sharing.Module](reg)
