@@ -139,10 +139,13 @@ func AuditableModels() []any {
 
 // The feature flags org contributes.
 //
-// Both default to on: a tenant that installed an organization product wants
-// to be able to add people to it. A host or an operator turns them off per
-// tenant through the config module, which org reads through the FeatureGate
-// seam below without importing it.
+// FeatureInvitations defaults to on: a tenant that installed an organization
+// product wants to be able to add people to it. FeatureInvitationEmail's
+// declared default mirrors the module's own delivery leg -- on when the host
+// wired the mail transport, off when it called WithInvitationEmailDisabled --
+// so the declared default and the module's ungated fallback always agree. A
+// host or an operator turns either off per tenant through the config module,
+// which org reads through the FeatureGate seam below without importing it.
 const (
 	// FeatureInvitations gates the whole invitation flow. With it off,
 	// Invite reports org.invitations_disabled and nothing is stored or sent.
@@ -158,19 +161,25 @@ const (
 	FeatureInvitationEmail = "org.invitation_email"
 )
 
-// featureFlagDecls is the catalog entry for each flag, declared in Register.
-var featureFlagDecls = []pkgcore.FeatureFlag{
-	{
-		Key:         FeatureInvitations,
-		Default:     true,
-		Description: "Allow members of this tenant to invite people into its organization.",
-	},
-	{
-		Key:         FeatureInvitationEmail,
-		Default:     true,
-		Description: "Let org deliver the invitation email itself, rather than leaving delivery to a notification module.",
-		DependsOn:   []string{FeatureInvitations},
-	},
+// featureFlagDecls returns the catalog entry for each flag, declared in
+// Register. The email flag's declared default is the module's own
+// emailEnabled state: a host that called WithInvitationEmailDisabled
+// declares the flag off, so a gate read with no tenant override resolves
+// the same value the module's own fallback uses.
+func featureFlagDecls(emailEnabled bool) []pkgcore.FeatureFlag {
+	return []pkgcore.FeatureFlag{
+		{
+			Key:         FeatureInvitations,
+			Default:     true,
+			Description: "Allow members of this tenant to invite people into its organization.",
+		},
+		{
+			Key:         FeatureInvitationEmail,
+			Default:     emailEnabled,
+			Description: "Let org deliver the invitation email itself, rather than leaving delivery to a notification module.",
+			DependsOn:   []string{FeatureInvitations},
+		},
+	}
 }
 
 // bootstrapKeyDecl is the process-start key material this module consumes: the
@@ -440,8 +449,12 @@ func WithSubjectResolver(resolver SubjectResolver) Option {
 // -- the M2 notification module subscribing to org.member.invited, say.
 //
 // Such a host needs neither WithMailFrom nor WithInvitationLinkBuilder, and
-// Register stops requiring them. Invitations are still created and still
-// announced; only org's own delivery leg goes quiet.
+// Register stops requiring them -- and declares the flag off, so a gate read
+// with no tenant override resolves the same quiet value the module's own
+// ungated fallback uses. Invitations are still created and still announced;
+// only org's own delivery leg goes quiet. An operator who turns the flag on
+// for such a host still cannot deliver: the missing wiring refuses the
+// invite with ErrInvitationMailRequired rather than dropping it silently.
 func WithInvitationEmailDisabled() Option {
 	return func(m *Module) { m.invites.emailEnabled = false }
 }
@@ -561,7 +574,7 @@ func (m *Module) Register(reg *pkgcore.ComponentRegistry) error {
 	); err != nil {
 		return err
 	}
-	if err := reg.FeaturesSeat().Add(featureFlagDecls...); err != nil {
+	if err := reg.FeaturesSeat().Add(featureFlagDecls(m.invites.emailEnabled)...); err != nil {
 		return err
 	}
 	// The process-start key material (bootstrapKeyDecl) is descriptor data:

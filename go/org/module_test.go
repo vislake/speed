@@ -533,6 +533,39 @@ func TestModule_Register_EmailDisabled_NeedsNoMailWiring(t *testing.T) {
 	}
 }
 
+// TestModule_Register_EmailDisabled_DeclaresTheFlagOff pins the option's
+// second effect: org.invitation_email's declared default is the module's own
+// delivery-leg state, so a gate read on a tenant with no override resolves
+// the same quiet value the ungated fallback uses. A declared default of true
+// here would make a wired gate report the flag on for a host with no way to
+// deliver -- and the first invite would fail at delivery instead of staying
+// quiet.
+func TestModule_Register_EmailDisabled_DeclaresTheFlagOff(t *testing.T) {
+	reg, err := componenttest.DeclareModules(NewModule(nil,
+		WithEmailIndexer(newTestEmailIndexer(t)),
+		WithInvitationEmailDisabled(),
+	))
+	if err != nil {
+		t.Fatalf("assembly: %v", err)
+	}
+
+	flags := map[string]pkgcore.FeatureFlag{}
+	for _, flag := range reg.FeaturesSeat().Flags() {
+		flags[flag.Key] = flag
+	}
+	email, ok := flags[FeatureInvitationEmail]
+	if !ok {
+		t.Fatalf("feature flag %q was not declared", FeatureInvitationEmail)
+	}
+	if email.Default {
+		t.Errorf("%q.Default = true with WithInvitationEmailDisabled in force; the declared default must mirror the delivery leg", FeatureInvitationEmail)
+	}
+	invitations, ok := flags[FeatureInvitations]
+	if !ok || !invitations.Default {
+		t.Errorf("feature flag %q = %+v, want it registered and on by default", FeatureInvitations, invitations)
+	}
+}
+
 // TestModule_Register_DeclaresTheMembershipSurface asserts the declarations
 // this block adds arrive on the registry.
 func TestModule_Register_DeclaresTheMembershipSurface(t *testing.T) {
