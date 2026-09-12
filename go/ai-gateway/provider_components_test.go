@@ -172,8 +172,8 @@ func TestProviderComponents_EmptyConfigRefusalMatchesTheRegistry(t *testing.T) {
 	reg.Put(pkgcore.NewComponentConfig(map[string]any{
 		"components": map[string]any{ProviderOpenAICompatible: map[string]any{"base_url": "https://upstream.example.test/v1"}},
 	}))
-	if err := reg.Prepare(ctx); err != nil {
-		t.Fatalf("Prepare() error = %v", err)
+	if prepareErr := reg.Prepare(ctx); prepareErr != nil {
+		t.Fatalf("Prepare() error = %v", prepareErr)
 	}
 	err = reg.Construct(ctx)
 	if !errors.Is(err, pkgcore.ErrMissingSeamConfig) {
