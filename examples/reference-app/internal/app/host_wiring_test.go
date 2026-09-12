@@ -407,6 +407,14 @@ func TestAssemble_ComposesAndClosesTheWholeApplication(t *testing.T) {
 	if face.server != nil {
 		t.Fatal("BuildServer's drive started a listener, want the face composed without one")
 	}
+	// BuildServer's composition deselects the observability component, so
+	// nothing declares on the Middleware seat in this drive: the composed
+	// face carries no seat layer, and a BuildServer caller that wants the
+	// instrumentation applies obs.Middleware itself (in the live drive the
+	// selected component fills the seat instead, which Standard applies).
+	if mws := reg.Middlewares(); len(mws) != 0 {
+		t.Errorf("the BuildServer drive's Middleware seat holds %d entries, want none: this composition deselects the observability component", len(mws))
+	}
 
 	// The provider members are selected members of the real assembly and
 	// construct through the component face: the names the module's routes

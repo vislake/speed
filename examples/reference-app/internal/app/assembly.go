@@ -21,8 +21,9 @@ import (
 // EventRegistrar, PeriodicTaskRegistrar), so building a view is a type
 // adaptation, never a second declaration path.
 type assemblyView struct {
-	// routes is the mounted-route reading the middleware chain derives its
-	// partition from (chain.Standard's RouteSource).
+	// routes is the registry reading the middleware chain derives its route
+	// partition and its outermost middleware layer from (chain.Standard's
+	// RouteSource: the mounted routes plus the registry's Middleware seat).
 	routes speedchain.RouteSource
 	// retention is the retention seat: where a step registers the
 	// participants a compliance sweep drives.

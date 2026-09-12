@@ -458,9 +458,8 @@ func TestHostCatalog_Refusals(t *testing.T) {
 // TestHostFace_ServesThenDrains pins the application component's listener
 // lifecycle over a plain handler: Start serves the composed face on a real
 // listener and records its address, Stop stops accepting and the drain
-// completes, and Close reports the drained state. The request path goes
-// through the same observability middleware the composed face is served
-// behind.
+// completes, and Close reports the drained state. The server serves the
+// handler the face carries, with no layer added at serve time.
 func TestHostFace_ServesThenDrains(t *testing.T) {
 	face := &hostFace{
 		handler: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
