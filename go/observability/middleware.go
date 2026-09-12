@@ -231,14 +231,14 @@ func methodMetricLabel(method string) string {
 // # Where this layer sits, and why
 //
 // Middleware is the layer this module's component declares on the
-// registry's Middleware seat (see component.go's initObservability), and
-// go/app/chain.Standard applies the seat around the finished chain it
-// builds: the assembled handler is this layer outside the whole chain --
+// http component's middleware face (see component.go's initObservability),
+// and the http component applies the face around the finished chain it
+// assembles: the assembled handler is this layer outside the whole chain --
 // outside authn.Middleware, outside the AdminRoutes and AuthnRoutes
 // branches, outside tenancy.Middleware and outside the protected routes'
-// own gates. The chain's internal order belongs to go/app/chain; the seat
+// own gates. The chain's internal order belongs to go/app/chain; the face
 // can only wrap that chain's output, never enter it (see
-// pkgcore.MiddlewareRegistrar for the seat's contract).
+// pkgcore.MiddlewareRegistrar for the face's contract).
 //
 // That position is deliberate, not incidental: a request authn.Middleware,
 // tenancy.Middleware or a route's permission gate REJECTS never reaches a
@@ -260,7 +260,7 @@ func methodMetricLabel(method string) string {
 // back up to a middleware wrapping it from outside. Concretely: by the
 // time this middleware's own request-handling code runs
 // pkgcore.TenantFromContext against the context it was actually given --
-// at the seat layer, outside the chain -- there usually is no tenant yet:
+// at that layer, outside the chain -- there usually is no tenant yet:
 // tenancy.Middleware resolves one further down the chain. This middleware
 // still checks defensively (see the tenant handling below), which costs
 // nothing and covers a caller that mounts it differently, but the honest
@@ -631,7 +631,7 @@ func Middleware(next http.Handler) http.Handler {
 // # Why this exists as its own function
 //
 // Middleware, per its own doc comment, stands OUTSIDE the whole chain
-// (the Middleware seat's layer) and therefore does not reliably see a
+// (the middleware face's layer) and therefore does not reliably see a
 // tenant on the request context it
 // is handed. A trace Span, unlike a plain context value, is a shared
 // mutable object reachable from every context that descends from the one
@@ -670,9 +670,9 @@ var (
 )
 
 // RegisterMountedRoutes hands Middleware the application's real route
-// table -- the pkgcore.MountedRoute values the host's modules registered
-// on the host's pkgcore.ComponentRegistry (the registry's MountedRoutes
-// reading of the Routes seat), plus any host-level routes the host
+// table -- the pkgcore.MountedRoute values the assembly's http component
+// accumulated through its route face (the same product's MountedRoutes
+// reading), plus any host-level routes the host
 // mounts itself -- so the route label limiter every Middleware instance
 // creates can reserve a place for each real route BEFORE any request
 // traffic arrives. Without that reservation, the limiter's
@@ -708,7 +708,7 @@ var (
 // bounds apply to them (see routeLabelLimiter.seed).
 //
 // examples/reference-app is the mandatory first consumer: its BuildServer
-// calls this with the module table reg.Routes.Routes() holds plus the two
+// calls this with the module route table the http component accumulated plus the two
 // host-level routes (/healthz and /metrics) it mounts on the mux
 // directly, and its flowtests/obs_route_seed_test.go drives the real composed
 // stack through the garbage-flood scenario. The mechanism's behavioral

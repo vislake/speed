@@ -64,7 +64,7 @@ func TestObservabilityComponent_SelfRegisters(t *testing.T) {
 // through the stages its descriptor fills: selected with its configuration
 // block, its Prepare initializes the providers and publishes the runtime,
 // Construct builds the instance carrying that runtime's shutdown function,
-// Init declares the module's middleware on the Middleware seat, and Close
+// Init declares the module's middleware on the middleware face, and Close
 // shuts the providers down.
 func TestObservabilityComponent_RunsItsWholeLifecycle(t *testing.T) {
 	ctx := context.Background()
@@ -100,15 +100,20 @@ func TestObservabilityComponent_RunsItsWholeLifecycle(t *testing.T) {
 	}
 }
 
-// TestObservabilityComponent_DeclaresTheMiddlewareSeat pins the component's
+// TestObservabilityComponent_DeclaresTheMiddlewareFace pins the component's
 // Init declaration: driving a real assembly through Init leaves the
-// registry's Middleware seat holding exactly the module's Middleware -- the
-// layer go/app/chain.Standard wraps around the fixed chain -- so the
+// http component's middleware face holding exactly the module's Middleware --
+// the layer chain.Standard wraps around the fixed chain -- so the
 // component's instrumentation rides every served request without any host
 // hand-wiring it.
-func TestObservabilityComponent_DeclaresTheMiddlewareSeat(t *testing.T) {
+func TestObservabilityComponent_DeclaresTheMiddlewareFace(t *testing.T) {
 	ctx := context.Background()
 	reg := pkgcore.NewComponentRegistry()
+	// The middleware face the http component provides, stood in for by the
+	// recorder: the component's Init turn declares its Middleware on it --
+	// the optional dependency real compositions satisfy with the http
+	// component.
+	reg.Put(componenttest.NewFaceRecorder())
 	reg.Put(observabilityComposition(map[string]any{"observability": nil}))
 
 	if err := reg.Prepare(ctx); err != nil {
@@ -125,12 +130,12 @@ func TestObservabilityComponent_DeclaresTheMiddlewareSeat(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = reg.Close(context.Background()) })
 
-	mws := reg.Middleware.Middlewares()
+	mws := componenttest.FaceOf(reg).Middlewares()
 	if len(mws) != 1 {
-		t.Fatalf("Middleware seat entries after Init = %d, want exactly the module's Middleware", len(mws))
+		t.Fatalf("middleware face entries after Init = %d, want exactly the module's Middleware", len(mws))
 	}
 	if got, want := reflect.ValueOf(mws[0]).Pointer(), reflect.ValueOf(Middleware).Pointer(); got != want {
-		t.Fatal("the Middleware seat does not hold the module's own Middleware function")
+		t.Fatal("the middleware face does not hold the module's own Middleware function")
 	}
 }
 

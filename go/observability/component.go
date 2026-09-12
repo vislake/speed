@@ -9,12 +9,14 @@ package observability
 // configuration layer deselects it.
 //
 // The component's Prepare initializes OTel from the configuration the same
-// loader loaded; its Init declares the module's middleware on the
-// registry's Middleware seat; its Close shuts the providers down and
-// flushes. The builtin composition names it explicitly and first, so the
-// plan puts it first and its Close runs last in the reverse-order close.
-// Nothing else initializes observability: the whole telemetry lifecycle is
-// this component's.
+// loader loaded; its Init declares the module's middleware on the http
+// component's middleware face (pkgcore.MiddlewareRegistrar, consumed
+// optionally -- a composition that carries no http component declares no
+// middleware for a face nothing would apply); its Close shuts the providers
+// down and flushes. The builtin composition names it explicitly and first,
+// so the plan puts it first and its Close runs last in the reverse-order
+// close. Nothing else initializes observability: the whole telemetry
+// lifecycle is this component's.
 
 import (
 	"context"
@@ -29,15 +31,25 @@ func init() {
 	pkgcore.MustRegister(observabilityComponent())
 }
 
-// initObservability declares the middleware on the registry's Middleware
-// seat: the seat's contract is that a middleware registered there wraps the
-// whole assembled chain from the outside, so this component's middleware
-// wraps every request the chain handles -- including one authn or tenancy
-// refuses before any route is reached, which is the reason the declaration
-// lives here rather than in a host's serve wiring. The write is legal only
-// while the Init stage runs, which is where the engine drives it.
+// initObservability declares the middleware on the http component's
+// middleware face: the face's contract is that a middleware registered
+// there wraps the whole assembled chain from the outside, so this
+// component's middleware wraps every request the chain handles -- including
+// one authn or tenancy refuses before any route is reached, which is the
+// reason the declaration lives here rather than in a host's serve wiring.
+// The face is an optional dependency: a composition that carries no http
+// component has no handler for the middleware to wrap, so the write is
+// skipped and the component still assembles. The write is legal only while
+// the Init stage runs, which is where the engine drives it.
 func initObservability(_ context.Context, reg *pkgcore.ComponentRegistry, _ any) error {
-	return reg.Middleware.Add(Middleware)
+	registrar, ok, err := pkgcore.GetOptional[pkgcore.MiddlewareRegistrar](reg)
+	if err != nil {
+		return fmt.Errorf("observability: read the middleware face: %w", err)
+	}
+	if !ok {
+		return nil
+	}
+	return registrar.Add(Middleware)
 }
 
 // observabilityConfig is the component's configuration schema, resolved
@@ -68,24 +80,29 @@ type observabilityInstance struct {
 	shutdown func(context.Context) error
 }
 
-// observabilityComponent returns the descriptor. It takes no dependencies
-// and carries no assets. Its Init declares Middleware -- the module's
-// tracing/metrics middleware -- on the registry's Middleware seat, so a
-// host composing its chain through go/app/chain.Standard gets the
-// instrumentation applied to every request without hand-wiring it (see
-// initObservability). It declares MultiReplicaSafe: each replica exports
-// its own spans and metrics, sharing no state with any sibling, so several
-// replicas running it split nothing -- and telemetry stays optional by
-// nature, so a composition that deselects the component still assembles.
+// observabilityComponent returns the descriptor. Its one dependency is the
+// http component's middleware face, consumed optionally (a composition
+// with no http component has no handler to wrap), and it carries no
+// assets. Its Init declares Middleware -- the module's tracing/metrics
+// middleware -- on that face, so a host composing its face through the http
+// component gets the instrumentation applied to every request without
+// hand-wiring it (see initObservability). It declares MultiReplicaSafe:
+// each replica exports its own spans and metrics, sharing no state with any
+// sibling, so several replicas running it split nothing -- and telemetry
+// stays optional by nature, so a composition that deselects the component
+// still assembles.
 func observabilityComponent() pkgcore.Component {
 	return pkgcore.Component{
 		Name:         "observability",
 		ConfigSchema: (*observabilityConfig)(nil),
 		Capabilities: pkgcore.MultiReplicaSafe,
-		Prepare:      prepareObservability,
-		New:          newObservability,
-		Init:         initObservability,
-		Close:        closeObservability,
+		Requires: []pkgcore.Requirement{
+			{Token: (*pkgcore.MiddlewareRegistrar)(nil), Optional: true},
+		},
+		Prepare: prepareObservability,
+		New:     newObservability,
+		Init:    initObservability,
+		Close:   closeObservability,
 	}
 }
 
