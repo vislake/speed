@@ -19,7 +19,7 @@ type IntegrationAPIKeySummary struct {
 	CreatedAt *time.Time `json:"createdAt,omitempty"`
 	CreatedBy *string    `json:"createdBy,omitempty"`
 
-	// CreatorLeft Whether CreatedBy is no longer an active member of the tenant -- a display flag only, computed through the optional MembershipChecker seam; false when no seam is wired, exactly as if every creator were still active.
+	// CreatorLeft Whether CreatedBy is no longer an active member of the tenant -- a display flag only, computed through the optional MembershipChecker module; false when none is wired, exactly as if every creator were still active.
 	CreatorLeft *bool      `json:"creatorLeft,omitempty"`
 	Expired     *bool      `json:"expired,omitempty"`
 	ExpiresAt   *time.Time `json:"expiresAt,omitempty"`
