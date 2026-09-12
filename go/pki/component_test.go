@@ -350,11 +350,39 @@ func TestSignerLocalComponent_ConstructsOverTheSharedConnection(t *testing.T) {
 	}
 }
 
+// TestSignerNameFromMember pins the derivation from a member name to the
+// module-facing signer name: the name's last dot-separated segment, so the
+// literal registrations, a host's renamed clone of any of them and every
+// provider name all read their family-local identity, and a dotless name
+// reads as itself.
+func TestSignerNameFromMember(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		member string
+		want   string
+	}{
+		{"signer.local", "local"},
+		{"signer.vault", "vault"},
+		{"signer.vault-direct", "vault-direct"},
+		{"signer.aws-kms", "aws-kms"},
+		{"signer.aws-kms-direct", "aws-kms-direct"},
+		{"reference-app.signer.local", "local"},
+		{"reference-app.signer.aws-kms", "aws-kms"},
+		{"__APP_NAME__.signer.local", "local"},
+		{"signer", "signer"},
+	} {
+		if got := signerNameFromMember(tc.member); got != tc.want {
+			t.Errorf("signerNameFromMember(%q) = %q, want %q", tc.member, got, tc.want)
+		}
+	}
+}
+
 // TestComponent_TakesTheSelectedSignerMember pins the binding-module
 // selection path: the "signer.*" member the composition selects alongside
 // pki is the signer the module signs with -- the member's own constructed
-// instance, by pointer identity -- and the module records the member's name
-// with the family prefix stripped as the signer name every key row carries.
+// instance, by pointer identity -- and the module records the last segment
+// of the member's name (signerNameFromMember) as the signer name every key
+// row carries.
 func TestComponent_TakesTheSelectedSignerMember(t *testing.T) {
 	ctx := context.Background()
 	db := newTestDB(t)
@@ -407,7 +435,78 @@ func TestComponent_TakesTheSelectedSignerMember(t *testing.T) {
 		t.Errorf("the module signs with %T %p, want the selected member's own instance %p", m.signer, m.signer, memberSigner)
 	}
 	if m.signerName != "test-remote" {
-		t.Errorf("module signer name = %q, want \"test-remote\" (the member name with the %q prefix stripped)", m.signerName, signerModuleName+".")
+		t.Errorf("module signer name = %q, want \"test-remote\" (the member name's last segment)", m.signerName)
+	}
+}
+
+// TestComponent_HostRenamedSignerCloneKeepsTheLocalSignerName pins the
+// equivalence under the shape both in-tree hosts actually select: the
+// reference-app and the saasctl templates clone the registered
+// "signer.local" descriptor under their own host prefix (the
+// capabilityComponent shape: name "reference-app.signer.local" /
+// "__APP_NAME__.signer.local", module still "signer") -- so the module's
+// signer name must read "local" for the clone exactly as for the literal
+// registration, or every existing row (signer_name "local") would fall out
+// of ReclaimRetired's ownership check and never be reclaimed.
+func TestComponent_HostRenamedSignerCloneKeepsTheLocalSignerName(t *testing.T) {
+	ctx := context.Background()
+
+	// The two host-prefixed shapes the in-tree consumers select: the
+	// reference app's own prefix and the scaffold template's placeholder.
+	for _, prefix := range []string{"reference-app.", "__APP_NAME__."} {
+		t.Run(prefix, func(t *testing.T) {
+			db := newTestDB(t)
+
+			// The clone is built exactly the way capabilityComponent builds
+			// it: the registered descriptor under the host's own name, the
+			// module declaration untouched.
+			var memberSigner Signer
+			clone := signerLocalComponent
+			clone.Name = prefix + "signer.local"
+			innerNew := clone.New
+			clone.New = func(ctx context.Context, reg *pkgcore.ComponentRegistry, cfg pkgcore.ComponentConfig) (any, error) {
+				instance, err := innerNew(ctx, reg, cfg)
+				if err == nil {
+					memberSigner = instance.(Signer)
+				}
+				return instance, err
+			}
+
+			reg := pkgcore.NewComponentRegistry()
+			if err := reg.Register(testDBComponent(db)); err != nil {
+				t.Fatalf("registering the database stand-in: %v", err)
+			}
+			if err := reg.Register(clone); err != nil {
+				t.Fatalf("registering the %s clone: %v", clone.Name, err)
+			}
+			reg.Put(pkgcore.NewComponentConfig(map[string]any{
+				"components": map[string]any{
+					"test.db":  nil,
+					clone.Name: nil,
+					"pki":      nil,
+				},
+			}))
+			if err := reg.Prepare(ctx); err != nil {
+				t.Fatalf("Prepare() error = %v", err)
+			}
+			if err := reg.Construct(ctx); err != nil {
+				t.Fatalf("Construct() error = %v", err)
+			}
+
+			m, err := pkgcore.Get[*Module](reg)
+			if err != nil {
+				t.Fatalf("Get[*Module] error = %v", err)
+			}
+			if memberSigner == nil {
+				t.Fatal("the signer clone component never constructed")
+			}
+			if m.signer != memberSigner {
+				t.Errorf("the module signs with %T %p, want the selected clone's own instance %p", m.signer, m.signer, memberSigner)
+			}
+			if m.signerName != "local" {
+				t.Errorf("module signer name = %q, want \"local\": a host-renamed clone of signer.local must keep the signer name LocalSigner's rows have always carried", m.signerName)
+			}
+		})
 	}
 }
 

@@ -35,9 +35,28 @@ import (
 // signerModuleName is the module name every signer implementation component
 // carries (the "signer" in "signer.local", "signer.vault",
 // "signer.aws-kms"): the member directory the pki module's own descriptor
-// resolves its selected signer through, and the prefix with which a member
-// name maps to the module-facing signer name ("signer.local" -> "local").
+// resolves its selected signer through, and the family segment a member
+// name's module-facing signer name is read out of
+// (signerNameFromMember).
 const signerModuleName = "signer"
+
+// signerNameFromMember derives the module-facing signer name from a selected
+// signer member's component name: the name's last dot-separated segment.
+// A host that clones the registered descriptor under its own name -- the
+// capabilityComponent shape, "reference-app.signer.local" or
+// "__APP_NAME__.signer.local" -- contributes only a prefix to the name, so
+// the identity every key row records is the segment after the final dot:
+// "signer.local" and every "<host>.signer.local" clone all read "local", the
+// name LocalSigner's rows have always carried, while a provider member keeps
+// its own identity ("signer.aws-kms" -> "aws-kms", "signer.vault-direct" ->
+// "vault-direct"). A name carrying no dot reads as itself -- the degenerate
+// case, since every registered signer name spells the family segment first.
+func signerNameFromMember(member string) string {
+	if idx := strings.LastIndex(member, "."); idx >= 0 {
+		return member[idx+1:]
+	}
+	return member
+}
 
 // componentConfig is pki's configuration schema in the assembly: the
 // construction-time knobs NewModule's options carry, as structured
@@ -131,11 +150,12 @@ func component() pkgcore.Component {
 			}
 			// The signer member selected alongside this module is the
 			// module's signer: the composition's component-name selection
-			// decides which implementation signs, and the member's name --
-			// this family's "signer." prefix stripped -- is the signer name
-			// every key row records, so "signer.local" reads "local" (the
-			// name LocalSigner's rows have always carried) while a provider
-			// member keeps its own identity ("vault", "aws-kms",
+			// decides which implementation signs, and the member name's
+			// last segment (signerNameFromMember) is the signer name every
+			// key row records, so "signer.local" -- and a host's renamed
+			// clone of it, "reference-app.signer.local" -- reads "local",
+			// the name LocalSigner's rows have always carried, while a
+			// provider member keeps its own identity ("vault", "aws-kms",
 			// "vault-direct"). The Requires declaration above orders the
 			// member's construction ahead of this one, so its product is
 			// already in the by-type context here. A composition that
@@ -146,7 +166,7 @@ func component() pkgcore.Component {
 				if err != nil {
 					return nil, err
 				}
-				opts = append(opts, WithSigner(strings.TrimPrefix(members[0], signerModuleName+"."), signer))
+				opts = append(opts, WithSigner(signerNameFromMember(members[0]), signer))
 			}
 			// The queue is optional: absent, the module runs without
 			// automatic rotation, and register claims neither task
