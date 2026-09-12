@@ -66,8 +66,9 @@ base URL 在拨号时受 SSRF 防护。用量记录与权益检查是可选的
 ## 完整示例:一张患者照片的旅程——上传、派生、分享
 
 诊所把患者的微笑模拟结果图(一张 PNG)传上 `storage`;三步上传协议完
-成后,`storage` 把「生成缩略图」任务入队,队列 worker(按参考应用的
-组装,以 `jobs.Wire` 从 `reg.Jobs` 接入队列)写出派生行。诊所随后为这张
+成后,`storage` 把「生成缩略图」任务入队,队列 worker(在队列组件
+自己的 `Start` 里以 `jobs.Wire` 从注册表的 jobs 席位接入,与参考
+应用的组装一致)写出派生行。诊所随后为这张
 已完成的图给患者铸一条分享链接,患者在无任何认证的情况下打开它,
 之后一次撤销让紧接着的下一次访问立即被拒。演练在单进程里、用内存
 SQLite 数据库和真实装配跑完全部流程——独立部署模式的寻
@@ -88,9 +89,7 @@ import (
 	"image/png"
 	"time"
 
-	"github.com/vislake/speed/go/dbkit"
 	_ "github.com/vislake/speed/go/dbkit/dialect/sqlite" // registers DialectSQLite
-	"github.com/vislake/speed/go/jobs"
 	"github.com/vislake/speed/go/pkgcore"
 	"github.com/vislake/speed/go/sharing"
 	"github.com/vislake/speed/go/storage"
@@ -105,26 +104,26 @@ func must(err error) {
 
 func uploadDeriveAndShare() {
 	ctx := pkgcore.WithTenant(context.Background(), pkgcore.TenantID("acme-dental"))
-	db, err := dbkit.Open(ctx, dbkit.Options{Dialect: dbkit.DialectSQLite, DSN: "file:media-walk?mode=memory&cache=shared"})
+
+	// A real assembly: the composition selects the database, the standalone
+	// jobs queue, storage and sharing, so the engine constructs each module
+	// — storage's queue comes from the selection, and the queue's own Start
+	// wires every handler the modules declared, so a real worker derives
+	// the thumbnail. (hostConfig, loaderOpts and the composition override
+	// that names those selections are the host's own bootstrap wiring —
+	// placeholders in this walk.)
+	reg := pkgcore.NewComponentRegistry()
+	err := app.Assemble(ctx, reg, app.LoadSpec{Host: &hostConfig, Options: loaderOpts})
 	must(err)
 
-	// storage completes onto this queue; jobs.Wire hands it every handler
-	// the modules declared so a real worker derives the thumbnail.
-	queue := jobs.NewStandaloneQueue(db, jobs.WithPollInterval(5*time.Millisecond))
-	media := storage.NewModule(db, storage.WithQueue(queue))
-	links := sharing.NewModule(db)
-	registry := dbkit.NewMigrationRegistry()
-	must(registry.Register(media))
-	must(registry.Register(links))
-	must(registry.Apply(ctx, db, dbkit.DialectSQLite))
-	// A real assembly: the engine runs both modules' Register, attaching
-	// the object store, event bus and registry seats their services read
-	// at call time — the same path a host takes.
-	reg := pkgcore.NewComponentRegistry()
-err := app.Assemble(ctx, reg, app.LoadSpec{Host: &hostConfig, Options: loaderOpts})
+	// Read every piece back from the registry. A hand-built module instance
+	// the engine never drove would leave its services lazily unattached:
+	// ObjectService and Service fail closed with ErrServiceNotAttached on
+	// the first call.
+	media, err := pkgcore.Get[*storage.Module](reg)
 	must(err)
-	must(jobs.Wire(ctx, queue, reg.Jobs))
-	must(queue.Start(ctx))
+	links, err := pkgcore.Get[*sharing.Module](reg)
+	must(err)
 	// An 8x8 PNG stands in for the simulation result image.
 	var buf bytes.Buffer
 	img := image.NewRGBA(image.Rect(0, 0, 8, 8))
@@ -235,9 +234,12 @@ fmt.Println("image job enqueued:", imageJobID)
 
 运行步骤:
 
-1. 在你的消费 `go.mod` 里为 `go/dbkit`、`go/pkgcore`、`go/jobs`、
-   `go/storage`、`go/sharing` 加 `replace` 行,然后 `go mod tidy`。
-2. 把第一个代码块放进你自己 `main` 包的文件,运行 `go run .`。
+1. 在你的消费 `go.mod` 里为 `go/app`、`go/dbkit`、`go/pkgcore`、
+   `go/jobs`、`go/storage`、`go/sharing` 加 `replace` 行,然后
+   `go mod tidy`。
+2. 把第一个代码块放进你自己 `main` 包的文件,补齐宿主占位符
+   (`hostConfig`、`loaderOpts`,以及选中 db、队列、storage 与
+   sharing 组件的组合覆盖层),然后运行 `go run .`。
 3. 演练会从零迁移两个模块、驱动真实装配、经真实队列 worker
    派生缩略图然后退出——不需要 Docker。
 

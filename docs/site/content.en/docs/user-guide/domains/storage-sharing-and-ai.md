@@ -84,8 +84,9 @@ are optional structural module interfaces your host can wire to `metering` and
 A clinic uploads a patient's smile-simulation result (a PNG) to
 `storage`; once the three-step transfer protocol completes, `storage`
 enqueues the thumbnail-derive task and the queue's worker (wired from
-`reg.Jobs` through `jobs.Wire`, exactly as the reference app assembles
-it) writes the derivative row. The clinic then mints a share link over the
+the registry's jobs seat through `jobs.Wire` inside the queue
+component's own `Start`, exactly as the reference app assembles it)
+writes the derivative row. The clinic then mints a share link over the
 completed object for the patient, the patient opens it without any
 authentication, and a later revocation refuses the very next access.
 The walk runs all of it in one process over an in-memory SQLite
@@ -108,9 +109,7 @@ import (
 	"image/png"
 	"time"
 
-	"github.com/vislake/speed/go/dbkit"
 	_ "github.com/vislake/speed/go/dbkit/dialect/sqlite" // registers DialectSQLite
-	"github.com/vislake/speed/go/jobs"
 	"github.com/vislake/speed/go/pkgcore"
 	"github.com/vislake/speed/go/sharing"
 	"github.com/vislake/speed/go/storage"
@@ -125,26 +124,26 @@ func must(err error) {
 
 func uploadDeriveAndShare() {
 	ctx := pkgcore.WithTenant(context.Background(), pkgcore.TenantID("acme-dental"))
-	db, err := dbkit.Open(ctx, dbkit.Options{Dialect: dbkit.DialectSQLite, DSN: "file:media-walk?mode=memory&cache=shared"})
-	must(err)
 
-	// storage completes onto this queue; jobs.Wire hands it every handler
-	// the modules declared so a real worker derives the thumbnail.
-	queue := jobs.NewStandaloneQueue(db, jobs.WithPollInterval(5*time.Millisecond))
-	media := storage.NewModule(db, storage.WithQueue(queue))
-	links := sharing.NewModule(db)
-	registry := dbkit.NewMigrationRegistry()
-	must(registry.Register(media))
-	must(registry.Register(links))
-	must(registry.Apply(ctx, db, dbkit.DialectSQLite))
-	// A real assembly: the engine runs both modules' Register, attaching
-	// the object store, event bus and registry seats their services read
-	// at call time — the same path a host takes.
+	// A real assembly: the composition selects the database, the standalone
+	// jobs queue, storage and sharing, so the engine constructs each module
+	// — storage's queue comes from the selection, and the queue's own Start
+	// wires every handler the modules declared, so a real worker derives
+	// the thumbnail. (hostConfig, loaderOpts and the composition override
+	// that names those selections are the host's own bootstrap wiring —
+	// placeholders in this walk.)
 	reg := pkgcore.NewComponentRegistry()
 	err := app.Assemble(ctx, reg, app.LoadSpec{Host: &hostConfig, Options: loaderOpts})
 	must(err)
-	must(jobs.Wire(ctx, queue, reg.Jobs))
-	must(queue.Start(ctx))
+
+	// Read every piece back from the registry. A hand-built module instance
+	// the engine never drove would leave its services lazily unattached:
+	// ObjectService and Service fail closed with ErrServiceNotAttached on
+	// the first call.
+	media, err := pkgcore.Get[*storage.Module](reg)
+	must(err)
+	links, err := pkgcore.Get[*sharing.Module](reg)
+	must(err)
 	// An 8x8 PNG stands in for the simulation result image.
 	var buf bytes.Buffer
 	img := image.NewRGBA(image.Rect(0, 0, 8, 8))
@@ -259,11 +258,13 @@ only as `go/storage` object ids.
 
 To run it:
 
-1. Add the `replace` lines for `go/dbkit`, `go/pkgcore`, `go/jobs`,
-   `go/storage` and `go/sharing` to your consumer `go.mod`, then
-   `go mod tidy`.
-2. Paste the first block into a file of your `main` package and run
-   `go run .`.
+1. Add the `replace` lines for `go/app`, `go/dbkit`, `go/pkgcore`,
+   `go/jobs`, `go/storage` and `go/sharing` to your consumer `go.mod`,
+   then `go mod tidy`.
+2. Paste the first block into a file of your `main` package, fill in
+   the host placeholders (`hostConfig`, `loaderOpts` and the
+   composition override selecting the db, queue, storage and sharing
+   components), and run `go run .`.
 3. The walk migrates both modules from zero, drives a real assembly,
    derives the thumbnail through a real queue worker and exits —
    nothing needs Docker.
