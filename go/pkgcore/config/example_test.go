@@ -285,6 +285,37 @@ func ExampleVerify() {
 	// true
 }
 
+// ExampleDescribe shows the read-only projection of a declaration: one
+// summary per resolvable field of a component's configuration schema, with
+// the local key path in the spelling a configuration block addresses it by,
+// how the field resolves, and the documentation markers. Nothing is read
+// and nothing is resolved -- a renderer, a generated reference or an
+// engine's resolver all start from this list.
+func ExampleDescribe() {
+	type listerConfig struct {
+		Addr      string `json:"addr" config:"expose,env=APP_LISTEN_ADDR"`
+		CipherKey []byte `json:"cipher_key" config:"derive,required,sensitive"`
+		CacheTTL  int    `json:"cache_ttl"`
+		Scratch   string `json:"scratch" config:"-"`
+	}
+
+	summaries, err := config.Describe((*listerConfig)(nil))
+	if err != nil {
+		fmt.Println("describe:", err)
+		return
+	}
+	for _, s := range summaries {
+		fmt.Printf("%s type=%s expose=%t derive=%t required=%t sensitive=%t env=%q skip=%t\n",
+			s.Key, s.TypeName(), s.Expose, s.Derive, s.Required, s.Sensitive, s.Env, s.Skip)
+	}
+
+	// Output:
+	// addr type=string expose=true derive=false required=false sensitive=false env="APP_LISTEN_ADDR" skip=false
+	// cipher_key type=[]byte expose=true derive=true required=true sensitive=true env="" skip=false
+	// cache_ttl type=int expose=false derive=false required=false sensitive=false env="" skip=false
+	// scratch type=string expose=false derive=false required=false sensitive=false env="" skip=true
+}
+
 // ExampleLoader_ResolveDeclarations shows the declaration-driven entry: keys
 // whose declaring module is their only owner are resolved without a struct,
 // on the same five-source chain, and the result is addressed by declared key
