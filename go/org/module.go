@@ -176,7 +176,7 @@ func featureFlagDecls(emailEnabled bool) []pkgcore.FeatureFlag {
 		{
 			Key:         FeatureInvitationEmail,
 			Default:     emailEnabled,
-			Description: "Let org deliver the invitation email itself, rather than leaving delivery to a notification module.",
+			Description: "Let org deliver the invitation email itself, rather than leaving delivery to a notification module. The declared default mirrors the host's delivery-leg wiring: a host that called WithInvitationEmailDisabled declares it off.",
 			DependsOn:   []string{FeatureInvitations},
 		},
 	}
