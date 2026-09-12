@@ -39,7 +39,7 @@ flowchart TB
 
     subgraph CORE["契约层 go/pkgcore（依赖地板：零第三方依赖，不读环境/文件）"]
         MODEL["Component（描述符八回调）/ Requirement / 资产字段"]
-        REG["ComponentRegistry：注册信息 + 组装信息（拓扑序）+ 八阶段方法 + Put/Get + 10 席"]
+        REG["ComponentRegistry：注册信息 + 组装信息（拓扑序）+ 八阶段方法 + Put/Get + 9 席"]
         CFG["Config：唯一配置类型"]
         CREG["包级 Register/MustRegister → 全局注册"]
     end
@@ -126,7 +126,7 @@ const (
 
 1. **注册信息**——名 → 描述符，回答“系统中有哪些组件”；
 2. **组装信息**——选中组件及已解析配置，**按拓扑序存储**，回答“应用由哪些组件组成”；
-3. **生命周期**——八个阶段方法，外加运行上下文（按类型的值、10 个声明席）。
+3. **生命周期**——八个阶段方法，外加运行上下文（按类型的值、9 个声明席）。
 
 ```go
 type ComponentRegistry struct { /* 注册信息 + 组装信息 + 生命周期状态 */ }
@@ -154,10 +154,13 @@ func (r *ComponentRegistry) Stage() Stage // 当前阶段（最后一个进入�
 func (r *ComponentRegistry) Put(v any)
 func Get[T any](r *ComponentRegistry) (T, error) // 泛型不可为方法，保持自由函数
 
-// 声明席（共 10 席）：**写入仅限 Init 阶段**（构造期与 Init 之后的写入均被拒绝
+// 声明席（共 9 席）：**写入仅限 Init 阶段**（构造期与 Init 之后的写入均被拒绝
 //   并点名阶段——声明由此冻结）；**读取任意时刻合法**（Init 前为空集，冻结后
-//   只读——收尾校验与 Init 后的全目录校验即靠它）。Routes、Config、Features、Permissions、Jobs、
+//   只读——收尾校验与 Init 后的全目录校验即靠它）。Config、Features、Permissions、Jobs、
 //   Notifications、Events、AuditActions、Retention、Schedules
+// 路由与平台中间件不再是注册表席位：二者是 http 组件（go/app/httpserve）产物的两个
+//   契约 token（RouteRegistrar / MiddlewareRegistrar），写入门禁由该组件按
+//   Stage() 读数强制（细节见 35 号文）。
 // 注意：启动期密钥材料（BootstrapKeys）与系统用途（SystemPurposes）是描述符静态
 //   字段——二者先于席门禁存在，不经席位。
 
@@ -216,7 +219,7 @@ classDiagram
         +注册信息（名→描述符）
         +组装信息（选中集合，按拓扑序）
         +Put(v) / Get~T~() 按类型
-        +10 个声明席（写仅限 Init；读任意时刻合法，Init 前为空集）
+        +9 个声明席（写仅限 Init；读任意时刻合法，Init 前为空集）
         +Prepare / Construct / Verify / Init / Start / Serve / Stop / Close(ctx)
     }
     class Config {
@@ -269,7 +272,7 @@ stateDiagram-v2
 | Prepare | `Component.Prepare` | loader（引导根，引擎内建）命令行解析、加载配置；装配器解析选择、拓扑排序、依赖验证；其余组件执行各自 Prepare（如注册 serializer） | 引导组件先行，其余按注册顺序 | 直接报错 |
 | Construct | `Component.New` | 构造产物；db 组件完成连接（不迁移） | 图拓扑序 | 逆序关闭 |
 | Verify | `Component.Verify` | db 组件**应用数据库迁移**；各组件校验自身前提（只做校验，不做初始化） | 图拓扑序 | 逆序关闭 |
-| Init | `Component.Init` | 声明席开放：声明进 10 席、挂接、发布运行时服务；全部完成后装配器做收尾统一校验 | 图拓扑序 | 逆序关闭 |
+| Init | `Component.Init` | 声明席开放：声明进 9 席、挂接、发布运行时服务；全部完成后装配器做收尾统一校验 | 图拓扑序 | 逆序关闭 |
 | Start | `Component.Start` | 组件自身启动（worker / scheduler / seed） | 图拓扑序 | 逆序关闭 |
 | Serve | `Component.Serve` | **入口开始接受外部请求**（HTTP 监听、队列消费、调度触发）；全体 `Start` 完成之后开始的一整轮，未声明该回调的组件不受影响 | 图拓扑序 | 逆序关闭 |
 | Stop | `Component.Stop` | 非阻塞停止通知（停接单、开始排空），两拍：先 Serve 声明者，再其余 | 逆拓扑序 | 忽略 |
@@ -285,7 +288,7 @@ stateDiagram-v2
 
 **Verify——数据库可达后的自验。** db 组件先应用迁移（全部构造已完成，迁移集合完整；零依赖使其在本阶段序最先），随后各组件校验自身前提（如 schema 与模型一致、依赖的外部条件成立）。只做校验，不承担初始化。需要“全目录”的领域级校验（如权限目录快照、配置 schema 冻结）放在相应组件的 `Start` 回调——进入 Start 的条件是 Init 全部完成，彼时声明集合完整。
 
-**Init——声明、挂接与服务发布。** **进入本阶段即汇总注册各选中组件的 `SystemPurposes`（先于任何 Init 回调——声明数据先于使用，任何 Init 回调都可能开启系统上下文；重复/冲突 fail-closed、全量校验通过后一次性注册）**——注册为进程级、幂等、不可撤销，同进程多次装配的接受集是历次并集（装配按「一进程一次」使用；测试的否定用例须用私有 purpose 名保证前提；**装配是唯一的注册路径**——模块不得在构造函数等非装配路径隐式注册 purpose，绕过装配直接构造的消费者须显式调用注册入口）；随后声明席开放，按拓扑序执行各组件 `Init`：声明束进 10 席、挂接依赖、发布运行时服务（含 app 组件的 face 组装与订阅——它拓扑序最后，彼时声明齐备，且订阅先于一切 Start）。全部完成后装配器做收尾统一校验（席一致性、资产合并、特征图）。**值进构造、服务进 Init**：能进构造图的是值，进不了的是服务（见 §5.4）。
+**Init——声明、挂接与服务发布。** **进入本阶段即汇总注册各选中组件的 `SystemPurposes`（先于任何 Init 回调——声明数据先于使用，任何 Init 回调都可能开启系统上下文；重复/冲突 fail-closed、全量校验通过后一次性注册）**——注册为进程级、幂等、不可撤销，同进程多次装配的接受集是历次并集（装配按「一进程一次」使用；测试的否定用例须用私有 purpose 名保证前提；**装配是唯一的注册路径**——模块不得在构造函数等非装配路径隐式注册 purpose，绕过装配直接构造的消费者须显式调用注册入口）；随后声明席开放，按拓扑序执行各组件 `Init`：声明束进 9 席、挂接依赖、发布运行时服务（宿主组件的 face 组装与订阅在其自己的 Init 中完成，订阅先于一切 Start）。全部完成后装配器做收尾统一校验（席一致性、资产合并、特征图）。**值进构造、服务进 Init**：能进构造图的是值，进不了的是服务（见 §5.4）。
 
 **Start——组件自身启动。** 在 Init 收尾校验通过之后：`jobs` 的 queue 组件先 wire（Jobs/Schedules 席已完整——全部 Init 已毕），再按自身配置启动 worker 与 scheduler（“本副本不启 worker”即该组件的配置，如 `worker: false`）；seed 执行。引擎不含任何 HTTP 组装或监听逻辑。
 
@@ -320,7 +323,7 @@ sequenceDiagram
     H->>R: Verify(ctx)
     R->>P: db 组件应用迁移（最先）→ 各组件自查需求
     H->>R: Init(ctx)
-    R->>P: 拓扑序：声明进 10 席、挂接、发布运行时服务（app：face 组装与订阅）
+    R->>P: 拓扑序：声明进 9 席、挂接、发布运行时服务（http 组件：Serve 阶段组装 face）
     R->>R: 收尾统一校验（席/资产合并/特征图）
     H->>R: Start(ctx)
     R->>P: 拓扑序：Worker/scheduler/seed 启动
@@ -496,7 +499,7 @@ components:
 - **observability**：标准组件（引擎提供、默认参与）：`Prepare`（拍③首位）初始化 OTel（配置经 loader 同路装载）、`Close` 关停并 flush——引擎不再在装配之前自行初始化观察面。
 - **config（配置服务）**：`go/config` 模块的组件，只承担运行期配置服务。依赖 db（存在 Sensitive 项时还需 cipher）与 tenancy 的解析数据；`Init` 发布配置服务；`Start` 做 schema 冻结校验。
 - **db**：模块 `db`，实现 `db.sqlite` / `db.postgres`（方言注册表，database/sql 式）。`New` 完成连接；`Verify` 应用选中组件的迁移（零依赖 → 序最先）；`Close` 关库；产物 `(*gorm.DB)`。
-- **app（宿主应用，宿主提供）**：`New` 产出应用对象；**`Init` 组装 face——从 10 席收集路由并完成订阅**（拓扑序最后，彼时声明齐备；订阅先于一切 Start，运行期事件不致丢失）；`Start` 起组件自身服务；入口（对外监听）在 `Serve` 阶段开始（异步）；`Stop` 停止通知（第一拍停接单）；`Close` 等待排空、释放监听。对外 HTTP 服务是组件行为。引擎（`go/app`）的边界：**只做编排**——提供 `Run` 糖（创建注册表、按序驱动八阶段、信号等待与两拍关闭），路由组装与监听生命周期全部属于 app 组件。
+- **http 组件（平台提供，go/app/httpserve）**：持有路由与中间件两个声明面；`Init` 不组装（其他组件仍在挂载路由）；**`Serve` 阶段读出累积声明，按宿主链路策略组装 face 并打开监听**（全体 Start 之后；宿主策略是它的非可选依赖）；`Stop` 停止接单（第一拍）；`Close` 等待排空、释放监听。对外 HTTP 服务是组件行为。引擎（`go/app`）的边界：**只做编排**——提供 `Run` 糖（创建注册表、按序驱动八阶段、信号等待与两拍关闭），路由组装与监听生命周期全部属于 http 组件；宿主提供链路策略并把自身路由与外层包装表达在策略里（细节见 35 号文）。
 - **中间件不设组件注册面（刻意）**：face 级**固定链**（认证 → 模拟 → 租户 → 授权）的顺序是安全属性——由 **app 组件（宿主策略）**经标准链组装（授权表、管理前缀、模拟装饰、租户状态门、pre-auth 附加白名单都是它的构造输入），不向任意组件开放注入，**跨组件中间件顺序永不进依赖图**。组件影响 face 的行为一律走**声明面**：豁免子树、pre-auth 白名单、逐路由授权在**挂载时**由链按固定规则织入；组件自有的请求级逻辑（限流、签名校验等）在自己的 handler 组合里完成，随路由经 `MountedRoutes` 声明。
 - **模块组件**（如 authn）：`Requires` 声明 db、pki 等依赖；`BootstrapKeys` 声明密钥材料、`Prepare` 经材料源自建 cipher 并注册 serializer；`Init` 声明与发布服务；`Verify` 校验自身前提；示例见附录 B。
 - **cipher 不设共享句柄**：各组件经材料源读取自己的密钥材料、在需要时自建——密钥分离天然成立。
@@ -520,7 +523,7 @@ components:
 4. **核心结构合一**：注册信息、组装信息与生命周期同属 `ComponentRegistry`；隔离由实例承担（每次装配一个新实例）。`Get[T]` 因泛型不可为方法而保持自由函数。
 5. **auto-pull 默认开启**，歧义一律显式报错；`strict` 提供钉死装配集的手段。
 6. **组件配置结构化**（`ComponentConfig`：键寻址、严格解码、类型化 Value），替代扁平字符串边界。
-7. **声明保持为注册表字段（10 席；`BootstrapKeys`/`SystemPurposes` 例外，为描述符字段）而非压平为值**——席位保留注册表语义，收尾校验依赖它。
+7. **声明保持为注册表字段（9 席；`BootstrapKeys`/`SystemPurposes` 例外，为描述符字段）而非压平为值**——席位保留注册表语义，收尾校验依赖它；路由与中间件两面例外，已是组件产物（见 35 号文）。
 
 ## 13 架构不变量
 
@@ -528,7 +531,7 @@ components:
 - 模块边界纪律：跨模块只存 ID 并以领域事件协作；`rbac` 不依赖 `authn`；业务代码不 import 具体基础设施实现。
 - 部署模式与能力位语义：模式约束实现、不选择实现；能力校验覆盖全部组件。
 - pkgcore 零第三方依赖、不主动读环境/文件；读文件是 loader 组件（引擎提供）的职责。
-- 声明动作（10 席写入）不做 I/O；阶段是程序流程，不是数据。
+- 声明动作（9 席写入）不做 I/O；阶段是程序流程，不是数据。
 - 组件多实例（如两个 storage root）v1 不支持，留扩展位。
 
 ## 附录 A 对象声明（Go）
@@ -579,8 +582,9 @@ func (r *ComponentRegistry) Register(c Component) error
 
 func (r *ComponentRegistry) Put(v any)
 func Get[T any](r *ComponentRegistry) (T, error)
-// 声明席（写仅限 Init；读任意时刻合法——Init 前为空集；共 10 席）：Routes、Config、Features、
+// 声明席（写仅限 Init；读任意时刻合法——Init 前为空集；共 9 席）：Config、Features、
 //   Permissions、Jobs、Notifications、Events、AuditActions、Retention、Schedules
+// 路由与中间件两面是 http 组件产物的契约 token（RouteRegistrar / MiddlewareRegistrar）
 
 func (r *ComponentRegistry) Prepare(ctx context.Context) error   // 阶段 0
 func (r *ComponentRegistry) Construct(ctx context.Context) error // 阶段 1：db 组件连接
@@ -690,7 +694,7 @@ pkgcore.MustRegister(pkgcore.Component{
         return instance.(*authn.Module).CheckSchema(ctx)
     },
 
-    // 声明束进 10 席（席仅此阶段开放）
+    // 声明束进 9 席（席仅此阶段开放）
     Init: func(ctx context.Context, reg *pkgcore.ComponentRegistry, instance any) error {
         return instance.(*authn.Module).Register(reg)
     },
