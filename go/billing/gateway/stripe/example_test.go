@@ -77,14 +77,15 @@ func Example() {
 	}
 	defer func() { _ = reg.Close(ctx) }()
 
-	gw, err := pkgcore.Get[billing.PaymentGateway](reg)
-	fmt.Println("gateway.stripe:", err, gw != nil)
+	for _, member := range pkgcore.Members[billing.PaymentGateway](reg) {
+		fmt.Println(member.Name+":", member.Value != nil)
+	}
 
 	caps, capsErr := pkgcore.ComponentCapabilities(reg, "gateway.stripe")
 	fmt.Println("capabilities:", caps, capsErr)
 
 	// Output:
-	// gateway.stripe: <nil> true
+	// gateway.stripe: true
 	// capabilities: none <nil>
 }
 

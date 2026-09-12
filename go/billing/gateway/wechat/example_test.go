@@ -121,14 +121,15 @@ func Example() {
 	}
 	defer func() { _ = reg.Close(ctx) }()
 
-	gw, err := pkgcore.Get[billing.PaymentGateway](reg)
-	fmt.Println("gateway.wechat:", err, gw != nil)
+	for _, member := range pkgcore.Members[billing.PaymentGateway](reg) {
+		fmt.Println(member.Name+":", member.Value != nil)
+	}
 
 	caps, capsErr := pkgcore.ComponentCapabilities(reg, "gateway.wechat")
 	fmt.Println("capabilities:", caps, capsErr)
 
 	// Output:
-	// gateway.wechat: <nil> true
+	// gateway.wechat: true
 	// capabilities: none <nil>
 }
 

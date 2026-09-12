@@ -31,18 +31,21 @@ type alipayGatewayConfig struct {
 
 // alipayGatewayComponent is the component descriptor for "gateway.alipay":
 // the Alipay channel over the configuration the component's own block
-// spells out, declaring 0 capabilities. Its New funnels through
-// gatewayFromConfig -- the package's one construction path -- so a
-// composition block and a flat pkgcore.Config cannot diverge on defaults or
-// validation: both build through NewGateway, which parses the RSA keys and
-// owns the required-field checks. Constructing a Gateway dials nothing, so
-// the component owns no closable resource and declares no Close.
+// spells out, declaring 0 capabilities. It contributes a member of the
+// "gateway" catalog (ProvidesMember), so several payment channels coexist
+// as selected members read by name rather than as one bound gateway. Its
+// New funnels through gatewayFromConfig -- the package's one construction
+// path -- so a composition block and a flat pkgcore.Config cannot diverge
+// on defaults or validation: both build through NewGateway, which parses
+// the RSA keys and owns the required-field checks. Constructing a Gateway
+// dials nothing, so the component owns no closable resource and declares no
+// Close.
 var alipayGatewayComponent = pkgcore.Component{
-	Name:         "gateway.alipay",
-	Module:       "gateway",
-	Provides:     []any{(*billing.PaymentGateway)(nil)},
-	Capabilities: 0,
-	ConfigSchema: (*alipayGatewayConfig)(nil),
+	Name:           "gateway.alipay",
+	Module:         "gateway",
+	ProvidesMember: []any{(*billing.PaymentGateway)(nil)},
+	Capabilities:   0,
+	ConfigSchema:   (*alipayGatewayConfig)(nil),
 	New: func(_ context.Context, _ *pkgcore.ComponentRegistry, cfg pkgcore.ComponentConfig) (any, error) {
 		var c alipayGatewayConfig
 		if err := cfg.Decode(&c); err != nil {

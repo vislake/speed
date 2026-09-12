@@ -111,14 +111,15 @@ func Example() {
 	}
 	defer func() { _ = reg.Close(ctx) }()
 
-	gw, err := pkgcore.Get[billing.PaymentGateway](reg)
-	fmt.Println("gateway.alipay:", err, gw != nil)
+	for _, member := range pkgcore.Members[billing.PaymentGateway](reg) {
+		fmt.Println(member.Name+":", member.Value != nil)
+	}
 
 	caps, capsErr := pkgcore.ComponentCapabilities(reg, "gateway.alipay")
 	fmt.Println("capabilities:", caps, capsErr)
 
 	// Output:
-	// gateway.alipay: <nil> true
+	// gateway.alipay: true
 	// capabilities: none <nil>
 }
 

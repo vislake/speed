@@ -46,8 +46,8 @@ func TestComponentWellFormed(t *testing.T) {
 
 // TestComponentAssemblesThroughRegistry drives the descriptor through the
 // assembly's stages the way a host would: selection from a composition
-// configuration, construction, and the product read back at the contract
-// type consumers use.
+// configuration, construction, and the member read back by name at the
+// contract type consumers use.
 func TestComponentAssemblesThroughRegistry(t *testing.T) {
 	ctx := context.Background()
 	reg := pkgcore.NewComponentRegistry()
@@ -62,12 +62,12 @@ func TestComponentAssemblesThroughRegistry(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = reg.Close(context.Background()) })
 
-	gateway, err := pkgcore.Get[billing.PaymentGateway](reg)
-	if err != nil {
-		t.Fatalf("Get[billing.PaymentGateway] error = %v, want the component's product", err)
+	members := pkgcore.Members[billing.PaymentGateway](reg)
+	if len(members) != 1 || members[0].Name != "gateway.wechat" {
+		t.Fatalf("Members[billing.PaymentGateway] = %+v, want exactly the gateway.wechat member", members)
 	}
-	if _, ok := gateway.(*Gateway); !ok {
-		t.Errorf("Get[billing.PaymentGateway] = %T, want *wechat.Gateway", gateway)
+	if _, ok := members[0].Value.(*Gateway); !ok {
+		t.Errorf("Members[billing.PaymentGateway] = %T, want *wechat.Gateway", members[0].Value)
 	}
 }
 
@@ -91,12 +91,12 @@ func TestComponentConstructsAndRefusesEmptyConfig(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = reg.Close(context.Background()) })
 
-	componentGateway, err := pkgcore.Get[billing.PaymentGateway](reg)
-	if err != nil {
-		t.Fatalf("Get[billing.PaymentGateway] error = %v", err)
+	members := pkgcore.Members[billing.PaymentGateway](reg)
+	if len(members) != 1 {
+		t.Fatalf("Members[billing.PaymentGateway] = %+v, want the single gateway.wechat member", members)
 	}
-	if _, ok := componentGateway.(*Gateway); !ok {
-		t.Errorf("Get[billing.PaymentGateway] = %T, want the package's own *wechat.Gateway", componentGateway)
+	if _, ok := members[0].Value.(*Gateway); !ok {
+		t.Errorf("Members[billing.PaymentGateway] = %T, want the package's own *wechat.Gateway", members[0].Value)
 	}
 
 	caps, err := pkgcore.ComponentCapabilities(reg, "gateway.wechat")

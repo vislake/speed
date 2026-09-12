@@ -30,18 +30,21 @@ type stripeGatewayConfig struct {
 // stripeGatewayComponent is the component descriptor for "gateway.stripe":
 // the Stripe channel over the configuration the component's own block
 // spells out, declaring 0 capabilities (no bit is meaningful for a payment
-// channel). Its New funnels through gatewayFromConfig -- the package's one
-// construction path -- so a composition block and a flat pkgcore.Config
-// cannot diverge on defaults or validation: both build through NewGateway,
-// which owns the required-field checks. Constructing a Gateway dials
-// nothing (the SDK client connects per request), so the component owns no
-// closable resource and declares no Close.
+// channel). It contributes a member of the "gateway" catalog
+// (ProvidesMember), so several payment channels coexist as selected members
+// read by name rather than as one bound gateway. Its New funnels through
+// gatewayFromConfig -- the package's one construction path -- so a
+// composition block and a flat pkgcore.Config cannot diverge on defaults or
+// validation: both build through NewGateway, which owns the required-field
+// checks. Constructing a Gateway dials nothing (the SDK client connects per
+// request), so the component owns no closable resource and declares no
+// Close.
 var stripeGatewayComponent = pkgcore.Component{
-	Name:         "gateway.stripe",
-	Module:       "gateway",
-	Provides:     []any{(*billing.PaymentGateway)(nil)},
-	Capabilities: 0,
-	ConfigSchema: (*stripeGatewayConfig)(nil),
+	Name:           "gateway.stripe",
+	Module:         "gateway",
+	ProvidesMember: []any{(*billing.PaymentGateway)(nil)},
+	Capabilities:   0,
+	ConfigSchema:   (*stripeGatewayConfig)(nil),
 	New: func(_ context.Context, _ *pkgcore.ComponentRegistry, cfg pkgcore.ComponentConfig) (any, error) {
 		var c stripeGatewayConfig
 		if err := cfg.Decode(&c); err != nil {
