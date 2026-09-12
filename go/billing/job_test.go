@@ -16,6 +16,8 @@ import (
 	"github.com/vislake/speed/go/observability"
 	"github.com/vislake/speed/go/pkgcore"
 	"github.com/vislake/speed/go/pkgcore/testkit"
+
+	"github.com/vislake/speed/go/billing/internal/testutil"
 )
 
 // fakeGateway is a minimal billing.PaymentGateway double for job_test.go's
@@ -476,9 +478,19 @@ func TestPollHandler_Handle_RejectsNonEmptyPayload(t *testing.T) {
 // startPollWindowQueue starts a real StandaloneQueue over its own fresh
 // billing-migrated database with fast intervals, registering cleanup, and
 // returns both the queue and its database.
+//
+// The database's pool is pinned to one connection so these tests measure
+// the poll-window semantics, never SQLite's multi-connection lock
+// behaviour: the queue's dispatcher, writer heartbeat and worker write the
+// same file every few milliseconds while the test goroutine's own
+// EnqueuePoll inserts and row counts run through the same pool, and on a
+// multi-connection pool a losing statement's bounded busy budget can
+// expire under load -- surfacing as a SQLITE_BUSY lock error no window-key
+// assertion is about. See testutil.PinSingleConnection.
 func startPollWindowQueue(t *testing.T) (*jobs.StandaloneQueue, *gorm.DB) {
 	t.Helper()
 	db := newTestDB(t)
+	testutil.PinSingleConnection(t, db)
 	q := jobs.NewStandaloneQueue(db,
 		jobs.WithPollInterval(5*time.Millisecond),
 		jobs.WithWorkerCount(1),
