@@ -209,7 +209,7 @@ func TestHostComponents_RequiresTheRouteFace(t *testing.T) {
 		app := slices.Index(planned, "reference-app.app")
 		httpIdx := slices.Index(planned, "http")
 		preServe := slices.Index(planned, "reference-app.pre_serve")
-		if app < 0 || httpIdx < 0 || preServe < 0 || !(app < httpIdx && httpIdx < preServe) {
+		if app < 0 || httpIdx < 0 || preServe < 0 || app >= httpIdx || httpIdx >= preServe {
 			t.Fatalf("planned order = %v, want the link policy before the http component before the pre-serve step", planned)
 		}
 	})
@@ -344,7 +344,6 @@ func TestStepInit_DerivesTheViewAndRunsTheBody(t *testing.T) {
 			t.Fatal("stepInit without a key-value store succeeded, want the seam refusal")
 		}
 	})
-
 }
 
 // TestWorkerComponent_ClosesAnUnstartedBuild pins the worker component's

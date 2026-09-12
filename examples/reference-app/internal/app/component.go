@@ -343,10 +343,12 @@ func (b *serverBuild) preServeStep(ctx context.Context, reg *pkgcore.ComponentRe
 	if err != nil {
 		return fmt.Errorf("reference-app: read the host link policy: %w", err)
 	}
-	if err := b.bindRegistry(reg); err != nil {
+	err = b.bindRegistry(reg)
+	if err != nil {
 		return err
 	}
-	if err := b.bindRuntimeServices(reg); err != nil {
+	err = b.bindRuntimeServices(reg)
+	if err != nil {
 		return err
 	}
 	view, err := b.viewFromComponents(reg)
