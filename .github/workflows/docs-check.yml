@@ -259,18 +259,20 @@ name: docs-check
 #                                internal/notes, internal/smilesim): the
 #                                committed index names the constructing
 #                                file and line, so a construction site
-#                                moving changes docs/error-codes.json and
-#                                its site page
+#                                moving can change docs/error-codes.json
+#                                and its site page
 #   go/**/errors.go              the Go modules' error declaration files
 #                                (each module's sentinel codes and the doc
 #                                comments the index renders as triggering
 #                                conditions): the bulk of the error-code
-#                                index's source, so a code added, renamed,
-#                                reworded or removed here changes
-#                                docs/error-codes.json and its site page,
-#                                and a code removed with its construction
-#                                (leaving its locales entry behind) can
-#                                leave the platform-error bundle stale.
+#                                index's source, so a code added, renamed or
+#                                removed here can change
+#                                docs/error-codes.json and its site page, a
+#                                reworded doc comment the index renders
+#                                changes the site page alone, and a code
+#                                removed with its construction (leaving its
+#                                locales entry behind) can leave the
+#                                platform-error bundle stale.
 #                                Deliberately this narrow glob rather than
 #                                go/**: the census scans every *.go file
 #                                (test and generated files excluded), but
