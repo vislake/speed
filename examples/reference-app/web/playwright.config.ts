@@ -218,8 +218,8 @@ export const LOGIN_LEDGER_PATH = process.env.E2E_LOGIN_LEDGER
  *
  * An invitation token never appears in an API response -- it is a bearer
  * credential handed to the invitee alone, through the message the server
- * sends (go/org's own fragment says so), and this app has no
- * team-management UI to click through instead. In standalone mode the
+ * sends (go/org's own fragment says so) -- and this app's Team surface
+ * never shows it either. In standalone mode the
  * Mailer seam resolves to the console mailer, whose entire purpose is to
  * print the mail a developer would otherwise have to intercept, so the
  * suite reads it the same way that developer would: from the server's
@@ -398,21 +398,21 @@ export default defineConfig({
           // server that fails to boot still says so in the test report.
           //
           // THE COST OF THAT, worth knowing: everything
-          // the assembly says goes to stderr and is therefore NOT in
-          // this file. pkgcore announces its resolved seam composition
-          // and warns about implementations that do not survive a
-          // restart through slog.Default() -- it cannot do otherwise,
-          // being the module every other one sits on, so it can never
-          // import observability -- and this app runs BuildServer, which
-          // is where the assembly happens, deliberately BEFORE obs.Init
-          // (main.go says why). So those lines are Go's default text
-          // format on stderr while everything a gate reads here is the
-          // structured logger's stdout.
+          // pkgcore's assembly machinery says goes to stderr and is
+          // therefore NOT in this file. pkgcore announces its prepared
+          // component assembly -- and warns when a selected component
+          // does not survive a process restart -- through slog.Default():
+          // it cannot do otherwise, being the module every other one
+          // sits on, so it can never import observability. This app
+          // boots through the engine's RunAssembly, which runs obs.Init
+          // inside its observability component. So those lines are Go's
+          // default text format on stderr while everything a gate reads
+          // here is the structured logger's stdout.
           //
           // Measured, not assumed: a probe boot answers
-          // "pkgcore: bootstrapped seam composition eventbus=... " plus
-          // two restart warnings on stderr, and zero occurrences on
-          // stdout. So a gate that wants to assert on a boot-time line
+          // "pkgcore: component assembly prepared components=... " on
+          // stderr, and zero occurrences on stdout. So a gate that
+          // wants to assert on a boot-time line
           // -- which composition the process actually resolved, say --
           // cannot use the shared server at all; it needs its own
           // through test-utils/servers.ts, whose bootServer captures
