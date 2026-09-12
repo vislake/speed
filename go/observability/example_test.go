@@ -74,10 +74,10 @@ func (exampleMetricsCollector) Export(context.Context, *colmetricpb.ExportMetric
 // writes real trace and metric data straight to os.Stdout by design
 // (Init's own doc comment: stdout output is for "a developer tailing the
 // process"), which would make this example's captured output
-// non-deterministic. init_test.go's
-// TestInit_NoEndpoint_WiresWorkingLocalExporters exercises that path
-// directly instead, with a real recorded request and a real
-// Prometheus-format scrape.
+// non-deterministic. exporter/prometheus's
+// TestBuildReader_WiresWorkingLocalMetricsEndpoint (prometheus_test.go)
+// exercises that path directly instead, with a real recorded request and
+// a real Prometheus-format scrape.
 func ExampleInit() {
 	// A minimal fake OTLP collector stands in for a real one (a real
 	// LGTM stack's collector, wherever a host points its telemetry at
