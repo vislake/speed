@@ -275,6 +275,14 @@
 - **登记理由**：宿主可见面（组合选中的语义由"装饰"变为"生效"、绑定式模块的选中约束）的行为变更，按"宿主可见面变更须带 `!BREAKING` footer 或登记本清单"的纪律登记（非破坏——既有组合结果等价，不带 footer）。
 - **出处**：`03e8b297`（`feat(pki): bind the module's signer to the composition-selected member`）。
 
+### （待编号）（收编阶段 2）ai-gateway：provider 按调用解析优先走组件面（行为登记，双轨并存）
+
+- **面**：`go/ai-gateway` 的每请求 provider 解析（`Gateway.Chat/ChatStream` 与图像任务处理器共用的 `resolveProvider`）在装配注册表在场时优先按组件面构造——`pkgcore.Build[T](reg, route.Provider, override{base_url, api_key})`，即阶段 1 登记的"每次请求按已解析凭据构造 provider"的组件面形状；名字未被选中（或 Gateway 在组装之外直接构造）时回落到包级 `ChatProviderRegistry` / `ImageProviderRegistry`，行为不变。route 的 provider 逻辑名与组件名逐字同一（阶段 1 的缺口 C 恒等），宿主既有 route 字符串与凭据行零迁移；选中 `chat.openai-compatible` / `image.openai-compatible` 的组合，每请求构造改走组件面，与注册面同实现、同能力位、同拒绝（缺 base_url/api_key 的拒绝同码）。装配接线在 `Module.Register`（Gateway 既有的 host-seams 步骤）把注册表挂到 Gateway 上。
+- **消费者影响**：组合选中 provider 组件的宿主，请求路径经组件面构造（结果等价，无升级动作）；未选中的宿主逐项维持原行为（回落注册表）。`WithChatProviderRegistry` / `WithImageProviderRegistry` 的文档语义收窄为"装配选中缺名时的回落面"，签名与实现保留至本体退役轮。
+- **替代路径**：不选 provider 组件即维持注册表面；要固定实现即在组合中选中对应 provider 组件。
+- **登记理由**：每请求解析的来源选择变化（组件面优先、注册表回落；既有组合结果等价），按"宿主可见面变更须带 `!BREAKING` footer 或登记本清单"的纪律登记（非破坏，不带 footer）。
+- **出处**：`b7726761`（`feat(ai-gateway): resolve providers through the assembly's selected members first`）。
+
 ## 6. D 组：configrefgen 工具内部迁移（工具面，非宿主面）
 
 - **面**：`tools/configrefgen` 的内部实现从旧内核面迁到组件面（工具自身不在消费者依赖面内）。
