@@ -111,7 +111,7 @@ type Queue struct {
 	// instruments registerJobMetrics wires from Start -- the distributed
 	// deployment mode's mirror of StandaloneQueue's identically-named
 	// fields (jobs' own queue_standalone.go), so both implementations of
-	// the jobs.Queue seam emit the same three metric names under the same
+	// the jobs.Queue module emit the same three metric names under the same
 	// jobs.InstrumentationName scope (see AGENTS.md's Observability
 	// section). Left at their zero value (nil) until then; worker.go's
 	// recordJobMetrics/recordDeadLetter guard against that, mirroring
@@ -188,11 +188,11 @@ var defaultQueueWeights = map[string]int{
 // WithDelayedTaskCheckInterval) state their own rule on top of it -- zero is
 // the one sanctioned way to say "asynq's own default", a documented
 // pass-through, and a negative value is refused like any other unhonourable
-// one. Both implementations of the jobs.Queue seam declare this same
+// one. Both implementations of the jobs.Queue module declare this same
 // strategy -- StandaloneQueue's Option type doc comment says so for its own
 // construction options -- so the two sides refuse alike by declaration; a
 // one-sided relaxation on either side would make the two implementations of
-// one seam diverge.
+// one module diverge.
 type Option func(*Queue)
 
 // WithConcurrency sets asynqlib.Config.Concurrency: the maximum number of
