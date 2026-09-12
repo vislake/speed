@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"net/http"
 	"reflect"
 	"strings"
 	"sync"
@@ -16,7 +15,7 @@ import (
 
 // component_registry.go carries the assembly half of the config-driven
 // component assembly: the ComponentRegistry, its by-type value store (Put
-// and Get), its eleven declaration seats, and the eight-stage lifecycle the
+// and Get), its nine declaration seats, and the eight-stage lifecycle the
 // engine drives over it. The descriptor half lives in component.go, the
 // structured configuration in config.go, and the Prepare stage's
 // parse-resolve-validate-plan pipeline in component_assembly.go.
@@ -147,7 +146,6 @@ type constructedEntry struct {
 // not been opened: reads see nothing declared, writes are refused before
 // they get here.
 type seatSet struct {
-	routes        RouteRegistrar
 	config        ConfigSchemaRegistrar
 	features      FeatureRegistrar
 	permissions   PermissionRegistrar
@@ -157,7 +155,6 @@ type seatSet struct {
 	auditActions  AuditActionRegistrar
 	retention     RetentionRegistrar
 	schedules     PeriodicTaskRegistrar
-	middleware    MiddlewareRegistrar
 }
 
 // ComponentRegistry is the core data structure of the assembly: one instance
@@ -167,13 +164,14 @@ type seatSet struct {
 // tests and repeated in-process assemblies each create their own, so their
 // registrations, values and declaration seats never leak into one another.
 //
-// The eleven declaration seats are the fields below; they accept writes
+// The nine declaration seats are the fields below; they accept writes
 // only while the Init stage runs, and a write outside it is refused naming
 // the stage. The by-type value context is Put and Get; the assembly puts
-// every component's product there as it constructs it.
+// every component's product there as it constructs it. The HTTP declaration
+// faces -- routes and platform middleware -- are not registry seats: they
+// belong to the http component (go/app/httpserve) and are consumed through
+// its product, pkgcore.RouteRegistrar and pkgcore.MiddlewareRegistrar.
 type ComponentRegistry struct {
-	// Routes receives the HTTP handlers components mount.
-	Routes RouteRegistrar
 	// Config receives the runtime configuration schema components declare.
 	Config ConfigSchemaRegistrar
 	// Features receives the feature flags components declare.
@@ -194,11 +192,6 @@ type ComponentRegistry struct {
 	Retention RetentionRegistrar
 	// Schedules receives the periodic tasks components declare.
 	Schedules PeriodicTaskRegistrar
-	// Middleware receives the platform-wide middleware components declare
-	// for the assembled chain's outermost layer. See MiddlewareRegistrar for
-	// the seat's contract and its boundary: this seat cannot insert inside
-	// the fixed chain, it only wraps the chain's finished output.
-	Middleware MiddlewareRegistrar
 
 	mu sync.RWMutex
 
@@ -266,7 +259,6 @@ func NewComponentRegistry() *ComponentRegistry {
 	r.order = append(r.order, globalComponents.order...)
 	globalComponents.mu.RUnlock()
 
-	r.Routes = &routeSeat{gatedSeatFor(r, "Routes", func(s seatSet) RouteRegistrar { return s.routes })}
 	r.Config = &configSeat{gatedSeatFor(r, "Config", func(s seatSet) ConfigSchemaRegistrar { return s.config })}
 	r.Features = &featuresSeat{gatedSeatFor(r, "Features", func(s seatSet) FeatureRegistrar { return s.features })}
 	r.Permissions = &permissionsSeat{gatedSeatFor(r, "Permissions", func(s seatSet) PermissionRegistrar { return s.permissions })}
@@ -276,7 +268,6 @@ func NewComponentRegistry() *ComponentRegistry {
 	r.AuditActions = &auditActionsSeat{gatedSeatFor(r, "AuditActions", func(s seatSet) AuditActionRegistrar { return s.auditActions })}
 	r.Retention = &retentionSeat{gatedSeatFor(r, "Retention", func(s seatSet) RetentionRegistrar { return s.retention })}
 	r.Schedules = &schedulesSeat{gatedSeatFor(r, "Schedules", func(s seatSet) PeriodicTaskRegistrar { return s.schedules })}
-	r.Middleware = &middlewareSeat{gatedSeatFor(r, "Middleware", func(s seatSet) MiddlewareRegistrar { return s.middleware })}
 	return r
 }
 
@@ -994,7 +985,6 @@ func (r *ComponentRegistry) openSeats() {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.seats = seatSet{
-		routes:        &memoryRouteRegistrar{},
 		config:        &memoryConfigRegistrar{keys: make(map[string]struct{})},
 		features:      &memoryFeatureRegistrar{keys: make(map[string]struct{})},
 		permissions:   &memoryPermissionRegistrar{perms: make(map[string]struct{})},
@@ -1004,7 +994,6 @@ func (r *ComponentRegistry) openSeats() {
 		auditActions:  &memoryAuditActionRegistrar{actions: make(map[string]struct{})},
 		retention:     &memoryRetentionRegistrar{names: make(map[string]struct{})},
 		schedules:     &memoryScheduleRegistrar{types: make(map[string]struct{})},
-		middleware:    &memoryMiddlewareRegistrar{},
 	}
 	r.seatsOpen = true
 }
@@ -1304,40 +1293,13 @@ func (r *ComponentRegistry) currentStage() Stage {
 	return r.cur
 }
 
-// MountedRoutes returns the routes declared on the Routes seat: the reading
-// the middleware chain derives its route partition from (go/app/chain's
-// RouteSource interface), so the chain takes a *ComponentRegistry without
-// naming it. Before the Init stage nothing has been declared, so it returns
-// nil.
-func (r *ComponentRegistry) MountedRoutes() []MountedRoute {
-	if r.Routes == nil {
-		return nil
-	}
-	return r.Routes.Routes()
-}
-
-// Middlewares returns the middleware declared on the Middleware seat, in
-// registration order -- the reading go/app/chain.Standard applies as the
-// assembled chain's outermost layer (its RouteSource interface), the same
-// sugar shape MountedRoutes has. Before the Init stage nothing has been
-// declared, so it returns nil.
-func (r *ComponentRegistry) Middlewares() []func(http.Handler) http.Handler {
-	if r.Middleware == nil {
-		return nil
-	}
-	return r.Middleware.Middlewares()
-}
-
-// The eleven seat accessors below are the declaration face of this registry:
+// The nine seat accessors below are the declaration face of this registry:
 // each returns the seat stored in the struct's own field, so a module's
 // declaration body declares into exactly these seats -- the
 // write gate (writes only while the Init stage runs) inside each seat, and
 // nothing else. The accessors open no path the seats themselves do not
 // already answer: reads go through the same seat read methods, writes
 // through the same gated write methods, with the same refusal outside Init.
-
-// RoutesSeat returns the Routes seat.
-func (r *ComponentRegistry) RoutesSeat() RouteRegistrar { return r.Routes }
 
 // ConfigSeat returns the Config seat.
 func (r *ComponentRegistry) ConfigSeat() ConfigSchemaRegistrar { return r.Config }
@@ -1365,9 +1327,6 @@ func (r *ComponentRegistry) RetentionSeat() RetentionRegistrar { return r.Retent
 
 // SchedulesSeat returns the Schedules seat.
 func (r *ComponentRegistry) SchedulesSeat() PeriodicTaskRegistrar { return r.Schedules }
-
-// MiddlewareSeat returns the Middleware seat.
-func (r *ComponentRegistry) MiddlewareSeat() MiddlewareRegistrar { return r.Middleware }
 
 // EventBus returns the assembled EventBus value from the by-type context --
 // the same value the Events seat subscribes on -- or nil when the assembly
@@ -1548,17 +1507,17 @@ func Assets(r *ComponentRegistry) []Asset {
 	return assets
 }
 
-// The eleven seat implementations below wrap the in-memory registrars with
+// The nine seat implementations below wrap the in-memory registrars with
 // the stage gate. The gate itself is implemented once, by gatedSeat, and each
 // wrapper instantiates it for the registrar interface it fronts: a write
 // asks the registry for the opened registrar behind the seat and is
 // refused, naming the seat and the current stage, outside the Init stage;
 // a read answers from the opened registrar or, before Init, reports nothing
 // declared. Where the registrar interface cannot report an error
-// (RouteRegistrar.Mount, EventRegistrar.Subscribe, both void), the refusal
-// is a panic instead -- silently dropping a declaration is the one outcome
-// worse than a loud failure at startup, and a write outside Init is a wiring
-// error, not a runtime condition.
+// (EventRegistrar.Subscribe, void), the refusal is a panic instead --
+// silently dropping a declaration is the one outcome worse than a loud
+// failure at startup, and a write outside Init is a wiring error, not a
+// runtime condition.
 
 // gatedSeat is one seat's view over the registry: the seat's name for the
 // refusal, and the address of the seat's registrar within the registry's
@@ -1586,16 +1545,6 @@ func (g gatedSeat[S]) write() (S, error) {
 	return g.seat(seats), nil
 }
 
-// writeOrPanic is write for the void-method registrars, whose interface
-// cannot carry the refusal.
-func (g gatedSeat[S]) writeOrPanic() S {
-	registrar, err := g.write()
-	if err != nil {
-		panic(err)
-	}
-	return registrar
-}
-
 // read returns the opened registrar behind the seat for a read: ok is false
 // before the seats open, when nothing has been declared (reads are legal at
 // any point, writes are not).
@@ -1606,21 +1555,6 @@ func (g gatedSeat[S]) read() (S, bool) {
 		return zero, false
 	}
 	return registrar, true
-}
-
-// routeSeat is the Routes seat.
-type routeSeat struct{ gatedSeat[RouteRegistrar] }
-
-func (s *routeSeat) Mount(path string, handler http.Handler) {
-	s.writeOrPanic().Mount(path, handler)
-}
-
-func (s *routeSeat) Routes() []MountedRoute {
-	registrar, ok := s.read()
-	if !ok {
-		return nil
-	}
-	return registrar.Routes()
 }
 
 // configSeat is the Config seat.
@@ -1825,25 +1759,4 @@ func (s *schedulesSeat) Declarations() []PeriodicTask {
 		return nil
 	}
 	return registrar.Declarations()
-}
-
-// middlewareSeat is the Middleware seat.
-type middlewareSeat struct {
-	gatedSeat[MiddlewareRegistrar]
-}
-
-func (s *middlewareSeat) Add(mw ...func(http.Handler) http.Handler) error {
-	registrar, err := s.write()
-	if err != nil {
-		return err
-	}
-	return registrar.Add(mw...)
-}
-
-func (s *middlewareSeat) Middlewares() []func(http.Handler) http.Handler {
-	registrar, ok := s.read()
-	if !ok {
-		return nil
-	}
-	return registrar.Middlewares()
 }

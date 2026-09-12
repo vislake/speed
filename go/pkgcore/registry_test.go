@@ -25,7 +25,6 @@ func (regTestHandler) ServeHTTP(http.ResponseWriter, *http.Request) {}
 // assembly through the seats' stage gate. The gate itself is the component
 // assembly's (component_registry.go), pinned by its own suites.
 type seatRegistrars struct {
-	Routes        *memoryRouteRegistrar
 	Config        *memoryConfigRegistrar
 	Features      *memoryFeatureRegistrar
 	Permissions   *memoryPermissionRegistrar
@@ -39,7 +38,6 @@ type seatRegistrars struct {
 
 func newSeatRegistrars() *seatRegistrars {
 	return &seatRegistrars{
-		Routes:        &memoryRouteRegistrar{},
 		Config:        &memoryConfigRegistrar{keys: make(map[string]struct{})},
 		Features:      &memoryFeatureRegistrar{keys: make(map[string]struct{})},
 		Permissions:   &memoryPermissionRegistrar{perms: make(map[string]struct{})},
@@ -54,45 +52,6 @@ func newSeatRegistrars() *seatRegistrars {
 
 // EventBus returns the bus the Events registrar installs subscriptions on.
 func (r *seatRegistrars) EventBus() EventBus { return r.Events.Bus() }
-
-func TestRouteRegistrar_Mount_RecordsRoutesInOrder(t *testing.T) {
-	reg := newSeatRegistrars()
-
-	billing := regTestHandler{id: "billing"}
-	org := regTestHandler{id: "org"}
-	reg.Routes.Mount("/api/v1/billing", billing)
-	reg.Routes.Mount("/api/v1/org", org)
-
-	routes := reg.Routes.Routes()
-	if len(routes) != 2 {
-		t.Fatalf("Routes() returned %d routes, want 2", len(routes))
-	}
-
-	want := []MountedRoute{
-		{Path: "/api/v1/billing", Handler: billing},
-		{Path: "/api/v1/org", Handler: org},
-	}
-	for i, w := range want {
-		if routes[i].Path != w.Path {
-			t.Errorf("route %d path = %q, want %q", i, routes[i].Path, w.Path)
-		}
-		if routes[i].Handler != w.Handler {
-			t.Errorf("route %d handler = %v, want %v", i, routes[i].Handler, w.Handler)
-		}
-	}
-}
-
-func TestRouteRegistrar_Routes_ReturnsCopy(t *testing.T) {
-	reg := newSeatRegistrars()
-	reg.Routes.Mount("/api/v1/billing", regTestHandler{id: "billing"})
-
-	mutated := reg.Routes.Routes()
-	mutated[0].Path = "/hijacked"
-
-	if got := reg.Routes.Routes()[0].Path; got != "/api/v1/billing" {
-		t.Errorf("mutating the returned slice changed the registry: path = %q, want %q", got, "/api/v1/billing")
-	}
-}
 
 func TestConfigRegistrar_Add_DuplicateKeyReturnsError(t *testing.T) {
 	tests := []struct {
@@ -960,7 +919,6 @@ func TestRegistry_ConcurrentRegistration_IsRaceFree(t *testing.T) {
 		go func(i int) {
 			defer wg.Done()
 			id := string(rune('a' + i))
-			reg.Routes.Mount("/api/v1/"+id, regTestHandler{id: id})
 			if err := reg.Permissions.Add(id + ":read"); err != nil {
 				t.Errorf("Permissions.Add() error = %v, want nil", err)
 			}
@@ -983,9 +941,6 @@ func TestRegistry_ConcurrentRegistration_IsRaceFree(t *testing.T) {
 	}
 	wg.Wait()
 
-	if got := len(reg.Routes.Routes()); got != goroutines {
-		t.Errorf("Routes() returned %d routes, want %d", got, goroutines)
-	}
 	if got := len(reg.Permissions.Permissions()); got != goroutines {
 		t.Errorf("Permissions() returned %d permissions, want %d", got, goroutines)
 	}

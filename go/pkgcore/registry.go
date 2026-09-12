@@ -67,7 +67,7 @@ var ErrDuplicatePeriodicTask = errors.New("pkgcore: duplicate periodic task type
 var ErrInvalidPeriodicTask = errors.New("pkgcore: invalid periodic task")
 
 // ErrNilMiddleware is returned when a nil middleware is added to the
-// Middleware seat. A nil entry could never wrap a handler -- the chain that
+// middleware face. A nil entry could never wrap a handler -- the chain that
 // applies it would panic at assembly time -- so it is refused at
 // registration rather than surfacing later as a startup crash. Nothing is
 // registered when the call returns this error.
@@ -286,7 +286,12 @@ type EventDecl struct {
 	Description string
 }
 
-// RouteRegistrar collects the HTTP handlers modules mount.
+// RouteRegistrar collects the HTTP handlers modules mount whose product is
+// consumed by the http component (go/app/httpserve) as its route face: the
+// component provides this token, every module that mounts a route consumes
+// it optionally, and the component reads the accumulated set when it
+// assembles the process's handler in the Serve stage. The registry itself
+// carries no route seat.
 type RouteRegistrar interface {
 	// Mount attaches handler to path. Duplicate paths are not rejected here
 	// because the routing implementation decides how it resolves overlaps.
@@ -296,15 +301,18 @@ type RouteRegistrar interface {
 }
 
 // MiddlewareRegistrar collects the platform-wide middleware components
-// declare for the assembled chain's outermost layer.
+// declare for the assembled chain's outermost layer. Like RouteRegistrar it
+// is a contract token the http component (go/app/httpserve) provides, not a
+// registry seat: a component that declares platform middleware consumes the
+// token optionally and adds there.
 //
 // It serves the one need a component's own route-subtree middleware cannot:
 // a middleware that must wrap EVERY request the assembled chain handles,
 // including requests the platform's own authn or tenancy layers will refuse
 // before any route is reached. A component that needs to wrap only the
-// routes it mounts itself does not use this seat: net/http.Handler composes
+// routes it mounts itself does not use this face: net/http.Handler composes
 // directly, so the component wraps its own handler before calling
-// reg.Routes.Mount. This seat exists for the middlewares that must stand
+// RouteRegistrar.Mount. This face exists for the middlewares that must stand
 // outside the fixed chain itself.
 //
 // # Boundary: outside the fixed chain, never inside it
@@ -312,20 +320,20 @@ type RouteRegistrar interface {
 // The platform's fixed order -- go/app/chain's Chain: authn.Middleware
 // outermost, the AdminRoutes and AuthnRoutes branches split out
 // structurally, then tenancy.Middleware with its pre-auth allowlist and the
-// protected face -- is not reachable through this seat. MiddlewareRegistrar
-// offers no way to insert inside that order: the middleware registered here
-// is applied only by go/app/chain.Standard, which wraps it around the
-// finished chain.Chain output, so a registered middleware is the OUTERMOST
-// layer of everything, authn included. A host that composes its handler
-// without Standard (a direct Chain call, or no chain at all) applies this
-// seat's middleware itself if it wants the layer.
+// protected face -- is not reachable through this face. MiddlewareRegistrar
+// offers no way to insert inside that order: the http component applies the
+// middleware registered here around the finished chain output (guarded
+// face) or around the protected mux itself (a chainless composition), so a
+// registered middleware is the OUTERMOST layer of the chain, authn
+// included, and only the host's own outer wrapper (the link policy's) can
+// stand outside it.
 //
 // A middleware standing at that layer runs outside authentication: it
 // receives the raw, unauthenticated request, before any authn.Principal or
 // tenant context exists. It must therefore do stateless,
 // request-content-insensitive bypass work only -- tracing, metrics, panic
 // recovery. A component that reads tenant or identity information here is
-// misusing the seat, and code review rejects it.
+// misusing the face, and code review rejects it.
 type MiddlewareRegistrar interface {
 	// Add registers middleware, applied in registration order: the first
 	// added wraps outermost. A nil entry is rejected with an error wrapping
@@ -710,51 +718,6 @@ func checkUnique[T any](registered map[string]struct{}, items []T, keyOf func(T)
 
 // sameString is the key accessor for registrars whose items are the keys.
 func sameString(s string) string { return s }
-
-type memoryRouteRegistrar struct {
-	mu     sync.Mutex
-	routes []MountedRoute
-}
-
-func (r *memoryRouteRegistrar) Mount(path string, handler http.Handler) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	r.routes = append(r.routes, MountedRoute{Path: path, Handler: handler})
-}
-
-func (r *memoryRouteRegistrar) Routes() []MountedRoute {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	return slices.Clone(r.routes)
-}
-
-// memoryMiddlewareRegistrar is the in-memory default implementation of
-// MiddlewareRegistrar, mirroring memoryRouteRegistrar's shape (a mutex plus
-// an append-only, registration-ordered slice). It refuses a nil entry --
-// validation comes before anything is appended, so a rejected call
-// registers nothing.
-type memoryMiddlewareRegistrar struct {
-	mu  sync.Mutex
-	mws []func(http.Handler) http.Handler
-}
-
-func (r *memoryMiddlewareRegistrar) Add(mw ...func(http.Handler) http.Handler) error {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	for _, m := range mw {
-		if m == nil {
-			return ErrNilMiddleware
-		}
-	}
-	r.mws = append(r.mws, mw...)
-	return nil
-}
-
-func (r *memoryMiddlewareRegistrar) Middlewares() []func(http.Handler) http.Handler {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	return slices.Clone(r.mws)
-}
 
 type memoryConfigRegistrar struct {
 	mu    sync.Mutex
