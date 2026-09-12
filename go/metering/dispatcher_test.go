@@ -466,6 +466,13 @@ func TestDispatcher_ConcurrentStartAndStop_NoDataRace(t *testing.T) {
 func TestDispatcher_RunOnce_FailedRowsAtTheHead_DoNotStarveNewerRows(t *testing.T) {
 	d, agg, db := newTestDispatcher(t)
 	d.batchSize = 50
+	// Widen this dispatcher's re-claim window so it outlasts the poison
+	// cycle by construction: every assertion below reads the pile's state
+	// after the cycle ran, so against the production-sized default
+	// (defaultDispatchRetryDelay) the pin would race the cycle's own
+	// duration and measure host speed instead of claim order on a slow
+	// host -- an hour cannot expire mid-test at any host speed.
+	d.retryDelay = time.Hour
 	ctx := context.Background()
 
 	const poisonCount = 50 // fills exactly one full batch
