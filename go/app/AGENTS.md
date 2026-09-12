@@ -111,6 +111,25 @@ off the registry's descriptors rather than the process-wide registration,
 so a component a host registered privately resolves under the namespace it
 declares.
 
+**The help rendering (`config_help.go`)** is the command line's `--help`
+slice of the component configuration contract. `CollectComponentConfig`
+walks a registry's registered components and collects every schema-carrying
+one through `pkgcore.DescribeComponentSchema` — the root package's one
+`FieldDescriptor` collection, the same one the generated configuration
+reference reads (`tools/configrefgen`) — and `RenderComponentConfigHelp`
+renders the collected surfaces: one block per field with its key path, type
+and declaration markers, the source chain it resolves through, the flag
+(`--<key path>`) and environment spellings (the pinned name, or the
+loader-derived one under the caller's own prefix), and the field's
+documentation. A field the schema marks `sensitive` renders its
+documentation cells as `[redacted]` — its Description still renders, which
+is exactly why the assembly requires one — so help output can never carry a
+secret's declared default or suggested value. The collection reads the
+declaration only: no assembly is composed, no source is loaded, so a host
+can (and should) print this surface even when its bootstrap configuration
+would refuse to boot. A host adopts it in its `--help` branch; the
+reference app's `cmd/server` runHelp is the in-repo instance.
+
 Composition spelling (the loading implementation's convention; the design's
 §6.1 leaves the carrying format to the implementation): the whole tree
 travels under the `composition` envelope key — config file
@@ -242,7 +261,10 @@ configuration resolver — the five-source ladder down to the block, the
 key-material tiers, the skip option, the pinned environment name, the
 behaviour-preserving no-declaration path, the wiring through `Load` and
 `RunAssembly`, and the alignment of its key paths with the root package's
-own projection — in `component_config_test.go`; the driver — its
+own projection — in `component_config_test.go`; the help rendering — the
+schema-carrying selection, the namespaced key paths, the redacted sensitive
+cells, the derived and pinned environment spellings, the empty surface and
+the write failure — in `config_help_test.go`; the driver — its
 stage order, its rollback and its entry refusals — and the `RunAssembly`
 sugar in `driver_test.go` (the serve callback's beat between Start and the
 close, its error joined with the close's, and the nil callback's default

@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
 
 	"github.com/vislake/speed/go/app"
 	"github.com/vislake/speed/go/pkgcore"
@@ -238,4 +239,87 @@ func ExamplePreAuthAllowlist() {
 	// HEAD /metrics: 200
 	// GET /api/v1/config/public: 200
 	// POST /healthz: 403
+}
+
+// exampleListerSchema is the schema ExampleRenderComponentConfigHelp describes:
+// an exposed field with a pinned variable name, a derive-tagged sensitive
+// key, and a plain block-only field -- the three resolution faces the help
+// rendering distinguishes.
+type exampleListerSchema struct {
+	Addr      string `json:"addr" config:"expose,env=APP_LISTEN_ADDR,group=network"`
+	CipherKey []byte `json:"cipher_key" config:"derive,required,sensitive,group=security"`
+	CacheTTL  int    `json:"cache_ttl" config:"group=tuning"`
+}
+
+// ConfigDocs documents the schema the way the assembly requires a sensitive
+// field to be documented; the sensitive field's Default is the cell the
+// rendering replaces with the redacted marker.
+func (exampleListerSchema) ConfigDocs() map[string]pkgcore.FieldDoc {
+	return map[string]pkgcore.FieldDoc{
+		"cipher_key": {
+			Description: "32 bytes the lister seals its cache with",
+			Default:     "documented non-secret development default",
+		},
+	}
+}
+
+// ExampleRenderComponentConfigHelp documents the --help rendering of the component
+// configuration surface: a host collects the components' schemas -- in a
+// binary's --help branch, pkgcore.GlobalComponents(), what the process
+// carries -- through the same FieldDescriptor collection the generated
+// configuration reference reads, and renders the result, so an operator can
+// read what this binary's components take and how each field resolves. A sensitive field's documentation cells
+// render as the redacted marker; its description still renders, and the
+// prefix argument is the host's own loader prefix, so the environment
+// spellings printed are the ones the loader reads.
+func ExampleRenderComponentConfigHelp() {
+	reg := pkgcore.NewComponentRegistry()
+	if err := reg.Register(pkgcore.Component{
+		Name:         "example.lister",
+		ConfigSchema: (*exampleListerSchema)(nil),
+		New: func(context.Context, *pkgcore.ComponentRegistry, pkgcore.ComponentConfig) (any, error) {
+			return new(int), nil
+		},
+	}); err != nil {
+		fmt.Println("register:", err)
+		return
+	}
+
+	surfaces, err := app.CollectComponentConfig(pkgcore.RegisteredComponents(reg))
+	if err != nil {
+		fmt.Println("collect:", err)
+		return
+	}
+	// The registry also carries this binary's global registration; render
+	// the one component this example registered.
+	var lister []app.ComponentConfigSurface
+	for _, surface := range surfaces {
+		if surface.Name == "example.lister" {
+			lister = append(lister, surface)
+		}
+	}
+	if err := app.RenderComponentConfigHelp(os.Stdout, lister, "APP_"); err != nil {
+		fmt.Println("render:", err)
+		return
+	}
+
+	// Output:
+	// Component configuration surface (each field collected through
+	// pkgcore.DescribeComponentSchema, the same collection the generated
+	// configuration reference reads; a key path is the address its flag,
+	// environment variable, config-file entry or derivation spells):
+	//
+	// example.lister
+	//   components.example.lister.addr  string  group=network
+	//       source: flag > environment > config file > the configuration block's value
+	//       flag: --components.example.lister.addr
+	//       env: APP_LISTEN_ADDR (pinned by the declaration)
+	//   components.example.lister.cipher_key  []byte  derive required sensitive group=security
+	//       source: flag > environment > config file > root-key derivation > declared default
+	//       flag: --components.example.lister.cipher_key
+	//       env: APP_COMPONENTS__EXAMPLE__LISTER__CIPHER_KEY
+	//       description: 32 bytes the lister seals its cache with
+	//       default: [redacted]
+	//   components.example.lister.cache_ttl  int  group=tuning
+	//       source: the component's configuration block only
 }
