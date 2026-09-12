@@ -791,7 +791,10 @@ func (s *CreditService) findTransaction(session *gorm.DB, id string) (*CreditTra
 // tenantID parameter, bound into the WHERE clause below) and the call
 // carries an isolation test -- both true here
 // (TestCreditBalanceRepository_AssertIsolated proves the underlying
-// table's own tenant scoping).
+// table's own tenant scoping, and TestApplyBalanceDelta_ScopedToOneTenant
+// pins the statement's own tenant predicate -- the plugin never sees an
+// Exec, so the WHERE clause below is the whole isolation mechanism for
+// this write).
 //
 // Because .Exec bypasses the ORM callback chain entirely, the isolation
 // plugin does NOT auto-filter this statement -- unlike every other query in
