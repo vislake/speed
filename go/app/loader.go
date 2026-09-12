@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"reflect"
+	"strings"
 
 	"github.com/vislake/speed/go/pkgcore"
 	pkgconfig "github.com/vislake/speed/go/pkgcore/config"
@@ -27,13 +28,15 @@ import (
 //     (builtin defaults, project file, environment, command line and the
 //     host's code override) and publishes it, with the host's configuration
 //     target, into the registry.
-//  3. It resolves every registered component's declared BootstrapKeys on the
+//  3. It resolves every registered component's declared key material on the
 //     same loader chain -- through the declaration-driven entry, with no
-//     host struct field behind them -- and publishes the results as the
-//     assembly's by-key-path BootstrapMaterial source. A declaration that is
-//     not resolvable as one schema fails the load, naming the stage, the
-//     declaring component, the reason and the remedy -- before any component
-//     is constructed.
+//     host struct field behind it -- and publishes the results as the
+//     assembly's by-key-path BootstrapMaterial source. A component declares
+//     that material on its BootstrapKeys seat or as the derive fields of its
+//     ConfigSchema; both fold into one declaration list, at the one key path
+//     each resolves at. A declaration that is not resolvable as one schema
+//     fails the load, naming the stage, the declaring component, the reason
+//     and the remedy -- before any component is constructed.
 //  4. It publishes the engine's component configuration resolver
 //     (component_config.go), which the Prepare stage reads to upgrade each
 //     selected component's configuration block into the five-source-merged
@@ -147,14 +150,17 @@ func Load(ctx context.Context, reg *pkgcore.ComponentRegistry, spec LoadSpec) er
 	return nil
 }
 
-// resolveBootstrapMaterial resolves every registered component's declared
-// bootstrap keys on loader's own source chain and publishes the results as
-// the assembly's by-key-path material source. The declarations are read
-// straight off the components -- there is no host struct field behind a
-// declared key, so nothing binds it and nothing can fail to bind -- and a
-// declaration whose value no source supplies simply resolves to nothing,
-// which leaves the consumer that needs it to report the missing material
-// itself.
+// resolveBootstrapMaterial resolves every registered component's declared key
+// material on loader's own source chain and publishes the results as the
+// assembly's by-key-path material source. The declarations are read straight
+// off the components -- there is no host struct field behind a declared key,
+// so nothing binds it and nothing can fail to bind -- and a declaration whose
+// value no source supplies simply resolves to nothing, which leaves the
+// consumer that needs it to report the missing material itself. A schema's
+// derive field and a BootstrapKeys declaration resolve identically, at the
+// same key path on the same chain, so a component's Prepare callback reads
+// key material from this source whether the declaring component still spells
+// it on the seat or declares it as its own configuration field.
 //
 // What does fail here, before anything is constructed, is a declaration set
 // that cannot be resolved as one schema: a malformed key path, a format
@@ -197,10 +203,17 @@ var declaredFormats = map[string]struct{}{
 	pkgconfig.FormatHexKey: {},
 }
 
-// declaredBootstrapKeys collects every registered component's BootstrapKeys,
-// in registration order, as the resolver's declaration list, validating each
-// declaration on the way. A key path two components declare identically --
-// the shape the transition bridge's wrappers produce, since a wrapper carries
+// declaredBootstrapKeys collects every registered component's declared key
+// material, in registration order, as the resolver's declaration list,
+// validating each declaration on the way. A component declares its
+// process-start key material two ways, and both are gathered here: the
+// BootstrapKeys seat (a host's own keys, which no module in this repository
+// declares any longer) and the derive fields of its ConfigSchema (the
+// modules' keys, resolved at the final key path the component's namespace
+// declares -- the same path the engine's configuration resolver resolves the
+// field at, so the published material and the component's own configuration
+// carry one value). A key path two components declare identically -- the
+// shape the transition bridge's wrappers produce, since a wrapper carries
 // its module descriptor's own declarations -- is one declaration and is
 // collapsed; one declared differently is a conflict, because one key path has
 // one resolution per assembly and which component's declaration won would be
@@ -212,43 +225,89 @@ func declaredBootstrapKeys(reg *pkgcore.ComponentRegistry) ([]pkgconfig.Declarat
 	owner := make(map[string]string)                 // key path -> first declaring component name
 	content := make(map[string]pkgcore.BootstrapKey) // key path -> first declaration
 
+	fold := func(component string, key pkgcore.BootstrapKey) {
+		if _, err := pkgcore.BootstrapKeyPurpose(key.Key); err != nil {
+			problems = append(problems, fmt.Errorf(
+				"%s declares an invalid bootstrap key path for its %q key: %w; give the declaration a non-empty dotted path with no empty segment",
+				component, key.Key, err))
+			return
+		}
+		if _, known := declaredFormats[key.Format]; !known {
+			problems = append(problems, fmt.Errorf(
+				"%s declares bootstrap key %q with format %q, want one of %q, %q, %q or %q; correct the component's declaration",
+				component, key.Key, key.Format,
+				pkgconfig.FormatString, pkgconfig.FormatInt, pkgconfig.FormatBool, pkgconfig.FormatHexKey))
+			return
+		}
+		if key.Sensitive && key.Description == "" {
+			problems = append(problems, fmt.Errorf(
+				"%s declares bootstrap key %q as Sensitive but carries no Description; a secret key's contract cannot be left unwritten",
+				component, key.Key))
+			return
+		}
+		if first, seen := owner[key.Key]; seen {
+			if content[key.Key] == key {
+				return // one declaration, carried twice
+			}
+			problems = append(problems, fmt.Errorf(
+				"%s declares bootstrap key %q differently from %s; one key path has one declaration",
+				component, key.Key, first))
+			return
+		}
+		owner[key.Key] = component
+		content[key.Key] = key
+		decls = append(decls, pkgconfig.Declaration{Key: key.Key, Format: key.Format})
+	}
+
 	for _, c := range pkgcore.RegisteredComponents(reg) {
 		component := fmt.Sprintf("component %q", c.Name)
 		for _, key := range c.BootstrapKeys {
-			if _, err := pkgcore.BootstrapKeyPurpose(key.Key); err != nil {
-				problems = append(problems, fmt.Errorf(
-					"%s declares an invalid bootstrap key path for its %q key: %w; give the declaration a non-empty dotted path with no empty segment",
-					component, key.Key, err))
-				continue
-			}
-			if _, known := declaredFormats[key.Format]; !known {
-				problems = append(problems, fmt.Errorf(
-					"%s declares bootstrap key %q with format %q, want one of %q, %q, %q or %q; correct the component's declaration",
-					component, key.Key, key.Format,
-					pkgconfig.FormatString, pkgconfig.FormatInt, pkgconfig.FormatBool, pkgconfig.FormatHexKey))
-				continue
-			}
-			if key.Sensitive && key.Description == "" {
-				problems = append(problems, fmt.Errorf(
-					"%s declares bootstrap key %q as Sensitive but carries no Description; a secret key's contract cannot be left unwritten",
-					component, key.Key))
-				continue
-			}
-			if first, seen := owner[key.Key]; seen {
-				if content[key.Key] == key {
-					continue // one declaration, carried twice
-				}
-				problems = append(problems, fmt.Errorf(
-					"%s declares bootstrap key %q differently from %s; one key path has one declaration",
-					component, key.Key, first))
-				continue
-			}
-			owner[key.Key] = component
-			content[key.Key] = key
-			decls = append(decls, pkgconfig.Declaration{Key: key.Key, Format: key.Format})
+			fold(component, key)
+		}
+		declared, err := schemaBootstrapKeys(reg, c)
+		if err != nil {
+			problems = append(problems, fmt.Errorf(
+				"%s declares a configuration schema whose key material cannot be read: %w", component, err))
+			continue
+		}
+		for _, key := range declared {
+			fold(component, key)
 		}
 	}
 	return decls, problems
+}
+
+// schemaBootstrapKeys returns the process-start key material a component's
+// ConfigSchema declares: one entry per derive-tagged field, at the field's
+// final key path -- the namespace prefix the component's registration
+// declares, then the field's local key path. The format is the key-material
+// shape the derive option promises, so a schema-derived declaration and a
+// BootstrapKeys declaration of one path fold onto each other; everything the
+// documentation side carries (the field's description and default) stays on
+// the schema, where DescribeComponentSchema reads it.
+func schemaBootstrapKeys(reg *pkgcore.ComponentRegistry, c pkgcore.Component) ([]pkgcore.BootstrapKey, error) {
+	if c.ConfigSchema == nil {
+		return nil, nil
+	}
+	fields, err := pkgconfig.Describe(c.ConfigSchema)
+	if err != nil {
+		return nil, err
+	}
+	prefix, err := componentConfigPrefix(reg, c.Name)
+	if err != nil {
+		return nil, err
+	}
+	var keys []pkgcore.BootstrapKey
+	for _, field := range fields {
+		if !field.Derive {
+			continue
+		}
+		keys = append(keys, pkgcore.BootstrapKey{
+			Key:    strings.ToLower(prefix + field.Key),
+			Format: pkgconfig.FormatHexKey,
+		})
+	}
+	return keys, nil
 }
 
 // isNonNilPointer reports whether v is a non-nil pointer.

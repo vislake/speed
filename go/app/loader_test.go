@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/vislake/speed/go/pkgcore"
+	pkgconfig "github.com/vislake/speed/go/pkgcore/config"
 )
 
 // loaderTestRegistry returns a registry carrying one probe component that
@@ -240,6 +241,120 @@ func TestLoad_ResolvesBootstrapMaterial(t *testing.T) {
 	if value, ok := material.ValueForPurpose(purpose); !ok || value != "host-token-value" {
 		t.Errorf("material for purpose %q = %v (present %v), want the by-purpose reading", purpose, value, ok)
 	}
+}
+
+// schemaKeySchema is the loader tests' schema fixture: one derive-tagged
+// key-material field, the shape a component declares its own key at.
+type schemaKeySchema struct {
+	BlindIndexKey []byte `json:"blind_index_key" config:"derive,sensitive"`
+}
+
+// ConfigDocs implements pkgcore.Documented for the fixture, the pairing a
+// sensitive field is required to carry.
+func (*schemaKeySchema) ConfigDocs() map[string]pkgcore.FieldDoc {
+	return map[string]pkgcore.FieldDoc{
+		"blind_index_key": {Description: "the fixture's key material", Default: "documented non-secret development default"},
+	}
+}
+
+// schemaKeyComponent is a registered component that declares its key
+// material as a ConfigSchema derive field under the given namespace.
+func schemaKeyComponent(name, namespace string) pkgcore.Component {
+	return pkgcore.Component{
+		Name:            name,
+		ConfigNamespace: namespace,
+		ConfigSchema:    (*schemaKeySchema)(nil),
+		New: func(context.Context, *pkgcore.ComponentRegistry, pkgcore.ComponentConfig) (any, error) {
+			return &testMarker{name: name}, nil
+		},
+	}
+}
+
+// TestLoad_ResolvesSchemaDeclaredKeyMaterial pins the second declaration
+// face: a component's ConfigSchema derive field resolves into the published
+// material at the field's final key path -- the namespace prefix the
+// component declares, then the field's local key path -- read from the
+// variable that path derives, so a component's Prepare callback reads the
+// same material the same way whether the component declares the key on its
+// BootstrapKeys seat or as its own configuration field.
+func TestLoad_ResolvesSchemaDeclaredKeyMaterial(t *testing.T) {
+	t.Run("a module namespace keeps the platform key path", func(t *testing.T) {
+		wantKey := testKey(0x55)
+		envName := pkgconfig.EnvName(testEnvPrefix, "schemakey.blind_index_key")
+		t.Setenv(envName, hex.EncodeToString(wantKey))
+
+		var host testHostConfig
+		reg := loaderTestRegistry(t, schemaKeyComponent("schemakey", "schemakey"))
+
+		if err := Load(context.Background(), reg, LoadSpec{
+			Host:    &host,
+			Options: testConfigOptions(),
+			Args:    []string{},
+		}); err != nil {
+			t.Fatalf("Load() error = %v", err)
+		}
+
+		material, err := pkgcore.BootstrapMaterialOf(reg)
+		if err != nil {
+			t.Fatalf("read the published material source: %v", err)
+		}
+		if key, ok := material.Material("schemakey.blind_index_key"); !ok || !bytes.Equal(key, wantKey) {
+			t.Errorf("material schemakey.blind_index_key = %x (present %v), want the value set as %s", key, ok, envName)
+		}
+	})
+
+	t.Run("the default namespace prefixes the component name", func(t *testing.T) {
+		wantKey := testKey(0x66)
+		envName := pkgconfig.EnvName(testEnvPrefix, "components.schemakey.blind_index_key")
+		t.Setenv(envName, hex.EncodeToString(wantKey))
+
+		var host testHostConfig
+		reg := loaderTestRegistry(t, schemaKeyComponent("schemakey", ""))
+
+		if err := Load(context.Background(), reg, LoadSpec{
+			Host:    &host,
+			Options: testConfigOptions(),
+			Args:    []string{},
+		}); err != nil {
+			t.Fatalf("Load() error = %v", err)
+		}
+
+		material, err := pkgcore.BootstrapMaterialOf(reg)
+		if err != nil {
+			t.Fatalf("read the published material source: %v", err)
+		}
+		if key, ok := material.Material("components.schemakey.blind_index_key"); !ok || !bytes.Equal(key, wantKey) {
+			t.Errorf("material components.schemakey.blind_index_key = %x (present %v), want the value set as %s", key, ok, envName)
+		}
+	})
+
+	t.Run("one declaration carried by two components is one entry", func(t *testing.T) {
+		wantKey := testKey(0x77)
+		envName := pkgconfig.EnvName(testEnvPrefix, "schemakey.blind_index_key")
+		t.Setenv(envName, hex.EncodeToString(wantKey))
+
+		var host testHostConfig
+		reg := loaderTestRegistry(t,
+			schemaKeyComponent("schemakey", "schemakey"),
+			schemaKeyComponent("host.schemakey", "schemakey"),
+		)
+
+		if err := Load(context.Background(), reg, LoadSpec{
+			Host:    &host,
+			Options: testConfigOptions(),
+			Args:    []string{},
+		}); err != nil {
+			t.Fatalf("Load() error = %v", err)
+		}
+
+		material, err := pkgcore.BootstrapMaterialOf(reg)
+		if err != nil {
+			t.Fatalf("read the published material source: %v", err)
+		}
+		if key, ok := material.Material("schemakey.blind_index_key"); !ok || !bytes.Equal(key, wantKey) {
+			t.Errorf("material schemakey.blind_index_key = %x (present %v), want the value set as %s", key, ok, envName)
+		}
+	})
 }
 
 // TestLoad_LeavesAnUnresolvedDeclaredKeyAbsent pins the semantic the
