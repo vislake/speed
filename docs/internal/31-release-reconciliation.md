@@ -85,6 +85,8 @@
 
 **保留面白名单**（未删，且是本轮收口的核验对象）：泛型 `pkgcore.SeamRegistry[T]`、`pkgcore.Registration[T]`、`pkgcore.Config`、`ErrDuplicateImplementation`、`ErrUnknownImplementation`、`ErrMissingSeamConfig`、`Capability` 能力位常量及各子包导出的 `Capabilities`、各子包构造器（`kv/nats.NewKVStore` 等）、`objectstore/s3` 的 `FromConfig`、pkgcore 内存实现（memory event bus / KV / console mailer / local object store）、`componenttest` 帮手、`chain.RouteSource`，以及模块内目录注册表 helpers（pki `SignerRegistry`、ai-gateway `ChatProviderRegistry`/`ImageProviderRegistry`、billing 的 gateway 注册表——`SeamRegistry[T]` 现在的活消费者）。
 
+（后续演进：该白名单中的泛型 `SeamRegistry[T]`/`Registration[T]` 与两个哨兵、以及三族模块内目录注册表已由收编阶段 3 移除；`pkgcore.Config`/`ErrMissingSeamConfig` 保留并迁入 `flat_config.go`。见（待编号）（收编阶段 3）段。）
+
 ### 4.2 八个分布式子包的注册面退役
 
 - **面**：`eventbus/{redis,postgres,nats}`、`kv/{redis,postgres,nats,memcached}`、`objectstore/s3` 的 `Registration` 工厂与 `FromAddr`/（s3 除外的）`FromConfig` 一步构造器退役。
@@ -289,6 +291,14 @@
 - **披露**：如实登记"暂不接"——不以虚构消费者（为示例宿主补一条无业务意义的收单流程）凑齐机制；将来宿主接入（组合选中 `gateway.*` 成员并经 `WithGateways` 注入）时另行登记。组件面本身已可用：选中即按普通组件参与装配的能力位校验。
 - **登记理由**：披露性状态登记，非破坏面。
 
+### （待编号）（收编阶段 3）pkgcore：泛型 SeamRegistry[T]/Registration[T] 与三族目录注册表本体退役（破坏面登记）
+
+- **面**：泛型注册机制本体与它的最后三族消费者一并移除。`go/pkgcore`：`SeamRegistry[T]`（`Register`/`Build`）、`Registration[T]`、`NewSeamRegistry`、`ErrDuplicateImplementation`、`ErrUnknownImplementation` 删除（`seam_registry.go` 与其测试整文件删）；`pkgcore.Config` 与 `ErrMissingSeamConfig` **保留**，从 `seam_registry.go`/`registries.go` 迁入新文件 `flat_config.go`（内置实现共享构造路径的扁平设置面与缺配置哨兵，签名与语义不变），`registries.go` 因只含该哨兵而随迁删除。`go/pki`：`SignerRegistry` 与 `BuildSignerRequiring` 删除（`signer_registry.go` 及其测试整文件删）；`signer.local` 与四个 provider 名（`signer.vault`/`signer.vault-direct`/`signer.aws-kms`/`signer.aws-kms-direct`）保留为组件描述符，两个 provider 子包的 `register.go`（init 注册面）删除，适配器（`envelopeSignerFromConfig`/`directSignerFromConfig`/`configFromFlat`）折入各自 `component.go`。`go/ai-gateway`：`ChatProviderRegistry`、`ImageProviderRegistry`、`WithChatProviderRegistry`、`WithImageProviderRegistry` 删除（`registry.go`/`image_registry.go` 及测试整文件删）；每请求解析在没有装配注册表在场时直接拒绝（错误点名 provider 与装配要求），不再回落包级注册表；`ProviderOpenAICompatible`/`ProviderOpenAICompatibleImage` 常量与两份适配器移入 `openai_compatible.go`/`openai_compatible_image.go`。`go/billing`：`PaymentGatewayRegistry` 删除（`gateway.go` 内 var 删，根部随之不再 import pkgcore），三个 provider 子包的 `register.go` 删除、`gatewayFromConfig` 折入各自 `component.go`。`go/dbkit` 的 `RegisterDialect` 注释改引 `pkgcore.MustRegister`（原引 `registries.go` 的 mustRegister）。
+- **消费者影响**：三处公共面移除，宿主升级动作——① 曾建 `pkgcore.NewSeamRegistry[T]()` 或调 `SeamRegistry.Register/Build` 者：自建实现改写成组件描述符（`pkgcore.Component`），在组合里选中，用 `pkgcore.Build[T]`/`Get` 读产品；② 曾走 `pki.SignerRegistry.Build`/`pki.BuildSignerRequiring` 名字路径解析签名者者：组合选中对应 `signer.*` 成员，能力位要求（`KeyNeverLeavesBoundary`）改经 `pkgcore.ComponentCapabilities` 读被选中成员的声明并自行比对（不再有解析点强制）；③ 曾注册/注入 ai-gateway provider 者：组合选中 `chat.openai-compatible`/`image.openai-compatible` 或自写描述符；`WithChatProviderRegistry`/`WithImageProviderRegistry` 的回落面不复存在，组装之外构造的 Gateway 不再解析任何 provider 名；④ 曾注册/构造 billing 支付网关者：组合选中 `gateway.*` 组件（或直接构造）后经 `billing.WithGateways` 注入。仓内消费者已随本批迁移完毕：reference-app 两个服务测试夹具经新叶子包 `internal/testutil/assemblytest` 走组件面，pki/billing/ai-gateway 的 Example 与测试面全量改组件面，文档面（CLAUDE.md、`.golangci.yml` 五条 depguard 描述、ADR 0003、docs/internal 03/06/08/15/22/27、双语文档站 pkgcore/ai-gateway/billing/pki 页、错误码索引生成物）同步改写。
+- **替代路径**：组件面即唯一替代（组合选中 + `pkgcore.Build`/`Get`/`ComponentCapabilities`）；`pkgcore.Config` 与 `ErrMissingSeamConfig` 保留，扁平构造路径的既有用法无需迁移；`Module.WithSigner`/`Module.WithGateways` 的直接注入面保留。
+- **登记理由**：破坏面登记（三处公共符号移除，加一处行为收紧——组装之外不再解析 provider 名）。本批提交全部带 `!BREAKING` footer；§9 的「29 §9 目录式组件收编」挂起项随之闭合。
+- **出处**：`cd9c7a8b`（`feat(pkgcore)!: remove the seam registry machinery`）+ `0312806d`（`refactor(ai-gateway)!: resolve providers through the component face only`）+ `ab0b6cd7`（`refactor(pki)!: retire the signer registry`）+ `a4841eb8`（`refactor(billing)!: retire the payment gateway registry`）+ `b7c733fd`（`test(reference-app): assemble provider fixtures through the component face`）+ `4857a047`（`docs: narrate the resolution face as components, not registries`）。
+
 ## 6. D 组：configrefgen 工具内部迁移（工具面，非宿主面）
 
 - **面**：`tools/configrefgen` 的内部实现从旧内核面迁到组件面（工具自身不在消费者依赖面内）。
@@ -346,6 +356,6 @@
 
 ## 9. 挂起项
 
-- **29 §9 目录式组件收编**：把模块内目录注册表（pki signer、ai-gateway provider、billing gateway）统一收编进组件机制的设想**未落地**，保持开放项登记，不在本清单的破坏面内。
+- **29 §9 目录式组件收编**：把模块内目录注册表（pki signer、ai-gateway provider、billing gateway）统一收编进组件机制的设想**已落地**——阶段 1 加组件面、阶段 2 切宿主面、阶段 3 本体退役，破坏面见（待编号）（收编阶段 3）段。此项闭合。
 - **pkgcore 注释面死引用（残留登记）**：`register.go` 悬空引用 52 处/33 文件、flat adapter 6 处，与 F-2 轮登记的 129 处/47 文件属同一类别，合并为一个子项，输入 R18 清扫收尾批；纯注释面，不在本清单的破坏面内。
 - **首个可用版本**：`task release:plan` 的离线计划（02 号文）在首个版本发布时以本清单生成 release note；发布后本清单转为历史记录，后续破坏面另起新篇。
