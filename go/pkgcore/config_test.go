@@ -141,6 +141,37 @@ func TestComponentConfigDecodePopulatesEveryShape(t *testing.T) {
 	}
 }
 
+func TestComponentConfigDecodeNestedComponentConfig(t *testing.T) {
+	// A subtree nested as a ComponentConfig decodes exactly like one nested
+	// as a plain map: the type is a mapping like any other, so a nested
+	// struct field, a map field and an any-typed field all take it -- the
+	// block form the composition loader produces for a key supplied through
+	// the command line.
+	cfg := ComponentConfig{}.
+		With("host", "h").
+		With("nested", NewComponentConfig(map[string]any{"port": 2525})).
+		With("labels", NewComponentConfig(map[string]any{"tier": 2})).
+		With("any", NewComponentConfig(map[string]any{"k": "v"}))
+
+	var target decodeTarget
+	if err := cfg.Decode(&target); err != nil {
+		t.Fatalf("Decode = %v, want nil", err)
+	}
+	if target.Nested.Port != 2525 {
+		t.Errorf("Nested.Port = %d, want 2525", target.Nested.Port)
+	}
+	if !reflect.DeepEqual(target.Labels, map[string]int{"tier": 2}) {
+		t.Errorf("Labels = %v, want the nested mapping converted", target.Labels)
+	}
+	inner, ok := target.Any.(ComponentConfig)
+	if !ok {
+		t.Fatalf("Any = %#v, want the nested ComponentConfig taken as the value it is", target.Any)
+	}
+	if value, carried := inner.Get("k"); !carried || value != "v" {
+		t.Errorf("Any nested entry = %v, %t, want k=v", value, carried)
+	}
+}
+
 func TestComponentConfigDecodeUnknownKeys(t *testing.T) {
 	var target decodeTarget
 

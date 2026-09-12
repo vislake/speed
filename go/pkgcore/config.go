@@ -285,12 +285,14 @@ func assignConfigValue(dst reflect.Value, raw any, path string) error {
 	}
 
 	rawValue := reflect.ValueOf(raw)
-	// A nested ComponentConfig is a mapping like any other.
-	if config, isConfig := raw.(ComponentConfig); isConfig {
-		return assignMapping(dst, config, path)
-	}
 	// The fast path: a value whose type fits the target as it stands is
-	// taken verbatim, which is also what an any-typed field receives.
+	// taken verbatim, which is also what an any-typed field receives. A
+	// nested ComponentConfig is a mapping like any other: it is not
+	// assignable to a struct- or map-typed field in general, so it falls
+	// through to the kind switch below, whose mapping branches admit it
+	// through asMap exactly as they admit a plain map[string]any -- a block
+	// nested as a ComponentConfig and one nested as a raw map decode
+	// identically.
 	if rawValue.Type().AssignableTo(dst.Type()) {
 		dst.Set(rawValue)
 		return nil
