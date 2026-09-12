@@ -122,6 +122,36 @@ func TestValidateComponentRejectsMalformedDescriptors(t *testing.T) {
 			c:    Component{Name: "test.validate.prov", New: noopNew, Provides: []any{"nope"}},
 			want: "Provides entry 0",
 		},
+		{
+			name: "ProvidesMember entry not a pointer",
+			c:    Component{Name: "test.validate.member", New: noopNew, ProvidesMember: []any{"nope"}},
+			want: "ProvidesMember entry 0",
+		},
+		{
+			name: "both delivery kinds declared",
+			c: Component{
+				Name:           "test.validate.both",
+				New:            noopNew,
+				Provides:       []any{(*compTokenA)(nil)},
+				ProvidesMember: []any{(*compTokenB)(nil)},
+			},
+			want: "declares both Provides and ProvidesMember",
+		},
+		{
+			name: "MinMembers without Catalog",
+			c:    Component{Name: "test.validate.min", New: noopNew, Requires: []Requirement{{Token: (*compTokenA)(nil), MinMembers: 1}}},
+			want: "MinMembers is 1 without Catalog",
+		},
+		{
+			name: "Optional with MinMembers",
+			c:    Component{Name: "test.validate.optmin", New: noopNew, Requires: []Requirement{{Token: (*compTokenA)(nil), Catalog: true, Optional: true, MinMembers: 1}}},
+			want: "Optional and MinMembers",
+		},
+		{
+			name: "negative MinMembers",
+			c:    Component{Name: "test.validate.negmin", New: noopNew, Requires: []Requirement{{Token: (*compTokenA)(nil), Catalog: true, MinMembers: -1}}},
+			want: "negative member count",
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -154,6 +184,27 @@ func TestValidateComponentAcceptsFullDescriptor(t *testing.T) {
 	}
 	if err := validateComponent(c); err != nil {
 		t.Fatalf("validateComponent(full descriptor) = %v, want nil", err)
+	}
+}
+
+// TestValidateComponentAcceptsCatalogDescriptor pins the well-formed
+// catalog shapes: a member descriptor, and requirement forms the catalog
+// vocabulary allows -- a bare catalog, a catalog with a lower bound, and an
+// optional catalog, all accepted.
+func TestValidateComponentAcceptsCatalogDescriptor(t *testing.T) {
+	member := Component{
+		Name:           "test.validate.memberok",
+		Module:         "test",
+		New:            noopNew,
+		ProvidesMember: []any{(*compTokenB)(nil)},
+		Requires: []Requirement{
+			{Token: (*compTokenA)(nil), Catalog: true},
+			{Token: (*compTokenA)(nil), Catalog: true, MinMembers: 2},
+			{Token: (*compTokenA)(nil), Catalog: true, Optional: true},
+		},
+	}
+	if err := validateComponent(member); err != nil {
+		t.Fatalf("validateComponent(catalog descriptor) = %v, want nil", err)
 	}
 }
 

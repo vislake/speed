@@ -132,3 +132,64 @@ func ExampleComponentCapabilities() {
 	// true false
 	// true
 }
+
+// exampleVendor is the catalog contract the ExampleMembers components
+// deliver members of.
+type exampleVendor interface{ VendorName() string }
+
+// exampleVendorImpl implements exampleVendor.
+type exampleVendorImpl struct{ name string }
+
+func (v *exampleVendorImpl) VendorName() string { return v.name }
+
+// ExampleMembers shows the catalog delivery and its reading: two components
+// contributing members of one contract are selected together -- the
+// selection a bound delivery would refuse as ambiguous -- and Members
+// enumerates them by name, while Get stays blind to them because a member
+// product is not put into the by-type context.
+func ExampleMembers() {
+	ctx := context.Background()
+
+	reg := pkgcore.NewComponentRegistry()
+	for _, vendor := range []struct{ component, name string }{
+		{"chat.alpha", "Alpha"},
+		{"chat.beta", "Beta"},
+	} {
+		impl := &exampleVendorImpl{name: vendor.name}
+		if err := reg.Register(pkgcore.Component{
+			Name:           vendor.component,
+			Module:         "chat",
+			ProvidesMember: []any{(*exampleVendor)(nil)},
+			New: func(context.Context, *pkgcore.ComponentRegistry, pkgcore.ComponentConfig) (any, error) {
+				return impl, nil
+			},
+		}); err != nil {
+			fmt.Println("register:", err)
+			return
+		}
+	}
+	reg.Put(pkgcore.NewComponentConfig(map[string]any{
+		"components": map[string]any{"chat.alpha": nil, "chat.beta": nil},
+	}))
+	for _, stage := range []struct {
+		name string
+		run  func(context.Context) error
+	}{{"prepare", reg.Prepare}, {"construct", reg.Construct}} {
+		if err := stage.run(ctx); err != nil {
+			fmt.Println(stage.name+":", err)
+			return
+		}
+	}
+	defer func() { _ = reg.Close(ctx) }()
+
+	for _, member := range pkgcore.Members[exampleVendor](reg) {
+		fmt.Println(member.Name, "->", member.Value.VendorName())
+	}
+	_, err := pkgcore.Get[exampleVendor](reg)
+	fmt.Println("get:", errors.Is(err, pkgcore.ErrMissingRequirement))
+
+	// Output:
+	// chat.alpha -> Alpha
+	// chat.beta -> Beta
+	// get: true
+}

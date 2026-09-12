@@ -315,6 +315,194 @@ func TestPrepareRejectsDuplicateDeclaredDeliveries(t *testing.T) {
 	})
 }
 
+// memberComponent returns a component contributing catalog members of the
+// given tokens; sink, when non-nil, records the component's construction
+// order.
+func memberComponent(name string, product any, sink *[]string, members ...any) Component {
+	return Component{
+		Name:           name,
+		ProvidesMember: members,
+		New: func(context.Context, *ComponentRegistry, ComponentConfig) (any, error) {
+			if sink != nil {
+				*sink = append(*sink, name)
+			}
+			return product, nil
+		},
+	}
+}
+
+// catalogConsumer returns a component consuming token as a catalog with the
+// given lower bound; sink, when non-nil, records its construction order.
+func catalogConsumer(name string, token any, min int, sink *[]string) Component {
+	return Component{
+		Name:     name,
+		Requires: []Requirement{{Token: token, Catalog: true, MinMembers: min}},
+		New: func(context.Context, *ComponentRegistry, ComponentConfig) (any, error) {
+			if sink != nil {
+				*sink = append(*sink, name)
+			}
+			return &asmTokenC{}, nil
+		},
+	}
+}
+
+// TestPrepareCatalogRequirements pins the catalog delivery contract at plan
+// time: the dependency edge reaches every selected member (so members order
+// before the consumer even when the composition lists the consumer first),
+// MinMembers bounds the member count, an empty catalog is legal at the zero
+// bound, and a catalog never auto-pulls even when exactly one registered
+// candidate exists.
+func TestPrepareCatalogRequirements(t *testing.T) {
+	t.Run("members order before the consumer and leave the by-type context alone", func(t *testing.T) {
+		var constructed []string
+		v1, v2 := &asmTokenA{}, &asmTokenA{}
+		m1 := memberComponent("asm.cat.m1", v1, &constructed, (*asmTokenA)(nil))
+		m2 := memberComponent("asm.cat.m2", v2, &constructed, (*asmTokenA)(nil))
+		consumer := catalogConsumer("asm.cat.c", (*asmTokenA)(nil), 0, &constructed)
+
+		reg, err := prepareAssembly(t, []Component{m1, m2, consumer},
+			configEntry{key: "asm.cat.c", value: nil},
+			configEntry{key: "asm.cat.m1", value: nil},
+			configEntry{key: "asm.cat.m2", value: nil},
+		)
+		if err != nil {
+			t.Fatalf("Prepare = %v, want nil", err)
+		}
+		assertPlanOrder(t, reg, []string{"asm.cat.m1", "asm.cat.m2", "asm.cat.c"})
+
+		if err := reg.Construct(context.Background()); err != nil {
+			t.Fatalf("Construct = %v, want nil", err)
+		}
+		t.Cleanup(func() { _ = reg.Close(context.Background()) })
+		if want := []string{"asm.cat.m1", "asm.cat.m2", "asm.cat.c"}; !reflect.DeepEqual(constructed, want) {
+			t.Errorf("construction order = %v, want %v", constructed, want)
+		}
+
+		members := Members[*asmTokenA](reg)
+		if len(members) != 2 || members[0].Name != "asm.cat.m1" || members[0].Value != v1 || members[1].Name != "asm.cat.m2" || members[1].Value != v2 {
+			t.Errorf("Members[*asmTokenA] = %+v, want m1 and m2 in dependency order with their own products", members)
+		}
+
+		if _, err := Get[*asmTokenA](reg); !errors.Is(err, ErrMissingRequirement) {
+			t.Errorf("Get[*asmTokenA] = %v, want ErrMissingRequirement: a member product is not put", err)
+		}
+		if _, ok, err := GetOptional[*asmTokenA](reg); ok || err != nil {
+			t.Errorf("GetOptional[*asmTokenA] = (ok=%v, %v), want absent", ok, err)
+		}
+	})
+
+	t.Run("a member product is read under the interface its token names", func(t *testing.T) {
+		m1 := memberComponent("asm.cat.i1", compSpreadImpl{}, nil, (*compSpreader)(nil))
+		consumer := catalogConsumer("asm.cat.ic", (*compSpreader)(nil), 1, nil)
+
+		reg, err := prepareAssembly(t, []Component{m1, consumer},
+			configEntry{key: "asm.cat.ic", value: nil},
+			configEntry{key: "asm.cat.i1", value: nil},
+		)
+		if err != nil {
+			t.Fatalf("Prepare = %v, want nil", err)
+		}
+		if err := reg.Construct(context.Background()); err != nil {
+			t.Fatalf("Construct = %v, want nil", err)
+		}
+		t.Cleanup(func() { _ = reg.Close(context.Background()) })
+
+		members := Members[compSpreader](reg)
+		if len(members) != 1 || members[0].Name != "asm.cat.i1" || members[0].Value.spread() != "spread" {
+			t.Errorf("Members[compSpreader] = %+v, want the implementing member", members)
+		}
+	})
+
+	t.Run("a shortfall fails naming the token, the count and the bound", func(t *testing.T) {
+		m1 := memberComponent("asm.cat.s1", &asmTokenA{}, nil, (*asmTokenA)(nil))
+		consumer := catalogConsumer("asm.cat.sc", (*asmTokenA)(nil), 2, nil)
+
+		_, err := prepareAssembly(t, []Component{m1, consumer},
+			configEntry{key: "asm.cat.sc", value: nil},
+			configEntry{key: "asm.cat.s1", value: nil},
+		)
+		if !errors.Is(err, ErrMissingRequirement) {
+			t.Fatalf("Prepare = %v, want ErrMissingRequirement", err)
+		}
+		for _, want := range []string{"stage prepare", "asmTokenA", "1 selected member(s)", "minimum of 2"} {
+			if !strings.Contains(err.Error(), want) {
+				t.Errorf("error %q does not carry %q", err, want)
+			}
+		}
+	})
+
+	t.Run("an empty catalog is legal at the zero bound", func(t *testing.T) {
+		consumer := catalogConsumer("asm.cat.ec", (*asmTokenA)(nil), 0, nil)
+		reg, err := prepareAssembly(t, []Component{consumer}, configEntry{key: "asm.cat.ec", value: nil})
+		if err != nil {
+			t.Fatalf("Prepare = %v, want nil", err)
+		}
+		assertPlanOrder(t, reg, []string{"asm.cat.ec"})
+		if err := reg.Construct(context.Background()); err != nil {
+			t.Fatalf("Construct = %v, want nil", err)
+		}
+		t.Cleanup(func() { _ = reg.Close(context.Background()) })
+		if members := Members[*asmTokenA](reg); len(members) != 0 {
+			t.Errorf("Members[*asmTokenA] = %+v, want an empty catalog", members)
+		}
+	})
+
+	t.Run("a catalog never auto-pulls its unique registered candidate", func(t *testing.T) {
+		candidate := memberComponent("asm.cat.p1", &asmTokenA{}, nil, (*asmTokenA)(nil))
+		consumer := catalogConsumer("asm.cat.pc", (*asmTokenA)(nil), 0, nil)
+
+		reg, err := prepareAssembly(t, []Component{candidate, consumer}, configEntry{key: "asm.cat.pc", value: nil})
+		if err != nil {
+			t.Fatalf("Prepare = %v, want nil", err)
+		}
+		assertPlanOrder(t, reg, []string{"asm.cat.pc"})
+		if p, ok := reg.planned("asm.cat.p1"); ok {
+			t.Errorf("the catalog's registered candidate joined the plan (auto=%v); a member joins only by explicit selection", p.auto)
+		}
+	})
+
+	t.Run("an optional catalog accepts the zero bound", func(t *testing.T) {
+		consumer := Component{
+			Name:     "asm.cat.oc",
+			Requires: []Requirement{{Token: (*asmTokenA)(nil), Catalog: true, Optional: true}},
+			New:      func(context.Context, *ComponentRegistry, ComponentConfig) (any, error) { return &asmTokenC{}, nil },
+		}
+		if _, err := prepareAssembly(t, []Component{consumer}, configEntry{key: "asm.cat.oc", value: nil}); err != nil {
+			t.Fatalf("Prepare = %v, want nil for an optional catalog", err)
+		}
+	})
+}
+
+// TestPrepareRejectsConflictingDeliveryKinds pins the cross-component rule:
+// one token cannot be a bound delivery and a catalog membership at once, so
+// a selection holding both is refused at plan time naming both components.
+func TestPrepareRejectsConflictingDeliveryKinds(t *testing.T) {
+	bound := providerComponent("asm.kind.bound", &asmTokenA{}, (*asmTokenA)(nil))
+	member := memberComponent("asm.kind.member", &asmTokenA{}, nil, (*asmTokenA)(nil))
+
+	_, err := prepareAssembly(t, []Component{bound, member},
+		configEntry{key: "asm.kind.bound", value: nil},
+		configEntry{key: "asm.kind.member", value: nil},
+	)
+	if !errors.Is(err, ErrInvalidComponent) {
+		t.Fatalf("Prepare = %v, want ErrInvalidComponent", err)
+	}
+	for _, want := range []string{"stage prepare", "asmTokenA", "bound delivery", "catalog member", `"asm.kind.bound"`, `"asm.kind.member"`} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error %q does not carry %q", err, want)
+		}
+	}
+
+	// Two members of the same token are legal; only the mixed pair is not.
+	other := memberComponent("asm.kind.member2", &asmTokenA{}, nil, (*asmTokenA)(nil))
+	if _, err := prepareAssembly(t, []Component{member, other},
+		configEntry{key: "asm.kind.member", value: nil},
+		configEntry{key: "asm.kind.member2", value: nil},
+	); err != nil {
+		t.Fatalf("Prepare = %v, want nil for two members of one catalog", err)
+	}
+}
+
 func TestPrepareOptionalRequirements(t *testing.T) {
 	optionalConsumer := func(name string) Component {
 		return Component{

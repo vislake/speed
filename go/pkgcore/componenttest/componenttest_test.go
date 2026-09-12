@@ -68,6 +68,16 @@ func TestWellFormedAcceptsAValidDescriptor(t *testing.T) {
 	if err := WellFormed(migrating); err != nil {
 		t.Errorf("WellFormed(migrating) = %v, want nil", err)
 	}
+
+	// A catalog member descriptor satisfies the contract: members in
+	// ProvidesMember, catalog requirements carrying their bounds.
+	cataloged := validComponent()
+	cataloged.Provides = nil
+	cataloged.ProvidesMember = []any{(*fixtureIface)(nil)}
+	cataloged.Requires = []pkgcore.Requirement{{Token: (*fixtureToken)(nil), Catalog: true, MinMembers: 1}}
+	if err := WellFormed(cataloged); err != nil {
+		t.Errorf("WellFormed(catalog member) = %v, want nil", err)
+	}
 }
 
 func TestWellFormedRejects(t *testing.T) {
@@ -158,6 +168,43 @@ func TestWellFormedRejects(t *testing.T) {
 				return c
 			},
 			want: []string{"Provides entry 0", "not a contract token"},
+		},
+		{
+			name: "non-pointer ProvidesMember entry",
+			make: func() pkgcore.Component {
+				c := validComponent()
+				c.Provides = nil
+				c.ProvidesMember = []any{fixtureSchema{}}
+				return c
+			},
+			want: []string{"ProvidesMember entry 0", "not a contract token"},
+		},
+		{
+			name: "both delivery kinds declared",
+			make: func() pkgcore.Component {
+				c := validComponent()
+				c.ProvidesMember = []any{(*fixtureSchema)(nil)}
+				return c
+			},
+			want: []string{"declares both Provides and ProvidesMember"},
+		},
+		{
+			name: "MinMembers without Catalog",
+			make: func() pkgcore.Component {
+				c := validComponent()
+				c.Requires = []pkgcore.Requirement{{Token: (*fixtureToken)(nil), MinMembers: 1}}
+				return c
+			},
+			want: []string{"Requires entry 0", "MinMembers is set without Catalog"},
+		},
+		{
+			name: "Optional with MinMembers",
+			make: func() pkgcore.Component {
+				c := validComponent()
+				c.Requires = []pkgcore.Requirement{{Token: (*fixtureToken)(nil), Catalog: true, Optional: true, MinMembers: 1}}
+				return c
+			},
+			want: []string{"Requires entry 0", "Optional and MinMembers are contradictory"},
 		},
 	}
 

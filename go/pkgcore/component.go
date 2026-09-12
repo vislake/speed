@@ -28,11 +28,18 @@ var ErrDuplicateComponent = errors.New("pkgcore: duplicate component")
 // ErrInvalidComponent is returned by Register and by
 // (*ComponentRegistry).Register when a descriptor is not well formed: an
 // empty Name, a missing New callback (the one callback every component must
-// carry), a ConfigSchema that is not a pointer to a config struct, or a
-// Requires/Provides entry that is not a pointer to the contract type it
-// names. Such a descriptor could never be selected, constructed or resolved,
-// so it is refused where it enters a registry rather than failing an
-// assembly later. Nothing is registered when it is returned.
+// carry), a ConfigSchema that is not a pointer to a config struct, a
+// Requires/Provides/ProvidesMember entry that is not a pointer to the
+// contract type it names, a descriptor declaring both Provides and
+// ProvidesMember (a component either owns a bound contract or contributes
+// catalog members, never both), or a Requirement combining MinMembers with
+// a non-catalog or an optional form. Such a descriptor could never be
+// selected, constructed or resolved, so it is refused where it enters a
+// registry rather than failing an assembly later. The Prepare stage returns
+// it as well when one selected component's Provides and another's
+// ProvidesMember claim one token -- the two delivery semantics cannot hold
+// at once -- naming both components. Nothing is registered when it is
+// returned by a registration call.
 var ErrInvalidComponent = errors.New("pkgcore: invalid component")
 
 // Component is one unit of the assembly: the implementation of a module (the
@@ -69,6 +76,15 @@ var ErrInvalidComponent = errors.New("pkgcore: invalid component")
 // tokens) and drive auto-pull. At construction the registry puts each
 // component's product into the by-type context itself, so runtime Get[T]
 // answers from the same data the declaration promised.
+//
+// ProvidesMember declares the catalog contracts this component contributes
+// a member of instead: tokens several selected components may deliver at
+// once, addressed by name (Members, Build) and never resolved to one value
+// (Requirement.Catalog is the consuming side). The two fields are mutually
+// exclusive, and they differ in where the delivery lives: a bound product
+// is put into the by-type context, while a catalog member's product stays
+// out of it -- the catalog itself is the registration -- so Get and
+// GetOptional never answer with one.
 //
 // # Identity
 //
@@ -164,10 +180,24 @@ type Component struct {
 	// constructed; when the component's construction completes, the
 	// assembly asserts EVERY declared token was delivered -- a declaration
 	// nothing delivered fails the construction, because a declaration is a
-	// promise a plan-time resolution rests on. Services published at Init
-	// are not part of this set (services never resolve token
-	// requirements).
+	// promise a plan-time resolution rests on. That assertion covers
+	// exactly this field's tokens: a catalog membership is declared in
+	// ProvidesMember and is satisfied by the catalog registration, never
+	// by this single-value delivery. Services published at Init are not
+	// part of this set (services never resolve token requirements).
 	Provides []any
+
+	// ProvidesMember declares the catalog contracts this component
+	// contributes a member of: tokens several selected components may
+	// deliver at once, addressed by name (Members, Build) and never
+	// resolved to a single value -- the payment channels, the AI vendors.
+	// The product New returns is the member: it is deliberately NOT put
+	// into the by-type context (Get and GetOptional never see a member),
+	// and the construction asserts it satisfies every declared token here
+	// while refusing a value New itself put for one. Declaring this
+	// together with Provides is refused: a component either owns a bound
+	// contract or is one member of a catalog, never both.
+	ProvidesMember []any
 
 	// Capabilities is what this component declares about itself. The
 	// assembly compares it against the deployment mode's requirement during
@@ -259,6 +289,13 @@ type Component struct {
 // assembly, none fails the assembly for a required token (or triggers
 // auto-pull of a uniquely-available registered component), and several fail
 // it as ambiguous.
+//
+// A catalog requirement (Catalog true) binds the consumer to every selected
+// member instead of one resolved value: each member delivering the token is
+// a dependency edge, so the members construct before the consumer, and the
+// member count is checked against MinMembers. A catalog requirement never
+// auto-pulls (members join only by explicit selection) and never reports
+// ambiguity -- multiplicity is the catalog's semantics.
 type Requirement struct {
 	// Token identifies the consumed contract as a typed nil pointer to its
 	// type -- (*gorm.DB)(nil), (*authn.KeySource)(nil),
@@ -272,6 +309,19 @@ type Requirement struct {
 	// value it must treat as fail-closed. An optional token that several
 	// selected components do provide is still ambiguous.
 	Optional bool
+
+	// Catalog declares that this requirement consumes every selected
+	// member delivering Token, by name, instead of one resolved value: the
+	// dependency edge reaches every member, the members construct before
+	// the consumer, and a shortfall against MinMembers fails the assembly.
+	Catalog bool
+
+	// MinMembers is the smallest member count the consumer accepts; zero
+	// (the default) accepts an empty catalog, which is also how an
+	// optional catalog spells itself. It is meaningful only with Catalog,
+	// and a requirement carrying it without Catalog -- or together with
+	// Optional -- is refused as a contradictory descriptor.
+	MinMembers int
 }
 
 // globalComponents is the process-wide registration every package writes
@@ -327,13 +377,19 @@ func MustRegister(c Component) {
 
 // validateComponent reports whether c is a well-formed descriptor: a
 // non-empty Name, a New callback, a ConfigSchema that is either nil or a
-// pointer to a struct, and Requires/Provides entries that are pointers.
+// pointer to a struct, Requires/Provides/ProvidesMember entries that are
+// pointers, at most one delivery kind declared, and Requirement catalog
+// fields that carry their own meaning (MinMembers only on a catalog
+// requirement, never together with Optional).
 func validateComponent(c Component) error {
 	if c.Name == "" {
 		return fmt.Errorf("%w: component has an empty name", ErrInvalidComponent)
 	}
 	if c.New == nil {
 		return fmt.Errorf("%w: component %q declares no New callback, and New is the one required callback", ErrInvalidComponent, c.Name)
+	}
+	if len(c.Provides) > 0 && len(c.ProvidesMember) > 0 {
+		return fmt.Errorf("%w: component %q declares both Provides and ProvidesMember; a component either owns bound contracts (one selected provider, read by type) or contributes catalog members (several, read by name), never both", ErrInvalidComponent, c.Name)
 	}
 	if c.ConfigSchema != nil {
 		t := reflect.TypeOf(c.ConfigSchema)
@@ -345,10 +401,24 @@ func validateComponent(c Component) error {
 		if err := checkTokenShape(req.Token); err != nil {
 			return fmt.Errorf("%w: component %q requirement %d: %w", ErrInvalidComponent, c.Name, i, err)
 		}
+		if req.MinMembers < 0 {
+			return fmt.Errorf("%w: component %q requirement %d: MinMembers is %d, and a negative member count has no meaning", ErrInvalidComponent, c.Name, i, req.MinMembers)
+		}
+		if req.MinMembers > 0 && !req.Catalog {
+			return fmt.Errorf("%w: component %q requirement %d: MinMembers is %d without Catalog; a member-count lower bound is meaningful only on a catalog requirement", ErrInvalidComponent, c.Name, i, req.MinMembers)
+		}
+		if req.Optional && req.MinMembers > 0 {
+			return fmt.Errorf("%w: component %q requirement %d: Optional and MinMembers = %d are contradictory; an optional catalog accepts an empty catalog (MinMembers 0), and a lower bound means the requirement is not optional", ErrInvalidComponent, c.Name, i, req.MinMembers)
+		}
 	}
 	for i, provided := range c.Provides {
 		if err := checkTokenShape(provided); err != nil {
 			return fmt.Errorf("%w: component %q Provides entry %d: %w", ErrInvalidComponent, c.Name, i, err)
+		}
+	}
+	for i, provided := range c.ProvidesMember {
+		if err := checkTokenShape(provided); err != nil {
+			return fmt.Errorf("%w: component %q ProvidesMember entry %d: %w", ErrInvalidComponent, c.Name, i, err)
 		}
 	}
 	return nil

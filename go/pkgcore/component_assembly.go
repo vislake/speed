@@ -171,6 +171,13 @@ func (r *ComponentRegistry) expandSelection(components ComponentConfig) (*assemb
 // selected provides. It fills draft.edges with the consumer-to-provider
 // edges the topological order is derived from. Auto-pulled components join
 // the queue and have their own requirements resolved in turn.
+//
+// A catalog requirement resolves against the selection's ProvidesMember
+// declarations instead: every selected member delivering the token becomes
+// an edge (so the members construct before the consumer), MinMembers bounds
+// the member count, and neither the ambiguity switch nor auto-pull applies
+// -- multiplicity is the catalog's semantics, and a member joins only by
+// explicit selection.
 func (r *ComponentRegistry) resolveRequirements(draft *assemblyDraft, strict bool) error {
 	queue := append([]string(nil), draft.order...)
 
@@ -178,6 +185,17 @@ func (r *ComponentRegistry) resolveRequirements(draft *assemblyDraft, strict boo
 		sel := draft.byName[queue[i]]
 		for _, req := range sel.component.Requires {
 			token := reflect.TypeOf(req.Token)
+
+			if req.Catalog {
+				members := catalogMembers(draft, token)
+				if len(members) < req.MinMembers {
+					return fmt.Errorf("%w (stage prepare): component %q consumes the %s catalog and %d selected member(s) deliver it, below the required minimum of %d; select more members in the composition configuration", ErrMissingRequirement, sel.name, tokenDisplay(token), len(members), req.MinMembers)
+				}
+				for _, member := range members {
+					draft.edges[sel.name] = appendUnique(draft.edges[sel.name], member)
+				}
+				continue
+			}
 
 			providers := make([]string, 0, 2)
 			for _, name := range draft.order {
@@ -204,6 +222,20 @@ func (r *ComponentRegistry) resolveRequirements(draft *assemblyDraft, strict boo
 		}
 	}
 	return nil
+}
+
+// catalogMembers returns the names of the selected components whose
+// ProvidesMember declarations deliver token, in selection order: the
+// consumers of a catalog requirement depend on every one of them, and
+// nothing else ever joins this set -- a catalog never auto-pulls.
+func catalogMembers(draft *assemblyDraft, token reflect.Type) []string {
+	var members []string
+	for _, name := range draft.order {
+		if providesMemberToken(draft.byName[name].component, token) {
+			members = append(members, name)
+		}
+	}
+	return members
 }
 
 // autoPull selects the uniquely-available registered component that
@@ -257,6 +289,32 @@ func providesToken(c Component, token reflect.Type) bool {
 	return false
 }
 
+// providesMemberToken reports whether a component's ProvidesMember
+// declarations match token.
+func providesMemberToken(c Component, token reflect.Type) bool {
+	for _, declared := range c.ProvidesMember {
+		if productMatchesToken(reflect.TypeOf(declared), token) {
+			return true
+		}
+	}
+	return false
+}
+
+// memberAddressesType reports whether a component's ProvidesMember
+// declarations address target -- the reading-side match Members uses: a
+// declaration promises a member whose value satisfies the declared token,
+// so target addresses the member when a value of type target would satisfy
+// one of those tokens (target may be the contract type itself, the type
+// behind a declared pointer).
+func memberAddressesType(c Component, target reflect.Type) bool {
+	for _, declared := range c.ProvidesMember {
+		if productMatchesToken(target, reflect.TypeOf(declared)) {
+			return true
+		}
+	}
+	return false
+}
+
 // appendUnique appends name to names when it is not already present.
 func appendUnique(names []string, name string) []string {
 	if slices.Contains(names, name) {
@@ -266,17 +324,20 @@ func appendUnique(names []string, name string) []string {
 }
 
 // validateDeclaredDeliveries refuses a selection in which two selected
-// components' Provides declarations address one another: one single-value
-// token delivered twice, which every by-type reading of it -- Get,
-// GetOptional, the nil-for-absent sugars -- would find ambiguous. The
-// requirement walk above anchors that rule on the token a consumer names;
-// this pass completes it over the selection itself, so a duplicate
-// delivery nothing requires cannot slip through to the by-type context and
-// surface only as a read-time failure or a sugar answering absent. Only
-// declared deliveries are visible here -- a value put outside a
-// component's declaration is invisible to the plan and stays a read-time
-// condition -- and components read by name rather than by token
-// (directory-style members) carry no single-value declaration to collide.
+// components' declarations contradict one another. Two shapes are refused:
+// one single-value token delivered twice -- which every by-type reading of
+// it (Get, GetOptional, the nil-for-absent sugars) would find ambiguous --
+// and one token declared as a bound delivery by one component while
+// another declares it as a catalog membership, two semantics a single
+// token cannot carry at once. The requirement walk above anchors the
+// ambiguity rule on the token a consumer names; this pass completes it
+// over the selection itself, so a duplicate delivery nothing requires
+// cannot slip through to the by-type context and surface only as a
+// read-time failure or a sugar answering absent. Only declared deliveries
+// are visible here -- a value put outside a component's declaration is
+// invisible to the plan and stays a read-time condition. Multiple
+// ProvidesMember declarations of one token are legal, not a collision:
+// they are the catalog's members.
 func validateDeclaredDeliveries(draft *assemblyDraft) error {
 	for i, nameA := range draft.order {
 		a := draft.byName[nameA].component
@@ -285,12 +346,15 @@ func validateDeclaredDeliveries(draft *assemblyDraft) error {
 			if token, ok := overlappingDelivery(a, b); ok {
 				return fmt.Errorf("%w (stage prepare): %s is provided by multiple selected components: %s; deselect all but one", ErrAmbiguousProvider, tokenDisplay(token), joinNames([]string{a.Name, b.Name}))
 			}
+			if token, ok := kindConflictingDelivery(a, b); ok {
+				return fmt.Errorf("%w (stage prepare): %s is declared as a bound delivery by component %q and as a catalog member by component %q; one token is either bound (one selected provider, read by type) or catalog (members, read by name), never both, so align the declarations or deselect one", ErrInvalidComponent, tokenDisplay(token), a.Name, b.Name)
+			}
 		}
 	}
 	return nil
 }
 
-// overlappingDelivery reports whether one component's declared deliveries
+// overlappingDelivery reports whether one component's bound deliveries
 // would be found by a by-type reading for a token another component also
 // declares: the same declaration twice, or a pair whose declared types
 // address one another (an interface token beside a concrete type that
@@ -305,6 +369,36 @@ func overlappingDelivery(a, b Component) (reflect.Type, bool) {
 				return tb, true
 			case productMatchesToken(tb, ta):
 				return ta, true
+			}
+		}
+	}
+	return nil, false
+}
+
+// kindConflictingDelivery reports whether one component declares a token as
+// a bound delivery while the other declares it as a catalog membership --
+// in either direction -- returning the token to name in the refusal.
+func kindConflictingDelivery(a, b Component) (reflect.Type, bool) {
+	if token, ok := boundAgainstMembers(a.Provides, b.ProvidesMember); ok {
+		return token, true
+	}
+	return boundAgainstMembers(b.Provides, a.ProvidesMember)
+}
+
+// boundAgainstMembers reports whether a bound declaration and a member
+// declaration address one another: one token under the two delivery kinds,
+// matched the way every declaration match works (the declared type, or the
+// type behind the pointer, assignable to the other).
+func boundAgainstMembers(bound, members []any) (reflect.Type, bool) {
+	for _, declaredBound := range bound {
+		tb := reflect.TypeOf(declaredBound)
+		for _, declaredMember := range members {
+			tm := reflect.TypeOf(declaredMember)
+			switch {
+			case productMatchesToken(tb, tm):
+				return tm, true
+			case productMatchesToken(tm, tb):
+				return tb, true
 			}
 		}
 	}

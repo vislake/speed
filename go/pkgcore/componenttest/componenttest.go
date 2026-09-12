@@ -41,8 +41,13 @@ var componentNamePattern = regexp.MustCompile(`^[a-z][a-z0-9_-]*(\.[a-z][a-z0-9_
 //   - ConfigSchema is nil or a pointer to a struct that decodes an empty
 //     configuration cleanly, the form the assembly decodes a component's
 //     configuration block with;
-//   - Requires tokens and Provides entries are typed pointers to the
-//     contract types they name.
+//   - Requires tokens, Provides entries and ProvidesMember entries are
+//     typed pointers to the contract types they name;
+//   - at most one delivery kind is declared: a component owns bound
+//     contracts (Provides) or contributes catalog members
+//     (ProvidesMember), never both;
+//   - a Requirement's MinMembers carries its meaning: set only with
+//     Catalog, never together with Optional.
 //
 // All problems are reported together, so one call tells a component author
 // everything the descriptor still has to fix.
@@ -84,11 +89,25 @@ func WellFormed(c pkgcore.Component) error {
 		if problem := tokenProblem(req.Token); problem != "" {
 			problems = append(problems, fmt.Sprintf("Requires entry %d: %s", i, problem))
 		}
+		if req.MinMembers > 0 && !req.Catalog {
+			problems = append(problems, fmt.Sprintf("Requires entry %d: MinMembers is set without Catalog, and a member-count lower bound is meaningful only on a catalog requirement", i))
+		}
+		if req.Optional && req.MinMembers > 0 {
+			problems = append(problems, fmt.Sprintf("Requires entry %d: Optional and MinMembers are contradictory; an optional catalog accepts an empty catalog", i))
+		}
 	}
 	for i, provided := range c.Provides {
 		if problem := tokenProblem(provided); problem != "" {
 			problems = append(problems, fmt.Sprintf("Provides entry %d: %s", i, problem))
 		}
+	}
+	for i, provided := range c.ProvidesMember {
+		if problem := tokenProblem(provided); problem != "" {
+			problems = append(problems, fmt.Sprintf("ProvidesMember entry %d: %s", i, problem))
+		}
+	}
+	if len(c.Provides) > 0 && len(c.ProvidesMember) > 0 {
+		problems = append(problems, "the component declares both Provides and ProvidesMember, and a component delivers either bound contracts or catalog members, never both")
 	}
 
 	if len(problems) == 0 {
@@ -97,8 +116,8 @@ func WellFormed(c pkgcore.Component) error {
 	return errors.New("component " + c.Name + ": " + strings.Join(problems, "; "))
 }
 
-// tokenProblem reports why a Requirement.Token or Provides entry is not a
-// usable contract token, or "" when it is.
+// tokenProblem reports why a Requirement.Token, Provides or ProvidesMember
+// entry is not a usable contract token, or "" when it is.
 func tokenProblem(tok any) string {
 	t := reflect.TypeOf(tok)
 	if t == nil || t.Kind() != reflect.Pointer {

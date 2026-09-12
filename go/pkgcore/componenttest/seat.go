@@ -197,6 +197,7 @@ func sameDeclarations(a, b pkgcore.Component) bool {
 		a.Capabilities == b.Capabilities &&
 		reflect.DeepEqual(a.Requires, b.Requires) &&
 		reflect.DeepEqual(a.Provides, b.Provides) &&
+		reflect.DeepEqual(a.ProvidesMember, b.ProvidesMember) &&
 		reflect.DeepEqual(a.BootstrapKeys, b.BootstrapKeys) &&
 		reflect.DeepEqual(a.SystemPurposes, b.SystemPurposes)
 }

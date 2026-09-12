@@ -1055,18 +1055,25 @@ func TestMemberNames(t *testing.T) {
 	log := &stageLog{}
 	gatewayB := recordingComponent(log, "gateway.b", "gateway", &compTokenA{}, nil)
 	gatewayA := recordingComponent(log, "gateway.a", "gateway", &compTokenB{}, nil)
+	// A catalog member of the same module is listed the same way: the
+	// reading groups by Module and carries no products, so it answers for
+	// bound implementations and members alike.
+	member := recordingComponent(log, "gateway.member", "gateway", compSpreadImpl{}, func(c *Component) {
+		c.ProvidesMember = []any{(*compSpreader)(nil)}
+	})
 	other := recordingComponent(log, "other", "other", &compSpreadImpl{}, nil)
 
-	reg := newTestRegistry(t, gatewayB, gatewayA, other)
+	reg := newTestRegistry(t, gatewayB, gatewayA, member, other)
 	reg.Put(testComposition(
 		configEntry{key: "gateway.a", value: nil},
 		configEntry{key: "gateway.b", value: nil},
+		configEntry{key: "gateway.member", value: nil},
 	))
 	if err := runStages(ctx, reg); err != nil {
 		t.Fatalf("stages = %v", err)
 	}
 
-	if got, want := MemberNames(reg, "gateway"), []string{"gateway.a", "gateway.b"}; !reflect.DeepEqual(got, want) {
+	if got, want := MemberNames(reg, "gateway"), []string{"gateway.a", "gateway.b", "gateway.member"}; !reflect.DeepEqual(got, want) {
 		t.Errorf("MemberNames(gateway) = %v, want %v", got, want)
 	}
 	if got := MemberNames(reg, "unselected.module"); len(got) != 0 {
@@ -1412,6 +1419,83 @@ func TestConstructProductDeliversProvides(t *testing.T) {
 		}
 		if err := reg.Construct(ctx); err != nil {
 			t.Fatalf("Construct = %v, want nil", err)
+		}
+	})
+}
+
+// TestConstructMemberDeliversProvidesMember pins the catalog member's
+// construction-time contract: the product must satisfy every declared
+// member token, the product stays out of the by-type context, and nothing
+// the New call put for a member token may enter it either.
+func TestConstructMemberDeliversProvidesMember(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("a product not satisfying a declared member token fails", func(t *testing.T) {
+		mismatched := recordingComponent(&stageLog{}, "memberbad", "", &compTokenB{}, func(c *Component) {
+			c.ProvidesMember = []any{(*compTokenA)(nil)}
+		})
+
+		reg := newTestRegistry(t, mismatched)
+		reg.Put(testComposition(configEntry{key: "memberbad", value: nil}))
+		if err := reg.Prepare(ctx); err != nil {
+			t.Fatalf("Prepare = %v", err)
+		}
+		err := reg.Construct(ctx)
+		if !errors.Is(err, ErrComponentFailed) {
+			t.Fatalf("Construct = %v, want ErrComponentFailed", err)
+		}
+		for _, want := range []string{`component "memberbad"`, "no product satisfying the declared catalog token(s) pkgcore.compTokenA"} {
+			if !strings.Contains(err.Error(), want) {
+				t.Errorf("error %q does not carry %q", err, want)
+			}
+		}
+	})
+
+	t.Run("a value put for a member token fails", func(t *testing.T) {
+		leaking := Component{
+			Name:           "memberleak",
+			ProvidesMember: []any{(*compTokenB)(nil)},
+			New: func(_ context.Context, reg *ComponentRegistry, _ ComponentConfig) (any, error) {
+				reg.Put(&compTokenB{})
+				return &compTokenB{}, nil
+			},
+		}
+
+		reg := newTestRegistry(t, leaking)
+		reg.Put(testComposition(configEntry{key: "memberleak", value: nil}))
+		if err := reg.Prepare(ctx); err != nil {
+			t.Fatalf("Prepare = %v", err)
+		}
+		err := reg.Construct(ctx)
+		if !errors.Is(err, ErrComponentFailed) {
+			t.Fatalf("Construct = %v, want ErrComponentFailed", err)
+		}
+		for _, want := range []string{`component "memberleak"`, "put a value satisfying the declared catalog token(s) pkgcore.compTokenB", "must not put it"} {
+			if !strings.Contains(err.Error(), want) {
+				t.Errorf("error %q does not carry %q", err, want)
+			}
+		}
+	})
+
+	t.Run("a matching member constructs without entering the by-type context", func(t *testing.T) {
+		viaInterface := recordingComponent(&stageLog{}, "memberok", "", compSpreadImpl{}, func(c *Component) {
+			c.ProvidesMember = []any{(*compSpreader)(nil)}
+		})
+
+		reg := newTestRegistry(t, viaInterface)
+		reg.Put(testComposition(configEntry{key: "memberok", value: nil}))
+		if err := reg.Prepare(ctx); err != nil {
+			t.Fatalf("Prepare = %v", err)
+		}
+		if err := reg.Construct(ctx); err != nil {
+			t.Fatalf("Construct = %v, want nil", err)
+		}
+		if _, err := Get[compSpreader](reg); !errors.Is(err, ErrMissingRequirement) {
+			t.Errorf("Get[compSpreader] = %v, want ErrMissingRequirement: a member product is not put", err)
+		}
+		members := Members[compSpreader](reg)
+		if len(members) != 1 || members[0].Name != "memberok" {
+			t.Errorf("Members[compSpreader] = %+v, want the memberok product", members)
 		}
 	})
 }

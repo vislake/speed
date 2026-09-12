@@ -189,7 +189,7 @@ type ComponentRegistry struct {
 
 	// plan is the assembly info: the selected components in dependency
 	// order, written by a successful Prepare. It stays unexported; Build,
-	// MemberNames and Assets are its public readers.
+	// MemberNames, Members and Assets are its public readers.
 	plan       []plannedComponent
 	planByName map[string]int
 
@@ -447,8 +447,10 @@ func (r *ComponentRegistry) Prepare(ctx context.Context) error {
 
 // Construct runs the second stage: every planned component's New callback,
 // in dependency order, each product put into the by-type context so the
-// components constructed after it can reach it. A New that returns no
-// product fails the stage.
+// components constructed after it can reach it -- except a catalog
+// member's product, which stays out of that context because the catalog
+// registration is its delivery (Members reads it by name; Get must never
+// see it). A New that returns no product fails the stage.
 //
 // A failure -- here or in any later stage -- closes every constructed
 // component in reverse order, exactly once, and returns ErrComponentFailed
@@ -475,11 +477,17 @@ func (r *ComponentRegistry) Construct(ctx context.Context) error {
 		// component's own additional deliveries: the stage drives one New at
 		// a time, so everything appended to the by-type context between the
 		// count above and now was put by this call.
-		if err := productDeliversDeclarations(p.component, instance, r.valuesFrom(before)); err != nil {
+		put := r.valuesFrom(before)
+		if err := productDeliversDeclarations(p.component, instance, put); err != nil {
+			return r.failStage(ctx, stageConstruct, name, err)
+		}
+		if err := memberDeliversDeclarations(p.component, instance, put); err != nil {
 			return r.failStage(ctx, stageConstruct, name, err)
 		}
 		r.recordConstructed(p.component, instance)
-		r.Put(instance)
+		if len(p.component.ProvidesMember) == 0 {
+			r.Put(instance)
+		}
 	}
 
 	r.markStageDone(stageConstruct)
@@ -767,6 +775,19 @@ func (r *ComponentRegistry) recordConstructed(c Component, instance any) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.constructedEntries = append(r.constructedEntries, constructedEntry{name: c.Name, component: c, instance: instance})
+}
+
+// constructedInstance returns the product recorded for the constructed
+// component named name, and whether that component has been constructed.
+func (r *ComponentRegistry) constructedInstance(name string) (any, bool) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	for _, e := range r.constructedEntries {
+		if e.name == name {
+			return e.instance, true
+		}
+	}
+	return nil, false
 }
 
 // beginStage validates that s may run now and records it as the current
@@ -1071,6 +1092,42 @@ func productDeliversDeclarations(c Component, instance any, put []any) error {
 	return fmt.Errorf("the construction delivered neither the product %s nor a value put during New for the declared token(s) %s; a Provides declaration promises a construction-time delivery, so a declaration the component cannot deliver must be removed (or the delivering value put inside New)", product, strings.Join(undelivered, ", "))
 }
 
+// memberDeliversDeclarations asserts the delivery promise a component's
+// ProvidesMember declarations make: the product New returned must satisfy
+// every declared token, and nothing the New call put into the by-type
+// context may satisfy one -- a catalog member's delivery is the catalog
+// registration itself (Members reads the product by name), so a member
+// value inside the single-value context would put a token there the
+// contract keeps out of every by-type reading. A declaration whose product
+// does not answer it is a descriptor promising a contract this component
+// never delivers, refused here while the component is still on the stack.
+func memberDeliversDeclarations(c Component, instance any, put []any) error {
+	if len(c.ProvidesMember) == 0 {
+		return nil
+	}
+	product := reflect.TypeOf(instance)
+	var undelivered, leaked []string
+	for _, declared := range c.ProvidesMember {
+		token := reflect.TypeOf(declared)
+		if !productMatchesToken(product, token) {
+			undelivered = append(undelivered, tokenDisplay(token))
+		}
+		for _, v := range put {
+			if productMatchesToken(reflect.TypeOf(v), token) {
+				leaked = append(leaked, tokenDisplay(token))
+				break
+			}
+		}
+	}
+	if len(undelivered) > 0 {
+		return fmt.Errorf("the construction delivered no product satisfying the declared catalog token(s) %s; a ProvidesMember declaration promises a member of that contract type, so the product must satisfy it", strings.Join(undelivered, ", "))
+	}
+	if len(leaked) > 0 {
+		return fmt.Errorf("the construction put a value satisfying the declared catalog token(s) %s into the by-type context; a catalog member is read by name (Members, Build), never through the single-value context, so New must not put it", strings.Join(leaked, ", "))
+	}
+	return nil
+}
+
 // Build constructs a selected component by name: the directory-style member
 // access path, both for the once-per-assembly forms (Init enumerating a
 // module's members into a map) and for per-call construction (a request
@@ -1276,9 +1333,10 @@ func RegisteredComponents(r *ComponentRegistry) []Component {
 }
 
 // MemberNames returns the names of the selected components implementing
-// module, in dependency order -- the stable reading a directory-style
-// module's consumer enumerates its members with. It returns an empty slice
-// when no selected component implements the module.
+// module, in dependency order -- the stable diagnostic reading of "which
+// selected components implement module X", grouped by Component.Module and
+// carrying no products. It returns an empty slice when no selected
+// component implements the module.
 func MemberNames(r *ComponentRegistry, module string) []string {
 	var names []string
 	for _, p := range r.plannedComponents() {
@@ -1287,6 +1345,51 @@ func MemberNames(r *ComponentRegistry, module string) []string {
 		}
 	}
 	return names
+}
+
+// Member is one catalog member: the component name it was delivered under,
+// and its product.
+type Member[T any] struct {
+	// Name is the selected component's name -- the key this member answers
+	// under and the name Build constructs the same component by.
+	Name string
+	// Value is the product the member's construction delivered, of the
+	// contract type T addresses.
+	Value T
+}
+
+// Members returns every selected catalog member delivering T, in
+// dependency order: the Construct-stage products a consumer enumerates
+// once per assembly (a provider map keyed by name, a directory listing).
+// A member is a selected component whose ProvidesMember declarations
+// address T; the value is the product its construction recorded, so a call
+// before the Construct stage finds nothing. Get and GetOptional never
+// answer with a member -- its product is not put into the by-type context
+// -- and Members never answers with a bound provider's value: the two
+// delivery kinds stay apart on the reading side too. Build remains the
+// per-call construction of one named member.
+func Members[T any](r *ComponentRegistry) []Member[T] {
+	target := reflect.TypeFor[T]()
+	var members []Member[T]
+	for _, p := range r.plannedComponents() {
+		if !memberAddressesType(p.component, target) {
+			continue
+		}
+		instance, constructed := r.constructedInstance(p.component.Name)
+		if !constructed {
+			continue
+		}
+		t := reflect.TypeOf(instance)
+		if t == nil || !t.AssignableTo(target) {
+			continue
+		}
+		value, ok := reflect.ValueOf(instance).Convert(target).Interface().(T)
+		if !ok {
+			continue
+		}
+		members = append(members, Member[T]{Name: p.component.Name, Value: value})
+	}
+	return members
 }
 
 // Asset is one selected component's embedded assets: the material a host or

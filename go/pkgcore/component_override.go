@@ -36,9 +36,9 @@ func LookupComponent(reg *ComponentRegistry, name string) (Component, bool) {
 // Override returns a descriptor derived from the one registered on reg
 // under base: the same declaration surface -- Module, ConfigSchema and
 // ConfigNamespace, BootstrapKeys, SystemPurposes, Capabilities, Provides,
-// Migrations, Locales, OpenAPISpec and every lifecycle callback except New
-// -- under the name name, constructed by construct, requiring base's own
-// tokens plus extra.
+// ProvidesMember, Migrations, Locales, OpenAPISpec and every lifecycle
+// callback except New -- under the name name, constructed by construct,
+// requiring base's own tokens plus extra.
 //
 // It is the derivation a host reaches for when a module's own construction
 // is not the one this deployment needs -- a membership store, a provider
