@@ -30,6 +30,7 @@ ProvidesMember []any
 - **成员身份由类型 token 确定，不由名字确定**：`Component.Module` 保持它原本的职责——资产归属（迁移集、语言资源的 id 前缀）与诊断分组，不再承担"这个组件是哪个目录的成员"这一含义。目录成员是否真的可赋值给目录的类型，在装配期即可校验，而不是等到取用时的类型断言才暴露。
 - **跨组件矛盾即拒绝**：一个 token 被某个选中组件声明为 `Provides`、又被另一个声明为 `ProvidesMember`，是不可能同时成立的两种语义，Prepare 阶段直接失败并点名两个来源。
 - 单值交付的重复校验（同一绑定式 token 被两个选中组件交付）只针对 `Provides`；`ProvidesMember` 的多重交付是合法的，不进入该校验。
+- **成员产物不进单值上下文**：`ProvidesMember` 的 token 由目录登记满足，不进入按类型索引的单值上下文——成员的产物不被放入该上下文（成员的 New 也不为它放入任何值），构造完成的交付断言因此只统计 `Provides`；成员一侧断言的是产物满足所声明的成员 token。
 
 ## 3. 消费方：`Requirement` 的目录形式
 
@@ -78,5 +79,6 @@ func Members[T any](r *ComponentRegistry) []Member[T]
 ## 5. 模块落位
 
 - `ai-gateway` 的 `chat`/`image` 两个厂商目录：厂商组件声明 `ProvidesMember: []any{(*ChatProvider)(nil)}`（image 侧同理），`Gateway` 声明 `Requires: []Requirement{{Token: (*ChatProvider)(nil), Catalog: true}}`，使这条依赖第一次出现在依赖图里；按调用构造的路径（`buildSelected` → `Build[T]` 携带凭据 override）不变。
+- `go/billing/gateway/{stripe,alipay,wechat}` 三个支付通道同批迁移，与 §1 语义一致：三者的 `(*billing.PaymentGateway)(nil)` 由 `Provides` 改为 `ProvidesMember`（目录 `"gateway"`，各自仍是该模块的一名成员），读取面随之从 `Get[billing.PaymentGateway]` 改为 `Members[billing.PaymentGateway]` 按名枚举；仓内无其它消费者。
 - 一个目录容纳两个及以上成员是这套契约的最小可用性：同一目录下两个厂商组件同时选中必须装配成功，并各自可被按名取用。
 - `examples/reference-app` 作为强制首个消费者，与上述声明面变更同批迁移：它按名字指定模型路由与凭据的既有写法继续成立，消费侧不得留在旧声明形态上。
