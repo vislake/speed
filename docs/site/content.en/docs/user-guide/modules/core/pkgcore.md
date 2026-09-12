@@ -42,7 +42,10 @@ builds on pkgcore. You use it in one of two roles:
   the descriptor's contract later: under lockstep versioning that
   breaks every module at once, which is why cross-cutting mechanisms
   become new seats on the `*pkgcore.ComponentRegistry` declaration
-  face instead.
+  face -- or, where the mechanism's consumers read it through a
+  product (the HTTP route and middleware faces, provided by the `http`
+  component in `go/app/httpserve`), declaration tokens a component
+  provides -- instead.
 - **As a host** — your binary composes the components with
   `pkgcore.NewComponentRegistry()` and drives them through the seven
   stages with `app.Assemble` (or the `app.RunAssembly` sugar),
@@ -59,7 +62,7 @@ sort decide:
 
 ```go
 func (m *BillingModule) Register(reg *pkgcore.ComponentRegistry) error {
-    reg.RoutesSeat().Mount("/api/v1/billing", m.router())
+    pkgcore.MountRoute(reg, "/api/v1/billing", m.router()) // the http component's route face, when selected
     if err := reg.PermissionsSeat().Add("billing:read", "billing:write"); err != nil {
         return err
     }
@@ -132,8 +135,8 @@ client must not see.
 
 ## Core concepts and API essentials
 
-- **The `ComponentRegistry`** — one seat field per mechanism (`Routes`,
-  `Config`, `Features`, `Permissions`, `Jobs`, `Notifications`, `Events`,
+- **The `ComponentRegistry`** — one seat field per mechanism (`Config`,
+  `Features`, `Permissions`, `Jobs`, `Notifications`, `Events`,
   `AuditActions`, `Retention`, `Schedules`), created with
   `pkgcore.NewComponentRegistry()` from the global component
   registration plus the host's own components; the seats accept writes
@@ -176,9 +179,12 @@ client must not see.
 
 ## Boundaries and pitfalls
 
-- A new cross-cutting mechanism belongs on the declaration face — a
+- A new cross-cutting mechanism belongs on a declaration face — a
   seat accessor on the `ComponentRegistry` plus the registrar behind
-  it — never as a new descriptor callback; `Register` must not perform
+  it, or, where consumers read it through a product rather than the
+  registry (the `http` component's route and middleware faces), a
+  declaration token a component provides — never as a new descriptor
+  callback; `Register` must not perform
   I/O, and a registrar error is never a merge — duplicate keys fail
   registration.
 - Do not write mocks for the modules: `NewMemoryKVStore`,

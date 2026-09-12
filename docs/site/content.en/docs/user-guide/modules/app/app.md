@@ -40,8 +40,9 @@ infrastructure implementations and the host's own pieces, each a
   nil waits the context out itself) and shuts down in the two phases of
   `app.Shutdown`.
 
-The engine contains **no HTTP assembly and no listening** — a host's
-own application component composes the routes and owns the listener.
+The engine contains **no HTTP assembly and no listening** — the `http`
+component (`go/app/httpserve`) composes the routes the declaration
+faces accumulated and owns the listener.
 The host-neutral HTTP helpers live beside the engine for hosts to
 compose with: `app.AuthnAPIPath` (authn's mount point),
 `app.ReadHeaderTimeout` / `app.ShutdownTimeout` (the serve bounds) and
@@ -71,8 +72,9 @@ your serve step reaches the engine as a `ServeFunc` either way.
 
 | Package | Concern | Who pays it |
 |---|---|---|
-| `go/app` (root) | the engine: loader, driver, `RunAssembly`, the observability component, the shared HTTP helpers | every composition |
-| `go/app/chain` | the fixed middleware chain: `chain.Standard` (registry-derived) and `chain.Chain` (custom layouts) | hosts that compose a chain |
+| `go/app` (root) | the engine: loader, driver, `RunAssembly`, the shared HTTP helpers | every composition |
+| `go/app/chain` | the fixed middleware chain: `chain.Standard` (derived from the http component's route source) and `chain.Chain` (custom layouts) | hosts that compose a chain |
+| `go/app/httpserve` | the `http` component: the route/middleware declaration faces, the handler assembly per the host's link policy, and the listener | every composition that serves HTTP |
 | `go/app/bridges` | the no-import bridges: `Entitlements`, `UsageRecorder`, `OrgFeatureGate`, `AuthnFeatureGate`, `ShareExpiryReader` | hosts that wire those modules |
 
 The split is by dependency cost, not by taste: a bare consumer of the
@@ -177,18 +179,20 @@ allowlist:
   own real, unsubstituted Principal, so neither tenancy resolution nor
   impersonation substitution may run ahead of it.
 
-`chain.Standard(reg, verifier, protectedMux, opts...)` derives that
-whole composition from the bootstrapped registry's mounted routes: it
+`chain.Standard(src, verifier, protectedMux, opts...)` derives that
+whole composition from the http component's route source — the mounted
+routes its route face accumulated: it
 admits every route through your route-authorization table
 (`chain.WithAuthorization` — an `rbac.GuardRoutes` rule set, checked
 for exhaustiveness and wrapped in the fail-closed gate before
 mounting), splits the authn and admin subtrees out, mounts the rest on
-your protected mux and delegates the order to `chain.Chain`. The host
-supplies the business half through options: `WithAdminPrefix`,
-`WithImpersonation`, `WithTenantStatusResolver`,
-`WithExtraAllowlist`. A host with a custom route layout composes
-`chain.Chain`/`chain.Config` directly instead — and a selection with no
-authn module composes no chain at all.
+your protected mux and delegates the order to `chain.Chain`. The `http`
+component calls it with the business half your link policy
+(`go/app/httpserve.LinkPolicy`) carries: `AdminPrefix`,
+`Impersonation`, `TenantStatusResolver`,
+`ExtraAllowlist` — and a policy declaring `Chainless` is served with no
+chain at all. A host with a custom route layout composes
+`chain.Chain`/`chain.Config` directly instead.
 
 ## The bridges
 

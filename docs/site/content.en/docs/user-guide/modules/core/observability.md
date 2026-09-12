@@ -41,7 +41,7 @@ if err != nil {
 }
 defer shutdown(ctx) // graceful process shutdown
 
-obs.RegisterMountedRoutes(reg.Routes.Routes()) // seed the route limiter before traffic
+obs.RegisterMountedRoutes(routes) // seed the route limiter with the accumulated route face before traffic
 
 mux := http.NewServeMux()
 mux.Handle("/", obs.Middleware(appHandler)) // outside tenancy.Middleware, per the fixed chain

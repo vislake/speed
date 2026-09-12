@@ -29,8 +29,8 @@ description: "go/app 的设计——唯一没有业务域的模块为何存在�
   层——standalone 部署默认与默认参与的 observability 组件——两者都
   可被更高来源取消。
 - **引擎核心里没有 HTTP 组装、没有监听。** `driver.go` 与
-  `loader.go` 两者皆无;路由由宿主自己的应用组
-  件从声明座席组装,listener 由它自持。
+  `loader.go` 两者皆无;路由由 `http` 组件
+  (`go/app/httpserve`)从声明面组装,listener 由它自持。
 - **绝不构造基础设施实现。** 一个进程跑哪个
   EventBus/KVStore/Mailer/ObjectStore 是组装应用的决定,二进制带哪
   些 SQL 方言包是宿主的 blank import。这由机制强制、不止于承诺:
@@ -117,12 +117,13 @@ token 立即 401),这正是为什么 tenancy 的 fail-closed 默认——拒绝
   求携带有效 impersonation 授权 id 时,为下游全部替换成目标
   Principal。
 
-`chain.Standard` 从已 bootstrap 的注册表推导整份组装,而不接受预先
-切好的部件——它的 `RouteSource` 参数由两种注册表形态同时满足(模块
-Registry 与组件装配的 `ComponentRegistry`)——业务半边由宿主经选
-项供给。`chain.Chain` 是路由布局自定义的宿主的直通路径;不含
-authn 模块的选集完全不走链。用哪个入口是宿主的决定,而这份弹性是
-刻意的:注册表路由集就是面子时用 `Standard`,布局是宿主自己的时
+`chain.Standard` 从 `http` 组件的产物推导整份组装,而不接受预先
+切好的部件——它的 `RouteSource` 读数就是挂载路由与中间件面——业务
+半边由 `http` 组件从宿主链路策略派生的选项传入。`chain.Chain` 是
+非标准布局的直通路径;不含
+authn 模块的选集由组件以 Chainless 形态服务。用哪个入口是组装方
+的决定,而这份弹性是
+刻意的:路由集就是面子时用 `Standard`,布局是宿主自己的时
 用 `Chain`。
 
 ## 八阶段驱动与其失败语义

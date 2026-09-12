@@ -54,21 +54,23 @@ through the assembly's five-source chain like any component's block. Its
 stale literal lookup), calls `Init` with whichever option halves the block
 set, and publishes the returned shutdown function as the runtime value its
 `New` hands to the instance; its `Init` callback declares the module's
-`Middleware` on the component registry's `Middleware` seat — the platform's
+`Middleware` on the http component's middleware face
+(`pkgcore.MiddlewareRegistrar`) — the platform's
 one middleware layer outside the fixed chain — so an engine-assembled host
-composing its chain through `go/app/chain.Standard` gets the
+carrying the `http` component gets the
 instrumentation applied around the whole chain (every request the chain
-handles, including one authn or tenancy refuses) with no hand-wiring. A
-host that composes no `Standard` chain reads `reg.Middlewares()` itself
-if it wants the layer
-(see `pkgcore.MiddlewareRegistrar` for the seat's boundary), and a host
-that serves a composed face with this component deselected — the reference
-app's `BuildServer` drive, the telemetry lifecycle belonging to the
-process that owns the listener — wraps `Middleware` at serve time itself.
+handles, including one authn or tenancy refuses) with no hand-wiring — the
+declaration is optional, so a pure-background composition carrying no http
+component simply leaves it unread
+(see `pkgcore.MiddlewareRegistrar` for the face's boundary). A host
+that composes a handler of its own with this component deselected — the
+reference app's `BuildServer` drive — wraps `Middleware` itself.
 `Close` shuts the providers down and flushes on a `context.WithoutCancel`
 copy, so a cancelled drain context cannot cut the final export short. The
 descriptor declares `MultiReplicaSafe` — each replica exports its own spans
-and metrics — and carries no dependencies and no assets.
+and metrics — and carries no assets, and requires the middleware face
+optionally (the dependency a serving composition satisfies with the `http`
+component).
 
 Its suite is `component_test.go` (internal `observability` package, the
 same white-box placement as `factory_vars_test.go`): the init

@@ -36,8 +36,10 @@ pkgcore 只拥有七样东西:模块/组件组装契约——每个模块实现�
   `Register(reg *pkgcore.ComponentRegistry)` 声明体,贡献路由、
   配置项、功能开关、权限、任务处理器、通知类型、事件与审计动作。
   此后不要再扩张描述符的契约:在锁步版本化下那会同时打破所有
-  模块——这正是横切机制改为落在 `*pkgcore.ComponentRegistry`
-  声明面上的原因。
+  模块——这正是横切机制改为落在声明面上的原因:通常是
+  `*pkgcore.ComponentRegistry` 的一个座席,而当消费方经产物读取
+  该机制时(HTTP 的路由与中间件面,由 `go/app/httpserve` 的
+  `http` 组件提供),则是组件提供的声明 token。
 - **宿主**——你的二进制用 `pkgcore.NewComponentRegistry()` 组装
   组件,并用 `app.Assemble`(或 `app.RunAssembly` 糖)驱动七个
   阶段,在组合配置里声明它以哪种拓扑运行。组合配置的
@@ -51,7 +53,7 @@ pkgcore 只拥有七样东西:模块/组件组装契约——每个模块实现�
 
 ```go
 func (m *BillingModule) Register(reg *pkgcore.ComponentRegistry) error {
-    reg.RoutesSeat().Mount("/api/v1/billing", m.router())
+    pkgcore.MountRoute(reg, "/api/v1/billing", m.router()) // http 组件的路由面（组合选中它时生效）
     if err := reg.PermissionsSeat().Add("billing:read", "billing:write"); err != nil {
         return err
     }
@@ -117,8 +119,8 @@ if err := app.Assemble(ctx, reg, spec); err != nil {
 
 ## 核心概念与 API 要点
 
-- **`ComponentRegistry`**——每个机制一个座席字段(`Routes`、
-  `Config`、`Features`、`Permissions`、`Jobs`、`Notifications`、
+- **`ComponentRegistry`**——每个机制一个座席字段(`Config`、
+  `Features`、`Permissions`、`Jobs`、`Notifications`、
   `Events`、`AuditActions`、`Retention`、`Schedules`),用
   `pkgcore.NewComponentRegistry()` 从包级组件注册加宿主自有的组件
   创建;座席仅在 Init 阶段接受写入。它的访问器按类型上下文读出
@@ -151,7 +153,9 @@ if err := app.Assemble(ctx, reg, spec); err != nil {
 ## 边界与注意
 
 - 新的横切机制落在声明面上(`ComponentRegistry` 上的一个座席
-  访问器加其背后的注册器),绝不作为新的描述符回调。
+  访问器加其背后的注册器;消费方经产物读取的机制则是组件提供的
+  声明 token——HTTP 的路由与中间件面即此形),绝不作为新的描述符
+  回调。
 - `Register` 不得做 I/O;注册器错误绝不是合并——跨模块重复键会让
   注册失败。
 - 不要为模块写 mock:`NewMemoryKVStore`、`NewMemoryEventBus`、

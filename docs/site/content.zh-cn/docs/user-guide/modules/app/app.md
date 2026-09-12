@@ -32,8 +32,9 @@ app 是 speed 的**应用装配层**:每个应用自己的启动代码所基于�
   serve 步骤(可选 `ServeFunc`,拿到信号叠加后的 context 与活注册表;
   nil 则由引擎自己等 context),然后两相关停。
 
-引擎**不含 HTTP 组装、不监听端口**——路由由宿主自己的应用组件组
-装,listener 由它自持。宿主中立的 HTTP 帮手住在引擎旁边,供宿主组
+引擎**不含 HTTP 组装、不监听端口**——路由由 `http` 组件
+(`go/app/httpserve`)组装声明面累积的路由,listener 由它自持。宿
+主中立的 HTTP 帮手住在引擎旁边,供宿主组
 装: `app.AuthnAPIPath`(authn 的挂载点)、
 `app.ReadHeaderTimeout` / `app.ShutdownTimeout`(服务时限)与
 `app.PreAuthAllowlist()`(豁免 healthz、metrics 与 config 两个
@@ -58,8 +59,9 @@ pre-auth 端点、覆盖 GET 与 HEAD 的 tenancy 选项)。
 
 | 包 | 职责 | 谁付费 |
 |---|---|---|
-| `go/app`(根) | 引擎:装载器、驱动器、`RunAssembly`、observability 组件、共享 HTTP 帮手 | 每个组装 |
-| `go/app/chain` | 固定中间件链:`chain.Standard`(从注册表推导)与 `chain.Chain`(自定义布局) | 组装链的宿主 |
+| `go/app`(根) | 引擎:装载器、驱动器、`RunAssembly`、共享 HTTP 帮手 | 每个组装 |
+| `go/app/chain` | 固定中间件链:`chain.Standard`(从 http 组件的路由源推导)与 `chain.Chain`(自定义布局) | 组装链的宿主 |
+| `go/app/httpserve` | `http` 组件:路由/中间件声明面、按宿主链路策略的 handler 组装与监听器 | 每个对外服务 HTTP 的组装 |
 | `go/app/bridges` | 无 import 桥接:`Entitlements`、`UsageRecorder`、`OrgFeatureGate`、`AuthnFeatureGate`、`ShareExpiryReader` | 接这些模块的宿主 |
 
 拆分依据是依赖成本,不是口味:根包的裸消费者付根包的闭包——36 条
@@ -150,15 +152,17 @@ allowlist)→ 你的受保护 handler**;两个分支从 authn 的输出按结构
   按调用者自己的、未被替换的 Principal 评估,所以租户解析与
   impersonation 替换都不得先于它运行。
 
-`chain.Standard(reg, verifier, protectedMux, opts...)` 从已 bootstrap
-的注册表的挂载路由推导整份组装:先让每条路由经过你的路由授权表
+`chain.Standard(src, verifier, protectedMux, opts...)` 从 `http` 组
+件的路由源(其路由面累积的挂载路由)推导整份组装:先让每条路由经过
+你的路由授权表
 (`chain.WithAuthorization`——一套 `rbac.GuardRoutes` 规则,双向完备
 性受检、挂载前包上 fail-closed 门),把 authn 与 admin 子树切出,把
 其余挂到你的受保护 mux,再把次序委派给 `chain.Chain`。业务半边由
-宿主经选项供给:`WithAdminPrefix`、`WithImpersonation`、
-`WithTenantStatusResolver`、`WithExtraAllowlist`。路由布局自定义的
-宿主直接组装 `chain.Chain`/`chain.Config`;不含 authn 模块的选集则
-完全不走链。
+`http` 组件经你的链路策略(`go/app/httpserve.LinkPolicy`)携带的选
+项传入:`AdminPrefix`、`Impersonation`、
+`TenantStatusResolver`、`ExtraAllowlist`;声明 `Chainless` 的策略
+则完全不走链。路由布局自定义的
+宿主直接组装 `chain.Chain`/`chain.Config`。
 
 ## 桥接
 

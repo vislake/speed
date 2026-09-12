@@ -52,7 +52,7 @@ Every module carries the module contract (`Name`/`DependsOn`/`Migrations`/`Local
 
 ```go
 func (m *Module) Register(reg *pkgcore.ComponentRegistry) error {
-    reg.RoutesSeat().Mount("/api/v1/billing", billingapi.Handler(m.svc)) // implements the spec-generated interface
+    pkgcore.MountRoute(reg, "/api/v1/billing", billingapi.Handler(m.svc)) // the http component's route face; implements the spec-generated interface
     reg.ConfigSeat().Add(configSchema...)
     reg.FeaturesSeat().Add(featureFlags...)
     reg.PermissionsSeat().Add("billing:read", "billing:manage")

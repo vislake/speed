@@ -34,7 +34,7 @@ if err != nil {
 }
 defer shutdown(ctx) // 优雅停机
 
-obs.RegisterMountedRoutes(reg.Routes.Routes()) // 流量到达前先喂路由限制器
+obs.RegisterMountedRoutes(routes) // 流量到达前先用累积路由面喂路由限制器
 
 mux := http.NewServeMux()
 mux.Handle("/", obs.Middleware(appHandler)) // 在 tenancy.Middleware 之外,按固定链序

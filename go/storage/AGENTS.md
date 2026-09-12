@@ -331,7 +331,7 @@ magic numbers:
   sweep's periodic schedule on `reg.SchedulesSeat()` (cleanup.go's
   `expirySweepSchedule`), the seat a host's `jobs.Scheduler` reads;
 - builds `Handler` (`handler.go`) and mounts the module's HTTP surface on
-  `reg.RoutesSeat()` at `apiPath` (`/api/v1/storage`, agreed with the fragment's
+  the route face (`pkgcore.MountRoute`) at `apiPath` (`/api/v1/storage`, agreed with the fragment's
   `paths:` keys so the host's outer mux knows which requests to hand over).
   `Handler` is built here, not in `NewModule`, so it serves the service and
   repository instances the host's `With*` options actually configured —

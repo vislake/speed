@@ -32,13 +32,16 @@ hand-maintained in every consumer.
   standalone deployment default and the default-participating observability
   component, both overridable from any higher source.
 - **No HTTP assembly, no listening, in the engine core.** `driver.go` and
-  `loader.go` contain neither: a host's own
-  application component composes routes from the declaration seats and owns
-  the listener, and a host's serve step reaches the engine as a callback
-  (`RunAssembly`'s `ServeFunc`) the engine calls -- it is the host that
-  serves, never the engine. The reusable helpers (`chain.Chain`,
-  `chain.Standard`, `PreAuthAllowlist`, the serve timeouts) stay in the
-  module for hosts to compose with.
+  `loader.go` contain neither: the process's HTTP face is the `http`
+  component in `go/app/httpserve` (the entry below), which assembles the
+  routes and middleware the declaration faces accumulated, opens the
+  listener in its Serve stage and is first to stop accepting on the way
+  down. A host's serve step reaches the engine as a callback
+  (`RunAssembly`'s `ServeFunc`) -- the host-level wait hook between the
+  Serve round and the close, not a listener of its own. The reusable
+  helpers (`chain.Chain`, `chain.Standard`, `PreAuthAllowlist`, the serve
+  timeouts) stay in the module for the `http` component -- or a host
+  composing a custom layout directly -- to build with.
 - **Never constructs infrastructure implementations.** app drives components
   and ships HTTP helpers; which EventBus/KVStore/Mailer/ObjectStore a
   process runs stays the application assembler's decision — selected as
@@ -178,7 +181,8 @@ component beyond the builtin selection.
 | Package | Concern | Dependency closure |
 |---|---|---|
 | `go/app` (root) | the engine: the loader, the driver and the `RunAssembly` sugar, and the HTTP helpers the engine and hand-composing hosts share (`AuthnAPIPath`, `ReadHeaderTimeout`/`ShutdownTimeout`, `PreAuthAllowlist`) | pkgcore (+ its config subpackage), config, observability, tenancy — and, through config, dbkit and its GORM. Every composition carries the root |
-| `go/app/chain` | the fixed middleware chain: `chain.Standard` (the registry-derived derivation over the registry's `RouteSource` — mounted routes plus the `Middleware` seat it applies around the finished chain: guard the mounted routes through the host's rbac rule table, split the authn and admin subtrees, mount the rest, delegate to `Chain`, wrap the seat's middleware outside it all), `chain.Config`/`chain.Chain` (the direct path for a custom layout) — the order (authn outermost, then the optional impersonation decorator, then tenancy with the pre-auth allowlist), the authn/admin branches dispatched around it, validation (`chain.go`, `standard.go`) | root + authn + rbac + tenancy + pkgcore — bounded by the chain's own participants (the rule table is rbac's, the impersonation decorator stays a `func(http.Handler) http.Handler` the host builds, and no admin import is needed: the admin prefix arrives as `admin.APIPath` through an option) |
+| `go/app/chain` | the fixed middleware chain: `chain.Standard` (the source-derived derivation over the http component's `RouteSource` product — mounted routes plus the middleware face it applies around the finished chain: guard the mounted routes through the host's rbac rule table, split the authn and admin subtrees, mount the rest, delegate to `Chain`, wrap the face's middleware outside it all), `chain.Config`/`chain.Chain` (the direct path for a custom layout) — the order (authn outermost, then the optional impersonation decorator, then tenancy with the pre-auth allowlist), the authn/admin branches dispatched around it, validation (`chain.go`, `standard.go`) | root + authn + rbac + tenancy + pkgcore — bounded by the chain's own participants (the rule table is rbac's, the impersonation decorator stays a `func(http.Handler) http.Handler` the host builds, and no admin import is needed: the admin prefix arrives as `admin.APIPath` through an option) |
+| `go/app/httpserve` | the `http` component: the process's HTTP face. The two declaration faces (`pkgcore.RouteRegistrar`/`pkgcore.MiddlewareRegistrar`) and the product that satisfies `chain.RouteSource`, the Init-only write gate, the handler assembly per the host's required `LinkPolicy` (fixed chain, or the declared chainless form; platform middleware outside the chain; the host's outer wrapper outermost) and the listener's Serve/Stop/Close contract (`component.go`, `face.go`, `serve.go`) | root + chain + observability + pkgcore + the chain's participants (authn, rbac, tenancy) — a host pays it for the HTTP face every serving composition needs |
 | `go/app/bridges` | the no-import bridges: `Entitlements`, `UsageRecorder`, `OrgFeatureGate`, `AuthnFeatureGate`, `ShareExpiryReader` (`bridges.go`, `sharing.go`) | ai-gateway, billing, metering, org, sharing, authn, config — paid only by hosts that wire those modules |
 
 Runnable usage documentation (`example_test.go`) ships one example per
@@ -210,20 +214,20 @@ allowlist entries):
   unsubstituted Principal, so neither tenancy resolution nor impersonation
   substitution may run ahead of it (`go/admin/AGENTS.md` states both).
 
-`chain.Standard(reg, verifier, protected, opts...)` derives that whole
-composition from the bootstrapped registry (`*pkgcore.ComponentRegistry`,
-its `RouteSource` parameter: the mounted routes and the registry's
-`Middleware` seat) instead of taking the pieces pre-assembled: it admits
-every mounted route through the host's
+`chain.Standard(src, verifier, protected, opts...)` derives that whole
+composition from the assembly's route source — the http component's
+product, whose `RouteSource` reading is the mounted routes and the
+middleware face it accumulated — instead of taking the pieces
+pre-assembled: it admits every mounted route through the host's
 route-authorization table (`WithAuthorization` — `rbac.GuardRoutes` over
 the host's own rules, so the table's exhaustiveness is checked and every
 gated route is wrapped in rbac's fail-closed gate before it is mounted),
 splits the authn subtree out with `authn.ExemptSubtree` and the admin
 subtree out by prefix, and mounts everything else on the host's protected
 mux before delegating the branch structure to `Chain`. It then wraps the
-registry's `Middleware` seat around the finished chain — the platform's one
+middleware face around the finished chain — the platform's one
 layer OUTSIDE the fixed order (authn.Middleware stays outermost of the
-chain; the seat cannot insert into it, only wrap its output), first
+chain; the face cannot insert into it, only wrap its output), first
 registered outermost. A middleware on that layer wraps every request the
 chain handles, including one authn or tenancy refuses before any route is
 reached, and therefore runs with no `authn.Principal` and no tenant
@@ -231,14 +235,15 @@ context: stateless bypass work (tracing, metrics, panic recovery) only.
 A request the host answers outside the chain stays outside the layer too:
 the reference app's SPA file server, wrapped around its composed face when
 the boot serves a frontend directory, answers its own traffic without the
-layer seeing it. `go/observability`'s component is the seat's first member
-— its `Init` declares the module's `Middleware` there, which is why a host
-composing through `Standard` no longer hand-wires `obs.Middleware` around
-the served handler (a selection that composes no chain keeps its own
-hand-wire: nothing reads the seat there). The host supplies
-the business half through options: the authorizer and rule table, the
-admin prefix, the impersonation decorator, the tenant-status resolver and
-its extra pre-auth allowlist entries. The billing quota domain does not
+layer seeing it. `go/observability`'s component is the face's first member
+— its `Init` declares the module's `Middleware` there, which is why a
+composition carrying the http component never hand-wires `obs.Middleware`
+around the served handler (the http component applies the face itself, in
+both its guarded and its chainless form). The host supplies
+the business half through the link policy (go/app/httpserve): the
+authorizer and rule table, the admin prefix, the impersonation decorator,
+the tenant-status resolver, its extra pre-auth allowlist entries, its own
+routes and its outer wrapper. The billing quota domain does not
 weave here: billing's quota mechanism is the entitlements module checked
 inside go/ai-gateway before a provider is reached
 (`aigateway.WithEntitlements`, host-wired at module construction), not a

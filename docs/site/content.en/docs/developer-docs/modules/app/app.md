@@ -36,9 +36,9 @@ Three prohibitions sharpen the boundary:
   default-participating observability component — and both are
   overridable from any higher source.
 - **No HTTP assembly, no listening, in the engine core.** `driver.go` and
-  `loader.go` contain neither; a
-  host's own application component composes routes from the declaration
-  seats and owns the listener.
+  `loader.go` contain neither; the `http`
+  component (`go/app/httpserve`) composes the routes the declaration
+  faces accumulated and owns the listener.
 - **Never constructs infrastructure implementations.** Which
   EventBus/KVStore/Mailer/ObjectStore a process runs stays the
   assembling application's decision, and which SQL dialect packages a
@@ -150,15 +150,16 @@ express:
   everything downstream, only when a valid impersonation grant id is
   present.
 
-`chain.Standard` derives the whole composition from the bootstrapped
-registry instead of taking the pieces pre-assembled — its `RouteSource`
-parameter is answered by both registry shapes (the module Registry and
-the component assembly's `ComponentRegistry`) — with the host supplying
-the business half through options. `chain.Chain` is the direct path for
-a host with a custom layout; a selection with no authn module composes
-no chain at all. The choice of entry point is the host's, and that
-flexibility is deliberate: `Standard` for the registry's route set as
-the face, `Chain` when the layout is the host's own.
+`chain.Standard` derives the whole composition from the http
+component's product instead of taking the pieces pre-assembled — its
+`RouteSource` reading is the mounted routes and the middleware face —
+with the business half arriving through the options the http component
+derives from the host's link policy. `chain.Chain` is the direct path
+for a layout that is not the standard shape; a selection with no authn
+module is served chainless by the component. The choice of entry point
+is the assembly's, and that
+flexibility is deliberate: `Standard` when the route set is the face's,
+`Chain` when the layout is the host's own.
 
 ## The eight-stage drive and its failure semantics
 
