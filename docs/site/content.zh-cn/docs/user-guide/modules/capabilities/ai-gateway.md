@@ -16,8 +16,7 @@ ai-gateway 是 speed 的 AI 网关:覆盖每个 LLM 与图像生成厂商的一�
 
 **对话面。** `ChatProvider`(`Chat`/`ChatStream`)是厂商无关接口;
 `OpenAICompatibleProvider` 是零依赖默认实现,直接用标准库对着
-OpenAI 兼容线协议写;`ChatProviderRegistry` 是第三方 provider 注册
-自己名字的地方。`Gateway.Chat` 跑固定管线:校验 → 检查
+OpenAI 兼容线协议写;第三方 provider 就是 `chat` 目录里多一个组件。`Gateway.Chat` 跑固定管线:校验 → 检查
 `Entitlements`(若接线)*先于*任何解析,被拒的调用方绝不会被计费 →
 解析凭据 → 路由 → provider → 调用 → 上报用量。
 `WithModelRoute(logicalKey, provider, vendorModel)` 在构造期把调用方
@@ -45,8 +44,7 @@ OpenAI 兼容线协议写;`ChatProviderRegistry` 是第三方 provider 注册
 你的产品要调 LLM 做对话或补全,或异步生成图像,并且想把厂商代码收
 在同一个门面后——带按租户 BYOK 凭据、权益门、用量上报与防 SSRF 的
 租户端点。内建 OpenAI 兼容实现已够到 OpenAI、Azure OpenAI、DeepSeek
-与多数自托管网关;别的厂商协议就是一次 `ChatProviderRegistry`/
-`ImageProviderRegistry` 注册。图像任务要同步返回就不选本模块——异
+与多数自托管网关;别的厂商协议就是组合里多一个 provider 组件。图像任务要同步返回就不选本模块——异
 步管线就是交付形态。
 
 ## 怎么接线

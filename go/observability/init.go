@@ -173,8 +173,8 @@ var otlpFactory func(ctx context.Context, cfg Config, res *resource.Resource) (f
 
 // RegisterOTLPExporters installs f as the constructor Init calls when a
 // caller supplies a non-empty WithOTLPEndpoint. It mirrors database/sql's
-// driver-registration pattern (also the shape go/pkgcore's SeamRegistry
-// follows, though this package's needs are simpler: there is exactly one
+// driver-registration pattern (this package's needs are simpler than the
+// assembly's component registry: there is exactly one
 // OTLP exporter implementation this repository ships, so a single package
 // variable, not a name-keyed registry, is enough): exactly one subpackage,
 // go/observability/exporter/otlp, calls this from its own init() function

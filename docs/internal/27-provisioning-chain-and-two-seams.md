@@ -155,7 +155,7 @@ func New(addresses map[string]notification.UserAddresses) notification.UserAddre
 
 ### 4.3 备选否决理由
 
-- **做成模块选项 `WithStaticUserAddresses(map)`**:把实现放进 `notification` 根包,与接口同包,违打包纪律;也让"模块根包不含实现"的先例(billing/pki/authn 各模块的实现全在子包)出现例外。pkgcore 的 `kv.memory` 内置不是反例:那是 **kv 模块自身**的内建注册(带 capability 位、进 SeamRegistry),而 `UserAddressResolver` 是模块声明、宿主实现的模块接口。
+- **做成模块选项 `WithStaticUserAddresses(map)`**:把实现放进 `notification` 根包,与接口同包,违打包纪律;也让"模块根包不含实现"的先例(billing/pki/authn 各模块的实现全在子包)出现例外。pkgcore 的 `kv.memory` 内置不是反例:那是 **kv 模块自身**的内建组件(带 capability 位、可被组合选中),而 `UserAddressResolver` 是模块声明、宿主实现的模块接口。
 - **放进 pkgcore**:pkgcore 在 notification 之下,方向反了(为一张 notification 域的表而让平台最底层的模块认识它);且 pkgcore 没有 notification 的 `UserAddresses` 类型。
 - **只留宿主侧、文档化 5 行模式**:这正是审计点名的现状;三处重写说明"5 行"没有阻止重复,且必装模块接口的最小可用装配应当是一行。
 - **命名带 `demo` 立场(仿 `demoseed`)**:静态地址表对单租户生产安装同样成立(地址由运营方持有),把它结构性锁进 demo 反而误伤;立场改由包文档承载(§4.2 第二条),`demoseed` 的实体是"注册演示账号"这个 demo-only 动作,两者不同。此判断列入开放问题 Q2 复核。

@@ -24,8 +24,7 @@ billing 是 speed 的商务模块:`Plan`/`Feature`/`Grant`/`Entitlements`
 「按用付费但可能失败」的业务操作都需要的先预留后结算形态;`Grant`
 充值;`Expire`(带 key、重试安全)是定时过期清扫要用的至多一次写入;
 `Balance`/`Transactions` 读回。账本只增不改,并发安全靠每次变更一
-条由数据库仲裁的 `UPDATE`。**支付网关层。** `PaymentGatewayRegistry`
-加三个真实 provider(`go/billing/gateway/{stripe,alipay,wechat}`)、
+条由数据库仲裁的 `UPDATE`。**支付网关层。** 三个真实 provider 组件(`go/billing/gateway/{stripe,alipay,wechat}`)、
 去重的 `PaymentEvent` 账本,以及 `PollingService`——渠道 webhook 迟
 迟不来的主动轮询兜底。
 

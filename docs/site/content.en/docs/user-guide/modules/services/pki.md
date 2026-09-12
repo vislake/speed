@@ -84,9 +84,10 @@ drives it (or call `EnqueueExpiryScan` from your own periodic-task
 loop). The scan stages and promotes successors. Host
 options: `WithSigner(name, signer)`, `WithPropagationWindow`,
 `WithRenewalLeadTime`, `WithCacheTTL`, `WithExpiryScanWindow`.
-Resolve a signer by registered name with a capability requirement
-through `SignerRegistry`'s `BuildSignerRequiring` (blank-import the
-provider subpackage first).
+Resolve a signer by selecting its component in the composition
+(blank-import the provider subpackage first); to require the boundary
+capability, read the selected member's declaration with
+`pkgcore.ComponentCapabilities` and compare.
 
 ## Core concepts and API surface
 

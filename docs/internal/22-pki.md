@@ -129,7 +129,7 @@ type Signer interface {
 | `go/pki/signer/vault` | 信封 + 直签 | Vault Transit 引擎内 | 私有化部署的主力选择 |
 | `go/pki/signer/kmsaws` | 信封 + 直签 | AWS KMS 内 | 公有云部署 |
 
-**每套供应商实现是 `go/pki` 模块内的一个独立子包**，在 `init()` 中向 `SignerRegistry` 注册自己，宿主 import 哪个就有哪个：
+**每套供应商实现是 `go/pki` 模块内的一个独立子包**，以组件描述符提供实现（`init()` 注册到全局组件集），宿主 import 哪个就有哪个可选中：
 
 ```go
 import _ "github.com/vislake/speed/go/pki/signer/kmsaws"   // 只有这一行带来 AWS SDK
@@ -141,7 +141,7 @@ pki.NewModule(db, pki.WithSigner("kms.aws", cfg))
 
 只有当某套实现需要独立于 `pki` 的发布节奏、或消费者会绕开 `pki` 单独使用它时，才值得升格为模块——在 lockstep 版本策略下，这两种情况都不成立。
 
-这正是 `database/sql` 的驱动模式，也是 `pkgcore` 的 `SeamRegistry` 当初照着它设计的原因。**没 import 的项目，`go.mod` 里不出现这个名字。**
+这正是 `database/sql` 的驱动模式，也是组件面收编所保留的取舍。**没 import 的项目，`go.mod` 里不出现这个名字。**
 
 这一点由 CI 兜底：depguard 的 SDK 禁令按实现所在的子包粒度放行，谁把 SDK import 写回根包或另一个实现包都会失败（见 [18 CI/CD](18-cicd.md) 文首注记）。
 
@@ -157,7 +157,7 @@ pki.NewModule(db, pki.WithSigner("kms.aws", cfg))
 
 `local` 不具备该能力；`vault`/`aws-kms` 在**直签模式**下具备，在信封模式下不具备。
 
-**尚未落地：这项声明目前不被任何地方校验。** 装配的能力校验只跑在被选中组件描述符声明的能力位上，不认识 `pki.SignerRegistry` 或 `pki.Signer`；`go/pki` 一侧也没有等价的校验——`pki.Module.WithSigner` 不接收 `Capability`/需求参数，`SignerRegistry.Build` 只是把注册时声明的 `Capability` 原样返回，不与任何期望值比较。也就是说，宿主即便装配了一个不具备 `KeyNeverLeavesBoundary` 的实现，即便本意是要求它，也不会得到任何错误——高安全部署的"声明即校验"仍是意图，不是实现。这项差距记录在 `go/pki/AGENTS.md` 的 Known limitations 中。
+**这项声明不由装配强制。** 装配的模式驱动校验只跑在被选中组件描述符声明的能力位上，而没有任何部署模式要求 `KeyNeverLeavesBoundary`；宿主若要要求它，用 `pkgcore.ComponentCapabilities` 读取选中成员的声明自行比对（`pki.Module.WithSigner` 不接收 `Capability`/需求参数，直接注入的 `Signer` 值没有可比的声明）。也就是说，宿主即便装配了一个不具备该位的实现，即便本意是要求它，也不会得到任何错误——高安全部署的"声明即校验"仍是意图，不是实现。这项差距记录在 `go/pki/AGENTS.md` 的 Known limitations 中。
 
 ### Ed25519 在三套实现上都能直签
 

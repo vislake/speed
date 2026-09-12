@@ -148,11 +148,11 @@ and self-registers from its own `init()` as a component on the
 package-level global registration (`kv.redis`, `eventbus.postgres`,
 `objectstore.s3`, …), and the in-process built-ins register the same
 way from the root package (`kv.memory`, `eventbus.memory`,
-`mailer.console`, `mailer.smtp`, `objectstore.local`). The generic
-`SeamRegistry`/`Registration` pair lives on as the module-internal
-provider directory pattern: ai-gateway's chat and image providers,
-billing's payment gateways and pki's signers register on their
-module's own instance, and the component assembly never consults one.
+`mailer.console`, `mailer.smtp`, `objectstore.local`). Provider
+implementations are components all the way down: ai-gateway's chat and
+image providers, billing's payment gateways and pki's signers each carry
+a descriptor the composition selects, resolved through the same assembly
+every infrastructure component uses.
 A composition that selects a
 distributed implementation resolves only after the host's binary
 imports that subpackage — a blank import suffices — or the assembly

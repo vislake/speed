@@ -56,12 +56,13 @@ Why a durable ledger row rather than an in-memory seen-set? A restarted
 replica must still refuse the redelivery — the memory of a processed
 event is platform data, not process state.
 
-## The payment-gateway module: mirroring pki's SignerRegistry
+## The payment-gateway module: mirroring pki's signer components
 
-`PaymentGateway` and `PaymentGatewayRegistry` live in billing's *root*
+`PaymentGateway` lives in billing's *root*
 package, and the three real implementations live in leaf subpackages
-under `go/billing/gateway/{stripe,alipay,wechat}` — a split that mirrors
-`go/pki`'s `Signer`/`SignerRegistry` exactly, for the same reason. The
+under `go/billing/gateway/{stripe,alipay,wechat}` (each a component
+descriptor) — a split that mirrors
+`go/pki`'s `Signer`/signer-component split exactly, for the same reason. The
 one-way rule is absolute: gateway subpackages may import billing's
 root, never the reverse. A caller depends on the interface and the
 registry without importing any provider; a provider registers itself

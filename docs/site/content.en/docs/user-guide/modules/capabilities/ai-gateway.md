@@ -18,8 +18,8 @@ scope-tiered credential store.
 **The chat surface.** `ChatProvider` (`Chat`/`ChatStream`) is the
 vendor-agnostic interface; `OpenAICompatibleProvider` is the
 zero-dependency default implemented directly against the
-OpenAI-compatible wire schema (stdlib only), and `ChatProviderRegistry`
-is where a third-party provider registers its name. `Gateway.Chat`
+OpenAI-compatible wire schema (stdlib only), and a third-party provider
+is one more component in the `chat` directory. `Gateway.Chat`
 runs the fixed pipeline: validate → check `Entitlements` (if wired)
 *before* anything is resolved, so a refused caller is never billed →
 resolve credential → route → provider → call → report usage.
@@ -57,8 +57,8 @@ asynchronously, and you want vendor code behind one facade — with
 per-tenant BYOK credentials, an entitlement gate, usage reporting and
 SSRF-guarded tenant endpoints. The OpenAI-compatible built-ins already
 reach OpenAI, Azure OpenAI, DeepSeek and most self-hosted gateways; a
-different vendor protocol is one more `ChatProviderRegistry`/`ImageProviderRegistry`
-registration. If you need an image job that returns synchronously,
+different vendor protocol is one more provider component in the
+composition. If you need an image job that returns synchronously,
 this is not the module — the async pipeline is the shipped shape.
 
 ## Wiring it in

@@ -56,8 +56,8 @@ this package's root, so a module calling `obs.FromContext()` purely for
 logging never inherits `otlptracegrpc`/`otlpmetricgrpc` (and their own
 gRPC/protobuf trees) or `github.com/prometheus/client_golang` (plus
 `go.opentelemetry.io/otel/exporters/prometheus`). The split follows the
-`database/sql` driver-registration pattern this repository's
-`pkgcore.SeamRegistry` also models — a backend implementation never sits
+`database/sql` driver-registration pattern this repository's component
+packaging also models — a backend implementation never sits
 in the same package as the interface it implements — with a single
 package-level registration slot per module rather than a name-keyed
 registry, since this package ships exactly one implementation of each:

@@ -67,9 +67,10 @@ err := ca.CreateRootCA(ctx, pki.CAParams{ /* subject、有效期 */ })
 起一个 `jobs.Scheduler` 即驱动它(也可自己在周期任务循环里调
 `EnqueueExpiryScan`)。扫描负责分阶段准备并提升继任者。宿主选项:`WithSigner(name, signer)`、
 `WithPropagationWindow`、`WithRenewalLeadTime`、`WithCacheTTL`、
-`WithExpiryScanWindow`。按注册名带能力要求(比如直签)解析签名器,
-走 `SignerRegistry` 的 `BuildSignerRequiring`(先空 import provider
-子包)。
+`WithExpiryScanWindow`。要按能力要求(比如直签)解析签名器,在组合中
+选中对应 provider 组件(先空 import provider 子包);宿主若要要求
+边界位,用 `pkgcore.ComponentCapabilities` 读取选中成员的声明自行
+比对。
 
 ## 核心概念与 API 面
 

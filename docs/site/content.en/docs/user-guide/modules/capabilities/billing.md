@@ -30,7 +30,7 @@ tops up; `Expire` (keyed, retry-safe) is the at-most-once write a
 scheduled expiry sweep calls; `Balance`/`Transactions` read back. The
 ledger is append-only and concurrency-safe through one
 database-arbitrated `UPDATE` per mutation. **The payment-gateway layer.**
-`PaymentGatewayRegistry` plus three real providers
+Three real provider components
 (`go/billing/gateway/{stripe,alipay,wechat}`), a deduplicated
 `PaymentEvent` ledger, and `PollingService`, the active-polling fallback
 for a channel webhook that never arrives.

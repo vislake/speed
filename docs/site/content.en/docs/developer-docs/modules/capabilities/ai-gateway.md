@@ -42,10 +42,10 @@ The default implementations need no vendor SDK at all —
 OpenAI-compatible wire schema over stdlib `net/http` and
 `encoding/json`, which is why they are trivially testable against an
 `httptest` endpoint and carry zero third-party dependencies into a
-consumer's `go.sum`. Each provider family has its own
-`pkgcore.SeamRegistry`, with the built-ins self-registered — the same
-`database/sql`-style registry shape every infrastructure module in this
-codebase uses, resolved fresh on every call so a changed credential is
+consumer's `go.sum`. Each provider family ships its own component set,
+with the built-ins self-registered — the same component shape every
+infrastructure module in this
+codebase uses, constructed fresh on every call so a changed credential is
 picked up without cache invalidation.
 
 Model routing is a construction-time decision —

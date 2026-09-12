@@ -16,7 +16,7 @@ ai-gateway 是通往各家 LLM 与图像生成端点的供应商无关网关。�
 
 ## 抽象所有供应商,而不让抽象僵化
 
-`ChatProvider` 是一条窄接口——`Chat` 与 `ChatStream`——`ImageProvider` 是它的三方法多模态孪生(`TextToImage`/`ImageToImage`/`Inpaint`)。防止抽象僵化的泄压阀是 `Params map[string]any`,原样透传给厂商:厂商特有选项走在 map 里,新厂商的怪癖因此永不逼出新接口方法。默认实现不需要任何厂商 SDK——`OpenAICompatibleProvider` 与它的图像孪生只用标准库 `net/http` 与 `encoding/json` 说 OpenAI 兼容线上协议,所以它们可以轻易对着 `httptest` 端点测试,也不会给消费方的 `go.sum` 增加任何第三方依赖。两个 provider 家族各有自己的 `pkgcore.SeamRegistry`,内置实现自行注册——本仓库每个基础设施模块都用的 `database/sql` 式注册表,每次调用重新 `Build`,改过的凭证无需缓存失效即被拾取。
+`ChatProvider` 是一条窄接口——`Chat` 与 `ChatStream`——`ImageProvider` 是它的三方法多模态孪生(`TextToImage`/`ImageToImage`/`Inpaint`)。防止抽象僵化的泄压阀是 `Params map[string]any`,原样透传给厂商:厂商特有选项走在 map 里,新厂商的怪癖因此永不逼出新接口方法。默认实现不需要任何厂商 SDK——`OpenAICompatibleProvider` 与它的图像孪生只用标准库 `net/http` 与 `encoding/json` 说 OpenAI 兼容线上协议,所以它们可以轻易对着 `httptest` 端点测试,也不会给消费方的 `go.sum` 增加任何第三方依赖。两个 provider 家族各有自己的组件集,内置实现自行注册——本仓库每个基础设施模块都用的组件形状,每次调用重新构造,改过的凭证无需缓存失效即被拾取。
 
 模型路由是构造期决策——`WithModelRoute(逻辑键, provider, 厂商模型)`——刻意不是动态 `go/config` 项:路由是宿主装配者做一次的基建组合决策,不是租户可调的运行时值;未路由的键是编码错误,绝不静默回退到可能按与调用方预期不同的费率计费的默认模型。
 

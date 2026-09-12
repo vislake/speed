@@ -47,7 +47,7 @@ flowchart TD
 
 ## 设计:实现像 `database/sql` 驱动一样注册
 
-每个基础设施接口有 N 套实现,N ≥ 1——从不是固定的两套。一个二进制包含哪些实现由应用组装者决定,打包方式追随 Go 按包解析依赖的特性:每套实现住在自己的子包里,经自己的 `init()` 在包级全局注册上自注册为组件(`kv.redis`、`eventbus.postgres`、`objectstore.s3`……);进程内内置实现以同样方式由根包登记(`kv.memory`、`eventbus.memory`、`mailer.console`、`mailer.smtp`、`objectstore.local`)。`SeamRegistry`/`Registration` 泛型类型依然存在,作为模块内部的 provider 目录模式:ai-gateway 的 chat 与 image provider、billing 的支付网关、pki 的签名器都注册在自己模块的实例上,组件装配从不查询它。组合选中某分布式实现的前提是宿主的二进制 import 了对应子包——空白导入足矣——否则装配以 `ErrUnknownComponent` 拒绝该选择,点名组件并列出已注册的组件:这是 `database/sql` 式交易中被接受的代价,编译期错误变成启动期错误,而报错信息会指名"缺的那行 import"。
+每个基础设施接口有 N 套实现,N ≥ 1——从不是固定的两套。一个二进制包含哪些实现由应用组装者决定,打包方式追随 Go 按包解析依赖的特性:每套实现住在自己的子包里,经自己的 `init()` 在包级全局注册上自注册为组件(`kv.redis`、`eventbus.postgres`、`objectstore.s3`……);进程内内置实现以同样方式由根包登记(`kv.memory`、`eventbus.memory`、`mailer.console`、`mailer.smtp`、`objectstore.local`)。provider 实现一路都是组件:ai-gateway 的 chat 与 image provider、billing 的支付网关、pki 的签名器各自携带描述符、由组合选中,经与每个基础设施组件相同的装配解析。组合选中某分布式实现的前提是宿主的二进制 import 了对应子包——空白导入足矣——否则装配以 `ErrUnknownComponent` 拒绝该选择,点名组件并列出已注册的组件:这是 `database/sql` 式交易中被接受的代价,编译期错误变成启动期错误,而报错信息会指名"缺的那行 import"。
 
 捆绑全部内置实现不是"有得有失"的取舍,因为它没换来任何东西:跑任意组装这个属性在分包之后依然可得——想要它的应用把实现全部 import 进来,代价一分不少;分包只是把这个属性从强制变成可选。这也是为什么新实现是子包、从不是新模块——模块是按领域内聚划分的发布单元,锁步下每多一个模块就要多一份 `go.work` 条目、CI 矩阵行与版本标签,而子包这些全都不需要。
 

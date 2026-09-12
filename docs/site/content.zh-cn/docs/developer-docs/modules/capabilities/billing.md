@@ -21,9 +21,9 @@ billing 决定*一个租户被允许做什么、欠什么*——它自己从不�
 
 两条 webhook 真相塑造了支付半边。回调**不可信**:其内容只是"去主动查一次"的触发信号,金额与状态永远以主动查询渠道的结果为准。回调**不可靠**——每个渠道的重试都会重复投递,也可能永远不来。重复投递被一张以渠道自身事件 id 为键的"先插入去重"账本拒掉(处理逻辑保持可重入作为第二道防线);永不抵达的情况由一个主动轮询的 `jobs` 任务兜底,定时重查卡住的行。为什么用持久化的账本行而不是进程内已见集合?重启后的副本必须照样拒绝重复投递——"某事件已处理"的记忆是平台数据,不是进程状态。
 
-## 支付网关模块:镜像 pki 的 SignerRegistry
+## 支付网关模块:镜像 pki 的 signer 组件拆分
 
-`PaymentGateway` 与 `PaymentGatewayRegistry` 住在 billing 的**根包**,三个真实实现住在 `go/billing/gateway/{stripe,alipay,wechat}` 叶子子包——与 `go/pki` 的 `Signer`/`SignerRegistry` 拆分完全同形,理由也相同。单向规则是绝对的:网关子包可以 import billing 根包,反向永远不行。调用方只依赖接口与注册表,不 import 任何 provider;provider 从自己的 `init()` 注册,宿主空白导入自己想要的哪一家。只有 import 了 provider SDK 的那个叶子为此付依赖成本——隔离穿透 `go.mod`/`go.sum`(本仓库子包规则的计量成本纪律),depguard 再把每家 SDK 限制在各自的叶子,`stripe-go` 既进不了 `gateway/alipay`,也进不了根包。为什么接口放根包而不放子包?模块接口若在 `gateway` 之下,billing 自己的领域代码为了指名它就得 import `gateway`——这正是让 `stripe.Subscription` 一类渠道类型随时间渗入领域模型的边。"渠道只是收款执行者"靠这个拆分强制执行,不是包装上的讲究。
+`PaymentGateway` 住在 billing 的**根包**,三个真实实现住在 `go/billing/gateway/{stripe,alipay,wechat}` 叶子子包(各自一个组件描述符)——与 `go/pki` 的 `Signer`/signer 组件拆分完全同形,理由也相同。单向规则是绝对的:网关子包可以 import billing 根包,反向永远不行。调用方只依赖接口,不 import 任何 provider;provider 从自己的 `init()` 注册组件,宿主空白导入自己想要的哪一家。只有 import 了 provider SDK 的那个叶子为此付依赖成本——隔离穿透 `go.mod`/`go.sum`(本仓库子包规则的计量成本纪律),depguard 再把每家 SDK 限制在各自的叶子,`stripe-go` 既进不了 `gateway/alipay`,也进不了根包。为什么接口放根包而不放子包?模块接口若在 `gateway` 之下,billing 自己的领域代码为了指名它就得 import `gateway`——这正是让 `stripe.Subscription` 一类渠道类型随时间渗入领域模型的边。"渠道只是收款执行者"靠这个拆分强制执行,不是包装上的讲究。
 
 ## 信用账本:预扣、确认、退还
 
