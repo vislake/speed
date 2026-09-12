@@ -117,7 +117,7 @@
 | 156 | BLOCKED | `web/packages/api-sdk/AGENTS.md` | oasdiff breaking-change gate | v0.0.1 的 21 个模块 tag 已从远端与本地删除、该版本作废;基线取自仓库自身历史——发布提交 `fbaaaf98` 是 main 的祖先,其树带着完整的合并文档与全部 spec 片段;Go module proxy 只解析 21 个模块中的 17 个(admin、ai-gateway、integration、saasctl 返回 404),单靠代理拼不出完整基线。下一个发布版本成为新基线。oasdiff 接线仍未做,随 v1.0(M4) |
 | 164 | BLOCKED | `docs/internal/21-api-contract.md` | oasdiff 破坏性变更闸门未交付 | v0.0.1 的 21 个模块 tag 已从远端与本地删除、该版本作废;基线取自仓库自身历史——发布提交 `fbaaaf98` 是 main 的祖先,其树带着完整的合并文档与全部 spec 片段;Go module proxy 只解析 21 个模块中的 17 个(admin、ai-gateway、integration、saasctl 返回 404),单靠代理拼不出完整基线。下一个发布版本成为新基线。oasdiff 接线仍未做,随 v1.0(M4) |
 | 178 | BLOCKED | `.github/workflows/api-contract.yml` | oasdiff 破坏性变更检测未接线 | v0.0.1 的 21 个模块 tag 已从远端与本地删除、该版本作废;基线取自仓库自身历史——发布提交 `fbaaaf98` 是 main 的祖先,其树带着完整的合并文档与全部 spec 片段;Go module proxy 只解析 21 个模块中的 17 个(admin、ai-gateway、integration、saasctl 返回 404),单靠代理拼不出完整基线。下一个发布版本成为新基线。oasdiff 接线仍未做,随 v1.0(M4) |
-| 195 | ROADMAP | `web/packages/api-sdk/AGENTS.md` | release-time SDK packaging and browser-page leg | 部分:api-sdk 发布期打包随 v0.0.1 直接 bump 发布落地(不经 changesets/发布期再生成——生成物已提交);oasdiff 基线门与浏览器腿仍随 v1.0(M4) |
+| 195 | ROADMAP | `web/packages/api-sdk/AGENTS.md` | release-time SDK packaging and browser-page leg | 部分:api-sdk 发布期打包随 v0.0.1 直接 bump 发布落地(不经 changesets/发布期再生成——生成物已提交);浏览器腿已落地(e2e 套件驱动真实服务器,@deployment 门驱动伺服页面;api-sdk 的 README/AGENTS 句已改写为现状);oasdiff 基线门仍随 v1.0(M4) |
 
 ### 5.3 发布机制装配(publint 与 changesets)
 
@@ -250,7 +250,7 @@
 | 73 | ROADMAP | `go/rbac/assign.go` | 角色编辑(修改自定义角色)无 API;DefineRole create-only | 锚:admin-shell 角色管理(D1/D11);DefineRole create-only,无 UpdateRole |
 | 107 | ROADMAP | `go/notification/hub.go` | platform-staff push consumer 未实现 | 锚:admin-shell;platform-staff push consumer(hub 与 SSE 流已交付) |
 | 113 | ROADMAP | `go/rbac/model.go` | rbac.Role 与 RolePermission 无删除路径 | 锚:admin-shell 角色管理;Role/RolePermission 无删除路径 |
-| 114 | ROADMAP | `web/packages/layout-kit/AGENTS.md` | admin-shell and browser automation over the served page | 锚:admin-shell(+M4 浏览器半);layout-kit 页腿记录为 M4 属过期散文 |
+| 114 | ROADMAP | `web/packages/layout-kit/AGENTS.md` | admin-shell and browser automation over the served page | 锚:admin-shell;浏览器半已落地(e2e 套件驱动真实服务器);layout-kit 的页面腿/浏览器自动化记录已改写为现状 |
 | 116 | ROADMAP | `web/packages/product-shell/README.md` | 平台员工面 shell(admin-shell)未构建(原指 a later round) | 锚:admin-shell(M3 行点名包);仅租户面 product-shell 已落地 |
 | 122 | ROADMAP | `docs/internal/23-admin.md` | admin-shell 前端未实现 | 锚:admin-shell(M3 行点名包);仅租户面 product-shell 已落地 |
 | 125 | ROADMAP | `CLAUDE.md` | 平台员工 admin-shell | 锚:admin-shell(M3 行点名包);仅租户面 product-shell 已落地 |
@@ -264,7 +264,7 @@
 | 普查号 | 判定 | 文件 | 主题 | 标记/锚点/落地 |
 |---|---|---|---|---|
 | 24 | ROADMAP | `web/packages/ui-kit/AGENTS.md` | Storybook / browser-side visual verification | 锚:Storybook 组件文档站+可视化回归(M4 行) |
-| 25 | ROADMAP | `web/packages/tenancy-ui/README.md` | 浏览器驱动真实服务器的 e2e 腿未接线(原指 M4 html-runner/e2e) | 锚:M4 e2e 行;浏览器自动化已落地(e5ec05b9:套件驱动真实服务器;e2e.yml 真实运行——按需+每日+push);包 README 的 "A browser driving the real server is not wired" 句未随落地更新 |
+| 25 | ROADMAP | `web/packages/tenancy-ui/README.md` | 浏览器驱动真实服务器的 e2e 腿未接线(原指 M4 html-runner/e2e) | 锚:M4 e2e 行;浏览器自动化已落地(e5ec05b9:套件驱动真实服务器;e2e.yml 真实运行——按需+每日+push);包 README 的 "A browser driving the real server is not wired" 句已改写为现状 |
 | 26 | ROADMAP | `web/packages/account-ui/README.md` | 无 Storybook/预览 harness,真实浏览器对比度验证缺失 | 锚:Storybook 组件文档站+可视化回归(M4 行) |
 | 29 | ROADMAP | `docs/internal/16-verification.md` | 浏览器端到端(Playwright)未实现 | 锚:M4 e2e 行;浏览器自动化已落地(e5ec05b9:套件驱动真实服务器;e2e.yml 真实运行——按需+每日+push) |
 | 41 | ROADMAP | `docs/internal/10-compliance-and-audit.md` | compliance 哈希链、按分区归档、自身 HTTP 面未实现 | 锚:M4 compliance 行;哈希链/时间分区归档/HTTP 面 |
@@ -291,7 +291,7 @@
 | 131 | ROADMAP | `examples/reference-app/web/e2e/account-surface.spec.ts` | 浏览器级账户变更旅程缺失 | 锚:M4 e2e;浏览器级账户变更旅程(撤销会话/解绑/MFA) |
 | 134 | ROADMAP | `go/compliance/AGENTS.md` | compliance HTTP surface / OpenAPI fragment 未实现 | 锚:M4/later 表行;compliance 自有 HTTP 面/OpenAPI fragment |
 | 135 | ROADMAP | `go/sharing/AGENTS.md` | sharing.share.accessed 事件无实时订阅者 | 锚:M4 compliance;sharing.share.accessed 无实时订阅者(模块只发布) |
-| 158 | ROADMAP | `web/packages/account-ui/README.md` | 浏览器驱动真实服务器的 e2e 腿未接线 | 锚:M4 e2e 行;浏览器自动化已落地(e5ec05b9:套件驱动真实服务器;e2e.yml 真实运行——按需+每日+push);包 README 的 "A browser driving the real server is not wired" 句未随落地更新 |
+| 158 | ROADMAP | `web/packages/account-ui/README.md` | 浏览器驱动真实服务器的 e2e 腿未接线 | 锚:M4 e2e 行;浏览器自动化已落地(e5ec05b9:套件驱动真实服务器;e2e.yml 真实运行——按需+每日+push);包 README 的 "A browser driving the real server is not wired" 句已改写为现状 |
 | 175 | ROADMAP | `CLAUDE.md` | compliance 自有 HTTP 表面 | 锚:M4 compliance 行;哈希链/时间分区归档/HTTP 面 |
 | 176 | ROADMAP | `CLAUDE.md` | e2e 与 nightly 流水线 | 锚:M4 e2e(+nightly 半见 4.5 节);e2e 半已落地(e5ec05b9:套件驱动真实服务器;e2e.yml 真实运行——按需+每日+push);nightly 半仍为 gated stub(见 4.5 普查行 86、179) |
 | 184 | ROADMAP | `internal/cases/model.go` | case 创建后加照片(add-photo-after-create)无 API | 锚:M4 页面/需求;cases add-photo-after-create 无端点(photos schema 已预留) |
@@ -300,9 +300,9 @@
 | 196 | ROADMAP | `web/packages/auth-ui/README.md` | 无 Storybook/预览 harness,真实浏览器对比度验证缺失 | 锚:Storybook 组件文档站+可视化回归(M4 行) |
 | 199 | ROADMAP | `docs/internal/14-reference-app.md` | reference-app 端到端链路未串通 | 锚:M4 出口条件行;reference-app 完整业务闭环全链路 |
 | 211 | ROADMAP | `CLAUDE.md` | compliance 哈希链 | 锚:M4 compliance 行;哈希链/时间分区归档/HTTP 面 |
-| 214 | ROADMAP | `examples/reference-app/web/src/main.tsx` | 浏览器自动化(html-runner/e2e)未落地 | 锚:M4 e2e 行;浏览器自动化已落地(e5ec05b9:套件驱动真实服务器;e2e.yml 真实运行——按需+每日+push);main.tsx 注释句未随落地更新 |
+| 214 | ROADMAP | `examples/reference-app/web/src/main.tsx` | 浏览器自动化(html-runner/e2e)未落地 | 锚:M4 e2e 行;浏览器自动化已落地(e5ec05b9:套件驱动真实服务器;e2e.yml 真实运行——按需+每日+push);main.tsx 注释句已改写为现状 |
 | 216 | ROADMAP | `go/dbkit/hard_delete.go` | HardDelete 外部编排 — 保留窗口配置/清理调度/right-to-erasure 入口均不存在(原 M4 compliance-module 承诺改写为 does-not-exist-yet) | 锚:M4 权务行(保留/被遗忘权);宿主级清理调度与 right-to-erasure 入口;服务层编排大半已落地 |
-| 217 | ROADMAP | `examples/reference-app/web/src/main.tsx` | 行 78 'What does not ship is browser automation driving that server-served page' — 代理已改写为现状局限表述并保留(若判定为需报备的 deferral 记录则在此) | 锚:M4 e2e 行;浏览器自动化已落地(e5ec05b9:套件驱动真实服务器;e2e.yml 真实运行——按需+每日+push);注释句未随落地更新 |
+| 217 | ROADMAP | `examples/reference-app/web/src/main.tsx` | 行 78 'What does not ship is browser automation driving that server-served page' — e2e-stub 时代遗留句,已改写为现状(e2e @deployment 门驱动伺服页面) | 锚:M4 e2e 行;浏览器自动化已落地(e5ec05b9:套件驱动真实服务器;e2e.yml 真实运行——按需+每日+push) |
 
 ### 8.5 锚:v1.0(M4)之后
 
@@ -393,7 +393,7 @@ TEXT 判定=注释/文档措辞改述候选(流程词、未来承诺句、里程
 
 档位判定以普查逐条记录为底;直接核读 31 条(A 13、L 6、R 12,见各行"抽查已核"括注),未核条目以普查为准,处理轮落地时再核。`spec 散文`与`测试 finding 代号`两族(档 L)的修改各受 api-contract 一致性门与测试可读性约束,核销时需一并处理。
 
-### 10.1 已闭于 main(A,49 项)
+### 10.1 已闭于 main(A,50 项)
 
 | 普查号 | 文件 | 主题 | 档位依据 |
 |---|---|---|---|
@@ -446,6 +446,7 @@ TEXT 判定=注释/文档措辞改述候选(流程词、未来承诺句、里程
 | 70 | `web/packages/api-client/README.md` | 286 行表格 "(no spec fragment exists yet)" — "yet" 残余(低信号;config-fetcher.ts 同义句已改),未改未声明(已被现状取代) | 闭:ba3ddb76 README 表格行改述为现状——两个路径常量与 go/config 的 OpenAPI 片段同步(片段生成 `@speed/api-sdk` 的 `useConfigGetPublicConfig`/`useConfigGetSystemFeatures`);api-client 包内该句无残留;由 10.3 移档于此 |
 | 12 | `.github/workflows/e2e.yml` | stub guard 文本与头部 PURPOSE 以计划时态描述未实现套件 | 闭:e5ec05b9(2026-09-11)真实流水线改写——guard stub 移除,PURPOSE 与 WHAT EXISTS 现述既有套件;由 10.3 移档于此 |
 | 31 | `.github/workflows/reusable-docker-build.yml` | header deferral 指针 "not wired (release.yml's own header)" 与 "trivy image scanning (security.yml's own DEFERRED note)" | 闭:e5ec05b9(2026-09-11)"those three stay gated stubs" 句改写为 e2e/release 真实运行、nightly 单独 gated stub 的现文;由 10.3 移档于此 |
+| 11 | `docs/internal/12-frontend.md` | reference-app 浏览器自动化(Playwright/e2e)腿的 deferral 记录形态过时 | docs/12 157/159 行的 html-runner M4 表述已改写为现状——伺服页面与驱动自动化分列陈述,与 15/19/21 号文口径一致;由 10.3 移档于此 |
 
 ### 10.2 台账缓办(L,9 项)
 
@@ -461,13 +462,12 @@ TEXT 判定=注释/文档措辞改述候选(流程词、未来承诺句、里程
 | 46 | `tools/release/lockstep-release.py` | 运行时输出字符串保留 M0/M4/v1.0 时间承诺 | v1.0 发布轮联动:lockstep-release.py M0/M4 字符串仍含(处数为普查台账原记录 16,直核 8)+测试 assertIn;文字在 v1.0 前仍准确,随首次发布更新 |
 | 69 | `web/packages/ui-kit/src/components/DataTable.test.tsx` | 标题字符串含 (P2-6)/(D5)/(P2-2)x3/(P2-3) 代号,未改未声明 | 测试 finding 代号簇:DataTable.test.tsx (P2-6)x1/(D5)x1/(P2-2)x3/(P2-3)x1 共 6 处仍在(P2-6@184、D5@223、P2-2@279/335/373、P2-3@946);抽查已核 |
 
-### 10.3 真剩余(R,13 项;未来文本修复候选)
+### 10.3 真剩余(R,12 项;未来文本修复候选)
 
 | 普查号 | 文件 | 主题 | 档位依据 |
 |---|---|---|---|
 | 4 | `go/integration/AGENTS.md` | 207 行 the follow-up this leaves 措辞 | integration AGENTS:215 "See Known limitations above for the follow-up this leaves" 尾句仍在;低信号导航句 |
 | 9 | `web/packages/account-ui/AGENTS.md` | 整文件未清理:'in the same round' 轮次语句与 docs/internal/21 出处引用 | account-ui AGENTS 2 处残留("in the same round" 同步规则句+docs/internal/21 引用);低信号 |
-| 11 | `docs/internal/12-frontend.md` | reference-app 浏览器自动化(Playwright/e2e)腿的 deferral 记录形态过时 | docs/12 157 行 html-runner M4 表述把伺服半一并划入;伺服已落地,归属句待精化 |
 | 13 | `Taskfile.yml` | release:plan desc "offline (M0 round)" 与 "Real publishing is not wired..." 文本 | Taskfile 502 行 "offline (M0 round)" 仍在;抽查已核 |
 | 15 | `go/storage/repository.go` | 302 行注释保留 "Paging a state listing is future work if a tenant's backlog ever grows past one task's worth" —— C 类未来承诺句式,未改写为纯边界陈述亦未记录 | storage repository.go:302 "Paging a state listing is future work" 仍在;抽查已核 |
 | 18 | `examples/reference-app/web/src/test-utils/real-client.ts` | 行 22 'extracting a shared rig package is recorded DEFERRED' — deferral 语句,文件未被代理改动/报备 | real-client.ts:22 "recorded DEFERRED" 悬空指针仍在;抽查已核 |

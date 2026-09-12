@@ -37,7 +37,7 @@
 - 核心组件提供中英双语的可运行示例，人工过一遍长文案截断问题
 - reference-app 的 e2e 至少有一条完整链路跑英文界面，并断言邮件按收件人 locale（而非操作者语言）渲染
 
-> **实施状态注记：** 仓库里没有 Storybook（无 `.stories.*` 文件、无相关依赖或配置），真实提供双语可运行示例的机制是各包自己的 `src/usage-example.test.tsx`（每个有运行时行为要证明的包各带一个，`pnpm -r test` 覆盖），不是独立的可视化组件浏览器。第四条的 reference-app e2e 尚未落地，见第 4 节的注记。
+> **实施状态注记：** 仓库里没有 Storybook（无 `.stories.*` 文件、无相关依赖或配置），真实提供双语可运行示例的机制是各包自己的 `src/usage-example.test.tsx`（每个有运行时行为要证明的包各带一个，`pnpm -r test` 覆盖），不是独立的可视化组件浏览器。第四条已落地——英文界面链路由 e2e 套件自身的 en-US 上下文行使（playwright.config.ts），邀请邮件的分语言渲染由 `go/org/mail_test.go` 钉住、其端到端链路在 `org-invitation-sign-in.spec.ts` 行使；机制见第 4 节的注记。
 
 **7. 配置管理**
 - 优先级链测试：同一个键分别从 flag/env/文件/默认值提供，断言覆盖顺序正确
