@@ -72,9 +72,10 @@ a := admin.NewModule(db,
     admin.WithMetering(meteringModule),     // 可选:用量汇总维度
     admin.WithBilling(billingModule),       // 可选,与 metering 相互独立
 )
-// 放进你的组合选出的组件集。然后,装配返回之后——
-// rbac.Service 要等 rbac 的 Attach 在装配的 Init 窗口内冻结目录才存在:
-if err := a.AttachRBAC(rbacService); err != nil { /* 处理 */ }
+// 放进你的组合选出的组件集。组件自己的 Start 回合会替你绑定已发布的
+// rbac Service;手工接线的模块则在装配返回后自己调用 AttachRBAC——
+// rbac.Service 是在装配的 Init 窗口内发布的:
+a.AttachRBAC(rbacService)
 ```
 
 停用与冒充经你自己的管线构造生效,不是模块路由——冒充坐在

@@ -87,10 +87,11 @@ a := admin.NewModule(db,
     admin.WithMetering(meteringModule),     // optional: usage-summary dimensions
     admin.WithBilling(billingModule),       // optional, independent of metering
 )
-// in the component set your composition selects. Then, after the assembly
-// has returned — rbac.Service exists once rbac's Attach has frozen the
-// catalog, inside the assembly's Init window:
-if err := a.AttachRBAC(rbacService); err != nil { /* handle */ }
+// in the component set your composition selects. The component's own Start
+// turn binds the published rbac service for you; a hand-wired module calls
+// AttachRBAC itself once the assembly has returned — rbac's Service is
+// published during the assembly's Init window:
+a.AttachRBAC(rbacService)
 ```
 
 Suspension and impersonation take effect through your own pipeline
