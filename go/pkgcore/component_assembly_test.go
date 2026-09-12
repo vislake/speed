@@ -813,3 +813,377 @@ func TestErrorCatalogFourElements(t *testing.T) {
 		})
 	}
 }
+
+// resolverCall records one ComponentConfigResolver invocation.
+type resolverCall struct {
+	componentName string
+	schema        any
+	fileConfig    ComponentConfig
+}
+
+// fakeResolver is the ComponentConfigResolver test double: it records every
+// call and answers through fn.
+type fakeResolver struct {
+	calls []resolverCall
+	fn    func(componentName string, schema any, fileConfig ComponentConfig) (ComponentConfig, error)
+}
+
+func (f *fakeResolver) ResolveComponentConfig(componentName string, schema any, fileConfig ComponentConfig) (ComponentConfig, error) {
+	f.calls = append(f.calls, resolverCall{componentName: componentName, schema: schema, fileConfig: fileConfig})
+	return f.fn(componentName, schema, fileConfig)
+}
+
+// schemaComponent returns a component with the given schema and product.
+func schemaComponent(name string, schema any, product any) Component {
+	c := plainComponent(name, product)
+	c.ConfigSchema = schema
+	return c
+}
+
+func TestPrepareResolvesComponentConfigurations(t *testing.T) {
+	ctx := context.Background()
+	a := schemaComponent("asm.resolve.a", (*asmSchema)(nil), &asmTokenA{})
+	b := schemaComponent("asm.resolve.b", (*asmSchema)(nil), &asmTokenB{})
+	noSchema := plainComponent("asm.resolve.c", &compTokenA{})
+	off := schemaComponent("asm.resolve.off", (*asmSchema)(nil), &compTokenB{})
+
+	resolver := &fakeResolver{fn: func(_ string, _ any, file ComponentConfig) (ComponentConfig, error) {
+		return file.With("port", "7070"), nil
+	}}
+	reg := newTestRegistry(t, a, b, noSchema, off)
+	reg.Put(resolver)
+	reg.Put(testComposition(
+		configEntry{key: "asm.resolve.a", value: map[string]any{"host": "h"}},
+		configEntry{key: "asm.resolve.b", value: nil},
+		configEntry{key: "asm.resolve.c", value: nil},
+		configEntry{key: "asm.resolve.off", value: false},
+	))
+	if err := reg.Prepare(ctx); err != nil {
+		t.Fatalf("Prepare = %v, want nil", err)
+	}
+
+	if len(resolver.calls) != 2 {
+		t.Fatalf("resolver called %d times (%v), want one call per selected component with a schema", len(resolver.calls), resolver.calls)
+	}
+	if resolver.calls[0].componentName != "asm.resolve.a" || resolver.calls[1].componentName != "asm.resolve.b" {
+		t.Errorf("resolver calls = %q, %q, want the selection order", resolver.calls[0].componentName, resolver.calls[1].componentName)
+	}
+	if resolver.calls[0].schema != a.ConfigSchema {
+		t.Errorf("resolver schema = %v, want the component's own ConfigSchema", resolver.calls[0].schema)
+	}
+	if host, ok := resolver.calls[0].fileConfig.Get("host"); !ok || host != "h" {
+		t.Errorf("resolver file block = %v, want the composition's block", resolver.calls[0].fileConfig.Keys())
+	}
+
+	p, ok := reg.planned("asm.resolve.a")
+	if !ok {
+		t.Fatal("asm.resolve.a is not planned")
+	}
+	var decoded asmSchema
+	if err := p.cfg.Decode(&decoded); err != nil {
+		t.Fatalf("planned config does not decode: %v", err)
+	}
+	if decoded.Host != "h" || decoded.Port != 7070 {
+		t.Errorf("planned config = %+v, want host=h port=7070 (the merged block)", decoded)
+	}
+}
+
+func TestPrepareResolvesAutoPulledComponentConfiguration(t *testing.T) {
+	ctx := context.Background()
+	consumer := plainComponent("asm.resolve.consumer", &asmTokenA{})
+	consumer.Requires = []Requirement{{Token: (*asmTokenB)(nil)}}
+	provider := schemaComponent("asm.resolve.provider", (*asmSchema)(nil), &asmTokenB{})
+	provider.Provides = []any{(*asmTokenB)(nil)}
+
+	resolver := &fakeResolver{fn: func(_ string, _ any, file ComponentConfig) (ComponentConfig, error) {
+		return file, nil
+	}}
+	reg := newTestRegistry(t, consumer, provider)
+	reg.Put(resolver)
+	reg.Put(testComposition(configEntry{key: "asm.resolve.consumer", value: nil}))
+	if err := reg.Prepare(ctx); err != nil {
+		t.Fatalf("Prepare = %v, want nil", err)
+	}
+
+	// The consumer declares no schema, so its (empty) block is not consulted;
+	// the provider is auto-pulled into the selection and resolved like any
+	// other selected component.
+	if len(resolver.calls) != 1 || resolver.calls[0].componentName != "asm.resolve.provider" {
+		t.Fatalf("resolver calls = %v, want exactly the auto-pulled provider resolved", resolver.calls)
+	}
+}
+
+func TestPrepareWithoutResolverKeepsFileBlock(t *testing.T) {
+	c := schemaComponent("asm.naive.a", (*asmSchema)(nil), &asmTokenA{})
+	reg, err := prepareAssembly(t, []Component{c}, configEntry{key: "asm.naive.a", value: map[string]any{"host": "h"}})
+	if err != nil {
+		t.Fatalf("Prepare = %v, want nil", err)
+	}
+
+	p, ok := reg.planned("asm.naive.a")
+	if !ok {
+		t.Fatal("asm.naive.a is not planned")
+	}
+	if _, carried := p.cfg.Get("port"); carried {
+		t.Error("the planned config carries a port value, want the file block alone with no resolver in the registry")
+	}
+}
+
+func TestPrepareResolverErrorFailsAssembly(t *testing.T) {
+	ctx := context.Background()
+	boom := errors.New("the flag parse failed")
+	c := schemaComponent("asm.resolve.broken", (*asmSchema)(nil), &asmTokenA{})
+	resolver := &fakeResolver{fn: func(string, any, ComponentConfig) (ComponentConfig, error) {
+		return ComponentConfig{}, boom
+	}}
+	reg := newTestRegistry(t, c)
+	reg.Put(resolver)
+	reg.Put(testComposition(configEntry{key: "asm.resolve.broken", value: nil}))
+
+	err := reg.Prepare(ctx)
+	if !errors.Is(err, boom) {
+		t.Fatalf("Prepare = %v, want the resolver's error", err)
+	}
+	if !strings.Contains(err.Error(), `"asm.resolve.broken"`) || !strings.Contains(err.Error(), "stage prepare") {
+		t.Errorf("error %q does not name the component and the stage", err)
+	}
+}
+
+// requiredSchemaFixture declares a top-level and a nested required field.
+type requiredSchemaFixture struct {
+	Host     string `json:"host"`
+	Port     int    `json:"port" config:"required"`
+	Password struct {
+		Memory uint32 `json:"memory" config:"required"`
+	} `json:"password"`
+}
+
+func TestPrepareRequiredConfigValue(t *testing.T) {
+	ctx := context.Background()
+	newRegistry := func(t *testing.T, resolver *fakeResolver, block map[string]any) *ComponentRegistry {
+		t.Helper()
+		c := schemaComponent("asm.required.a", (*requiredSchemaFixture)(nil), &asmTokenA{})
+		reg := newTestRegistry(t, c)
+		if resolver != nil {
+			reg.Put(resolver)
+		}
+		reg.Put(testComposition(configEntry{key: "asm.required.a", value: block}))
+		return reg
+	}
+
+	t.Run("missing from the file block", func(t *testing.T) {
+		reg := newRegistry(t, nil, map[string]any{"host": "h"})
+		err := reg.Prepare(ctx)
+		if !errors.Is(err, ErrMissingConfigValue) {
+			t.Fatalf("Prepare = %v, want ErrMissingConfigValue", err)
+		}
+		for _, want := range []string{`"asm.required.a"`, `"port"`, `"password.memory"`, "required"} {
+			if !strings.Contains(err.Error(), want) {
+				t.Errorf("error %q does not carry %q", err, want)
+			}
+		}
+	})
+
+	t.Run("supplied by the file block", func(t *testing.T) {
+		reg := newRegistry(t, nil, map[string]any{
+			"port":     8080,
+			"password": map[string]any{"memory": 256},
+		})
+		if err := reg.Prepare(ctx); err != nil {
+			t.Fatalf("Prepare = %v, want nil", err)
+		}
+	})
+
+	t.Run("supplied by the resolver", func(t *testing.T) {
+		resolver := &fakeResolver{fn: func(_ string, _ any, file ComponentConfig) (ComponentConfig, error) {
+			return file.
+				With("port", 8080).
+				With("password", NewComponentConfig(map[string]any{"memory": 256})), nil
+		}}
+		reg := newRegistry(t, resolver, map[string]any{"host": "h"})
+		if err := reg.Prepare(ctx); err != nil {
+			t.Fatalf("Prepare = %v, want nil", err)
+		}
+	})
+
+	t.Run("resolver result without the key still fails", func(t *testing.T) {
+		resolver := &fakeResolver{fn: func(_ string, _ any, file ComponentConfig) (ComponentConfig, error) {
+			return file, nil
+		}}
+		reg := newRegistry(t, resolver, map[string]any{"host": "h"})
+		if err := reg.Prepare(ctx); !errors.Is(err, ErrMissingConfigValue) {
+			t.Fatalf("Prepare = %v, want ErrMissingConfigValue", err)
+		}
+	})
+
+	t.Run("an explicit zero counts as supplied", func(t *testing.T) {
+		// The required declaration is judged by presence, not by zero value:
+		// a source that states the field supplies it, whatever it states.
+		reg := newRegistry(t, nil, map[string]any{
+			"port":     0,
+			"password": map[string]any{"memory": 0},
+		})
+		if err := reg.Prepare(ctx); err != nil {
+			t.Fatalf("Prepare = %v, want nil", err)
+		}
+	})
+}
+
+// sensitiveSchemas are the documentation pairings the sensitive check judges.
+type (
+	sensitiveUndocumented struct {
+		Token string `json:"token" config:"sensitive"`
+	}
+	sensitiveEmptyDoc struct {
+		Token string `json:"token" config:"sensitive"`
+	}
+	sensitiveOtherDoc struct {
+		Token string `json:"token" config:"sensitive"`
+	}
+	sensitiveDocumented struct {
+		Token string `json:"token" config:"sensitive"`
+	}
+)
+
+func (sensitiveEmptyDoc) ConfigDocs() map[string]FieldDoc {
+	return map[string]FieldDoc{"token": {Default: "no description"}}
+}
+
+func (sensitiveOtherDoc) ConfigDocs() map[string]FieldDoc {
+	return map[string]FieldDoc{"other": {Description: "a field nobody marked sensitive"}}
+}
+
+func (sensitiveDocumented) ConfigDocs() map[string]FieldDoc {
+	// Keyed by the Go field name: the lookup folds it onto the json spelling.
+	return map[string]FieldDoc{"Token": {Description: "the token this fixture seals"}}
+}
+
+func TestPrepareSensitiveFieldNeedsDocs(t *testing.T) {
+	prepare := func(schema any) error {
+		c := schemaComponent("asm.sensitive.a", schema, &asmTokenA{})
+		_, err := prepareAssembly(t, []Component{c}, configEntry{key: "asm.sensitive.a", value: nil})
+		return err
+	}
+
+	for name, schema := range map[string]any{
+		"no Documented implementation":      (*sensitiveUndocumented)(nil),
+		"a doc entry without a description": (*sensitiveEmptyDoc)(nil),
+		"a doc entry for another field":     (*sensitiveOtherDoc)(nil),
+	} {
+		t.Run(name, func(t *testing.T) {
+			err := prepare(schema)
+			if !errors.Is(err, ErrInvalidComponent) {
+				t.Fatalf("Prepare = %v, want ErrInvalidComponent", err)
+			}
+			for _, want := range []string{`"asm.sensitive.a"`, `"token"`, "sensitive"} {
+				if !strings.Contains(err.Error(), want) {
+					t.Errorf("error %q does not carry %q", err, want)
+				}
+			}
+		})
+	}
+
+	t.Run("a documented sensitive field passes", func(t *testing.T) {
+		if err := prepare((*sensitiveDocumented)(nil)); err != nil {
+			t.Fatalf("Prepare = %v, want nil", err)
+		}
+	})
+}
+
+// conflictSchemas are the key-path shapes the conflict check judges.
+type (
+	flatTokenSchema struct {
+		Token string `json:"token"`
+	}
+	flatMaterialSchema struct {
+		Material []byte `json:"pii_cipher_key"`
+	}
+	hostSchema struct {
+		Host string `json:"host"`
+	}
+	skippedTokenSchema struct {
+		Token string `json:"token" config:"-"`
+	}
+)
+
+func TestPrepareRejectsConflictingConfigKeyPaths(t *testing.T) {
+	flatComponent := func(name string, schema any) Component {
+		c := schemaComponent(name, schema, &asmTokenA{})
+		c.ConfigNamespace = NoConfigNamespace
+		return c
+	}
+	prepare := func(comps ...Component) error {
+		t.Helper()
+		entries := make([]configEntry, 0, len(comps))
+		for _, c := range comps {
+			entries = append(entries, configEntry{key: c.Name, value: nil})
+		}
+		_, err := prepareAssembly(t, comps, entries...)
+		return err
+	}
+
+	t.Run("two flat-namespace fields at one path", func(t *testing.T) {
+		err := prepare(
+			flatComponent("asm.conflict.x", (*flatTokenSchema)(nil)),
+			flatComponent("asm.conflict.y", (*flatTokenSchema)(nil)),
+		)
+		if !errors.Is(err, ErrConfigKeyConflict) {
+			t.Fatalf("Prepare = %v, want ErrConfigKeyConflict", err)
+		}
+		for _, want := range []string{`"asm.conflict.x"`, `"asm.conflict.y"`, `"token"`, "stage prepare"} {
+			if !strings.Contains(err.Error(), want) {
+				t.Errorf("error %q does not carry %q", err, want)
+			}
+		}
+	})
+
+	t.Run("a schema field against a BootstrapKeys declaration", func(t *testing.T) {
+		declaring := schemaComponent("asm.conflict.declaring", (*asmSchema)(nil), &asmTokenB{})
+		declaring.BootstrapKeys = []BootstrapKey{{Key: "pii_cipher_key"}}
+		err := prepare(
+			flatComponent("asm.conflict.flat", (*flatMaterialSchema)(nil)),
+			declaring,
+		)
+		if !errors.Is(err, ErrConfigKeyConflict) {
+			t.Fatalf("Prepare = %v, want ErrConfigKeyConflict", err)
+		}
+		for _, want := range []string{`"asm.conflict.flat"`, `"asm.conflict.declaring"`, `"pii_cipher_key"`} {
+			if !strings.Contains(err.Error(), want) {
+				t.Errorf("error %q does not carry %q", err, want)
+			}
+		}
+	})
+
+	t.Run("a custom namespace against another component's default", func(t *testing.T) {
+		custom := schemaComponent("asm.conflict.custom", (*hostSchema)(nil), &asmTokenA{})
+		custom.ConfigNamespace = "components.asm.conflict.other"
+		err := prepare(
+			custom,
+			schemaComponent("asm.conflict.other", (*hostSchema)(nil), &asmTokenB{}),
+		)
+		if !errors.Is(err, ErrConfigKeyConflict) {
+			t.Fatalf("Prepare = %v, want ErrConfigKeyConflict", err)
+		}
+		if !strings.Contains(err.Error(), `"components.asm.conflict.other.host"`) {
+			t.Errorf("error %q does not name the conflicting key path", err)
+		}
+	})
+
+	t.Run("same field name under distinct default namespaces passes", func(t *testing.T) {
+		if err := prepare(
+			schemaComponent("asm.conflict.one", (*hostSchema)(nil), &asmTokenA{}),
+			schemaComponent("asm.conflict.two", (*hostSchema)(nil), &asmTokenB{}),
+		); err != nil {
+			t.Fatalf("Prepare = %v, want nil", err)
+		}
+	})
+
+	t.Run("a skipped field claims no key path", func(t *testing.T) {
+		if err := prepare(
+			flatComponent("asm.conflict.skipped", (*skippedTokenSchema)(nil)),
+			flatComponent("asm.conflict.claimed", (*flatTokenSchema)(nil)),
+		); err != nil {
+			t.Fatalf("Prepare = %v, want nil", err)
+		}
+	})
+}

@@ -178,11 +178,26 @@ type Component struct {
 	// ConfigSchema is a typed nil pointer to the struct the component's
 	// configuration decodes into ((*mailerConfig)(nil)); nil means the
 	// component takes no configuration, and any key in its composition
-	// block is then unknown. The assembly decodes the component's
-	// components.<name> subtree into the schema strictly -- an undeclared
-	// key fails the Prepare stage and the error lists the accepted keys --
-	// before anything is constructed.
+	// block is then unknown. The fields of that struct declare, with the
+	// config struct tag, how each one resolves: a plain field is supplied by
+	// the component's configuration block alone, and the expose, derive,
+	// required, sensitive, env=NAME, group=NAME and "-" options widen or
+	// narrow that (config_schema.go carries the vocabulary and its contract).
+	// The assembly decodes the component's subtree into the schema strictly
+	// -- an undeclared key fails the Prepare stage and the error lists the
+	// accepted keys -- before anything is constructed, after the optional
+	// ComponentConfigResolver has merged the five sources into the block.
 	ConfigSchema any
+
+	// ConfigNamespace overrides the key-path prefix the ConfigSchema fields
+	// resolve under: empty keeps the default "components.<Name>.", the
+	// NoConfigNamespace value ("-") drops the prefix entirely so fields
+	// resolve at their bare local paths, and any other non-empty string
+	// replaces the default prefix (normalized to end with a dot). The
+	// assembly refuses a selection in which two components' fields -- or a
+	// field and a BootstrapKeys declaration -- end up addressing one key
+	// path, naming both sources.
+	ConfigNamespace string
 
 	// BootstrapKeys declares the process-start key material this component
 	// consumes: one key path plus the purpose it derives under. The

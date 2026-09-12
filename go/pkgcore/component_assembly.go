@@ -16,15 +16,19 @@ import (
 	"github.com/vislake/speed/go/pkgcore/i18n"
 )
 
-// component_assembly.go implements the Prepare stage's parse-resolve-validate-plan
-// pipeline: the second beat of Prepare, which runs before anything is
-// constructed and fails the whole assembly on the first problem it finds. It
-// turns the composition configuration in the by-type context into the plan
-// the ComponentRegistry then constructs, in exactly three steps --
-// select (expand the configuration's selections, pull uniquely-available
-// providers), validate (dependency completeness, configuration keys,
-// capabilities, assets, graph), plan (topological order, written to the
-// registry) -- and it never calls a New.
+// component_assembly.go implements the Prepare stage's
+// parse-resolve-validate-plan pipeline: the second beat of Prepare, which
+// runs before anything is constructed and fails the whole assembly on the
+// first problem it finds. It turns the composition configuration in the
+// by-type context into the plan the ComponentRegistry then constructs, in
+// exactly four steps -- select (expand the configuration's selections, pull
+// uniquely-available providers), resolve (replace each selected component's
+// configuration block with the optional ComponentConfigResolver's
+// five-source-merged result, when the registry carries one), validate
+// (dependency completeness, configuration keys -- the per-block decode, the
+// required-value check, the sensitive/documentation pairing and the
+// one-key-path-per-source rule -- capabilities, assets, graph), plan
+// (topological order, written to the registry) -- and it never calls a New.
 
 // selection is one resolved member of the assembly, before the plan exists.
 type selection struct {
@@ -79,6 +83,9 @@ func (r *ComponentRegistry) planAssembly(ctx context.Context) error {
 	}
 	if deliveryErr := validateDeclaredDeliveries(draft); deliveryErr != nil {
 		return deliveryErr
+	}
+	if resolveErr := r.resolveComponentConfigs(draft); resolveErr != nil {
+		return resolveErr
 	}
 	if validateErr := r.validateSelection(draft, comp.mode); validateErr != nil {
 		return validateErr
@@ -306,14 +313,22 @@ func overlappingDelivery(a, b Component) (reflect.Type, bool) {
 
 // validateSelection runs the per-component validations in selection order:
 // the configuration block against the component's ConfigSchema, the
-// declared capabilities against the deployment mode, and the embedded
-// assets -- then the set-level checks over the selected whole, the locale
-// resources and the migration sets.
+// documentation pairing a sensitive schema field requires, the declared
+// capabilities against the deployment mode, and the embedded assets -- then
+// the set-level checks over the selected whole: the one-key-path-per-source
+// rule, the locale resources and the migration sets.
 func (r *ComponentRegistry) validateSelection(draft *assemblyDraft, mode DeploymentMode) error {
 	selected := make([]*selection, 0, len(draft.order))
 	for _, name := range draft.order {
 		sel := draft.byName[name]
-		if err := validateConfigBlock(sel.component, sel.cfg); err != nil {
+		fields, err := analyzeComponentSchema(sel.component)
+		if err != nil {
+			return err
+		}
+		if err := validateConfigBlock(sel.component, sel.cfg, fields); err != nil {
+			return err
+		}
+		if err := validateSensitiveDocs(sel.component, fields); err != nil {
 			return err
 		}
 		if err := validateComponentCapabilities(sel.component, mode); err != nil {
@@ -324,16 +339,64 @@ func (r *ComponentRegistry) validateSelection(draft *assemblyDraft, mode Deploym
 		}
 		selected = append(selected, sel)
 	}
+	if err := validateConfigKeyPaths(draft); err != nil {
+		return err
+	}
 	if err := validateLocaleAssets(selected); err != nil {
 		return err
 	}
 	return validateMigrationLedgerKeys(selected)
 }
 
-// validateConfigBlock strictly decodes a component's configuration block
-// against its ConfigSchema. A component that declares no schema accepts no
-// keys, so any key in its block is unknown.
-func validateConfigBlock(c Component, cfg ComponentConfig) error {
+// resolveComponentConfigs gives each selected component's configuration
+// block its final form. When the registry carries a ComponentConfigResolver
+// (the assembling engine's five-source parser, put before Prepare), every
+// selected component that declares a schema has its file block replaced by
+// the resolver's merged result -- what the component's New then receives as
+// its cfg, decode text unchanged. Without one the blocks stand exactly as
+// the composition configuration carried them, the file-only behaviour a
+// bare registry keeps.
+func (r *ComponentRegistry) resolveComponentConfigs(draft *assemblyDraft) error {
+	resolver, present, err := GetOptional[ComponentConfigResolver](r)
+	if err != nil {
+		return fmt.Errorf("pkgcore: the component configuration resolver (stage prepare): %w", err)
+	}
+	if !present {
+		return nil
+	}
+
+	for _, name := range draft.order {
+		sel := draft.byName[name]
+		if sel.component.ConfigSchema == nil {
+			// A component that declares no schema has nothing to resolve;
+			// its block is validated empty instead.
+			continue
+		}
+		merged, err := resolver.ResolveComponentConfig(sel.name, sel.component.ConfigSchema, sel.cfg)
+		if err != nil {
+			return fmt.Errorf("pkgcore: component %q (stage prepare): resolve the configuration: %w", sel.name, err)
+		}
+		sel.cfg = merged
+	}
+	return nil
+}
+
+// analyzeComponentSchema flattens a component's ConfigSchema, naming the
+// component in any parse error.
+func analyzeComponentSchema(c Component) ([]schemaField, error) {
+	fields, err := analyzeConfigSchema(c.ConfigSchema)
+	if err != nil {
+		return nil, fmt.Errorf("pkgcore: component %q (stage prepare): %w", c.Name, err)
+	}
+	return fields, nil
+}
+
+// validateConfigBlock strictly decodes a component's configuration block --
+// the resolver's merged result when one ran -- against its ConfigSchema, and
+// checks every field the schema declares required actually arrived. A
+// component that declares no schema accepts no keys, so any key in its
+// block is unknown.
+func validateConfigBlock(c Component, cfg ComponentConfig, fields []schemaField) error {
 	if c.ConfigSchema == nil {
 		if cfg.Len() == 0 {
 			return nil
@@ -346,7 +409,124 @@ func validateConfigBlock(c Component, cfg ComponentConfig) error {
 	if err := cfg.Decode(target.Interface()); err != nil {
 		return fmt.Errorf("pkgcore: component %q (stage prepare): %w", c.Name, err)
 	}
+
+	var missing []string
+	for _, f := range fields {
+		if f.required && !configCarriesKey(cfg, f.key) {
+			missing = append(missing, f.key)
+		}
+	}
+	if len(missing) > 0 {
+		return fmt.Errorf("%w (stage prepare): component %q: the ConfigSchema declares key %s required, and no configuration source supplied a value for it; supply the value in the component's configuration block, or drop the required declaration",
+			ErrMissingConfigValue, c.Name, quoteAll(missing))
+	}
 	return nil
+}
+
+// validateSensitiveDocs enforces the documentation half of the sensitive tag
+// option: a field marked sensitive must carry a ConfigDocs entry with a
+// non-empty description, because a secret no operator is told how to supply
+// or rotate is one they cannot deploy. A schema declaring no Documented at
+// all cannot mark a field sensitive.
+func validateSensitiveDocs(c Component, fields []schemaField) error {
+	docs := configDocs(c.ConfigSchema)
+	var undocumented []string
+	for _, f := range fields {
+		if !f.sensitive {
+			continue
+		}
+		doc, ok := configDocFor(docs, f.key)
+		if ok && strings.TrimSpace(doc.Description) != "" {
+			continue
+		}
+		undocumented = append(undocumented, f.key)
+	}
+	if len(undocumented) == 0 {
+		return nil
+	}
+	return fmt.Errorf("%w (stage prepare): component %q marks configuration key %s sensitive, and a sensitive field must document itself: implement ConfigDocs() on the ConfigSchema target with an entry carrying a non-empty Description under the field's local key path",
+		ErrInvalidComponent, c.Name, quoteAll(undocumented))
+}
+
+// validateConfigKeyPaths runs the one-key-path-per-source rule over the
+// selected whole: every key path the selection produces -- each component's
+// schema fields under the namespace prefix its ConfigNamespace declares,
+// plus each component's BootstrapKeys declarations -- must be unique. A key
+// path two sources produce would let one of them silently resolve the
+// other's value, so the assembly refuses it, naming the key path and both
+// sources.
+func validateConfigKeyPaths(draft *assemblyDraft) error {
+	owner := make(map[string]string)
+	for _, name := range draft.order {
+		sel := draft.byName[name]
+		prefix, err := configKeyPrefix(sel.name, sel.component.ConfigNamespace)
+		if err != nil {
+			return fmt.Errorf("pkgcore: component %q (stage prepare): %w", sel.name, err)
+		}
+		fields, err := analyzeConfigSchema(sel.component.ConfigSchema)
+		if err != nil {
+			return fmt.Errorf("pkgcore: component %q (stage prepare): %w", sel.name, err)
+		}
+		for _, f := range fields {
+			who := fmt.Sprintf("component %q (ConfigSchema field %q)", sel.name, f.name)
+			if err := claimConfigKeyPath(owner, prefix+f.key, who); err != nil {
+				return err
+			}
+		}
+		for _, key := range sel.component.BootstrapKeys {
+			who := fmt.Sprintf("component %q (BootstrapKeys declaration)", sel.name)
+			if err := claimConfigKeyPath(owner, key.Key, who); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+// claimConfigKeyPath records one source's claim on a key path, refusing a
+// claim on a path another source already produced. Paths compare
+// case-insensitively, the way config keys resolve.
+func claimConfigKeyPath(owner map[string]string, path, source string) error {
+	folded := strings.ToLower(path)
+	if previous, taken := owner[folded]; taken {
+		return fmt.Errorf("%w (stage prepare): configuration key path %q is produced by both %s and %s; give one of them a distinct key path or namespace",
+			ErrConfigKeyConflict, path, previous, source)
+	}
+	owner[folded] = source
+	return nil
+}
+
+// configCarriesKey reports whether a component's configuration block carries
+// a value at the local dotted key path, matching each segment
+// case-insensitively the way Decode matches keys.
+func configCarriesKey(cfg ComponentConfig, local string) bool {
+	segment, rest, nested := strings.Cut(local, ".")
+	raw, ok := configLookupFold(cfg, segment)
+	if !ok {
+		return false
+	}
+	if !nested {
+		return true
+	}
+	child, isMapping := asMap(raw)
+	if !isMapping {
+		return false
+	}
+	return configCarriesKey(child, rest)
+}
+
+// configLookupFold reads a raw value out of a ComponentConfig by a key
+// matched case-insensitively.
+func configLookupFold(cfg ComponentConfig, key string) (any, bool) {
+	if raw, ok := cfg.lookup(key); ok {
+		return raw, true
+	}
+	for _, candidate := range cfg.Keys() {
+		if strings.EqualFold(candidate, key) {
+			return cfg.lookup(candidate)
+		}
+	}
+	return nil, false
 }
 
 // validateComponentCapabilities compares a component's declared capabilities
