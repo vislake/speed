@@ -1221,7 +1221,7 @@
       "file": "examples/reference-app/internal/app/cases.go",
       "ident": "casesErrInternal",
       "kind": "declared",
-      "line": 59,
+      "line": 60,
       "module": "cases",
       "status": 500
     },
@@ -1230,7 +1230,7 @@
       "file": "examples/reference-app/internal/app/cases.go",
       "ident": "casesInvalidRequestBody",
       "kind": "declared",
-      "line": 66,
+      "line": 67,
       "module": "cases",
       "status": 400
     },
