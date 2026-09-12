@@ -397,6 +397,50 @@ func TestResolveDeclarations_KeyShapesAreValidated(t *testing.T) {
 	}
 }
 
+// TestResolveDeclarations_RepeatedKeyIsRefusedByName pins that a repeated
+// declaration is refused as the schema-shape error it is -- one key path
+// has one declaration -- before any source is read, not stumbled into
+// later through the pair's identical derived environment name. The two
+// declarations may even disagree on format: that is the case a duplicate
+// check that only compared derived names would let collapse silently to
+// the last declaration.
+func TestResolveDeclarations_RepeatedKeyIsRefusedByName(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name  string
+		decls []Declaration
+	}{
+		{
+			name: "the same key and format twice",
+			decls: []Declaration{
+				{Key: "server.addr", Format: FormatString},
+				{Key: "server.addr", Format: FormatString},
+			},
+		},
+		{
+			name: "two formats for one key",
+			decls: []Declaration{
+				{Key: "server.addr", Format: FormatString},
+				{Key: "server.addr", Format: FormatInt},
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			_, err := New(WithArgs(nil), WithEnviron(nil)).ResolveDeclarations(tt.decls)
+			if !errors.Is(err, ErrInvalidTarget) {
+				t.Fatalf("ResolveDeclarations() error = %v, want ErrInvalidTarget", err)
+			}
+			if !strings.Contains(err.Error(), "appears more than once") {
+				t.Errorf("ResolveDeclarations() error = %v, want the repeated-key refusal, not a derived-name collision", err)
+			}
+		})
+	}
+}
+
 // TestResolveDeclarations_DeclaredDefaultsTableRules pins the table's own
 // contract: its entries serve hexkey declarations alone, an entry for a
 // declared key of another format is a wiring error, an entry no declaration

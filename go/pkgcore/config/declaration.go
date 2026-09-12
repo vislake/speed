@@ -187,6 +187,12 @@ func describeDeclarations(decls []Declaration) (*schema, error) {
 		byKey:         make(map[string]*field, len(decls)),
 		defaultSource: declaredDefaultsSource,
 	}
+	// seen tracks the key paths appended so far. The duplicate check
+	// cannot read s.byKey, whose entries are only filled once the slice
+	// stops growing: append may reallocate it, so field pointers taken
+	// mid-loop would dangle -- hence the deferred fill below and this
+	// separate membership set here.
+	seen := make(map[string]struct{}, len(decls))
 	for _, decl := range decls {
 		if err := checkDeclaredKeyPath(decl.Key); err != nil {
 			return nil, err
@@ -196,10 +202,11 @@ func describeDeclarations(decls []Declaration) (*schema, error) {
 			return nil, fmt.Errorf("%w: declared key %q has format %q, want one of %q, %q, %q or %q",
 				ErrInvalidTarget, decl.Key, decl.Format, FormatString, FormatInt, FormatBool, FormatHexKey)
 		}
-		if _, exists := s.byKey[decl.Key]; exists {
+		if _, exists := seen[decl.Key]; exists {
 			return nil, fmt.Errorf("%w: declared key %q appears more than once; one key path has one declaration",
 				ErrInvalidTarget, decl.Key)
 		}
+		seen[decl.Key] = struct{}{}
 		derive := decl.Format == FormatHexKey
 		s.fields = append(s.fields, field{key: decl.Key, typ: typ, derive: derive})
 		if derive {
