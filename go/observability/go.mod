@@ -2,6 +2,13 @@ module github.com/vislake/speed/go/observability
 
 go 1.26.0
 
+// pkgcore's componenttest contract helpers are not in a released pkgcore
+// version yet, and this module's component suite imports them to assert the
+// descriptor contract, so this module resolves pkgcore from the sibling
+// checkout. A replace directive in a dependency is ignored by consumers, so
+// this affects this module's own standalone builds only.
+replace github.com/vislake/speed/go/pkgcore => ../pkgcore
+
 require (
 	github.com/prometheus/client_golang v1.23.2
 	github.com/vislake/speed/go/pkgcore v0.0.1
