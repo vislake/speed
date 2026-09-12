@@ -176,6 +176,24 @@ tenantless calls explicitly.
   shape as the chat registry -- with `OpenAICompatibleImageProvider`
   self-registered under `ProviderOpenAICompatibleImage`
   ("image.openai-compatible") from this package's own `init()`.
+- Both built-ins are also `pkgcore.Component`s (`provider_components.go`):
+  `chat.openai-compatible` (module `"chat"`) and
+  `image.openai-compatible` (module `"image"`), each `Providing` its
+  contract type, declaring the same
+  `MultiReplicaSafe|SurvivesRestart|Stateless` bits its registration
+  declares, and taking the same two-key block (`base_url`, `api_key`) the
+  flat registration reads. The component name IS the route's logical
+  provider name -- the string `WithModelRoute` takes, credential rows are
+  keyed by and the registries register under -- so the route-to-component
+  resolution is the module's own identity, pinned by
+  `TestProviderComponentNames_MatchProviderNamesAndCapabilities`: a host's
+  existing routes, credential rows and composition selections need no
+  translation and gain no new configuration obligation. The per-request
+  shape of the component face is `pkgcore.Build` with an override carrying
+  the credential just resolved (`TestProviderComponentsAssembleAndBuildPerCall`),
+  and both faces funnel through the same constructors
+  (`openaiCompatibleFromConfig` / `openaiCompatibleImageFromConfig`), so
+  neither can diverge on validation or on the coded config refusal.
 - `OpenAICompatibleImageProvider` (`openai_compatible_image.go`): the
   default, zero-vendor-SDK `ImageProvider`, implemented directly against
   the OpenAI-compatible images wire schema with stdlib `net/http` +
