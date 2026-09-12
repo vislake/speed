@@ -34,7 +34,7 @@ import in the other direction is a merge blocker rather than a style note.
 | Symbol | Purpose |
 |---|---|
 | `NewModule(db, opts...) (*Module, error)` | The `the module contract`. Options are validated eagerly, so a missing key is a startup error. |
-| `NewService(db, bus, kv, opts...) (*Service, error)` | The service alone, for a host that does not bootstrap through a registry. |
+| `NewService(db, bus, kv, opts...) (*Service, error)` | The service alone, for a host that does not bootstrap through a registry. It carries no host seam until one is attached — `Module.Register` attaches the registry, which is where the merged message catalog the SMS body renders through comes from; a bare service's render reports its missing catalog on the same log-and-answer-success path as any other render failure. |
 | `RegisterPIISerializer(cipher) error` | Registers the field-encryption serializer under `SerializerName`. **Call before opening the `*gorm.DB`.** |
 | `WithKeySource`, `WithBlindIndexKey` | **Required.** No safe default exists for either. The former static-key options (`WithSigningKeys` and the `KeySet` API) do not exist in this version — breaking, with no back-compat path; `WithKeySource` is the only way in (see "Tokens and passwords" below). |
 | `WithMembershipReader` | The module through which membership is asked. Absent means "refuse", not "allow". |
@@ -152,7 +152,7 @@ there is no intent for the module to enforce.
 | `GET/PATCH /api/v1/authn/me/preferences` (`authn_getPreferences` / `authn_updatePreferences`) | The HTTP surface, per-principal by construction. An unstorable value answers `authn.invalid_locale`/`authn.invalid_timezone` (400); the empty value is the "not chosen yet" state and reaches the wire as an absent field, like every other response in this module. |
 | `DefaultTimezone = "UTC"`, `DefaultLocale = "en-US"` | The platform defaults: the last tier of every chain, applied when the stored value is empty. |
 | `TimeZoneResolver`, `WithTimeZoneResolver` | The registration timezone chain's IP-resolution tier. Optional, and deliberately NOT fail-closed — see below. |
-| `canonicalLocale`, `canonicalTimezone`, `registrationLocale`, `registrationTimeZone`, `smsLocale`, `supportedLocales` (unexported) | The validation and chain rules themselves; `supportedLocales()` derives the module's language set from its embedded locale files, the single source the validation, the SMS loader and the Accept-Language negotiation all read. |
+| `canonicalLocale`, `canonicalTimezone`, `registrationLocale`, `registrationTimeZone`, `smsLocale`, `supportedLocales` (unexported) | The validation and chain rules themselves; `supportedLocales()` derives the module's language set from its embedded locale files, the single source the validation and the Accept-Language negotiation read. The SMS body renders through the host's merged message catalog (`renderSMSCode`, `hostSeams`), whose language set `Builder.AddModule` pins to the same files: every message-shipping component must ship one file per catalog language, so the two sets cannot disagree. |
 
 ### Phone-plus-SMS-code sign-in
 
@@ -345,8 +345,11 @@ carries `_ "time/tzdata"` so `time.LoadLocation`'s validation runs
 identically in deployments whose image has no system zoneinfo — removing
 that import makes validation environment-dependent — and
 `supportedLocales()` derives the shipped language set from the embedded
-locale files rather than a hardcoded pair, so validation, the SMS loader
-and the negotiation cannot disagree about which languages exist.
+locale files rather than a hardcoded pair, so the validation and the
+negotiation cannot disagree about which languages exist. The SMS body's
+render reads the merged catalog (never a bundle of this module's own), so
+the text a delivery carries is exactly the locale files' text, sharing one
+renderer with every other module's backend-generated content.
 
 ### Immediate revocation is enforced by default, not by host ceremony
 

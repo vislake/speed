@@ -235,6 +235,14 @@
 - **登记理由**：公共符号面新增，按"宿主可见面变更须带 `!BREAKING` footer 或登记本清单"的纪律登记（本轮为纯新增，不带 footer）。
 - **出处**：`42f57d80`（`feat(pkgcore): add the shared JSON response writer to httpapi`）+ `92187243`（`refactor: write the modules' JSON responses through pkgcore/httpapi`）+ `01abb1a0`（`refactor(reference-app): write the notes responses through httpapi.WriteJSON`）+ `2b8ae249`（`refactor(tools): emit the shared JSON helpers from the new-module scaffold`）。
 
+### （待编号）authn：SMS 正文渲染改经宿主合并目录（组装边界登记）
+
+- **面**：`go/authn` 的手机验证码短信正文由"模块自带 TOML 目录（私有解析 + `BurntSushi/toml` 直接依赖）"改为经宿主合并目录渲染（`pkgcore/i18n` 机制；`Module.Register` 自动把注册表挂为服务的宿主缝，调用期读取）。渲染结果等价：同 key 同文案，占位符仍由 code/minutes 两个参数插值，落单语言仍回落 `DefaultLocale` 并在短信 seam 上报告实际渲染 locale（承接 §5.9 的 seam 语义，不变）。导出符号与签名无变化；`go/authn` 的 `go.mod` 中 `BurntSushi/toml` 由直接依赖降为 `// indirect`（经 `pkgcore`，`pkgcore/i18n` 才是同一批文件的解析者）。
+- **消费者影响**：凡经 `NewModule` + `Register` 装配的宿主（含 reference-app 与 saasctl 各含 authn 的模板工程）零行为变化。边界：直接以 `NewService` 组装、不经注册表挂载宿主缝、又自行服务短信发码路径的宿主，渲染失败与其它渲染失败同路（记日志、按成功应答），不再从模块自带文件兜底——此类宿主照 `Module.Register` 的做法挂载注册表即可恢复（`go/authn/AGENTS.md` 的 `NewService` 行已写明该要求）。
+- **替代路径**：无（行为修正）；走 `Module.Register` 即自动生效。
+- **登记理由**：组装契约边界（直接构造路径新增宿主缝挂载要求）的登记，按"宿主可见面变更须带 `!BREAKING` footer 或登记本清单"的纪律登记（装配宿主零行为变化，不带 footer）。
+- **出处**：`a05c3e57`（`refactor(authn): render the SMS body from the host's merged i18n catalog`）+ `bf28ebd7`（`test(authn): pin the catalog render and run the locale census through the catalog`）。
+
 ## 6. D 组：configrefgen 工具内部迁移（工具面，非宿主面）
 
 - **面**：`tools/configrefgen` 的内部实现从旧内核面迁到组件面（工具自身不在消费者依赖面内）。
