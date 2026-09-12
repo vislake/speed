@@ -511,9 +511,9 @@ func (r *ComponentRegistry) Verify(ctx context.Context) error {
 // into the seats, wiring dependencies and publishing runtime services with
 // Put), the seats close again, and the assembly's closing validation runs
 // over the finished declarations: the one-key-one-layer check between the
-// selected components' BootstrapKeys and the runtime configuration seat,
-// and the feature-graph check (ValidateFeatureGraph over the Features
-// seat).
+// selected components' key material (BootstrapKeys declarations and
+// ConfigSchema derive fields) and the runtime configuration seat, and the
+// feature-graph check (ValidateFeatureGraph over the Features seat).
 func (r *ComponentRegistry) Init(ctx context.Context) error {
 	if err := r.beginStage(stageInit); err != nil {
 		return err
@@ -925,12 +925,19 @@ func (r *ComponentRegistry) seatRead() seatSet {
 	return r.seats
 }
 
-// validateOneLayerPerKey refuses a key declared on two layers: a selected
-// component's BootstrapKeys declaration (the process-start layer, resolved
-// by the loader before construction) and an item declared on the runtime
-// Config seat. One dotted key carries one meaning, one default and one edit
-// surface, so a key on both layers fails the Init stage's closing validation
-// rather than leaving an operator unable to tell which layer a change hits.
+// validateOneLayerPerKey refuses key material declared on two layers: a
+// selected component's BootstrapKeys declaration or ConfigSchema derive
+// field (the process-start layer, resolved by the loader before construction)
+// and an item declared on the runtime Config seat. One dotted key carries
+// one meaning, one default and one edit surface, so key material on both
+// layers fails the Init stage's closing validation rather than leaving an
+// operator unable to tell which layer a change hits.
+//
+// The rule covers key material alone, not every schema field: a component's
+// ordinary configuration field may deliberately share a path with a runtime
+// item of the same name (the construction-time value its own runtime reads
+// fall back to, for example), while key material has no fallback semantics
+// to chain across the layers.
 func (r *ComponentRegistry) validateOneLayerPerKey() error {
 	runtimeKeys := make(map[string]struct{})
 	for _, item := range r.Config.Items() {
@@ -948,11 +955,43 @@ func (r *ComponentRegistry) validateOneLayerPerKey() error {
 				p.component.Name, key.Key,
 			))
 		}
+		for _, keyPath := range deriveKeyPaths(p.component) {
+			if _, both := runtimeKeys[keyPath]; !both {
+				continue
+			}
+			conflicts = append(conflicts, fmt.Errorf(
+				"component %q declares key material at %q, which the runtime configuration seat also carries",
+				p.component.Name, keyPath,
+			))
+		}
 	}
 	if len(conflicts) == 0 {
 		return nil
 	}
 	return fmt.Errorf("pkgcore: key declared on two layers: %w", errors.Join(conflicts...))
+}
+
+// deriveKeyPaths returns the final key paths of a component's ConfigSchema
+// derive fields: the component's declared key material, resolved under the
+// namespace prefix its registration declares like every other schema field.
+// A schema the prepare stage already validated cannot fail to analyze here;
+// a nil schema declares nothing.
+func deriveKeyPaths(c Component) []string {
+	fields, err := analyzeConfigSchema(c.ConfigSchema)
+	if err != nil {
+		return nil
+	}
+	prefix, err := configKeyPrefix(c.Name, c.ConfigNamespace)
+	if err != nil {
+		return nil
+	}
+	var paths []string
+	for _, f := range fields {
+		if f.derive {
+			paths = append(paths, prefix+f.key)
+		}
+	}
+	return paths
 }
 
 // registerSystemPurposes collects every selected component's

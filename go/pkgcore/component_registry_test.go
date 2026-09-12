@@ -1440,3 +1440,106 @@ func TestOwnComponentConfigOutsidePrepareFails(t *testing.T) {
 		t.Fatalf("OwnComponentConfig outside a Prepare callback = %v, want ErrStageViolation", err)
 	}
 }
+
+// deriveKeySchema is the one-layer tests' schema fixture: one derive-tagged
+// key-material field.
+type deriveKeySchema struct {
+	CipherKey []byte `json:"cipher_key" config:"derive,sensitive"`
+}
+
+// ConfigDocs implements Documented for the fixture, the pairing a sensitive
+// field is required to carry.
+func (*deriveKeySchema) ConfigDocs() map[string]FieldDoc {
+	return map[string]FieldDoc{
+		"cipher_key": {Description: "the fixture's key material"},
+	}
+}
+
+// TestInit_RefusesKeyMaterialDeclaredOnTwoLayers pins the closing validation
+// over both declaration faces: a BootstrapKeys declaration and a ConfigSchema
+// derive field each refuse to share their final key path with a runtime
+// Config seat item, while an ordinary schema field may share a path with one
+// -- the construction-time value a runtime read deliberately falls back to.
+func TestInit_RefusesKeyMaterialDeclaredOnTwoLayers(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("a BootstrapKeys declaration refuses the shared path", func(t *testing.T) {
+		c := plainComponent("asm.layers.seat", &asmTokenA{})
+		c.BootstrapKeys = []BootstrapKey{{Key: "layers.seat_cipher_key", Format: "hexkey"}}
+		c.Init = func(_ context.Context, reg *ComponentRegistry, _ any) error {
+			return reg.Config.Add(ConfigItem{Key: "layers.seat_cipher_key", Type: "string"})
+		}
+
+		reg, err := prepareAssembly(t, []Component{c}, configEntry{key: "asm.layers.seat", value: nil})
+		if err != nil {
+			t.Fatalf("Prepare = %v", err)
+		}
+		if err := reg.Construct(ctx); err != nil {
+			t.Fatalf("Construct = %v", err)
+		}
+		if err := reg.Verify(ctx); err != nil {
+			t.Fatalf("Verify = %v", err)
+		}
+		err = reg.Init(ctx)
+		if err == nil {
+			t.Fatal("Init over a bootstrap key on both layers = nil, want a refusal")
+		}
+		for _, want := range []string{`component "asm.layers.seat"`, `"layers.seat_cipher_key"`, "two layers"} {
+			if !strings.Contains(err.Error(), want) {
+				t.Errorf("refusal %q does not carry %q", err, want)
+			}
+		}
+	})
+
+	t.Run("a ConfigSchema derive field refuses the shared path", func(t *testing.T) {
+		c := plainComponent("asm.layers.schema", &asmTokenA{})
+		c.ConfigNamespace = "layers"
+		c.ConfigSchema = (*deriveKeySchema)(nil)
+		c.Init = func(_ context.Context, reg *ComponentRegistry, _ any) error {
+			return reg.Config.Add(ConfigItem{Key: "layers.cipher_key", Type: "string"})
+		}
+
+		reg, err := prepareAssembly(t, []Component{c}, configEntry{key: "asm.layers.schema", value: nil})
+		if err != nil {
+			t.Fatalf("Prepare = %v", err)
+		}
+		if err := reg.Construct(ctx); err != nil {
+			t.Fatalf("Construct = %v", err)
+		}
+		if err := reg.Verify(ctx); err != nil {
+			t.Fatalf("Verify = %v", err)
+		}
+		err = reg.Init(ctx)
+		if err == nil {
+			t.Fatal("Init over a schema derive field on both layers = nil, want a refusal")
+		}
+		for _, want := range []string{`component "asm.layers.schema"`, `"layers.cipher_key"`, "two layers"} {
+			if !strings.Contains(err.Error(), want) {
+				t.Errorf("refusal %q does not carry %q", err, want)
+			}
+		}
+	})
+
+	t.Run("an ordinary schema field may share the path", func(t *testing.T) {
+		c := plainComponent("asm.layers.plain", &asmTokenA{})
+		c.ConfigNamespace = "layers"
+		c.ConfigSchema = (*asmSchema)(nil)
+		c.Init = func(_ context.Context, reg *ComponentRegistry, _ any) error {
+			return reg.Config.Add(ConfigItem{Key: "layers.host", Type: "string"})
+		}
+
+		reg, err := prepareAssembly(t, []Component{c}, configEntry{key: "asm.layers.plain", value: map[string]any{"host": "h"}})
+		if err != nil {
+			t.Fatalf("Prepare = %v", err)
+		}
+		if err := reg.Construct(ctx); err != nil {
+			t.Fatalf("Construct = %v", err)
+		}
+		if err := reg.Verify(ctx); err != nil {
+			t.Fatalf("Verify = %v", err)
+		}
+		if err := reg.Init(ctx); err != nil {
+			t.Fatalf("Init over an ordinary field sharing a runtime path = %v, want nil", err)
+		}
+	})
+}
