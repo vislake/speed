@@ -401,7 +401,7 @@ TEXT 判定=注释/文档措辞改述候选(流程词、未来承诺句、里程
 | 2 | `docs/internal/23-admin.md` | 管理员操作审批流未做 | docs/23 边界声明=设计性范围外,记录即现状 |
 | 3 | `docs/internal/03-deployment-modes.md` | seed 任务未实现 | docs/03 seed 现文已重述(演示账号经 APP_DEMO_USERS_PASSWORD 真实注册种入);抽查已核 |
 | 5 | `go/compliance/AGENTS.md` | Known limitations:SweepAllTenants 无内置 TenantLister、retention sweep 模块内无调度点 | compliance AGENTS 两 bullet 已含完整裁决+宿主 cadence 契约;抽查已核 |
-| 6 | `go/authn/standalone_build_test.go` | 注释中 "replace lines get deleted entirely once every module has its first tag" 为对未来锁步发布流程的承诺断言 | authn standalone_build_test "first tag" 承诺断言句已清;抽查已核 |
+| 6 | `go/authn/unittest/standalone_build_test.go` | 注释中 "replace lines get deleted entirely once every module has its first tag" 为对未来锁步发布流程的承诺断言 | authn standalone_build_test "first tag" 承诺断言句已清;抽查已核 |
 | 7 | `go/dbkit/repository.go` | Restore 不强制保留窗口 — 配置属 compliance 侧且尚不存在(原 deferred-scope 改写) | dbkit repository.go "(deferred scope)" 标签已清;抽查已核 |
 | 16 | `go/billing/AGENTS.md` | 第58行 'a caller (business code today; a live webhook endpoint eventually)' 的 'eventually' 属 C 类未来承诺,未清理(同文件其余未来承诺均已转'not implemented/deliberately not shipped'措辞) | billing AGENTS 指名 "a later round's ... endpoint eventually" 句已清(现文为现状段落);抽查已核 |
 | 19 | `.github/workflows/nightly.yml` | stub guard echo "Wire the full matrix + benchmark + flaky-detection legs once full-check is live and the first benchmarks exist" | nightly.yml guard echo 已与头注同步更新(full-check 半解锁、benchmark 落地);抽查已核 |

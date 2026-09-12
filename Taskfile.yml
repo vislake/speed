@@ -74,9 +74,10 @@ tasks:
     # When the sync moves a module's go.mod/go.sum (a dependency bumped by the
     # workspace union, or a require relabeled), run `go mod tidy` from inside
     # that module and commit both together: sync writes what the workspace
-    # needs, and the module's own standalone guard test (go/pkgcore and
-    # go/tenancy standalone_build_test.go, which build with GOWORK=off) fails
-    # until the module's go.sum also carries the standalone graph entries.
+    # needs, and the module's own standalone guard test (go/pkgcore/unittest
+    # and go/tenancy/unittest standalone_build_test.go, which build with
+    # GOWORK=off) fails until the module's go.sum also carries the standalone
+    # graph entries.
     cmds:
       - |
         if command -v mise >/dev/null 2>&1; then
