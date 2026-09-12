@@ -197,19 +197,21 @@ func runHealthcheck(ctx context.Context, port string) error {
 // an actual boot selects stays the composition's decision. That is also why
 // --help works even when this deployment's bootstrap configuration would
 // refuse to boot -- the one moment an operator is most likely to reach for
-// it.
+// it. The diagnostic writes to stderr are best-effort, blank-assigning
+// their write error (the repository's CLI convention -- the returned exit
+// code is the whole contract); a render failure still returns 1.
 func runHelp(stdout, stderr io.Writer) int {
 	if _, err := fmt.Fprint(stdout, helpUsage); err != nil {
-		fmt.Fprintln(stderr, "reference-app: help:", err)
+		_, _ = fmt.Fprintln(stderr, "reference-app: help:", err)
 		return 1
 	}
 	surfaces, err := speedapp.CollectComponentConfig(pkgcore.GlobalComponents())
 	if err != nil {
-		fmt.Fprintln(stderr, "reference-app: help:", err)
+		_, _ = fmt.Fprintln(stderr, "reference-app: help:", err)
 		return 1
 	}
 	if err := speedapp.RenderComponentConfigHelp(stdout, surfaces, app.EnvPrefix); err != nil {
-		fmt.Fprintln(stderr, "reference-app: help:", err)
+		_, _ = fmt.Fprintln(stderr, "reference-app: help:", err)
 		return 1
 	}
 	return 0
