@@ -9,22 +9,17 @@ import (
 	"embed"
 	"fmt"
 
-	speedchain "github.com/vislake/speed/go/app/chain"
 	"github.com/vislake/speed/go/pkgcore"
 	"github.com/vislake/speed/go/pkgcore/i18n"
 )
 
 // assemblyView is what the host's steps read: the declaration seats a step
 // registers onto, the resolved seam values it hands to services, and the
-// merged message catalog. The two registry shapes answer the same seat
-// interfaces (RouteRegistrar, RetentionRegistrar, JobHandlerRegistrar,
-// EventRegistrar, PeriodicTaskRegistrar), so building a view is a type
-// adaptation, never a second declaration path.
+// merged message catalog. The registry answers the seat interfaces
+// (RetentionRegistrar, JobHandlerRegistrar, EventRegistrar,
+// PeriodicTaskRegistrar), so building a view is a type adaptation, never a
+// second declaration path.
 type assemblyView struct {
-	// routes is the registry reading the middleware chain derives its route
-	// partition and its outermost middleware layer from (chain.Standard's
-	// RouteSource: the mounted routes plus the registry's Middleware seat).
-	routes speedchain.RouteSource
 	// retention is the retention seat: where a step registers the
 	// participants a compliance sweep drives.
 	retention pkgcore.RetentionRegistrar
@@ -62,7 +57,6 @@ func (b *serverBuild) viewFromComponents(reg *pkgcore.ComponentRegistry) (assemb
 		return assemblyView{}, err
 	}
 	return assemblyView{
-		routes:    reg,
 		retention: reg.Retention,
 		jobs:      reg.Jobs,
 		events:    reg.Events,

@@ -219,8 +219,8 @@ const BillingRoutePath = "/api/v1/billing"
 // rbac.RouteRule for every path a module mounts, declaring whether the
 // route is public or which permission gates it, which subject resolver the
 // check evaluates, and (for org alone) the layer that narrows inside the
-// gate. composeFace hands it to rbac.GuardRoutes through chain.Standard,
-// which mounts what comes back.
+// gate. The host's link policy carries it to rbac.GuardRoutes through
+// chain.Standard, which mounts what comes back.
 //
 // The table is exact in both directions: a mounted path it does not name
 // fails the server build, and so does an entry no module mounted. That
@@ -236,7 +236,7 @@ const BillingRoutePath = "/api/v1/billing"
 // them at once. The two entries that deliberately deviate are pki's and
 // admin's, each for its own domain reason stated on its own entry.
 //
-// az and orgDeps are the same instances composeFace passes to
+// az and orgDeps are the same instances the link policy passes to
 // rbac.GuardRoutes through chain.Standard, and the same org module wiring
 // BuildServer composed; the org entry's Layer closure needs them (see
 // orgNodeScopeLayer).

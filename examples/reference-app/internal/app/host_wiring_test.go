@@ -13,8 +13,10 @@ import (
 	"reflect"
 	"testing"
 
+	"github.com/vislake/speed/go/admin"
 	aigateway "github.com/vislake/speed/go/ai-gateway"
 	speedapp "github.com/vislake/speed/go/app"
+	"github.com/vislake/speed/go/app/httpserve"
 	"github.com/vislake/speed/go/org"
 	"github.com/vislake/speed/go/pkgcore"
 
@@ -398,23 +400,56 @@ func TestAssemble_ComposesAndClosesTheWholeApplication(t *testing.T) {
 	if err != nil {
 		t.Fatalf("assemble(): %v", err)
 	}
-	face, err := pkgcore.Get[*hostFace](reg)
+	face, err := pkgcore.Get[*httpserve.Face](reg)
 	if err != nil {
 		t.Fatalf("read the composed face: %v", err)
 	}
 	if face.Handler() == nil {
 		t.Fatal("the composed face carries no handler")
 	}
-	if face.server != nil {
-		t.Fatal("BuildServer's drive started a listener, want the face composed without one")
+	if face.Listening() {
+		t.Fatal("BuildServer's drive opened a listener, want the face composed without one")
 	}
 	// BuildServer's composition deselects the observability component, so
-	// nothing declares on the Middleware seat in this drive: the composed
-	// face carries no seat layer, and a BuildServer caller that wants the
-	// instrumentation applies obs.Middleware itself (in the live drive the
-	// selected component fills the seat instead, which Standard applies).
-	if mws := reg.Middlewares(); len(mws) != 0 {
-		t.Errorf("the BuildServer drive's Middleware seat holds %d entries, want none: this composition deselects the observability component", len(mws))
+	// nothing declares on the middleware face in this drive: the composed
+	// face carries no platform layer, and a BuildServer caller that wants
+	// the instrumentation applies obs.Middleware itself (in the live drive
+	// the selected component fills the face instead, which the http
+	// component's assembly applies).
+	if mws := face.Middlewares(); len(mws) != 0 {
+		t.Errorf("the BuildServer drive's middleware face holds %d entries, want none: this composition deselects the observability component", len(mws))
+	}
+
+	// The link policy the http component consumed carries this host's whole
+	// chain half -- filled during the link-policy component's Init turn and
+	// read by the component in the Serve stage.
+	policy, err := pkgcore.Get[*httpserve.LinkPolicy](reg)
+	if err != nil {
+		t.Fatalf("read the link policy: %v", err)
+	}
+	if policy.Verifier == nil {
+		t.Error("the link policy carries no verifier")
+	}
+	if policy.Authorizer == nil || len(policy.RouteRules) == 0 {
+		t.Error("the link policy carries no route-authorization table")
+	}
+	if policy.AdminPrefix != admin.APIPath {
+		t.Errorf("the link policy's AdminPrefix = %q, want %q", policy.AdminPrefix, admin.APIPath)
+	}
+	if policy.Impersonation == nil {
+		t.Error("the link policy carries no impersonation decorator")
+	}
+	if policy.TenantStatusResolver == nil {
+		t.Error("the link policy carries no tenant-status resolver")
+	}
+	if len(policy.ExtraAllowlist) != 3 {
+		t.Errorf("the link policy carries %d pre-auth allowlist entries, want the three public routes", len(policy.ExtraAllowlist))
+	}
+	if policy.MountHostRoutes == nil {
+		t.Error("the link policy carries no host-route mount")
+	}
+	if policy.Chainless {
+		t.Error("the link policy declares Chainless, want the guarded half")
 	}
 
 	// The provider members are selected members of the real assembly and

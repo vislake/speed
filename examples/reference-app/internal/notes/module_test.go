@@ -114,7 +114,7 @@ func TestModule_OpenAPISpec_IsNonEmptyAndDescribesNotesPath(t *testing.T) {
 // TestModule_Register_DeclaresRoutesPermissionsEventsAndAuditActions
 // exercises every registrar surface Register touches (root task's explicit
 // goal: "genuinely exercise the registry surface rather than only its
-// minimum"), not only reg.Routes.Mount.
+// minimum"), not only the route-face mount.
 func TestModule_Register_DeclaresRoutesPermissionsEventsAndAuditActions(t *testing.T) {
 	reg := componenttest.NewRegistry()
 	m := NewModule(nil)
@@ -123,7 +123,7 @@ func TestModule_Register_DeclaresRoutesPermissionsEventsAndAuditActions(t *testi
 		t.Fatalf("Register() error = %v", err)
 	}
 
-	routes := reg.Routes.Routes()
+	routes := componenttest.FaceOf(reg).Routes()
 	if len(routes) != 1 {
 		t.Fatalf("got %d mounted routes, want 1", len(routes))
 	}

@@ -21,6 +21,7 @@ import (
 	"github.com/vislake/speed/go/admin"
 	aigateway "github.com/vislake/speed/go/ai-gateway"
 	speedapp "github.com/vislake/speed/go/app"
+	"github.com/vislake/speed/go/app/httpserve"
 	"github.com/vislake/speed/go/authn"
 	"github.com/vislake/speed/go/billing"
 	"github.com/vislake/speed/go/compliance"
@@ -587,7 +588,7 @@ func BuildServer(ctx context.Context, cfg ServerConfig) (http.Handler, func() er
 		// once -- so no host-side teardown is needed here.
 		return nil, nil, nil, err
 	}
-	face, err := pkgcore.Get[*hostFace](reg)
+	face, err := pkgcore.Get[*httpserve.Face](reg)
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("reference-app: read the composed HTTP face: %w", err)
 	}
@@ -600,8 +601,8 @@ func BuildServer(ctx context.Context, cfg ServerConfig) (http.Handler, func() er
 
 // Run assembles the reference app with BuildServer's composition and runs it
 // under the engine's lifecycle: RunAssembly overlays the signals on ctx,
-// drives the assembly (the app component's Start binds the listener), calls
-// this host's serve step (serveHost) and runs the two-phase shutdown (the
+// drives the assembly (the http component's Serve stage binds the listener),
+// calls this host's serve step (serveHost) and runs the two-phase shutdown (the
 // Stop notification, then the drain and release) once the step returns.
 func Run(ctx context.Context, cfg ServerConfig) error {
 	b := newServerBuild(cfg)
@@ -616,11 +617,12 @@ func Run(ctx context.Context, cfg ServerConfig) error {
 	return nil
 }
 
-// serveHost is this host's serve step, run by the engine between Start and
-// the two-beat close: the application component's Start already owns the
-// listener, so the step is the process's own serving lifetime -- it holds
-// until the lifecycle context ends (the engine's signal overlay is what ends
-// it) and returns, and the engine then drains through Stop and Close.
+// serveHost is this host's serve step, run by the engine after the Serve
+// round and before the two-beat close: the http component's Serve stage
+// already opened the listener, so the step is the process's own serving
+// lifetime -- it holds until the lifecycle context ends (the engine's
+// signal overlay is what ends it) and returns, and the engine then drains
+// through Stop and Close.
 func serveHost(ctx context.Context, _ *pkgcore.ComponentRegistry) error {
 	<-ctx.Done()
 	return nil
@@ -635,8 +637,9 @@ func serveHost(ctx context.Context, _ *pkgcore.ComponentRegistry) error {
 // global registration: the host's own override copies read the module
 // descriptors from that seed, while the caller assembles the built set on
 // the registry it owns. live tells the caller's composition whether this
-// assembly owns the listener -- true for Run, whose app component binds it,
-// false for BuildServer, whose caller serves the returned handler.
+// assembly owns the listener -- true for Run, whose http component binds it
+// in the Serve stage, false for BuildServer, whose caller serves the
+// returned handler.
 func (b *serverBuild) assemblyInputs(ctx context.Context, live bool) ([]pkgcore.Component, speedapp.LoadSpec, error) {
 	b.hostByTenant = make(map[pkgcore.TenantID]string, len(b.cfg.HostTenants))
 	for host, tenant := range b.cfg.HostTenants {
@@ -647,7 +650,7 @@ func (b *serverBuild) assemblyInputs(ctx context.Context, live bool) ([]pkgcore.
 		b.memberships = NewSignInMemberships()
 	}
 
-	components, err := b.hostComponents(ctx, pkgcore.NewComponentRegistry(), live)
+	components, err := b.hostComponents(pkgcore.NewComponentRegistry())
 	if err != nil {
 		return nil, speedapp.LoadSpec{}, err
 	}
@@ -882,10 +885,21 @@ func (b *serverBuild) composition(live bool) pkgcore.ComponentConfig {
 		}
 		components = components.With("observability", observability)
 	} else {
-		// BuildServer serves the returned handler in-process; the telemetry
-		// lifecycle belongs to the process that owns the listener.
+		// BuildServer hands the composed handler to its caller's own serving
+		// loop; the telemetry lifecycle belongs to the process that serves
+		// the traffic.
 		components = components.With("observability", false)
 	}
+
+	// The http component (go/app/httpserve): the process's HTTP face, whose
+	// required dependency is this app's link policy (the reference-app.app
+	// component above). live drives the listener: a live drive binds it in
+	// the Serve stage on the configured address, while BuildServer composes
+	// the handler without a listener of its own -- the caller serves the
+	// returned handler.
+	components = components.With("http", pkgcore.ComponentConfig{}.
+		With("addr", ":"+b.cfg.Port).
+		With("listen", live))
 
 	return pkgcore.ComponentConfig{}.
 		With("deployment", string(b.cfg.DeploymentMode)).

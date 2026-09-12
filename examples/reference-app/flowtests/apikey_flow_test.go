@@ -4,7 +4,7 @@ package flowtests
 // mandatory-first-consumer proof. It drives the module's own
 // spec-generated HTTP surface --
 // internal/app/modules.go's integrationModule wiring, mounted through the
-// engine's route registration over the registry's route seat exactly like
+// http component's route face exactly like
 // every other module's fragment (chain.Standard wraps the whole mounted
 // set), gated
 // by the integration entry of internal/app/demo/demo_subject.go's DemoRouteRules -- through the composed

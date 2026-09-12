@@ -20,7 +20,7 @@
 // ai-gateway itself ships no HTTP surface for image generation, which is
 // why these routes are the app's own -- like consult.go's chat
 // route and the demo-notification route, they are mounted by hand on the
-// protected mux (composeFace, routes.go) rather than through the registry,
+// protected mux (mountHostRoutes in component.go) rather than through the registry,
 // so none needs (and cannot silently skip) an entry in DemoRouteRules'
 // table. consult's
 // route remains hand-written (its chat surface has no web consumer to

@@ -267,7 +267,9 @@ func (m *Module) Register(reg *pkgcore.ComponentRegistry) error {
 	// it before publishing (see audit.Emit's own doc comment), which is what
 	// requires the declaration above to run before this line, not after it.
 	m.handler = NewHandler(m.repo, reg.EventBus(), reg.AuditActionsSeat(), m.subject)
-	reg.RoutesSeat().Mount(apiPath, m.handler)
+	if err := pkgcore.MountRoute(reg, apiPath, m.handler); err != nil {
+		return err
+	}
 
 	if err := reg.PermissionsSeat().Add(PermissionRead, PermissionWrite); err != nil {
 		return err

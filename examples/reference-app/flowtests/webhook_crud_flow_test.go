@@ -7,8 +7,8 @@ package flowtests
 // drives the module's own spec-generated HTTP surface --
 // go/integration/api/openapi.yaml's six operations under
 // /api/v1/integration/webhooks, served through internal/app/modules.go's
-// integrationModule wiring and the engine's route registration over the
-// registry's route seat exactly like every other module's fragment
+// integrationModule wiring and the http component's route face
+// exactly like every other module's fragment
 // (chain.Standard wraps the whole mounted set),
 // gated by the integration entry of internal/app/demo/demo_subject.go's
 // DemoRouteRules, whose sub-path selector chooses integration:webhook:read for reads and

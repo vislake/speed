@@ -108,7 +108,7 @@ func TestComponent_InitDeclaresThroughTheGate(t *testing.T) {
 	if !slices.Contains(typeKeys, noteCreatedNotificationType.Key) {
 		t.Errorf("Notifications seat = %v, want the note-created type", typeKeys)
 	}
-	if routes := reg.Routes.Routes(); len(routes) != 1 || routes[0].Path != apiPath {
+	if routes := componenttest.FaceOf(reg).Routes(); len(routes) != 1 || routes[0].Path != apiPath {
 		t.Fatalf("Init mounted %v, want exactly the %s mount", routes, apiPath)
 	}
 	if m.handler == nil {

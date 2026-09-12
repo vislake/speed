@@ -23,8 +23,8 @@ import (
 // obs.RegisterMountedRoutes exists precisely so a host can hand the route
 // label limiter every obs.Middleware constructs its REAL route table
 // before any request traffic arrives, and this app is the mandatory first
-// consumer of that API -- BuildServer's wiring below (internal/app/server.go) calls
-// it with the module route table reg.Routes.Routes() holds plus the two
+// consumer of that API -- the http component calls it (its Serve assembly,
+// go/app/httpserve) with the module route table it accumulated plus the two
 // host-level routes mounted directly on the mux. Without that call, the
 // limiter's distinct-value budget (obs.MaxRouteLabelValues) is
 // first-come-first-served: an attacker sending that many distinct garbage
@@ -174,7 +174,7 @@ func TestObsRouteSeed_RealRoutesSurviveStartupGarbage(t *testing.T) {
 
 	// The module-table half of the seed: /api/v1/notes is registered by
 	// the notes module on the pkgcore registry (not by this app's own
-	// host-level mount), so its survival proves the reg.Routes.Routes()
+	// host-level mount), so its survival proves the accumulated-route
 	// half of the registration reached the limiter too.
 	notesSeries, ok := series[notesListPath]
 	if !ok {

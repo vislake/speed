@@ -33,10 +33,11 @@
 // recorded CreatorUserID), are what actually gate access. Only the
 // create route resolves a creator; the list, detail, upload and
 // photo-content routes need none. Like the smile-simulation surface,
-// these routes are mounted by hand on the protected mux (composeFace in
-// routes.go) rather than through the registry, so none needs (and cannot
-// silently skip) an entry in DemoRouteRules' table, the same structural
-// argument smilesim.go's own header makes.
+// these routes are mounted by hand on the protected mux (mountHostRoutes
+// in component.go, carried into the assembly as the link policy's
+// MountHostRoutes hook) rather than through the registry, so none needs
+// (and cannot silently skip) an entry in DemoRouteRules' table, the same
+// structural argument smilesim.go's own header makes.
 
 package app
 

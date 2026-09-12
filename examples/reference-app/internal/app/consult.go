@@ -8,9 +8,9 @@
 // the OpenAPI machinery, the same pattern internal/app/demo/demo_notification.go's own demo
 // patient-message route establishes in this app. Like that route,
 // it is deliberately outside DemoRouteRules' table too: it is mounted by
-// hand on the protected mux (composeFace, routes.go) rather than through
-// the registry, so it never needs (and cannot silently skip) an entry
-// there.
+// hand on the protected mux (mountHostRoutes in component.go) rather than
+// through the registry, so it never needs (and cannot silently skip) an
+// entry there.
 
 package app
 

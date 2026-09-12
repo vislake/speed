@@ -10,17 +10,15 @@ package app
 import (
 	"context"
 	"embed"
-	"io"
-	"net/http"
 	"slices"
 	"strings"
 	"testing"
-	"time"
 
 	"gorm.io/gorm"
 
 	"github.com/vislake/speed/go/admin"
 	aigateway "github.com/vislake/speed/go/ai-gateway"
+	"github.com/vislake/speed/go/app/httpserve"
 	"github.com/vislake/speed/go/authn"
 	"github.com/vislake/speed/go/billing"
 	"github.com/vislake/speed/go/compliance"
@@ -46,8 +44,20 @@ import (
 )
 
 // hostComponentOrder is the order hostComponents must return, which is the
-// order the assembly plans the independent components in.
+// order the assembly plans the independent components in; the http
+// component plans between the link-policy provider (its required
+// dependency) and the pre-serve step (which requires its route face).
 var hostComponentOrder = []string{
+	"reference-app.post_bootstrap",
+	"reference-app.post_attach",
+	"reference-app.app",
+	"http",
+	"reference-app.pre_serve",
+	"reference-app.worker",
+}
+
+// hostStepOrder is the order the host's own step components plan in.
+var hostStepOrder = []string{
 	"reference-app.post_bootstrap",
 	"reference-app.post_attach",
 	"reference-app.app",
@@ -55,24 +65,31 @@ var hostComponentOrder = []string{
 	"reference-app.worker",
 }
 
-// registerHostComponents registers the host's step components into a fresh
-// component registry and puts the composition that selects exactly them
-// (strictly, so no globally registered component can be pulled in), which
-// is the fixture the plan-shape tests below drive. The wiring components
-// are deliberately left out: their requirements name module products this
-// fixture does not select, and their own contracts are pinned separately
-// (host_wiring_test.go).
+// registerHostComponents registers the host's step components -- plus the
+// http component the pre-serve step's route requirement names -- into a
+// fresh component registry and puts the composition that selects exactly
+// them (strictly, so no globally registered component can be pulled in),
+// which is the fixture the plan-shape tests below drive. The wiring
+// components are deliberately left out: their requirements name module
+// products this fixture does not select, and their own contracts are pinned
+// separately (host_wiring_test.go).
 func registerHostComponents(t *testing.T) *pkgcore.ComponentRegistry {
 	t.Helper()
 	b := newServerBuild(ServerConfig{Port: "8080"})
 	reg := pkgcore.NewComponentRegistry()
 	selection := pkgcore.ComponentConfig{}
-	for _, c := range b.hostStepComponents(context.Background(), false) {
+	for _, c := range b.hostStepComponents() {
 		if err := reg.Register(c); err != nil {
 			t.Fatalf("register %q: %v", c.Name, err)
 		}
 		selection = selection.With(c.Name, nil)
 	}
+	if _, ok := pkgcore.LookupComponent(reg, httpserve.ComponentName); !ok {
+		t.Fatal("the http component is not registered")
+	}
+	// The instance was seeded from the global registration, so the http
+	// component is already registered: the composition only selects it.
+	selection = selection.With(httpserve.ComponentName, nil)
 	reg.Put(pkgcore.ComponentConfig{}.With("strict", true).With("components", selection))
 	return reg
 }
@@ -106,26 +123,28 @@ func TestHostComponents_PlanInRegistrationOrder(t *testing.T) {
 	}
 }
 
-// TestHostComponents_RequiresTheComposedFace pins the pre-serve step's
-// requirement as a plan constraint: a composition without the application
-// component fails Prepare naming the missing product, and a composition that
-// declares the pre-serve step before it still plans the application
-// component first -- the edge, not the declaration order, decides.
-func TestHostComponents_RequiresTheComposedFace(t *testing.T) {
+// TestHostComponents_RequiresTheRouteFace pins the plan constraints the
+// host's declarations create: a composition without the http component
+// fails Prepare naming the pre-serve step's missing route face, a
+// composition without the link-policy provider fails naming the http
+// component's missing policy, and a composition that declares the steps
+// back to front still plans the dependency edges' order -- the edges, not
+// the declaration order, decide.
+func TestHostComponents_RequiresTheRouteFace(t *testing.T) {
 	b := newServerBuild(ServerConfig{Port: "8080"})
-	components := b.hostStepComponents(context.Background(), false)
+	components := b.hostStepComponents()
 	byName := make(map[string]pkgcore.Component, len(components))
 	for _, c := range components {
 		byName[c.Name] = c
 	}
+	if _, ok := pkgcore.LookupComponent(pkgcore.NewComponentRegistry(), httpserve.ComponentName); !ok {
+		t.Fatal("the http component is not registered")
+	}
 
-	t.Run("without the application component", func(t *testing.T) {
+	t.Run("without the http component", func(t *testing.T) {
 		reg := pkgcore.NewComponentRegistry()
 		selection := pkgcore.ComponentConfig{}
-		for _, name := range hostComponentOrder {
-			if name == "reference-app.app" {
-				continue
-			}
+		for _, name := range hostStepOrder {
 			if err := reg.Register(byName[name]); err != nil {
 				t.Fatalf("register %q: %v", name, err)
 			}
@@ -135,10 +154,34 @@ func TestHostComponents_RequiresTheComposedFace(t *testing.T) {
 
 		err := reg.Prepare(context.Background())
 		if err == nil {
-			t.Fatal("Prepare() without the application component succeeded, want the missing-product refusal")
+			t.Fatal("Prepare() without the http component succeeded, want the missing-route-face refusal")
 		}
-		if !strings.Contains(err.Error(), "reference-app.pre_serve") || !strings.Contains(err.Error(), "hostFace") {
-			t.Fatalf("Prepare() error = %v, want it to name the pre-serve step and the missing product", err)
+		if !strings.Contains(err.Error(), "reference-app.pre_serve") || !strings.Contains(err.Error(), "RouteRegistrar") {
+			t.Fatalf("Prepare() error = %v, want it to name the pre-serve step and the missing route face", err)
+		}
+	})
+
+	t.Run("without the link-policy provider", func(t *testing.T) {
+		reg := pkgcore.NewComponentRegistry()
+		selection := pkgcore.ComponentConfig{}
+		for _, name := range hostStepOrder {
+			if name == "reference-app.app" {
+				continue
+			}
+			if err := reg.Register(byName[name]); err != nil {
+				t.Fatalf("register %q: %v", name, err)
+			}
+			selection = selection.With(name, nil)
+		}
+		selection = selection.With(httpserve.ComponentName, nil)
+		reg.Put(pkgcore.ComponentConfig{}.With("strict", true).With("components", selection))
+
+		err := reg.Prepare(context.Background())
+		if err == nil {
+			t.Fatal("Prepare() without the link-policy provider succeeded, want the missing-policy refusal")
+		}
+		if !strings.Contains(err.Error(), "http") || !strings.Contains(err.Error(), "LinkPolicy") {
+			t.Fatalf("Prepare() error = %v, want it to name the http component and the missing policy", err)
 		}
 	})
 
@@ -147,6 +190,11 @@ func TestHostComponents_RequiresTheComposedFace(t *testing.T) {
 		selection := pkgcore.ComponentConfig{}
 		for i := len(hostComponentOrder) - 1; i >= 0; i-- {
 			name := hostComponentOrder[i]
+			if name == httpserve.ComponentName {
+				// Seeded from the global registration already.
+				selection = selection.With(name, nil)
+				continue
+			}
 			if err := reg.Register(byName[name]); err != nil {
 				t.Fatalf("register %q: %v", name, err)
 			}
@@ -158,23 +206,25 @@ func TestHostComponents_RequiresTheComposedFace(t *testing.T) {
 			t.Fatalf("Prepare() over the reverse-declared composition: %v", err)
 		}
 		planned := pkgcore.MemberNames(reg, "")
-		app, preServe := slices.Index(planned, "reference-app.app"), slices.Index(planned, "reference-app.pre_serve")
-		if app < 0 || preServe < 0 || app > preServe {
-			t.Fatalf("planned order = %v, want the application component before the pre-serve step", planned)
+		app := slices.Index(planned, "reference-app.app")
+		httpIdx := slices.Index(planned, "http")
+		preServe := slices.Index(planned, "reference-app.pre_serve")
+		if app < 0 || httpIdx < 0 || preServe < 0 || !(app < httpIdx && httpIdx < preServe) {
+			t.Fatalf("planned order = %v, want the link policy before the http component before the pre-serve step", planned)
 		}
 	})
 }
 
 // TestHostComponents_DeclareTheirContracts pins what each descriptor
 // declares: no host component implements a module, every one carries the New
-// callback the registry requires, the application component provides the
-// face the pre-serve step requires, and the lifecycle callbacks the faces'
-// serving and draining depend on are declared.
+// callback the registry requires, the link-policy component provides the
+// policy the http component requires, and the Init callbacks the steps'
+// bodies run in are declared.
 func TestHostComponents_DeclareTheirContracts(t *testing.T) {
 	b := newServerBuild(ServerConfig{Port: "8080"})
-	components := b.hostStepComponents(context.Background(), false)
-	if len(components) != len(hostComponentOrder) {
-		t.Fatalf("hostComponents() returned %d components, want %d", len(components), len(hostComponentOrder))
+	components := b.hostStepComponents()
+	if len(components) != len(hostStepOrder) {
+		t.Fatalf("hostStepComponents() returned %d components, want %d", len(components), len(hostStepOrder))
 	}
 	byName := make(map[string]pkgcore.Component, len(components))
 	for _, c := range components {
@@ -188,16 +238,21 @@ func TestHostComponents_DeclareTheirContracts(t *testing.T) {
 	}
 
 	app := byName["reference-app.app"]
-	if len(app.Provides) != 1 || app.Provides[0] != (*hostFace)(nil) {
-		t.Fatalf("the application component Provides = %v, want the single (*hostFace) product", app.Provides)
+	if len(app.Provides) != 1 || app.Provides[0] != (*httpserve.LinkPolicy)(nil) {
+		t.Fatalf("the link-policy component Provides = %v, want the single (*httpserve.LinkPolicy) product", app.Provides)
 	}
-	if app.Init == nil || app.Start == nil || app.Stop == nil || app.Close == nil {
-		t.Fatalf("the application component declares %v, want Init, Start, Stop and Close", app)
+	if app.Init != nil {
+		t.Fatalf("the link-policy component declares %v; the policy's content is filled by the pre-serve step, whose plan position is ordered after the runtime services exist", app)
+	}
+	if app.Start != nil || app.Stop != nil || app.Close != nil || app.Serve != nil {
+		t.Fatalf("the link-policy component declares %v; the listener's lifecycle belongs to the http component", app)
 	}
 
 	preServe := byName["reference-app.pre_serve"]
-	if len(preServe.Requires) != 1 || preServe.Requires[0].Token != (*hostFace)(nil) || preServe.Requires[0].Optional {
-		t.Fatalf("the pre-serve step Requires = %v, want one mandatory (*hostFace) requirement", preServe.Requires)
+	if len(preServe.Requires) != 2 ||
+		preServe.Requires[0].Token != (*runtimeServicesSeat)(nil) || preServe.Requires[0].Optional ||
+		preServe.Requires[1].Token != (*pkgcore.RouteRegistrar)(nil) || preServe.Requires[1].Optional {
+		t.Fatalf("the pre-serve step Requires = %v, want the mandatory runtime-services seat and route face", preServe.Requires)
 	}
 
 	for _, name := range []string{"reference-app.post_bootstrap", "reference-app.post_attach", "reference-app.pre_serve"} {
@@ -256,8 +311,9 @@ func assembledSeams(withBus, withKV bool) *pkgcore.ComponentRegistry {
 // TestStepInit_DerivesTheViewAndRunsTheBody pins the adapter the host's step
 // components share: it hands the step body the view derived from the
 // registry, refuses an assembly missing a seam the view needs before the
-// body runs, and the face flavor reads the composed face the pre-serve
-// step's own requirement provides -- refusing an assembly without one.
+// body runs, and the registrar flavor mounts the route face the pre-serve
+// step's own requirement provides onto the seed handler -- refusing an
+// assembly without a route face.
 func TestStepInit_DerivesTheViewAndRunsTheBody(t *testing.T) {
 	b := newServerBuild(ServerConfig{})
 	ctx := context.Background()
@@ -272,22 +328,6 @@ func TestStepInit_DerivesTheViewAndRunsTheBody(t *testing.T) {
 	}
 	if !ran {
 		t.Fatal("stepInit did not run its body")
-	}
-
-	face := &hostFace{handler: http.HandlerFunc(func(http.ResponseWriter, *http.Request) {})}
-	full.Put(face)
-	ran = false
-	if err := b.stepInitWithFace(func(_ context.Context, _ assemblyView, got *hostFace) error {
-		ran = true
-		if got != face {
-			t.Errorf("stepInitWithFace handed the body %p, want the composed face %p", got, face)
-		}
-		return nil
-	})(ctx, full, nil); err != nil {
-		t.Fatalf("stepInitWithFace over a complete assembly: %v", err)
-	}
-	if !ran {
-		t.Fatal("stepInitWithFace did not run its body")
 	}
 
 	t.Run("view seams", func(t *testing.T) {
@@ -305,42 +345,6 @@ func TestStepInit_DerivesTheViewAndRunsTheBody(t *testing.T) {
 		}
 	})
 
-	t.Run("the composed face", func(t *testing.T) {
-		if err := b.stepInitWithFace(func(context.Context, assemblyView, *hostFace) error {
-			t.Fatal("the body ran on an assembly with no composed face")
-			return nil
-		})(ctx, assembledSeams(true, true), nil); err == nil {
-			t.Fatal("stepInitWithFace without a composed face succeeded, want the face refusal")
-		}
-		if err := b.stepInitWithFace(func(context.Context, assemblyView, *hostFace) error {
-			t.Fatal("the body ran on an assembly missing a view seam")
-			return nil
-		})(ctx, func() *pkgcore.ComponentRegistry {
-			reg := assembledSeams(false, false)
-			reg.Put(&hostFace{})
-			return reg
-		}(), nil); err == nil {
-			t.Fatal("stepInitWithFace over a face without view seams succeeded, want the seam refusal")
-		}
-	})
-}
-
-// TestAppComponent_RefusesAForeignInstance pins the application component's
-// product check: every lifecycle callback reports an instance that is not
-// the component's own *hostFace by name instead of panicking on it.
-func TestAppComponent_RefusesAForeignInstance(t *testing.T) {
-	component := appComponent(newServerBuild(ServerConfig{}), context.Background(), true)
-	foreign := &hostStep{}
-	for name, callback := range map[string]func(context.Context, *pkgcore.ComponentRegistry, any) error{
-		"Init":  component.Init,
-		"Start": component.Start,
-		"Stop":  component.Stop,
-		"Close": component.Close,
-	} {
-		if err := callback(context.Background(), nil, foreign); err == nil {
-			t.Fatalf("the application component's %s callback accepted a %T instance, want the product refusal", name, foreign)
-		}
-	}
 }
 
 // TestWorkerComponent_ClosesAnUnstartedBuild pins the worker component's
@@ -453,77 +457,4 @@ func TestHostCatalog_Refusals(t *testing.T) {
 			t.Fatalf("lookup alpha.greeting: %v, want the renamed component's resources merged under the module name", err)
 		}
 	})
-}
-
-// TestHostFace_ServesThenDrains pins the application component's listener
-// lifecycle over a plain handler: Start serves the composed face on a real
-// listener and records its address, Stop stops accepting and the drain
-// completes, and Close reports the drained state. The server serves the
-// handler the face carries, with no layer added at serve time.
-func TestHostFace_ServesThenDrains(t *testing.T) {
-	face := &hostFace{
-		handler: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-			_, _ = io.WriteString(w, "served")
-		}),
-		addr:    "127.0.0.1:0",
-		baseCtx: context.Background(),
-	}
-	if err := face.start(context.Background()); err != nil {
-		t.Fatalf("start(): %v", err)
-	}
-	if face.addr == "127.0.0.1:0" {
-		t.Fatal("start() did not record the listener's own address")
-	}
-	if face.Handler() == nil {
-		t.Fatal("Handler() = nil after start, want the composed handler")
-	}
-
-	resp, err := http.Get("http://" + face.addr + "/")
-	if err != nil {
-		t.Fatalf("request to the started face: %v", err)
-	}
-	body, readErr := io.ReadAll(resp.Body)
-	_ = resp.Body.Close()
-	if readErr != nil {
-		t.Fatalf("read the response body: %v", readErr)
-	}
-	if resp.StatusCode != http.StatusOK || string(body) != "served" {
-		t.Fatalf("response = %d %q, want the composed handler's 200 \"served\"", resp.StatusCode, body)
-	}
-
-	face.stop(context.Background())
-	select {
-	case <-face.drained:
-	case <-time.After(5 * time.Second):
-		t.Fatal("the drain Stop began did not finish within the shutdown timeout")
-	}
-	if _, err := http.Get("http://" + face.addr + "/"); err == nil {
-		t.Fatal("the listener still accepts requests after Stop, want the drain to have stopped it")
-	}
-	if err := face.close(context.Background()); err != nil {
-		t.Fatalf("close() after the drain: %v", err)
-	}
-}
-
-// TestHostFace_ClosesWithoutStop pins the other shutdown order: a face that
-// is closed before it ever stopped accepting drains synchronously, and a
-// face that never started releases nothing.
-func TestHostFace_ClosesWithoutStop(t *testing.T) {
-	face := &hostFace{
-		handler: http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}),
-		addr:    "127.0.0.1:0",
-		baseCtx: context.Background(),
-	}
-	if err := face.start(context.Background()); err != nil {
-		t.Fatalf("start(): %v", err)
-	}
-	if err := face.close(context.Background()); err != nil {
-		t.Fatalf("close() without a preceding Stop: %v", err)
-	}
-
-	unstarted := &hostFace{}
-	if err := unstarted.close(context.Background()); err != nil {
-		t.Fatalf("close() on a face that never started: %v", err)
-	}
-	unstarted.stop(context.Background())
 }

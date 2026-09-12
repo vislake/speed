@@ -1,143 +1,40 @@
 package app
 
-// This file carries the reference app's own components: the application
-// component, which composes and serves the host's HTTP face, and the step
-// components wrapping the assembly steps attach.go and serve.go implement.
-// A step component's callback binds the assembled values its body reads and
-// then runs that body, so a step has one implementation.
+// This file carries the reference app's own components: the link-policy
+// component (the host's half of the HTTP face, consumed by the http
+// component go/app/httpserve) plus the host's route and subscription
+// wiring, and the step components wrapping the assembly steps attach.go and
+// serve.go implement. A step component's callback binds the assembled
+// values its body reads and then runs that body, so a step has one
+// implementation.
 
 import (
 	"context"
-	"errors"
 	"fmt"
-	"net"
 	"net/http"
-	"sync"
 
-	speedapp "github.com/vislake/speed/go/app"
-	obs "github.com/vislake/speed/go/observability"
+	"github.com/vislake/speed/go/admin"
+	"github.com/vislake/speed/go/app/httpserve"
 	"github.com/vislake/speed/go/pkgcore"
 	"github.com/vislake/speed/go/pkgcore/spa"
+	"github.com/vislake/speed/go/sharing"
+	"github.com/vislake/speed/go/tenancy"
+
+	"github.com/vislake/speed/examples/reference-app/internal/app/demo"
+	"github.com/vislake/speed/examples/reference-app/internal/cases"
+	"github.com/vislake/speed/examples/reference-app/internal/consult"
+	"github.com/vislake/speed/examples/reference-app/internal/notes"
 )
 
-// hostFace is the application component's product: the composed HTTP handler
-// and the listener's drain state. Its reads and lifecycle methods are what a
-// host-side serve loop drives; the fields stay unexported because only this
-// component's callbacks write them.
-type hostFace struct {
-	// handler is the composed face: the protected-face composition
-	// (composeFace), wrapped in the shared SPA file server when this boot
-	// serves a frontend directory.
-	handler http.Handler
-	// server is the http.Server Start builds and serves. Its handler is the
-	// composed face (which already carries the observability middleware the
-	// chain's Middleware seat applies), plus the serve timeouts and the
-	// request base context.
-	server *http.Server
-	// listener is the bound listener Start serves on; an error Serve
-	// reports other than the shutdown's own ErrServerClosed is logged at
-	// Error level.
-	listener net.Listener
-	// addr is the listen address: the resolved port before Start, the
-	// listener's own address (the real port a :0 bind picked) after it.
-	addr string
-	// baseCtx is the context every served request inherits. It is
-	// deliberately the host's own assembly context, never the
-	// signal-derived context a serve loop waits on, so a shutdown signal
-	// never cancels in-flight requests ahead of the drain (net/http's
-	// Server.BaseContext contract).
-	baseCtx context.Context
-	// drained closes when the asynchronous drain Stop began has finished;
-	// drainErr carries its result. Both are written before the close, so a
-	// reader that sees the closed channel sees the error.
-	drained  chan struct{}
-	drainErr error
-
-	stopOnce sync.Once
-}
-
-// Handler returns the composed handler. It is nil until the component's Init
-// has run.
-func (f *hostFace) Handler() http.Handler { return f.handler }
-
-// start builds the http.Server over the composed handler and serves it on
-// the face's listen address, in a goroutine: the server's handler is the
-// composed face itself, because the observability middleware already rides
-// inside it -- declared on the chain's Middleware seat by the observability
-// component and applied by chain.Standard around the fixed chain, so the
-// face's outer layer needs no serve-time wrapping. The server's request
-// base context is the face's own, and Start records the listener's real
-// address so a caller can reach a port the operating system picked.
-func (f *hostFace) start(ctx context.Context) error {
-	server := &http.Server{
-		Addr:              f.addr,
-		Handler:           f.handler,
-		ReadHeaderTimeout: speedapp.ReadHeaderTimeout,
-		BaseContext:       func(net.Listener) context.Context { return f.baseCtx },
-	}
-	listener, err := net.Listen("tcp", f.addr)
-	if err != nil {
-		return fmt.Errorf("reference-app: serve: listen on %s: %w", f.addr, err)
-	}
-	f.server = server
-	f.listener = listener
-	f.addr = listener.Addr().String()
-	f.drained = make(chan struct{})
-	obs.FromContext(ctx).Info("server listening", "addr", f.addr)
-	go func() {
-		if err := server.Serve(f.listener); err != nil && !errors.Is(err, http.ErrServerClosed) {
-			obs.FromContext(ctx).Error("the server stopped serving", "error", err)
-		}
-	}()
-	return nil
-}
-
-// stop is the non-blocking half of shutdown: it detaches a goroutine that
-// stops the listener from accepting and waits out the in-flight requests,
-// bounded by the shutdown timeout, and returns immediately. A face that
-// never started is a no-op, so Stop is safe before Start.
-func (f *hostFace) stop(ctx context.Context) {
-	if f.server == nil || f.drained == nil {
-		return
-	}
-	f.stopOnce.Do(func() {
-		go func() {
-			drainCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), speedapp.ShutdownTimeout)
-			defer cancel()
-			f.drainErr = f.server.Shutdown(drainCtx)
-			close(f.drained)
-		}()
-	})
-}
-
-// close is the blocking half: it reports the drain stop began, waiting it
-// out bounded by the shutdown timeout on top of the caller's context. A
-// face whose drain has not finished -- Close before Stop, or a drain still
-// in flight -- stops accepting and waits out the in-flight requests here,
-// synchronously and bounded the same way; a face that never started
-// releases nothing.
-func (f *hostFace) close(ctx context.Context) error {
-	if f.server == nil {
-		return nil
-	}
-	if f.drained != nil {
-		select {
-		case <-f.drained:
-			if f.drainErr != nil {
-				return fmt.Errorf("reference-app: shut the HTTP server down: %w", f.drainErr)
-			}
-			return nil
-		default:
-		}
-	}
-
-	drainCtx, cancel := context.WithTimeout(ctx, speedapp.ShutdownTimeout)
-	defer cancel()
-	if err := f.server.Shutdown(drainCtx); err != nil {
-		return fmt.Errorf("reference-app: shut the HTTP server down: %w", err)
-	}
-	return nil
-}
+// runtimeServicesSeat is the post-bootstrap step's product token. It carries
+// no data -- the step publishes the runtime services (config's schema-bearing
+// service, rbac's catalog-bearing service) through the by-type context -- and
+// exists so the plan orders every consumer of those services after the step:
+// the link-policy component's Init fill and the pre-serve step's seed drive
+// both read what the step published, and a requirement edge is what makes
+// that order structural instead of a function of the composition's seed
+// order (which other edges can move).
+type runtimeServicesSeat struct{}
 
 // hostStep is a step component's product: New must return one non-nil value
 // and a step owns no resource of its own -- what it works on is the
@@ -149,118 +46,189 @@ func newHostStep(context.Context, *pkgcore.ComponentRegistry, pkgcore.ComponentC
 	return &hostStep{}, nil
 }
 
-// hostFaceOf returns the application component's own product from the
-// instance a callback was handed. The registry passes back the very value
-// New returned, so a mismatch means the descriptor and its callbacks
-// disagree about the product -- a wiring error reported by name rather than
-// a panic inside a lifecycle callback.
-func hostFaceOf(instance any) (*hostFace, error) {
-	face, ok := instance.(*hostFace)
-	if !ok {
-		return nil, fmt.Errorf("reference-app: the application component was handed a %T, want its own *hostFace product", instance)
-	}
-	return face, nil
-}
-
-// appComponent returns the host's application component: the one component
-// that owns the HTTP face and the listener.
+// linkPolicyComponent returns the host's link-policy component: the one
+// component that delivers the host's half of the HTTP face -- the verifier,
+// the authorization table, the admin prefix, the impersonation decorator,
+// the tenant-status gate, the extra pre-auth entries, the host's own
+// hand-written routes and the SPA outer wrapper -- which the http component
+// (go/app/httpserve) consumes as its required dependency and applies when
+// it assembles the handler in the Serve stage.
 //
-// Its product is the *hostFace the pre-serve step requires, which turns
-// "the face exists" into plan order. Init composes the face -- the phase
-// that must compose it: composing installs the two event subscriptions (the
-// demo notification glue and the smilesim terminal signal), no subscription
-// may land after a Start, and the seat gate admits those writes only while
-// Init runs. Start only listens; Stop begins the non-blocking drain and
-// Close waits it out.
-//
-// baseCtx is the context every served request inherits: the host's own
-// assembly context, never a signal-derived one, so a shutdown signal never
-// cancels in-flight requests ahead of the drain.
-//
-// live tells the component whether this assembly owns the listener: Start
-// binds and serves it only then. A drive that hands the composed handler to
-// its caller (BuildServer, whose handler an httptest.Server or the caller's
-// own server fronts) composes the very same face with no listener of its
-// own, which is the difference between the two drives and nothing else.
-func appComponent(b *serverBuild, baseCtx context.Context, live bool) pkgcore.Component {
+// Its product is a *httpserve.LinkPolicy, delivered empty at construction:
+// that delivery is what resolves the http component's required token and
+// orders the two components structurally. The CONTENT is filled by the
+// pre-serve step's Init turn (composeLinkPolicy), not here, because the fill
+// reads runtime services the post-bootstrap step publishes and must
+// therefore run after every module's Init callback -- a position the
+// post-bootstrap step's own dependency is the one that owns, and which this
+// component's earlier, module-pulled plan position cannot provide. One
+// *LinkPolicy value travels the whole way: constructed here, filled there,
+// read by the http component in its Serve stage.
+func linkPolicyComponent(b *serverBuild) pkgcore.Component {
 	return pkgcore.Component{
 		Name:         "reference-app.app",
 		Capabilities: pkgcore.MultiReplicaSafe,
-		Provides:     []any{(*hostFace)(nil)},
+		Provides:     []any{(*httpserve.LinkPolicy)(nil)},
 		New: func(context.Context, *pkgcore.ComponentRegistry, pkgcore.ComponentConfig) (any, error) {
-			return &hostFace{baseCtx: baseCtx}, nil
-		},
-		Init: func(_ context.Context, reg *pkgcore.ComponentRegistry, instance any) error {
-			face, err := hostFaceOf(instance)
-			if err != nil {
-				return err
-			}
-			view, err := b.viewFromComponents(reg)
-			if err != nil {
-				return err
-			}
-			if err := b.bindRegistry(reg); err != nil {
-				return err
-			}
-			if err := b.bindRuntimeServices(reg); err != nil {
-				return err
-			}
-			return b.composeHostFace(view, face)
-		},
-		Start: func(ctx context.Context, _ *pkgcore.ComponentRegistry, instance any) error {
-			if !live {
-				return nil
-			}
-			face, err := hostFaceOf(instance)
-			if err != nil {
-				return err
-			}
-			return face.start(ctx)
-		},
-		Stop: func(ctx context.Context, _ *pkgcore.ComponentRegistry, instance any) error {
-			face, err := hostFaceOf(instance)
-			if err != nil {
-				return err
-			}
-			face.stop(ctx)
-			return nil
-		},
-		Close: func(ctx context.Context, _ *pkgcore.ComponentRegistry, instance any) error {
-			face, err := hostFaceOf(instance)
-			if err != nil {
-				return err
-			}
-			return face.close(ctx)
+			return &httpserve.LinkPolicy{}, nil
 		},
 	}
 }
 
-// composeHostFace composes the face the application component serves, in the
-// one order the pieces require: a mux carrying the platform liveness routes,
-// the mounted-route seed for the observability middleware's route-label
-// budget (healthz and metrics, which no module registers, plus every route
-// the view's registry mounted -- the last write before that middleware is
-// constructed, which composeFace's Standard call does, the very next step),
-// then the protected face composeFace builds over it, then the shared SPA
-// file server when this boot serves a frontend directory.
-func (b *serverBuild) composeHostFace(view assemblyView, face *hostFace) error {
-	mux := http.NewServeMux()
-	obs.MountLiveness(mux)
-	obs.RegisterMountedRoutes(append([]pkgcore.MountedRoute{
-		{Path: obs.HealthzPath},
-		{Path: obs.MetricsPath},
-	}, view.routes.MountedRoutes()...))
+// composeLinkPolicy fills the host's link policy and installs the host's
+// Init-stage subscriptions, in the order the pieces require: the
+// subscriptions first (they read the assembled runtime services), then the
+// policy's chain half and the host's own routes.
+func (b *serverBuild) composeLinkPolicy(ctx context.Context, view assemblyView, policy *httpserve.LinkPolicy) error {
+	// The two subscriptions the host installs during Init, exactly where the
+	// old face composition installed them: the demo notification glue's
+	// note-created subscriber (on the bus itself) and the smilesim terminal
+	// signal (on the events seat). No subscription may land after a Start.
+	demo.SubscribeDemoNotifications(view.bus, b.notificationModule, b.authnUserLocales)
+	wireSmilesimTerminalSignal(view.events, b.smileSimService)
 
-	handler, err := b.composeFace(view, mux)
-	if err != nil {
-		return err
+	orgGuardDeps := demo.OrgRouteGuardDeps{Scope: b.orgModule.Scope(), Members: b.orgModule.Members()}
+	*policy = httpserve.LinkPolicy{
+		Verifier:      b.authnModule.Service().Verifier(),
+		Authorizer:    b.rbacService,
+		RouteRules:    demo.DemoRouteRules(b.rbacService, orgGuardDeps, b.cfg.DisableDemoUserHeader),
+		AdminPrefix:   admin.APIPath,
+		Impersonation: admin.ImpersonationMiddleware(b.adminModule.Impersonation()),
+		// tenancy.WithTenantStatusResolver is the suspension enforcement
+		// seam (go/tenancy/tenant_status.go): admin's own tenant ledger
+		// (*admin.TenantService) implements tenancy.TenantStatusResolver
+		// structurally -- admin is its one real implementer, but the
+		// interface itself does not know admin exists. This is what turns
+		// "an operator marked a tenant suspended in admin's console" into
+		// every OTHER route (notes, storage, org, ...) actually refusing
+		// that tenant's requests on the very next one, rather than being a
+		// ledger fact nothing downstream ever consults.
+		TenantStatusResolver: b.adminModule.Tenants(),
+		ExtraAllowlist: []tenancy.MiddlewareOption{
+			// sharing.PathAccess is the one genuinely public,
+			// unauthenticated route this app mounts: an anonymous visitor
+			// holding a bearer share token carries no Principal and
+			// therefore no tenant claim at all, by design -- sharing's own
+			// handler resolves the tenant itself, from the token alone,
+			// once this allowlist entry lets the request reach it at all.
+			// GET only: the fragment defines no other method on this path.
+			tenancy.WithAllowlist(http.MethodGet, sharing.PathAccess),
+			// IntegrationWhoamiPath is the identical shape, one layer
+			// removed: its caller carries an API key, not a share token,
+			// and like sharing.PathAccess it resolves ITS OWN tenant --
+			// integration.AuthMiddleware, mounted ahead of the tenancy
+			// chain reaching this route, via Service.Authenticate.
+			tenancy.WithAllowlist(http.MethodGet, IntegrationWhoamiPath),
+			// OrgAcceptPath (org_acceptInvitation) is the one org route
+			// this app lets through tenant resolution: the caller an
+			// invitation exists for holds no membership in, and typically
+			// no bearer token for, the inviting tenant, so their request
+			// carries no tenant claim for tenancy.Middleware to resolve.
+			// org's accept handler resolves the tenant itself, server-side,
+			// from the invitation token, once this allowlist entry lets the
+			// request reach it at all. POST only: the fragment defines no
+			// other method on this path. Unlike sharing.PathAccess this is
+			// NOT an anonymous surface: org's own per-operation
+			// SubjectResolver check still refuses an unidentifiable
+			// acceptor, and authn.Middleware still 401s a genuinely invalid
+			// bearer.
+			tenancy.WithAllowlist(http.MethodPost, demo.OrgAcceptPath),
+		},
+		MountHostRoutes: func(mux *http.ServeMux) { b.mountHostRoutes(mux, view) },
 	}
 	if b.cfg.WebDistDir != "" {
-		handler = spa.New(b.cfg.WebDistDir, handler, hostSPAOptions()...)
+		// The SPA file server is the host's outer wrapper: it stands
+		// outside everything the component assembled -- the platform
+		// middleware, the fixed chain and the host's own routes -- so a
+		// path the frontend serves itself (a built asset, the client-route
+		// index fallback) never traverses the chain's layers. The boundary
+		// is pinned by TestWebDistForm_SeatLayerStaysInsideTheSPA.
+		policy.OuterWrapper = func(next http.Handler) http.Handler {
+			return spa.New(b.cfg.WebDistDir, next, hostSPAOptions()...)
+		}
 	}
-	face.handler = handler
-	face.addr = ":" + b.cfg.Port
 	return nil
+}
+
+// mountHostRoutes mounts the host's own hand-written routes on the mux the
+// http component prepared (which already carries the platform liveness
+// routes): every one of them sits behind the tenancy chain exactly like a
+// module route, and each carries its own gate -- the route-authorization
+// table covers the registry's mounted routes only, so a hand-written route
+// that needs a permission check applies it itself (team_members.go is the
+// standing example), while the demo notification and integration surfaces
+// resolve identity per operation. kv is the assembled key-value store the
+// integration whoami route's guard limiter is built over.
+func (b *serverBuild) mountHostRoutes(mux *http.ServeMux, view assemblyView) {
+	// The demo notification glue's route half: the demo patient-message
+	// route, which dispatches the demo module's patient-reminder type to a
+	// verified external contact of the caller's tenant. (Its subscription
+	// half landed during Init; see composeLinkPolicy.)
+	demo.MountDemoNotificationRoutes(mux, b.notificationModule, view.catalog)
+
+	// wireConsult mounts go/ai-gateway's mandatory-first-consumer route
+	// (consult.go): consultService shares notesModule's own database
+	// connection through a fresh notes.Repository -- no new infrastructure
+	// dependency is needed for this app to have a real consult surface --
+	// and asks aiGatewayModule's own Gateway, the same instance
+	// aiGatewayModule.Register validated.
+	consultService := consult.NewService(notes.NewRepository(b.db), b.aiGatewayModule.Gateway())
+	wireConsult(mux, consultService)
+
+	// wireSmileSim mounts the image-generation half of go/ai-gateway's
+	// mandatory-first-consumer routes (smilesim.go): smileSimService asks
+	// aiGatewayModule's own Gateway to run an async smile simulation over a
+	// patient photo already uploaded through storageModule's own HTTP
+	// surface, and the job-status route polls the same standaloneQueue every
+	// other async task in this app shares. billingModule.Credits() is the
+	// same *billing.CreditService instance SeedDemoCredits granted the demo
+	// tenants' starting balance against: smilesim.Service reserves
+	// smilesim.CreditsPerSimulation credits from it before ever calling
+	// Gateway.GenerateImage, and settles that reservation (Confirm/Refund)
+	// once the async job reaches a terminal status. memberships rides along
+	// as the recipient gate's membership answer -- the SAME store authn's
+	// MembershipReader reads, attached to org in the post-bootstrap step.
+	// storageModule.ObjectService() is the simulation-content route's read
+	// path for a generated image's stored bytes, the same instance the
+	// cases photo routes drive.
+	wireSmileSim(mux, b.smileSimService, b.standaloneQueue, b.memberships, b.storageModule.ObjectService(), b.attestationService)
+
+	// WireClinicName mounts this host's own tenant-identity answer
+	// (clinic_name.go): the org root name of the tenant the caller's token
+	// is scoped to, the name the web renders for a clinic that did not
+	// exist at boot where the demo roster's static copy has no entry.
+	WireClinicName(mux, b.orgModule.Tree())
+
+	// wireTeamMembers mounts this host's own roster-with-identity answer
+	// (team_members.go): the tenant's org membership roster, each row
+	// enriched with the member's display identity from authn's users table
+	// -- org's member rows carry opaque user ids only by its own
+	// module-boundary rule. Gated on the org read permission through the
+	// same rbac gate the org module route uses.
+	wireTeamMembers(mux, teamMembersDeps{
+		az:             b.rbacService,
+		members:        b.orgModule.Members(),
+		tree:           b.orgModule.Tree(),
+		users:          b.authnModule.Service().Users(),
+		headerDisabled: b.cfg.DisableDemoUserHeader,
+	})
+
+	// wireCasesRoutes mounts the case domain (internal/cases, mounted in
+	// cases.go): the tenant-scoped Case records a web UI renders from. The
+	// photo-upload and photo-content routes drive storageModule's own
+	// ObjectService -- the same instance the storage module's HTTP surface
+	// serves -- so the app's case surface and the module agree on what an
+	// object is and which tenant's rows each read.
+	wireCasesRoutes(mux, cases.NewService(b.caseRepository), demo.DemoNotesSubjectResolver{HeaderDisabled: b.cfg.DisableDemoUserHeader}, b.storageModule.ObjectService())
+
+	// wireIntegrationAuthenticated mounts go/integration's
+	// mandatory-first-consumer route (integration_authenticate.go): a
+	// minimal "whoami" demo endpoint gated by the module's own
+	// AuthMiddleware, with the guard wired ahead of it through
+	// integration.WithAuthenticationGuard, applied inside
+	// wireIntegrationAuthenticated once the kv store exists, since the
+	// guard's limiter is built over this same resolved KVStore seam.
+	wireIntegrationAuthenticated(mux, b.integrationModule, view.kv)
 }
 
 // stepInit returns the Init callback the host's step components share: bind
@@ -284,21 +252,17 @@ func (b *serverBuild) stepInit(run func(ctx context.Context, view assemblyView) 
 	}
 }
 
-// stepInitWithFace returns the pre-serve step's Init callback: the same
-// adapter, plus the composed face the step's own requirement has ordered
-// the application component to provide.
-func (b *serverBuild) stepInitWithFace(run func(ctx context.Context, view assemblyView, face *hostFace) error) func(context.Context, *pkgcore.ComponentRegistry, any) error {
-	return func(ctx context.Context, reg *pkgcore.ComponentRegistry, _ any) error {
-		face, err := pkgcore.Get[*hostFace](reg)
-		if err != nil {
-			return fmt.Errorf("reference-app: read the composed HTTP face: %w", err)
-		}
-		view, err := b.viewFromComponents(reg)
-		if err != nil {
-			return err
-		}
-		return run(ctx, view, face)
-	}
+// seedHandler mounts the route face's accumulated routes on a mux of its
+// own: the handler the demo seeds drive, chosen deliberately over the
+// composed face -- which does not exist yet in this Init turn -- because
+// the seeds' substantive requirements all live inside the modules' own
+// handlers (the real register route, its password policy and its rate
+// limiter), while the chain layers the composed face adds are pass-through
+// for an unauthenticated pre-auth register POST.
+func seedHandler(registrar pkgcore.RouteRegistrar) http.Handler {
+	mux := http.NewServeMux()
+	pkgcore.MountRoutes(mux, registrar.Routes()...)
+	return mux
 }
 
 // postBootstrapComponent returns the post-bootstrap step as a component: its
@@ -309,7 +273,10 @@ func (b *serverBuild) postBootstrapComponent() pkgcore.Component {
 	return pkgcore.Component{
 		Name:         "reference-app.post_bootstrap",
 		Capabilities: pkgcore.MultiReplicaSafe,
-		New:          newHostStep,
+		Provides:     []any{(*runtimeServicesSeat)(nil)},
+		New: func(context.Context, *pkgcore.ComponentRegistry, pkgcore.ComponentConfig) (any, error) {
+			return &runtimeServicesSeat{}, nil
+		},
 		Init: func(ctx context.Context, reg *pkgcore.ComponentRegistry, _ any) error {
 			if err := b.bindRegistry(reg); err != nil {
 				return err
@@ -340,53 +307,85 @@ func (b *serverBuild) postAttachComponent() pkgcore.Component {
 	}
 }
 
-// preServeComponent returns the pre-serve step as a component: its Init
-// runs the runPreServe body over the composed face. The (*hostFace) requirement is what places it after the
-// application component in the plan, so the demo seeds it registers run
-// through the composed handler and its subscription lands after them.
+// preServeComponent returns the pre-serve step as a component: the last
+// host step whose Init turn runs before the listener opens. It fills the
+// host's link policy, installs the host's Init-stage subscriptions (no
+// subscription may land after a Start), and then runs the runPreServe body
+// (the demo seeds over the seed handler, then the self-service chain). Its
+// two requirements are what make the turn's position structural: the
+// runtime-services edge orders it after the post-bootstrap step, and the
+// route-face edge orders it after the http component -- so the route table
+// the seeds drive is complete and the self-service subscription lands after
+// the seeds' registrations, the discriminator that keeps the demo path
+// byte-identical.
 func (b *serverBuild) preServeComponent() pkgcore.Component {
 	return pkgcore.Component{
 		Name:         "reference-app.pre_serve",
 		Capabilities: pkgcore.MultiReplicaSafe,
-		Requires:     []pkgcore.Requirement{{Token: (*hostFace)(nil)}},
-		New:          newHostStep,
-		Init: b.stepInitWithFace(func(ctx context.Context, view assemblyView, face *hostFace) error {
-			return b.runPreServe(ctx, view, face.Handler())
-		}),
+		Requires: []pkgcore.Requirement{
+			{Token: (*runtimeServicesSeat)(nil)},
+			{Token: (*pkgcore.RouteRegistrar)(nil)},
+		},
+		New:  newHostStep,
+		Init: b.preServeStep,
 	}
+}
+
+// preServeStep is the pre-serve step's Init callback, in the one order the
+// pieces require: bind the assembled values, fill the policy and install
+// the subscriptions (composeLinkPolicy), then run the seeds.
+func (b *serverBuild) preServeStep(ctx context.Context, reg *pkgcore.ComponentRegistry, _ any) error {
+	registrar, err := pkgcore.Get[pkgcore.RouteRegistrar](reg)
+	if err != nil {
+		return fmt.Errorf("reference-app: read the route face: %w", err)
+	}
+	policy, err := pkgcore.Get[*httpserve.LinkPolicy](reg)
+	if err != nil {
+		return fmt.Errorf("reference-app: read the host link policy: %w", err)
+	}
+	if err := b.bindRegistry(reg); err != nil {
+		return err
+	}
+	if err := b.bindRuntimeServices(reg); err != nil {
+		return err
+	}
+	view, err := b.viewFromComponents(reg)
+	if err != nil {
+		return err
+	}
+	if err := b.composeLinkPolicy(ctx, view, policy); err != nil {
+		return err
+	}
+	return b.runPreServe(ctx, view, seedHandler(registrar))
 }
 
 // hostComponents returns the host's own components in the registration order
 // the assembly plans by: the override and provider components first (their
 // seams are what the modules' descriptors read while constructing), then the
 // post-bootstrap step (it runs after every module's Init turn has published
-// what it reads), the post-attach step, the application component, the
-// pre-serve step -- ordered after the application component by its
-// (*hostFace) requirement, not by registration alone -- and the worker last.
+// what it reads), the post-attach step, the link-policy component, the
+// pre-serve step -- ordered after the http component by its route-face
+// requirement, not by registration alone -- and the worker last.
 // Independent components take their plan order from the registration order
 // (the assembly's own tie rule), so this order is the plan order; the module
 // components' own descriptors are the composition's business, not this
 // list's.
-//
-// baseCtx is the context the application component's served requests inherit
-// (see appComponent's own doc comment), and live tells it whether this
-// assembly owns the listener.
-func (b *serverBuild) hostComponents(ctx context.Context, reg *pkgcore.ComponentRegistry, live bool) ([]pkgcore.Component, error) {
+func (b *serverBuild) hostComponents(reg *pkgcore.ComponentRegistry) ([]pkgcore.Component, error) {
 	wiring, err := b.hostWiringComponents(reg)
 	if err != nil {
 		return nil, err
 	}
-	return append(wiring, b.hostStepComponents(ctx, live)...), nil
+	return append(wiring, b.hostStepComponents()...), nil
 }
 
 // hostStepComponents returns the host's assembly-step components alone, in
 // the registration order the assembly plans by (see hostComponents for the
 // ordering rationale).
-func (b *serverBuild) hostStepComponents(baseCtx context.Context, live bool) []pkgcore.Component {
+func (b *serverBuild) hostStepComponents() []pkgcore.Component {
 	components := []pkgcore.Component{
 		b.postBootstrapComponent(),
 		b.postAttachComponent(),
-		appComponent(b, baseCtx, live),
+		linkPolicyComponent(b),
 		b.preServeComponent(),
 		b.workerComponent(),
 	}

@@ -147,9 +147,11 @@ func main() {
 // app package's Run, which assembles the server, serves it until the
 // process is signalled and drains it in the engine's fixed order. Signals,
 // observability init and the graceful shutdown are all the engine's now;
-// baseCtx -- carrying the logger main attached -- travels as the request
-// base context, so an in-flight request's own context observes the signal
-// only through the drain the engine performs, never ahead of it.
+// baseCtx -- carrying the logger main attached -- is the lifecycle context
+// the engine overlays the signals on, and the http component hands its
+// listener a request base context decoupled from that cancellation
+// (context.WithoutCancel), so an in-flight request's own context observes
+// the signal only through the drain the engine performs, never ahead of it.
 func run(baseCtx context.Context) error {
 	cfg, err := app.ConfigFromEnv()
 	if err != nil {

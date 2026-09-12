@@ -262,19 +262,23 @@ func SimulationCompletedFieldsFromPayload(payload any) (recipientUserID, imageJo
 	return recipientUserID, imageJobID, succeeded, true
 }
 
-// WireDemoNotification mounts the reference app's demo glue for the
-// notification module on mux: the subscription that turns notes'
-// note-created event into a notification dispatch for the note's creator,
-// and the demo patient-message route. bus is the assembled bus -- the same
-// bus the module set publishes on, so the subscription hears exactly what
-// notes' handler publishes -- catalog is the assembly's merged message
-// catalog the patient-message route negotiates its Accept-Language against,
-// and module is the app's notification module, whose Deliveries() accessor
-// the two glue pieces drive.
+// SubscribeDemoNotifications installs the reference app's demo
+// note-created subscriber on bus: notes publishes notes.note.created as a
+// fact (see internal/notes/handler.go's publishNoteCreated) whenever a note
+// is created, and this subscription dispatches the type of the same name to
+// the note's creator. bus is the assembled bus -- the same bus the module
+// set publishes on, so the subscription hears exactly what notes' handler
+// publishes -- module is the app's notification module, whose Deliveries()
+// accessor the handler drives, and userLocales is the creator-locale
+// resolver the handler renders the copy under. The call cannot fail:
+// subscribing to a bus returns no error.
 //
-// The call cannot fail: subscribing to a bus returns no error, and mounting
-// a route on a *http.ServeMux cannot fail for a well-formed pattern.
-func WireDemoNotification(mux *http.ServeMux, bus pkgcore.EventBus, module *notification.Module, catalog *i18n.Catalog, userLocales AuthnUserLocales) {
+// It is the subscription half of the demo glue; the route half is
+// MountDemoNotificationRoutes, split out because the two land in different
+// places now that the http component owns the face: the subscription is an
+// Init-stage declaration, the route is mounted when the component assembles
+// the handler.
+func SubscribeDemoNotifications(bus pkgcore.EventBus, module *notification.Module, userLocales AuthnUserLocales) {
 	// The note-created subscription: notes publishes notes.note.created as
 	// a fact (see internal/notes/handler.go's publishNoteCreated) whenever
 	// a note is created; this subscription dispatches the type of the same
@@ -360,69 +364,6 @@ func WireDemoNotification(mux *http.ServeMux, bus pkgcore.EventBus, module *noti
 		}
 		return nil
 	})
-
-	// The demo patient-message route: dispatch the demo module's
-	// patient-reminder type to a verified external contact of the
-	// caller's tenant. The caller's tenant context is the middleware
-	// chain's doing (the same tenancy.Middleware that gates every other
-	// mounted route), and the dispatch context below carries it into the
-	// enqueued job untouched.
-	//
-	// The route takes no subject and checks no permission of its own: in
-	// this app every authenticated member of a tenant may trigger a demo
-	// reminder, and the module's own send-time gates -- re-checked by the
-	// delivery job after enqueue -- are what actually protect the
-	// recipient: the named contact is resolved inside the caller's tenant
-	// and must be verified (an unknown or still-pending contact is refused,
-	// and one that has since unsubscribed or bounced is settled as a
-	// skipped send before any transport is touched), and the send travels
-	// only on the contact's own verified channel. The platform blacklist
-	// is not among those gates: nothing in the delivery
-	// pipeline consults it, and no writer or bounce-remediation path
-	// exists to populate it. A real deployment would gate its
-	// own trigger route however its staff model requires; the dispatch
-	// call itself is all the notification module asks of it.
-	mux.HandleFunc(http.MethodPost+" "+demoPatientMessagePath, func(w http.ResponseWriter, r *http.Request) {
-		var body struct {
-			ContactID string `json:"contact_id"`
-		}
-		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-			http.Error(w, "demo patient-message: malformed JSON body", http.StatusBadRequest)
-			return
-		}
-		if body.ContactID == "" {
-			http.Error(w, "demo patient-message: contact_id is required", http.StatusBadRequest)
-			return
-		}
-		// The requester's own language, captured from this request and
-		// dispatched as the copy's language: an external contact carries no
-		// locale of its own, and the requesting staff member's language is
-		// the contact's first available signal (the producer-captured
-		// requester tier of the dispatch chain). A request naming no
-		// language this deployment's catalog ships dispatches an empty
-		// Locale, and the module renders the platform default.
-		locale := ""
-		if catalog != nil {
-			locale, _ = i18n.Negotiate(r.Header.Get("Accept-Language"), catalog.Locales())
-		}
-		if _, err := module.Deliveries().Dispatch(r.Context(), notification.Dispatch{
-			TypeKey: demomodule.TypeKeyPatientReminder,
-			Recipient: notification.DispatchRecipient{
-				Class:     notification.RecipientClassExternal,
-				ContactID: body.ContactID,
-			},
-			Locale: locale,
-			// The demo reminder type's templates take no parameters (see
-			// internal/demo/locales); the copy is a fixed appointment
-			// reminder.
-			Params: map[string]any{},
-		}); err != nil {
-			http.Error(w, "demo patient-message: dispatch refused: "+err.Error(), http.StatusInternalServerError)
-			return
-		}
-		w.WriteHeader(http.StatusAccepted)
-	})
-
 	// The smilesim completion subscription: internal/smilesim's Service
 	// publishes smilesim.EventSimulationCompleted (see its own package
 	// comment's "Completion notification" section) once a requested smile
@@ -507,5 +448,76 @@ func WireDemoNotification(mux *http.ServeMux, bus pkgcore.EventBus, module *noti
 				"event_type", evt.Type, "user_id", recipientUserID, "error", err)
 		}
 		return nil
+	})
+}
+
+// MountDemoNotificationRoutes mounts the demo patient-message route on mux:
+// dispatch the demo module's patient-reminder type to a verified external
+// contact of the caller's tenant. module is the app's notification module,
+// whose Deliveries() accessor the handler drives, and catalog is the
+// assembly's merged message catalog the route negotiates its
+// Accept-Language against. The call cannot fail: mounting a route on a
+// *http.ServeMux cannot fail for a well-formed pattern.
+func MountDemoNotificationRoutes(mux *http.ServeMux, module *notification.Module, catalog *i18n.Catalog) {
+	// The demo patient-message route: dispatch the demo module's
+	// patient-reminder type to a verified external contact of the
+	// caller's tenant. The caller's tenant context is the middleware
+	// chain's doing (the same tenancy.Middleware that gates every other
+	// mounted route), and the dispatch context below carries it into the
+	// enqueued job untouched.
+	//
+	// The route takes no subject and checks no permission of its own: in
+	// this app every authenticated member of a tenant may trigger a demo
+	// reminder, and the module's own send-time gates -- re-checked by the
+	// delivery job after enqueue -- are what actually protect the
+	// recipient: the named contact is resolved inside the caller's tenant
+	// and must be verified (an unknown or still-pending contact is refused,
+	// and one that has since unsubscribed or bounced is settled as a
+	// skipped send before any transport is touched), and the send travels
+	// only on the contact's own verified channel. The platform blacklist
+	// is not among those gates: nothing in the delivery
+	// pipeline consults it, and no writer or bounce-remediation path
+	// exists to populate it. A real deployment would gate its
+	// own trigger route however its staff model requires; the dispatch
+	// call itself is all the notification module asks of it.
+	mux.HandleFunc(http.MethodPost+" "+demoPatientMessagePath, func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			ContactID string `json:"contact_id"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			http.Error(w, "demo patient-message: malformed JSON body", http.StatusBadRequest)
+			return
+		}
+		if body.ContactID == "" {
+			http.Error(w, "demo patient-message: contact_id is required", http.StatusBadRequest)
+			return
+		}
+		// The requester's own language, captured from this request and
+		// dispatched as the copy's language: an external contact carries no
+		// locale of its own, and the requesting staff member's language is
+		// the contact's first available signal (the producer-captured
+		// requester tier of the dispatch chain). A request naming no
+		// language this deployment's catalog ships dispatches an empty
+		// Locale, and the module renders the platform default.
+		locale := ""
+		if catalog != nil {
+			locale, _ = i18n.Negotiate(r.Header.Get("Accept-Language"), catalog.Locales())
+		}
+		if _, err := module.Deliveries().Dispatch(r.Context(), notification.Dispatch{
+			TypeKey: demomodule.TypeKeyPatientReminder,
+			Recipient: notification.DispatchRecipient{
+				Class:     notification.RecipientClassExternal,
+				ContactID: body.ContactID,
+			},
+			Locale: locale,
+			// The demo reminder type's templates take no parameters (see
+			// internal/demo/locales); the copy is a fixed appointment
+			// reminder.
+			Params: map[string]any{},
+		}); err != nil {
+			http.Error(w, "demo patient-message: dispatch refused: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+		w.WriteHeader(http.StatusAccepted)
 	})
 }
