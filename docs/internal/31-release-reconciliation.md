@@ -257,7 +257,7 @@
 - **消费者影响**：宿主代码无需改动。对"产品实现 `Close() error` 但描述符未声明 `Close` 回调"的宿主组件，其产品现在会在装配关闭（含构造后失败的回滚）时被释放——此前不会；这正是 `go/pkgcore/AGENTS.md` 一直记载的契约（"声明所有权的方式是在 `New` 返回的值上实现 `Close() error`"），本次是机制对齐文档。内置实现的产品释放行为与删除适配回调前逐项等价（同一 `Close` 方法、同一逆序、同一失败聚合与 `rolled back` 名单）。唯一的语义约束：产品类型上的 `Close() error` 即"装配关闭时释放我"的声明，语义不符的产品不应以该形态暴露（`io.Closer` 的标准含义即释放所拥有的资源）。
 - **替代路径**：无（行为放宽）；需要 context / registry / 自定义拆解的释放继续声明描述符 `Close` 回调（优先级不变）。
 - **登记理由**：宿主可见面（组装契约：关闭阶段多释放一类产品）的行为变更，按"宿主可见面变更须带 `!BREAKING` footer 或登记本清单"的纪律登记（非破坏，不带 footer）。
-- **出处**：`5fd9c801`（`feat(pkgcore): release constructed products through their own Close() error`）+ `b671031c`（`refactor(pkgcore): drop the duplicated close adapters from the built-in descriptors`）。
+- **出处**：`5fd9c801`（`feat(pkgcore): release constructed products through their own Close() error`）+ `b671031c`（`refactor(pkgcore): drop the duplicated close adapters from the built-in descriptors`）+ `7af0a87f`（`test(pkgcore): keep the kv.redis release probe inside its implementing package`）。
 
 ## 6. D 组：configrefgen 工具内部迁移（工具面，非宿主面）
 
