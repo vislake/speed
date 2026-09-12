@@ -99,7 +99,7 @@ func TestS3ObjectStoreConfig_CarriesTheConfiguredValuesAndResolves(t *testing.T)
 				t.Errorf("block carries %d keys (%v), want exactly %d", len(values), values, len(tc.want))
 			}
 			reg := pkgcore.NewComponentRegistry()
-			descriptor, ok := registeredComponent(reg, "objectstore.s3")
+			descriptor, ok := pkgcore.LookupComponent(reg, "objectstore.s3")
 			if !ok {
 				t.Fatal("the \"objectstore.s3\" component is not registered")
 			}
@@ -141,7 +141,7 @@ func TestS3ObjectStoreConfig_UnrecognizedBucketLookupFailsResolution(t *testing.
 		S3BucketLookup: "dns",
 	}
 	reg := pkgcore.NewComponentRegistry()
-	if _, ok := registeredComponent(reg, "objectstore.s3"); !ok {
+	if _, ok := pkgcore.LookupComponent(reg, "objectstore.s3"); !ok {
 		t.Fatal("the \"objectstore.s3\" component is not registered")
 	}
 	reg.Put(pkgcore.NewComponentConfig(nil).

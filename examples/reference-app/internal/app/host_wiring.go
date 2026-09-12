@@ -26,13 +26,15 @@ package app
 //     performs the attach sequence itself, in the post-bootstrap step.
 //
 // For both classes the host selects its own override component: the
-// descriptor is copied from the registry -- every declaration, capability,
-// asset and lifecycle callback stays the module package's own, and only the
-// Name (a component name is unique, and the module's own descriptor keeps
-// its own), the New callback or the Init callback differ. A module whose
-// seams are all reachable through the by-type context (sharing, compliance,
-// notes, storage, ...) needs no override: the provider components below
-// supply its tokens and its own descriptor constructs it.
+// descriptor is copied from the registry -- pkgcore.Override for the
+// construction-time class, registerOnlyComponent below for the
+// Init-callback class -- so every declaration, capability, asset and
+// lifecycle callback stays the module package's own, and only the Name (a
+// component name is unique, and the module's own descriptor keeps its own)
+// plus the New or Init callback differ. A module whose seams are all
+// reachable through the by-type context (sharing, compliance, notes,
+// storage, ...) needs no override: the provider components below supply its
+// tokens and its own descriptor constructs it.
 
 import (
 	"context"
@@ -105,7 +107,7 @@ func declaredMaterial(reg *pkgcore.ComponentRegistry, keyPath string) ([]byte, e
 // than silently inherited. Every other module's descriptor declares its own
 // capabilities, so no other component needs this copy.
 func capabilityComponent(reg *pkgcore.ComponentRegistry, name string) (pkgcore.Component, error) {
-	descriptor, ok := registeredComponent(reg, name)
+	descriptor, ok := pkgcore.LookupComponent(reg, name)
 	if !ok {
 		return pkgcore.Component{}, fmt.Errorf("reference-app: component %q has no registered descriptor", name)
 	}
@@ -113,37 +115,6 @@ func capabilityComponent(reg *pkgcore.ComponentRegistry, name string) (pkgcore.C
 	c.Name = hostComponentPrefix + name
 	c.Capabilities |= pkgcore.MultiReplicaSafe
 	return c, nil
-}
-
-// overrideComponent returns the registered descriptor named base carrying
-// this host's own construction. Everything but the name and the New callback
-// is the package's own declaration: the same Requires, Provides, assets
-// (locale resources included -- the catalog merges them under the module
-// name, assembly.go's hostCatalog), capabilities, system purposes and
-// lifecycle callbacks the component ships, so an override declares exactly
-// what the component declares and only constructs it differently.
-// moduleName is the module the descriptor implements, and the suffix of the
-// override's own name.
-func overrideComponent(reg *pkgcore.ComponentRegistry, base, moduleName string, construct func(context.Context, *pkgcore.ComponentRegistry, pkgcore.ComponentConfig) (any, error), extra ...pkgcore.Requirement) (pkgcore.Component, error) {
-	descriptor, ok := registeredComponent(reg, base)
-	if !ok {
-		return pkgcore.Component{}, fmt.Errorf("reference-app: component %q has no registered descriptor to override", base)
-	}
-	c := descriptor
-	c.Name = hostComponentPrefix + moduleName
-	c.New = construct
-	c.Requires = append(append([]pkgcore.Requirement(nil), descriptor.Requires...), extra...)
-	return c, nil
-}
-
-// registeredComponent returns the component registered under name.
-func registeredComponent(reg *pkgcore.ComponentRegistry, name string) (pkgcore.Component, bool) {
-	for _, c := range pkgcore.RegisteredComponents(reg) {
-		if c.Name == name {
-			return c, true
-		}
-	}
-	return pkgcore.Component{}, false
 }
 
 // registeredModuleComponent returns the component a module package
@@ -224,7 +195,7 @@ func (b *serverBuild) dbComponent() pkgcore.Component {
 // deployment assembled, the redirect allowlist and trusted-provider list
 // their callbacks are validated against, and the per-header vendor opt-in.
 func (b *serverBuild) authnComponent(reg *pkgcore.ComponentRegistry) (pkgcore.Component, error) {
-	return overrideComponent(reg, "authn", "authn", func(_ context.Context, reg *pkgcore.ComponentRegistry, _ pkgcore.ComponentConfig) (any, error) {
+	return pkgcore.Override(reg, "authn", hostComponentPrefix+"authn", func(_ context.Context, reg *pkgcore.ComponentRegistry, _ pkgcore.ComponentConfig) (any, error) {
 		db, err := pkgcore.Get[*gorm.DB](reg)
 		if err != nil {
 			return nil, err
@@ -316,7 +287,7 @@ func (b *serverBuild) authnComponent(reg *pkgcore.ComponentRegistry) (pkgcore.Co
 // profile-locale resolver, and the header-only subject resolver this app's
 // notification surfaces pin.
 func (b *serverBuild) notificationComponent(reg *pkgcore.ComponentRegistry) (pkgcore.Component, error) {
-	return overrideComponent(reg, "notification", "notification", func(_ context.Context, reg *pkgcore.ComponentRegistry, _ pkgcore.ComponentConfig) (any, error) {
+	return pkgcore.Override(reg, "notification", hostComponentPrefix+"notification", func(_ context.Context, reg *pkgcore.ComponentRegistry, _ pkgcore.ComponentConfig) (any, error) {
 		db, err := pkgcore.Get[*gorm.DB](reg)
 		if err != nil {
 			return nil, err
@@ -360,7 +331,7 @@ func (b *serverBuild) notificationComponent(reg *pkgcore.ComponentRegistry) (pkg
 // webhook flow test arms (nil in every production boot, leaving the
 // module's own strict default in force).
 func (b *serverBuild) integrationComponent(reg *pkgcore.ComponentRegistry) (pkgcore.Component, error) {
-	return overrideComponent(reg, "integration", "integration", func(_ context.Context, reg *pkgcore.ComponentRegistry, _ pkgcore.ComponentConfig) (any, error) {
+	return pkgcore.Override(reg, "integration", hostComponentPrefix+"integration", func(_ context.Context, reg *pkgcore.ComponentRegistry, _ pkgcore.ComponentConfig) (any, error) {
 		db, err := pkgcore.Get[*gorm.DB](reg)
 		if err != nil {
 			return nil, err
@@ -398,7 +369,7 @@ func (b *serverBuild) integrationComponent(reg *pkgcore.ComponentRegistry) (pkgc
 // gateway for, image generation over the shared queue and storage service,
 // the billing-derived entitlements gate, and metering's usage recorder.
 func (b *serverBuild) aiGatewayComponent(reg *pkgcore.ComponentRegistry) (pkgcore.Component, error) {
-	return overrideComponent(reg, "ai-gateway", "ai-gateway", func(_ context.Context, reg *pkgcore.ComponentRegistry, _ pkgcore.ComponentConfig) (any, error) {
+	return pkgcore.Override(reg, "ai-gateway", hostComponentPrefix+"ai-gateway", func(_ context.Context, reg *pkgcore.ComponentRegistry, _ pkgcore.ComponentConfig) (any, error) {
 		db, err := pkgcore.Get[*gorm.DB](reg)
 		if err != nil {
 			return nil, err
@@ -527,7 +498,7 @@ func (b *serverBuild) tenancyResolverComponent() pkgcore.Component {
 // endpoints read, the mail identities its invitations render with, and the
 // invitation-link builder.
 func (b *serverBuild) orgComponent(reg *pkgcore.ComponentRegistry) (pkgcore.Component, error) {
-	return overrideComponent(reg, "org", "org", func(_ context.Context, reg *pkgcore.ComponentRegistry, _ pkgcore.ComponentConfig) (any, error) {
+	return pkgcore.Override(reg, "org", hostComponentPrefix+"org", func(_ context.Context, reg *pkgcore.ComponentRegistry, _ pkgcore.ComponentConfig) (any, error) {
 		db, err := pkgcore.Get[*gorm.DB](reg)
 		if err != nil {
 			return nil, err
@@ -568,7 +539,7 @@ func (b *serverBuild) orgComponent(reg *pkgcore.ComponentRegistry) (pkgcore.Comp
 // descriptor's own Start callback completes the snapshot as the backstop
 // either way. Everything else -- Start included -- is the module's own.
 func registerOnlyComponent(reg *pkgcore.ComponentRegistry, moduleName string, declare func(any, *pkgcore.ComponentRegistry) error) (pkgcore.Component, error) {
-	base, ok := registeredComponent(reg, moduleName)
+	base, ok := pkgcore.LookupComponent(reg, moduleName)
 	if !ok {
 		return pkgcore.Component{}, fmt.Errorf("reference-app: component %q has no registered descriptor", moduleName)
 	}
