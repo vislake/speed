@@ -54,8 +54,9 @@ b := billing.NewModule(db, nil) // nil UsageReader:配额授予会失败关闭
 // 「这个租户能不能用功能 X」——在付费工作之前:
 d, err := b.Entitlements().Check(ctx, "model:chat:default", 1)
 if err != nil || !d.Allowed { /* 拒绝 */ }
-// d.Remaining == nil 即无上限;reason 词汇表:
-// DecisionReasonOK/FeatureDisabled/QuotaExceeded/NoSubscription。
+// d.Remaining == nil 即无上限;Reason 的取值词汇表:
+// billing.DecisionReasonOK、billing.DecisionReasonFeatureDisabled、
+// billing.DecisionReasonQuotaExceeded、billing.DecisionReasonNoSubscription。
 
 // 按用付费:先预留、后结算:
 res, err := b.Credits().PreDeduct(ctx, billing.PreDeductInput{

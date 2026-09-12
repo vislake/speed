@@ -63,8 +63,9 @@ b := billing.NewModule(db, nil) // nil UsageReader: quota grants fail closed
 // "may this tenant use feature X" — before the paid work:
 d, err := b.Entitlements().Check(ctx, "model:chat:default", 1)
 if err != nil || !d.Allowed { /* refuse */ }
-// d.Remaining == nil means unbounded; the reason vocabulary is
-// DecisionReasonOK/FeatureDisabled/QuotaExceeded/NoSubscription.
+// d.Remaining == nil means unbounded; the Reason vocabulary is
+// billing.DecisionReasonOK, billing.DecisionReasonFeatureDisabled,
+// billing.DecisionReasonQuotaExceeded, billing.DecisionReasonNoSubscription.
 
 // pay-per-use: reserve before the work, settle after it:
 res, err := b.Credits().PreDeduct(ctx, billing.PreDeductInput{
