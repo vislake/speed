@@ -48,7 +48,7 @@ job;worker 重建租户上下文,在**发送时**重查偏好、同意与地址�
 
 ```go
 m := notification.NewModule(db,
-    notification.WithSMSSender(pkgcore.NewConsoleSMSSender()), // pkgcore 的 SMS 模块——console、HTTP 网关或运营商适配器
+    notification.WithSMSSender(pkgcore.NewConsoleSMSSender(os.Stdout)), // 零外部依赖的 console 发送器;任何满足 pkgcore.SMSSender 的发送器都可传入
     notification.WithMailFrom("no-reply@example.com"),
     notification.WithContactEmailIndexer(emailIndexer),   // dbkit.NewBlindIndexer,over notification.AddressIndexColumn
     notification.WithContactPhoneIndexer(phoneIndexer),   // 索引键必须与加密键不同

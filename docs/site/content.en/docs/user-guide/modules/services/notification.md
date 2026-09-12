@@ -59,7 +59,7 @@ Six options are required — `Register` fails with its own named
 
 ```go
 m := notification.NewModule(db,
-    notification.WithSMSSender(pkgcore.NewConsoleSMSSender()), // pkgcore's SMS module — console, HTTP gateway, or a carrier adapter
+    notification.WithSMSSender(pkgcore.NewConsoleSMSSender(os.Stdout)), // the zero-dependency console sender; any pkgcore.SMSSender fits
     notification.WithMailFrom("no-reply@example.com"),
     notification.WithContactEmailIndexer(emailIndexer),   // dbkit.NewBlindIndexer over notification.AddressIndexColumn
     notification.WithContactPhoneIndexer(phoneIndexer),   // index keys must differ from the cipher key
