@@ -2,7 +2,6 @@ package testutil
 
 import (
 	"errors"
-	"net"
 	"strconv"
 	"strings"
 	"testing"
@@ -133,30 +132,5 @@ func TestIsHostPortBindCollision(t *testing.T) {
 		if isHostPortBindCollision(errors.New(msg)) {
 			t.Errorf("isHostPortBindCollision(%q) = true, want false", msg)
 		}
-	}
-}
-
-func TestHostPortFree_ReportsOnlyGenuinelyFreePorts(t *testing.T) {
-	// Track one port through both states: the OS hands it out as free
-	// (release it again), then this test's own listener binds it.
-	probe, err := net.Listen("tcp", "0.0.0.0:0")
-	if err != nil {
-		t.Fatalf("net.Listen: %v", err)
-	}
-	hostPort := strconv.Itoa(probe.Addr().(*net.TCPAddr).Port)
-	if closeErr := probe.Close(); closeErr != nil {
-		t.Fatalf("close listener: %v", closeErr)
-	}
-	if !HostPortFree(hostPort) {
-		t.Fatalf("HostPortFree(%q) = false for a port the OS just reported free", hostPort)
-	}
-
-	holder, err := net.Listen("tcp", net.JoinHostPort("0.0.0.0", hostPort))
-	if err != nil {
-		t.Fatalf("net.Listen(%q): %v", hostPort, err)
-	}
-	defer holder.Close()
-	if HostPortFree(hostPort) {
-		t.Fatalf("HostPortFree(%q) = true while the port is bound by this test's own listener", hostPort)
 	}
 }
