@@ -7,6 +7,9 @@ import (
 	"testing"
 	"time"
 
+	"gorm.io/gorm"
+
+	"github.com/vislake/speed/go/dbkit"
 	"github.com/vislake/speed/go/dbkit/audit"
 	"github.com/vislake/speed/go/pkgcore"
 	"github.com/vislake/speed/go/pkgcore/apperr"
@@ -1291,5 +1294,81 @@ func TestCreditService_Reason_NonPhraseRefused(t *testing.T) {
 	// An absent reason stays legal: reason is optional.
 	if _, err := svc.Grant(ctx, GrantInput{Amount: 10}); err != nil {
 		t.Errorf("Grant with no reason: err = %v, want nil", err)
+	}
+}
+
+// TestApplyBalanceDelta_ScopedToOneTenant is the isolation proof
+// applyBalanceDelta's raw-Exec shape requires: .Exec bypasses the
+// tenant-scope plugin's callback chain, so the hand-written
+// "id = ? AND tenant_id = ?" predicate is the statement's entire isolation
+// mechanism -- every write must land on a row the passed tenant owns,
+// exactly as the plugin would scope an ORM-level write.
+//
+// The witness is the row that predicate exists to refuse: one whose id
+// reads "tenant-b" while tenant-a owns it. No CreditService write produces
+// that shape (ensureBalance keeps id equal to the owning tenant), and that
+// is the point -- the answers below rest on the tenant_id predicate alone,
+// never on the id convention happening to make the two agree. The witness
+// is created through the ordinary ORM path, whose tenant-scope create hook
+// forces tenant_id to the creating context's tenant while the id stays the
+// caller's own value.
+//
+// Tenant-a's delta against its genuine row is the positive control (the
+// statement applies and reads back); tenant-b's delta names the witness by
+// id and must affect zero rows, leaving the witness untouched. Drop the
+// tenant_id predicate from the Exec and the same call becomes a write
+// against another tenant's row -- the exact failure this test fails on.
+func TestApplyBalanceDelta_ScopedToOneTenant(t *testing.T) {
+	db := newTestDB(t)
+	ctxA := pkgcore.WithTenant(context.Background(), "tenant-a")
+	ctxB := pkgcore.WithTenant(context.Background(), "tenant-b")
+	at := time.Now().UTC()
+
+	repo := NewCreditBalanceRepository(db)
+	// Tenant-a's genuine row (the id == owning tenant convention) plus the
+	// cross-tenant witness described above.
+	if err := repo.Create(ctxA, &CreditBalance{ID: "tenant-a"}); err != nil {
+		t.Fatalf("Create(tenant-a row): %v", err)
+	}
+	if err := repo.Create(ctxA, &CreditBalance{ID: "tenant-b"}); err != nil {
+		t.Fatalf("Create(witness row): %v", err)
+	}
+
+	// Positive control: tenant-a's own delta applies to tenant-a's own row.
+	var aOK bool
+	if err := dbkit.WithTenantSession(ctxA, db, func(session *gorm.DB) error {
+		var derr error
+		aOK, derr = applyBalanceDelta(session, "tenant-a", 100, 0, at)
+		return derr
+	}); err != nil {
+		t.Fatalf("applyBalanceDelta(tenant-a, +100) error = %v", err)
+	}
+	if !aOK {
+		t.Fatalf("applyBalanceDelta(tenant-a, +100) = false, want true -- the statement must apply a tenant's own delta to its own row")
+	}
+	if got, err := repo.FindByID(ctxA, "tenant-a"); err != nil {
+		t.Fatalf("FindByID(tenant-a): %v", err)
+	} else if got.Available != 100 {
+		t.Errorf("tenant-a's Available = %d after its own +100 delta, want 100", got.Available)
+	}
+
+	// The isolation assertion: tenant-b's delta names the witness by id,
+	// but the witness is tenant-a's row -- zero rows affected, nothing
+	// written.
+	var bOK bool
+	if err := dbkit.WithTenantSession(ctxB, db, func(session *gorm.DB) error {
+		var derr error
+		bOK, derr = applyBalanceDelta(session, "tenant-b", 100, 0, at)
+		return derr
+	}); err != nil {
+		t.Fatalf("applyBalanceDelta(tenant-b, +100) error = %v", err)
+	}
+	if bOK {
+		t.Fatalf("applyBalanceDelta(tenant-b, +100) = true, want false: it matched a row owned by tenant-a (id \"tenant-b\") -- the hand-written tenant_id predicate is the only thing scoping this raw Exec away from another tenant's row")
+	}
+	if got, err := repo.FindByID(ctxA, "tenant-b"); err != nil {
+		t.Fatalf("FindByID(witness): %v", err)
+	} else if got.Available != 0 || got.Reserved != 0 {
+		t.Errorf("witness row = available %d / reserved %d after tenant-b's delta, want 0/0 -- a delta must never write a row another tenant owns", got.Available, got.Reserved)
 	}
 }
