@@ -406,7 +406,7 @@ plain unit suite under `-race`:
   completion event and derive enqueue, completed-rows-only reads, and
   fail-closed behavior without an attached host;
 - `module_test.go` — the register-time wiring proof: after a real standalone
-  `pkgcore.the assembly`, `Module.Register` hands the registry to all three
+  `the assembly`, `Module.Register` hands the registry to all three
   services and claims the two job handlers on it, each bound to the module's
   own service instance (a new service or handler that Register stopped wiring
   fails here), and a real Create→Upload→Complete→OpenContent round trip runs
