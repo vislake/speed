@@ -133,6 +133,7 @@ type seatSet struct {
 	auditActions  AuditActionRegistrar
 	retention     RetentionRegistrar
 	schedules     PeriodicTaskRegistrar
+	middleware    MiddlewareRegistrar
 }
 
 // ComponentRegistry is the core data structure of the assembly: one instance
@@ -142,10 +143,10 @@ type seatSet struct {
 // tests and repeated in-process assemblies each create their own, so their
 // registrations, values and declaration seats never leak into one another.
 //
-// The ten declaration seats are the fields below; they accept writes only
-// while the Init stage runs, and a write outside it is refused naming the
-// stage. The by-type value context is Put and Get; the assembly puts every
-// component's product there as it constructs it.
+// The eleven declaration seats are the fields below; they accept writes
+// only while the Init stage runs, and a write outside it is refused naming
+// the stage. The by-type value context is Put and Get; the assembly puts
+// every component's product there as it constructs it.
 type ComponentRegistry struct {
 	// Routes receives the HTTP handlers components mount.
 	Routes RouteRegistrar
@@ -169,6 +170,11 @@ type ComponentRegistry struct {
 	Retention RetentionRegistrar
 	// Schedules receives the periodic tasks components declare.
 	Schedules PeriodicTaskRegistrar
+	// Middleware receives the platform-wide middleware components declare
+	// for the assembled chain's outermost layer. See MiddlewareRegistrar for
+	// the seat's contract and its boundary: this seat cannot insert inside
+	// the fixed chain, it only wraps the chain's finished output.
+	Middleware MiddlewareRegistrar
 
 	mu sync.RWMutex
 
@@ -245,6 +251,7 @@ func NewComponentRegistry() *ComponentRegistry {
 	r.AuditActions = &auditActionsSeat{gatedSeatFor(r, "AuditActions", func(s seatSet) AuditActionRegistrar { return s.auditActions })}
 	r.Retention = &retentionSeat{gatedSeatFor(r, "Retention", func(s seatSet) RetentionRegistrar { return s.retention })}
 	r.Schedules = &schedulesSeat{gatedSeatFor(r, "Schedules", func(s seatSet) PeriodicTaskRegistrar { return s.schedules })}
+	r.Middleware = &middlewareSeat{gatedSeatFor(r, "Middleware", func(s seatSet) MiddlewareRegistrar { return s.middleware })}
 	return r
 }
 
@@ -887,6 +894,7 @@ func (r *ComponentRegistry) openSeats() {
 		auditActions:  &memoryAuditActionRegistrar{actions: make(map[string]struct{})},
 		retention:     &memoryRetentionRegistrar{names: make(map[string]struct{})},
 		schedules:     &memoryScheduleRegistrar{types: make(map[string]struct{})},
+		middleware:    &memoryMiddlewareRegistrar{},
 	}
 	r.seatsOpen = true
 }
@@ -1144,7 +1152,19 @@ func (r *ComponentRegistry) MountedRoutes() []MountedRoute {
 	return r.Routes.Routes()
 }
 
-// The ten seat accessors below are the declaration face of this registry:
+// Middlewares returns the middleware declared on the Middleware seat, in
+// registration order -- the reading go/app/chain.Standard applies as the
+// assembled chain's outermost layer (its RouteSource interface), the same
+// sugar shape MountedRoutes has. Before the Init stage nothing has been
+// declared, so it returns nil.
+func (r *ComponentRegistry) Middlewares() []func(http.Handler) http.Handler {
+	if r.Middleware == nil {
+		return nil
+	}
+	return r.Middleware.Middlewares()
+}
+
+// The eleven seat accessors below are the declaration face of this registry:
 // each returns the seat stored in the struct's own field, so a module's
 // declaration body declares into exactly these seats -- the
 // write gate (writes only while the Init stage runs) inside each seat, and
@@ -1181,6 +1201,9 @@ func (r *ComponentRegistry) RetentionSeat() RetentionRegistrar { return r.Retent
 
 // SchedulesSeat returns the Schedules seat.
 func (r *ComponentRegistry) SchedulesSeat() PeriodicTaskRegistrar { return r.Schedules }
+
+// MiddlewareSeat returns the Middleware seat.
+func (r *ComponentRegistry) MiddlewareSeat() MiddlewareRegistrar { return r.Middleware }
 
 // EventBus returns the assembled EventBus value from the by-type context --
 // the same value the Events seat subscribes on -- or nil when the assembly
@@ -1315,8 +1338,8 @@ func Assets(r *ComponentRegistry) []Asset {
 	return assets
 }
 
-// The ten seat implementations below wrap the in-memory registrars with the
-// stage gate. The gate itself is implemented once, by gatedSeat, and each
+// The eleven seat implementations below wrap the in-memory registrars with
+// the stage gate. The gate itself is implemented once, by gatedSeat, and each
 // wrapper instantiates it for the registrar interface it fronts: a write
 // asks the registry for the opened registrar behind the seat and is
 // refused, naming the seat and the current stage, outside the Init stage;
@@ -1592,4 +1615,25 @@ func (s *schedulesSeat) Declarations() []PeriodicTask {
 		return nil
 	}
 	return registrar.Declarations()
+}
+
+// middlewareSeat is the Middleware seat.
+type middlewareSeat struct {
+	gatedSeat[MiddlewareRegistrar]
+}
+
+func (s *middlewareSeat) Add(mw ...func(http.Handler) http.Handler) error {
+	registrar, err := s.write()
+	if err != nil {
+		return err
+	}
+	return registrar.Add(mw...)
+}
+
+func (s *middlewareSeat) Middlewares() []func(http.Handler) http.Handler {
+	registrar, ok := s.read()
+	if !ok {
+		return nil
+	}
+	return registrar.Middlewares()
 }

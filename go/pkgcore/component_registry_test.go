@@ -293,6 +293,14 @@ func TestSeatsClosedOutsideInit(t *testing.T) {
 		t.Errorf("Routes.Routes() before Init = %v, want nil", routes)
 	}
 
+	mwErr := reg.Middleware.Add(func(next http.Handler) http.Handler { return next })
+	if !errors.Is(mwErr, ErrStageViolation) || !strings.Contains(mwErr.Error(), `"Middleware" seat`) {
+		t.Errorf("Middleware seat write before Init = %v, want ErrStageViolation naming the seat", mwErr)
+	}
+	if mws := reg.Middleware.Middlewares(); mws != nil {
+		t.Errorf("Middleware.Middlewares() before Init = %v, want nil", mws)
+	}
+
 	// A write from inside a Construct callback is refused naming the stage
 	// running.
 	var seatErr error
@@ -359,6 +367,9 @@ func TestSeatsAcceptWritesDuringInit(t *testing.T) {
 	content := recordingComponent(log, "seatcontent", "", &compTokenA{}, func(c *Component) {
 		c.Init = func(ctx context.Context, reg *ComponentRegistry, instance any) error {
 			reg.Routes.Mount("/seatcontent", http.NotFoundHandler())
+			if err := reg.Middleware.Add(func(next http.Handler) http.Handler { return next }); err != nil {
+				return err
+			}
 			if err := reg.Config.Add(ConfigItem{Key: "seatcontent.item", Type: "string", Description: "d"}); err != nil {
 				return err
 			}
@@ -431,6 +442,34 @@ func TestSeatsAcceptWritesDuringInit(t *testing.T) {
 	}
 	if got := len(reg.Schedules.Declarations()); got != 1 {
 		t.Errorf("Schedules.Declarations() = %d entries, want 1", got)
+	}
+	if got := len(reg.Middleware.Middlewares()); got != 1 {
+		t.Errorf("Middleware.Middlewares() = %d entries, want 1", got)
+	}
+}
+
+// TestMiddlewareSeatRefusesNilEntry pins the seat's one validation: a nil
+// middleware could never wrap a handler, so Add refuses it with
+// ErrNilMiddleware and registers nothing -- a nil declaration must surface
+// at registration, not at the wrap the chain performs.
+func TestMiddlewareSeatRefusesNilEntry(t *testing.T) {
+	var addErr error
+	content := recordingComponent(&stageLog{}, "nilmiddleware", "", &compTokenA{}, func(c *Component) {
+		c.Init = func(_ context.Context, reg *ComponentRegistry, _ any) error {
+			addErr = reg.Middleware.Add(nil)
+			return nil
+		}
+	})
+	reg := newTestRegistry(t, content)
+	reg.Put(testComposition(configEntry{key: "nilmiddleware", value: nil}))
+	if err := runStages(context.Background(), reg); err != nil {
+		t.Fatalf("stages = %v", err)
+	}
+	if !errors.Is(addErr, ErrNilMiddleware) {
+		t.Fatalf("Middleware.Add(nil) = %v, want ErrNilMiddleware", addErr)
+	}
+	if mws := reg.Middleware.Middlewares(); len(mws) != 0 {
+		t.Fatalf("Middlewares() after a refused Add = %d entries, want none registered", len(mws))
 	}
 }
 

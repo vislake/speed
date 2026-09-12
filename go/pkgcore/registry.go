@@ -66,6 +66,13 @@ var ErrDuplicatePeriodicTask = errors.New("pkgcore: duplicate periodic task type
 // this error.
 var ErrInvalidPeriodicTask = errors.New("pkgcore: invalid periodic task")
 
+// ErrNilMiddleware is returned when a nil middleware is added to the
+// Middleware seat. A nil entry could never wrap a handler -- the chain that
+// applies it would panic at assembly time -- so it is refused at
+// registration rather than surfacing later as a startup crash. Nothing is
+// registered when the call returns this error.
+var ErrNilMiddleware = errors.New("pkgcore: nil middleware")
+
 // ErrNilRetentionSweep is returned when a RetentionParticipant is registered
 // without its Sweep callback. Sweep is mandatory at registration: the
 // retention sweep calls each registered participant's Sweep once per
@@ -286,6 +293,47 @@ type RouteRegistrar interface {
 	Mount(path string, handler http.Handler)
 	// Routes returns every route mounted so far, in mount order.
 	Routes() []MountedRoute
+}
+
+// MiddlewareRegistrar collects the platform-wide middleware components
+// declare for the assembled chain's outermost layer.
+//
+// It serves the one need a component's own route-subtree middleware cannot:
+// a middleware that must wrap EVERY request the assembled chain handles,
+// including requests the platform's own authn or tenancy layers will refuse
+// before any route is reached. A component that needs to wrap only the
+// routes it mounts itself does not use this seat: net/http.Handler composes
+// directly, so the component wraps its own handler before calling
+// reg.Routes.Mount. This seat exists for the middlewares that must stand
+// outside the fixed chain itself.
+//
+// # Boundary: outside the fixed chain, never inside it
+//
+// The platform's fixed order -- go/app/chain's Chain: authn.Middleware
+// outermost, the AdminRoutes and AuthnRoutes branches split out
+// structurally, then tenancy.Middleware with its pre-auth allowlist and the
+// protected face -- is not reachable through this seat. MiddlewareRegistrar
+// offers no way to insert inside that order: the middleware registered here
+// is applied only by go/app/chain.Standard, which wraps it around the
+// finished chain.Chain output, so a registered middleware is the OUTERMOST
+// layer of everything, authn included. A host that composes its handler
+// without Standard (a direct Chain call, or no chain at all) applies this
+// seat's middleware itself if it wants the layer.
+//
+// A middleware standing at that layer runs outside authentication: it
+// receives the raw, unauthenticated request, before any authn.Principal or
+// tenant context exists. It must therefore do stateless,
+// request-content-insensitive bypass work only -- tracing, metrics, panic
+// recovery. A component that reads tenant or identity information here is
+// misusing the seat, and code review rejects it.
+type MiddlewareRegistrar interface {
+	// Add registers middleware, applied in registration order: the first
+	// added wraps outermost. A nil entry is rejected with an error wrapping
+	// ErrNilMiddleware, because it could never wrap a handler; nothing is
+	// registered when the call returns an error.
+	Add(mw ...func(http.Handler) http.Handler) error
+	// Middlewares returns every registered middleware, in registration order.
+	Middlewares() []func(http.Handler) http.Handler
 }
 
 // ConfigSchemaRegistrar collects the configuration schema modules declare.
@@ -678,6 +726,34 @@ func (r *memoryRouteRegistrar) Routes() []MountedRoute {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	return slices.Clone(r.routes)
+}
+
+// memoryMiddlewareRegistrar is the in-memory default implementation of
+// MiddlewareRegistrar, mirroring memoryRouteRegistrar's shape (a mutex plus
+// an append-only, registration-ordered slice). It refuses a nil entry --
+// validation comes before anything is appended, so a rejected call
+// registers nothing.
+type memoryMiddlewareRegistrar struct {
+	mu  sync.Mutex
+	mws []func(http.Handler) http.Handler
+}
+
+func (r *memoryMiddlewareRegistrar) Add(mw ...func(http.Handler) http.Handler) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for _, m := range mw {
+		if m == nil {
+			return ErrNilMiddleware
+		}
+	}
+	r.mws = append(r.mws, mw...)
+	return nil
+}
+
+func (r *memoryMiddlewareRegistrar) Middlewares() []func(http.Handler) http.Handler {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return slices.Clone(r.mws)
 }
 
 type memoryConfigRegistrar struct {
