@@ -34,13 +34,12 @@ import { expect, test, type Page } from '@playwright/test'
 import { DEMO_OWNER } from './test-utils/accounts.js'
 import {
   APP_TEXT,
-  SIGN_IN_TEXT,
   expectSignedIn,
   openSurface,
   readCurrentTenant,
+  registerThroughUi,
   signInAs,
   submitPasswordSignIn,
-  visitSignIn,
 } from './test-utils/journeys.js'
 
 /**
@@ -233,13 +232,11 @@ test(
   async ({ page }) => {
     const email = `e2e-invite-pop-${Date.now()}@example.com`
 
-    await visitSignIn(page)
-    await page.getByRole('button', { name: SIGN_IN_TEXT.registerAction }).click()
-    await page.getByRole('textbox', { name: SIGN_IN_TEXT.identifierLabel }).fill(email)
-    await page.getByRole('textbox', { name: SIGN_IN_TEXT.passwordLabel }).fill(SIGNUP_PASSWORD)
-    await page.getByRole('textbox', { name: SIGN_IN_TEXT.displayNameLabel }).fill('Northgate Dental')
-    await page.getByRole('button', { name: APP_TEXT.registerSubmit }).click()
-    await expect(page.getByRole('status')).toContainText(APP_TEXT.registerSuccess)
+    await registerThroughUi(page, {
+      email,
+      password: SIGNUP_PASSWORD,
+      displayName: 'Northgate Dental',
+    })
 
     await page.getByRole('button', { name: APP_TEXT.registerBackToSignIn }).click()
     await submitPasswordSignIn(page, email, SIGNUP_PASSWORD)

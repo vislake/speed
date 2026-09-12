@@ -40,11 +40,10 @@ import { INJECT_API_PORT } from '../playwright.config.js'
 import { bootServer, routeApiTo } from './test-utils/servers.js'
 import {
   APP_TEXT,
-  SIGN_IN_TEXT,
   expectOutsideDemoOrganizations,
   expectSignedIn,
+  registerThroughUi,
   submitPasswordSignIn,
-  visitSignIn,
 } from './test-utils/journeys.js'
 
 /** A password that satisfies authn's real policy (12 characters minimum). */
@@ -77,19 +76,14 @@ test(
       await routeApiTo(page, INJECT_API_PORT)
 
       const email = `e2e-recovery-${Date.now()}@example.com`
-      await visitSignIn(page)
-      await page.getByRole('button', { name: SIGN_IN_TEXT.registerAction }).click()
-      await page.getByRole('textbox', { name: SIGN_IN_TEXT.identifierLabel }).fill(email)
-      await page.getByRole('textbox', { name: SIGN_IN_TEXT.passwordLabel }).fill(SIGNUP_PASSWORD)
-      await page
-        .getByRole('textbox', { name: SIGN_IN_TEXT.displayNameLabel })
-        .fill('Recovery Dental')
-      await page.getByRole('button', { name: APP_TEXT.registerSubmit }).click()
-
-      // The registration answers as it always does. A person cannot tell
-      // from this screen that anything went wrong behind it, which is
-      // exactly why the recovery has to be real rather than advisory.
-      await expect(page.getByRole('status')).toContainText(APP_TEXT.registerSuccess)
+      // The registration answers as it always does -- a person cannot
+      // tell from this screen that anything went wrong behind it, which
+      // is exactly why the recovery has to be real rather than advisory.
+      await registerThroughUi(page, {
+        email,
+        password: SIGNUP_PASSWORD,
+        displayName: 'Recovery Dental',
+      })
 
       // BOTH THE FAILURE AND THE RECOVERY REALLY HAPPENED, read from the
       // server's own output before the sign-in is attempted.

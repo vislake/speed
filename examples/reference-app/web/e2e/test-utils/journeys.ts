@@ -96,6 +96,62 @@ export async function visitSignIn(page: Page): Promise<void> {
 }
 
 /**
+ * Opens the register surface from the sign-in one, the way a first-time
+ * visitor does: the sign-in page's own create-account entrance, then the
+ * register form's submit control as proof the form arrived. Gates whose
+ * subject is a refusal the form itself makes (an empty submit, a
+ * duplicate address on the second attempt) open the form this way and
+ * then drive it their own way.
+ */
+export async function openRegisterForm(page: Page): Promise<void> {
+  await visitSignIn(page)
+  await page.getByRole('button', { name: SIGN_IN_TEXT.registerAction }).click()
+  await expect(
+    page.getByRole('button', { name: APP_TEXT.registerSubmit }),
+  ).toBeVisible()
+}
+
+/**
+ * Registers an account through the register form -- the path the
+ * surface itself offers a first-time visitor -- and returns once the
+ * created-account panel is up. The panel is the register verdict the
+ * host's onRegistered callback renders (register is not a session
+ * operation; the panel sends the visitor back to sign-in), and waiting
+ * for it is load-bearing rather than polite: the "Back to sign in"
+ * control exists from the moment the form shows, so a caller that
+ * clicks it while the request is still in flight races the verdict --
+ * when the request settles, the panel replaces the sign-in form the
+ * click was aiming at.
+ *
+ * The display name is filled only when one is given: the field is
+ * optional, and the gates that omit it exercise the name-less
+ * registration the self-service provisioning falls back on.
+ */
+export async function registerThroughUi(
+  page: Page,
+  registration: {
+    readonly email: string
+    readonly password: string
+    readonly displayName?: string
+  },
+): Promise<void> {
+  await openRegisterForm(page)
+  await page
+    .getByRole('textbox', { name: SIGN_IN_TEXT.identifierLabel })
+    .fill(registration.email)
+  await page
+    .getByRole('textbox', { name: SIGN_IN_TEXT.passwordLabel })
+    .fill(registration.password)
+  if (registration.displayName !== undefined) {
+    await page
+      .getByRole('textbox', { name: SIGN_IN_TEXT.displayNameLabel })
+      .fill(registration.displayName)
+  }
+  await page.getByRole('button', { name: APP_TEXT.registerSubmit }).click()
+  await expect(page.getByRole('status')).toContainText(APP_TEXT.registerSuccess)
+}
+
+/**
  * go/authn's two limits on sign-in, as this suite has to live with them:
  * five attempts per account per minute (limitLoginByAccount) and twenty
  * per IP per minute (limitLoginByIP), the second a pool every gate in

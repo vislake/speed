@@ -29,16 +29,15 @@ import { expect, test } from '@playwright/test'
 import { DEMO_READER } from './test-utils/accounts.js'
 import {
   APP_TEXT,
-  SIGN_IN_TEXT,
   expectSignedIn,
   openSurface,
   otherTenant,
   readCurrentTenant,
   readTenantLabel,
+  registerThroughUi,
   signInAs,
   submitPasswordSignIn,
   switchTenant,
-  visitSignIn,
 } from './test-utils/journeys.js'
 
 /** A password that satisfies authn's real policy (12 characters minimum). */
@@ -139,15 +138,11 @@ test(
     // the work area says it.
     const email = `e2e-named-clinic-${Date.now()}@example.com`
 
-    await visitSignIn(page)
-    await page.getByRole('button', { name: SIGN_IN_TEXT.registerAction }).click()
-    await page.getByRole('textbox', { name: SIGN_IN_TEXT.identifierLabel }).fill(email)
-    await page.getByRole('textbox', { name: SIGN_IN_TEXT.passwordLabel }).fill(SIGNUP_PASSWORD)
-    await page
-      .getByRole('textbox', { name: SIGN_IN_TEXT.displayNameLabel })
-      .fill('Northside Dental')
-    await page.getByRole('button', { name: APP_TEXT.registerSubmit }).click()
-    await expect(page.getByRole('status')).toContainText(APP_TEXT.registerSuccess)
+    await registerThroughUi(page, {
+      email,
+      password: SIGNUP_PASSWORD,
+      displayName: 'Northside Dental',
+    })
     await page.getByRole('button', { name: APP_TEXT.registerBackToSignIn }).click()
     await submitPasswordSignIn(page, email, SIGNUP_PASSWORD)
     await expectSignedIn(page)

@@ -31,11 +31,10 @@
 import { expect, test } from '@playwright/test'
 import {
   APP_TEXT,
-  SIGN_IN_TEXT,
   expectSignedIn,
   openSurface,
+  registerThroughUi,
   submitPasswordSignIn,
-  visitSignIn,
 } from './test-utils/journeys.js'
 
 import { PATIENT_PHOTO } from './test-utils/cases.js'
@@ -66,15 +65,11 @@ test(
 
     // The whole journey the product offers a first-time visitor, in one
     // sitting, the way somebody evaluating it would.
-    await visitSignIn(page)
-    await page.getByRole('button', { name: SIGN_IN_TEXT.registerAction }).click()
-    await page.getByRole('textbox', { name: SIGN_IN_TEXT.identifierLabel }).fill(email)
-    await page.getByRole('textbox', { name: SIGN_IN_TEXT.passwordLabel }).fill(SIGNUP_PASSWORD)
-    await page
-      .getByRole('textbox', { name: SIGN_IN_TEXT.displayNameLabel })
-      .fill('Sunrise Dental')
-    await page.getByRole('button', { name: APP_TEXT.registerSubmit }).click()
-    await expect(page.getByRole('status')).toContainText(APP_TEXT.registerSuccess)
+    await registerThroughUi(page, {
+      email,
+      password: SIGNUP_PASSWORD,
+      displayName: 'Sunrise Dental',
+    })
 
     await page.getByRole('button', { name: APP_TEXT.registerBackToSignIn }).click()
     await submitPasswordSignIn(page, email, SIGNUP_PASSWORD)

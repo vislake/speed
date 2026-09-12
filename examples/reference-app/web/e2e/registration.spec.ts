@@ -28,23 +28,17 @@ import {
   REQUIRED_FIELD_TEXT,
   SIGN_IN_TEXT,
   expectSpecificError,
-  visitSignIn,
+  openRegisterForm,
+  registerThroughUi,
 } from './test-utils/journeys.js'
 
 /** A password that satisfies authn's real policy (12 characters minimum). */
 const VALID_PASSWORD = 'e2e-registration-2026'
 
-/** Opens the register surface from the sign-in one, the way a visitor does. */
-async function visitRegister(page: import('@playwright/test').Page): Promise<void> {
-  await visitSignIn(page)
-  await page.getByRole('button', { name: SIGN_IN_TEXT.registerAction }).click()
-  await expect(page.getByRole('button', { name: APP_TEXT.registerSubmit })).toBeVisible()
-}
-
 test('a too-short password renders the specific policy message, not the generic fallback', async ({
   page,
 }) => {
-  await visitRegister(page)
+  await openRegisterForm(page)
   await page.getByRole('textbox', { name: SIGN_IN_TEXT.identifierLabel }).fill(uniqueEmail())
   await page.getByRole('textbox', { name: SIGN_IN_TEXT.passwordLabel }).fill('too-short')
   await page.getByRole('button', { name: APP_TEXT.registerSubmit }).click()
@@ -53,7 +47,7 @@ test('a too-short password renders the specific policy message, not the generic 
 })
 
 test('an empty submit is refused by the form itself, before any request', async ({ page }) => {
-  await visitRegister(page)
+  await openRegisterForm(page)
 
   // The two required fields answer for themselves; nothing reaches the
   // server, so no whole-attempt banner appears beside them.
@@ -63,19 +57,16 @@ test('an empty submit is refused by the form itself, before any request', async 
 })
 
 test('a valid registration reports the created account and offers sign-in', async ({ page }) => {
-  await visitRegister(page)
-  await page.getByRole('textbox', { name: SIGN_IN_TEXT.identifierLabel }).fill(uniqueEmail())
-  await page.getByRole('textbox', { name: SIGN_IN_TEXT.passwordLabel }).fill(VALID_PASSWORD)
-  await page
-    .getByRole('textbox', { name: SIGN_IN_TEXT.displayNameLabel })
-    .fill('E2E Registration')
-  await page.getByRole('button', { name: APP_TEXT.registerSubmit }).click()
+  await registerThroughUi(page, {
+    email: uniqueEmail(),
+    password: VALID_PASSWORD,
+    displayName: 'E2E Registration',
+  })
 
   // The app's own success panel, not a session: the created account is
   // handed to the host's onRegistered callback, which renders this and
   // routes back to sign-in rather than pretending register signed anyone
   // in.
-  await expect(page.getByRole('status')).toContainText(APP_TEXT.registerSuccess)
   await expect(page.getByRole('button', { name: APP_TEXT.registerBackToSignIn })).toBeVisible()
 })
 
@@ -84,13 +75,11 @@ test('registering an address twice is refused with the specific conflict message
 }) => {
   const email = uniqueEmail()
 
-  await visitRegister(page)
-  await page.getByRole('textbox', { name: SIGN_IN_TEXT.identifierLabel }).fill(email)
-  await page.getByRole('textbox', { name: SIGN_IN_TEXT.passwordLabel }).fill(VALID_PASSWORD)
-  await page.getByRole('button', { name: APP_TEXT.registerSubmit }).click()
-  await expect(page.getByRole('status')).toContainText(APP_TEXT.registerSuccess)
+  await registerThroughUi(page, { email, password: VALID_PASSWORD })
 
-  await visitRegister(page)
+  // The second attempt stops at the refusal: the register verdict is the
+  // conflict, so the flow is driven by hand from the reopened form.
+  await openRegisterForm(page)
   await page.getByRole('textbox', { name: SIGN_IN_TEXT.identifierLabel }).fill(email)
   await page.getByRole('textbox', { name: SIGN_IN_TEXT.passwordLabel }).fill(VALID_PASSWORD)
   await page.getByRole('button', { name: APP_TEXT.registerSubmit }).click()

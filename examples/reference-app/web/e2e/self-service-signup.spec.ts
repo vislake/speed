@@ -18,12 +18,11 @@
 import { expect, test } from '@playwright/test'
 import {
   APP_TEXT,
-  SIGN_IN_TEXT,
   expectOutsideDemoOrganizations,
   expectSignedIn,
   openSurface,
+  registerThroughUi,
   submitPasswordSignIn,
-  visitSignIn,
 } from './test-utils/journeys.js'
 
 /** A password that satisfies authn's real policy (12 characters minimum). */
@@ -41,15 +40,11 @@ test.describe('a practice signing itself up', { tag: '@budget' }, () => {
     const email = `e2e-clinic-${Date.now()}@example.com`
 
     // The path the surface itself offers a first-time visitor.
-    await visitSignIn(page)
-    await page.getByRole('button', { name: SIGN_IN_TEXT.registerAction }).click()
-    await page.getByRole('textbox', { name: SIGN_IN_TEXT.identifierLabel }).fill(email)
-    await page.getByRole('textbox', { name: SIGN_IN_TEXT.passwordLabel }).fill(SIGNUP_PASSWORD)
-    await page
-      .getByRole('textbox', { name: SIGN_IN_TEXT.displayNameLabel })
-      .fill('E2E Dental Clinic')
-    await page.getByRole('button', { name: APP_TEXT.registerSubmit }).click()
-    await expect(page.getByRole('status')).toContainText(APP_TEXT.registerSuccess)
+    await registerThroughUi(page, {
+      email,
+      password: SIGNUP_PASSWORD,
+      displayName: 'E2E Dental Clinic',
+    })
 
     // Doing exactly what the product just told them to do.
     await page.getByRole('button', { name: APP_TEXT.registerBackToSignIn }).click()
@@ -72,21 +67,11 @@ test.describe('a practice signing itself up', { tag: '@budget' }, () => {
   test('can do the work an owner does, not merely look at it', async ({ page }) => {
     const email = `e2e-clinic-owner-${Date.now()}@example.com`
 
-    await visitSignIn(page)
-    await page.getByRole('button', { name: SIGN_IN_TEXT.registerAction }).click()
-    await page.getByRole('textbox', { name: SIGN_IN_TEXT.identifierLabel }).fill(email)
-    await page.getByRole('textbox', { name: SIGN_IN_TEXT.passwordLabel }).fill(SIGNUP_PASSWORD)
-    await page.getByRole('button', { name: APP_TEXT.registerSubmit }).click()
-    // Wait for the register verdict before leaving the register surface.
-    // The surface's "Back to sign in" control exists from the moment the
-    // register form shows, so clicking it while the request is still in
-    // flight races the register's own verdict: when the request then
-    // settles, the host's onRegistered flips the view to the
-    // created-account panel and the sign-in form never appears. Leg one
-    // waits for the same panel -- the product tells a registrant to sign
-    // in with the credentials they just registered, so the gate takes
-    // that turn in the same order.
-    await expect(page.getByRole('status')).toContainText(APP_TEXT.registerSuccess)
+    // Leg one takes the turn the product asks of a registrant: sign in
+    // with the credentials just registered. registerThroughUi returns on
+    // the created-account panel, which is the verdict the back-to-sign-in
+    // click must not race (the helper's own doc tells that story).
+    await registerThroughUi(page, { email, password: SIGNUP_PASSWORD })
     await page.getByRole('button', { name: APP_TEXT.registerBackToSignIn }).click()
     await submitPasswordSignIn(page, email, SIGNUP_PASSWORD)
 
