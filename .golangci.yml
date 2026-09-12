@@ -124,7 +124,7 @@ linters:
         # fails exactly like it would in any business module. This is the
         # acceptance criterion the split's own issue named: depguard was
         # structurally blind to "an implementation must not share a package
-        # with a different seam's implementation" while the exemption
+        # with a different module's implementation" while the exemption
         # covered the whole module; it is not blind to it now.
         # asynq-only-in-jobs stays module-scoped -- go/jobs' own asynq
         # split, if it lands, is a separate round's job.
@@ -177,10 +177,11 @@ linters:
           # unittest's factory-path driver
           # proves the typed-configuration loop end to end -- register under
           # an alias name, select it from a composition, resolve it -- over
-          # the two Redis-backed seams sharing one client
-          # concrete *redis.Client by design, so the driver cannot exist
-          # without the import; it is exempted per file, and every other
-          # file under go/pkgcore/unittest stays under the ban.
+          # the two Redis-backed components sharing one client, whose
+          # factories take the concrete *redis.Client by design, so the
+          # driver cannot exist without the import; it is exempted per
+          # file, and every other file under go/pkgcore/unittest stays
+          # under the ban.
           # redistest is the third: the package every module's integration
           # tier builds its disposable Redis fixture through, shipping the
           # container plumbing (start, client, independent-client pair,
@@ -222,7 +223,7 @@ linters:
         nats-only-in-pkgcore:
           # Two distributed-mode implementations share this one rule:
           # go/pkgcore/eventbus/nats (a second EventBus implementation --
-          # docs/internal/03-deployment-modes.md's seam table used to name
+          # docs/internal/03-deployment-modes.md's module table used to name
           # NATS a candidate; this package made it real) and
           # go/pkgcore/kv/nats (a second KVStore implementation, on a NATS
           # JetStream KV bucket). Both were added the same way
@@ -249,7 +250,7 @@ linters:
           # SurvivesRestart (see the package's own doc comment) and is not
           # named by any built-in composition, but the packaging rule is
           # identical either way: an implementation must not share a
-          # package with a different seam's implementation, or with the
+          # package with a different module's implementation, or with the
           # KVStore interface itself.
           files:
             - "**/go/**"
@@ -343,7 +344,7 @@ linters:
         # module-boundary rule ("authorization knows only
         # Subject{TenantID, UserID}; the authenticating side assembles
         # the Subject and calls authorization"). rbac never needs authn:
-        # it declares the two structural seams (SubtreeResolver,
+        # it declares the two structural module interfaces (SubtreeResolver,
         # WithSubjectResolver) that hosts -- authn's module included --
         # implement. Files are constrained to the rbac module's own
         # tree; test files are exempted the same way the discipline
@@ -361,7 +362,7 @@ linters:
           list-mode: lax
           deny:
             - pkg: github.com/vislake/speed/go/authn
-              desc: "rbac never imports authn: authorization knows only Subject{TenantID, UserID}, and the authenticating side (authn's module in a real host) assembles the Subject through rbac's own WithSubjectResolver seam"
+              desc: "rbac never imports authn: authorization knows only Subject{TenantID, UserID}, and the authenticating side (authn's module in a real host) assembles the Subject through rbac's own WithSubjectResolver option"
         # go/observability's exporter split (issue #1 site 3): unlike the
         # three rules above, these two narrow their exemption to the
         # IMPLEMENTATION PACKAGE, not the owning module -- go/observability's
@@ -382,9 +383,9 @@ linters:
           list-mode: lax
           deny:
             - pkg: go.opentelemetry.io/otel/exporters/otlp/otlpmetric/otlpmetricgrpc
-              desc: "the OTLP/gRPC metric exporter belongs to go/observability/exporter/otlp alone; go/observability's own root package resolves it through the RegisterOTLPExporters seam instead of importing it directly"
+              desc: "the OTLP/gRPC metric exporter belongs to go/observability/exporter/otlp alone; go/observability's own root package resolves it through the RegisterOTLPExporters hook instead of importing it directly"
             - pkg: go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc
-              desc: "the OTLP/gRPC trace exporter belongs to go/observability/exporter/otlp alone; go/observability's own root package resolves it through the RegisterOTLPExporters seam instead of importing it directly"
+              desc: "the OTLP/gRPC trace exporter belongs to go/observability/exporter/otlp alone; go/observability's own root package resolves it through the RegisterOTLPExporters hook instead of importing it directly"
         prometheus-only-in-observability-exporter-prometheus:
           files:
             - "**/go/**"
@@ -392,7 +393,7 @@ linters:
           list-mode: lax
           deny:
             - pkg: github.com/prometheus/client_golang
-              desc: "the Prometheus client (promhttp included, as a subpackage of this import path) belongs to go/observability/exporter/prometheus alone; go/observability's own root package resolves a local metrics reader through the RegisterLocalMetricsReader seam instead of importing it directly"
+              desc: "the Prometheus client (promhttp included, as a subpackage of this import path) belongs to go/observability/exporter/prometheus alone; go/observability's own root package resolves a local metrics reader through the RegisterLocalMetricsReader hook instead of importing it directly"
             - pkg: go.opentelemetry.io/otel/exporters/prometheus
               desc: "the OTel-side Prometheus adapter is exporter-specific in exactly the same way as the client library above, and belongs alongside it in go/observability/exporter/prometheus alone"
         # go/pki's Signer provider split (round 4): the vault and kmsaws
