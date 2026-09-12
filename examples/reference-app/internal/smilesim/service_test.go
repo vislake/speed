@@ -263,9 +263,9 @@ func newTestServiceWithDB(t *testing.T, db *gorm.DB, provider aigateway.ImagePro
 	// "image" directory, attached to the module's Gateway through the same
 	// Module.Register declaration turn the production assembly drives.
 	assemblytest.AssembleWithProviders(t, module, pkgcore.Component{
-		Name:     fakeImageProviderName,
-		Module:   "image",
-		Provides: []any{(*aigateway.ImageProvider)(nil)},
+		Name:           fakeImageProviderName,
+		Module:         "image",
+		ProvidesMember: []any{(*aigateway.ImageProvider)(nil)},
 		New: func(context.Context, *pkgcore.ComponentRegistry, pkgcore.ComponentConfig) (any, error) {
 			return provider, nil
 		},

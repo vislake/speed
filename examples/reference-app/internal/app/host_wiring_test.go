@@ -267,8 +267,9 @@ func TestComposition_SelectsTheResolvedImplementations(t *testing.T) {
 		}
 		// The ai-gateway provider members are credential-conditioned: a
 		// plain boot configures no provider credential, so neither member is
-		// selected and the provider names stay on the package-level
-		// registries -- the module's documented fallback.
+		// selected and no provider name resolves (the provider names are the
+		// members' component names, and a member joins only by explicit
+		// selection).
 		for _, absent := range []string{"chat.openai-compatible", "image.openai-compatible"} {
 			if value, ok := block.Get(absent); ok {
 				t.Errorf("the plain boot carries entry %q = %v, want it absent: the member is selected only when its platform credential is configured", absent, value)
@@ -419,16 +420,21 @@ func TestAssemble_ComposesAndClosesTheWholeApplication(t *testing.T) {
 	// The provider members are selected members of the real assembly and
 	// construct through the component face: the names the module's routes
 	// carry resolve as the selected components (ai-gateway's buildChat/
-	// buildImage prefer a selected member over the package-level registry
-	// for exactly these names), and the per-call construction shape works
-	// over the assembled plan. The two faces construct the same
-	// implementation, so this is the selection half of the switch; the
-	// preference itself is pinned in ai-gateway's own suite.
+	// buildImage resolve each name through Build against the assembled
+	// plan), and the per-call construction shape works over that plan. The
+	// members are catalog members: readable by name through Members and
+	// Build, never through the by-type context.
 	if got := pkgcore.MemberNames(reg, "chat"); !reflect.DeepEqual(got, []string{aigateway.ProviderOpenAICompatible}) {
 		t.Errorf("MemberNames(chat) = %v, want [%s]", got, aigateway.ProviderOpenAICompatible)
 	}
 	if got := pkgcore.MemberNames(reg, "image"); !reflect.DeepEqual(got, []string{aigateway.ProviderOpenAICompatibleImage}) {
 		t.Errorf("MemberNames(image) = %v, want [%s]", got, aigateway.ProviderOpenAICompatibleImage)
+	}
+	if members := pkgcore.Members[aigateway.ChatProvider](reg); len(members) != 1 || members[0].Name != aigateway.ProviderOpenAICompatible {
+		t.Errorf("Members[ChatProvider] = %+v, want the selected %s member", members, aigateway.ProviderOpenAICompatible)
+	}
+	if _, err := pkgcore.Get[aigateway.ChatProvider](reg); err == nil {
+		t.Error("Get[ChatProvider] resolved a catalog member; member products are not put into the by-type context")
 	}
 	provider, err := pkgcore.Build[aigateway.ChatProvider](context.Background(), reg, aigateway.ProviderOpenAICompatible, nil)
 	if err != nil {

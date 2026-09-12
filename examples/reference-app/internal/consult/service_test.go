@@ -125,9 +125,9 @@ func newTestService(t *testing.T, provider aigateway.ChatProvider) (*Service, *n
 	// "chat" directory, attached to the module's Gateway through the same
 	// Module.Register declaration turn the production assembly drives.
 	assemblytest.AssembleWithProviders(t, module, pkgcore.Component{
-		Name:     fakeProviderName,
-		Module:   "chat",
-		Provides: []any{(*aigateway.ChatProvider)(nil)},
+		Name:           fakeProviderName,
+		Module:         "chat",
+		ProvidesMember: []any{(*aigateway.ChatProvider)(nil)},
 		New: func(context.Context, *pkgcore.ComponentRegistry, pkgcore.ComponentConfig) (any, error) {
 			return provider, nil
 		},
