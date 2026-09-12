@@ -17,10 +17,11 @@ package main
 // run, and the host hands the resulting *config.Service to the caller for
 // Describe.
 //
-// The composition also selects notification, which declares no schema of
-// its own but does declare a process-start key: the bootstrap side of the
-// reference is enumerated from the same composed set (each module's
-// component descriptor carries its BootstrapKeys), so the composed set is
+// The composition also selects notification, which declares no runtime
+// schema of its own but does declare a process-start key: the bootstrap side
+// of the reference is enumerated from the same composed set (each module's
+// component descriptor carries its keys, on the BootstrapKeys seat or as
+// ConfigSchema derive fields), so the composed set is
 // every platform module whose declarations this reference renders, on either
 // layer, and no module's declaration can reach the reference without being
 // composed here.
@@ -478,11 +479,12 @@ func snapshotDevDefaults() map[string][]byte {
 }
 
 // declaredBootstrapKeys returns the composed set's declared process-start
-// keys: each module states its keys on its component descriptor
-// (pkgcore.Component.BootstrapKeys), the static declaration the assembly's
-// loader resolves before anything is constructed, so the census reads the
-// descriptors of exactly the modules this composition selects, in
-// platformModules order.
+// keys: each module states its keys on its component descriptor, either as a
+// BootstrapKeys declaration or as ConfigSchema derive fields, and the
+// assembly's loader resolves both before anything is constructed. The census
+// reads the descriptors of exactly the modules this composition selects, in
+// platformModules order, and renders a schema-declared key at the final key
+// path its field resolves at -- the address an operator supplies it by.
 func declaredBootstrapKeys(reg *pkgcore.ComponentRegistry) []pkgcore.BootstrapKey {
 	descriptors := make(map[string]pkgcore.Component)
 	for _, c := range pkgcore.RegisteredComponents(reg) {
@@ -492,7 +494,39 @@ func declaredBootstrapKeys(reg *pkgcore.ComponentRegistry) []pkgcore.BootstrapKe
 	}
 	var keys []pkgcore.BootstrapKey
 	for _, name := range platformModules {
-		keys = append(keys, descriptors[name].BootstrapKeys...)
+		descriptor := descriptors[name]
+		keys = append(keys, descriptor.BootstrapKeys...)
+		keys = append(keys, schemaDeclaredKeys(name, descriptor.ConfigSchema)...)
+	}
+	return keys
+}
+
+// schemaDeclaredKeys returns the key material a component's ConfigSchema
+// declares, one BootstrapKey-shaped entry per derive-tagged field, keyed by
+// the field's final key path (the component's namespace prefix, then the
+// field's local path -- the same path the assembly's loader resolves the
+// field at). The field's ConfigDocs entry supplies the rendered contract
+// text and unset fallback; a schema that declares no key material (or
+// fails to describe, which the assembly's own validation would refuse)
+// contributes nothing.
+func schemaDeclaredKeys(componentName string, schema any) []pkgcore.BootstrapKey {
+	fields, err := pkgcore.DescribeComponentSchema(componentName, schema)
+	if err != nil {
+		return nil
+	}
+	var keys []pkgcore.BootstrapKey
+	for _, field := range fields {
+		if !field.Derive {
+			continue
+		}
+		keys = append(keys, pkgcore.BootstrapKey{
+			Key:         field.Key,
+			Format:      "hexkey",
+			Default:     field.Doc.Default,
+			Sensitive:   field.Sensitive,
+			Description: field.Doc.Description,
+			Group:       field.Group,
+		})
 	}
 	return keys
 }

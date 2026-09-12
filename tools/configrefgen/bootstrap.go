@@ -4,11 +4,12 @@ package main
 // speed-based application resolves once, before anything else is wired.
 //
 // The layer's source is the modules themselves. Every platform module that
-// consumes process-start input declares it on its component descriptor
-// (pkgcore.BootstrapKey, pkgcore.Component.BootstrapKeys), and the generator
-// renders those declarations straight from the census -- what the key
-// protects, its value type, whether it is secret material, and the fallback
-// an operator should expect when it is unset -- never from a hand-kept copy.
+// consumes process-start input declares it on its component descriptor, as a
+// pkgcore.BootstrapKey on the BootstrapKeys seat or as a derive-tagged field
+// of its ConfigSchema, and the generator renders those declarations straight
+// from the census -- what the key protects, its value type, whether it is
+// secret material, and the fallback an operator should expect when it is
+// unset -- never from a hand-kept copy.
 // A host's own bootstrap variables are the host's business: they belong to
 // the assembling application and are documented where that host lives, so
 // this repository-wide reference stays the platform surface: the keys the
