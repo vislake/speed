@@ -1474,11 +1474,11 @@ func TestInit_RefusesKeyMaterialDeclaredOnTwoLayers(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Prepare = %v", err)
 		}
-		if err := reg.Construct(ctx); err != nil {
-			t.Fatalf("Construct = %v", err)
+		if constructErr := reg.Construct(ctx); constructErr != nil {
+			t.Fatalf("Construct = %v", constructErr)
 		}
-		if err := reg.Verify(ctx); err != nil {
-			t.Fatalf("Verify = %v", err)
+		if verifyErr := reg.Verify(ctx); verifyErr != nil {
+			t.Fatalf("Verify = %v", verifyErr)
 		}
 		err = reg.Init(ctx)
 		if err == nil {
@@ -1503,11 +1503,11 @@ func TestInit_RefusesKeyMaterialDeclaredOnTwoLayers(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Prepare = %v", err)
 		}
-		if err := reg.Construct(ctx); err != nil {
-			t.Fatalf("Construct = %v", err)
+		if constructErr := reg.Construct(ctx); constructErr != nil {
+			t.Fatalf("Construct = %v", constructErr)
 		}
-		if err := reg.Verify(ctx); err != nil {
-			t.Fatalf("Verify = %v", err)
+		if verifyErr := reg.Verify(ctx); verifyErr != nil {
+			t.Fatalf("Verify = %v", verifyErr)
 		}
 		err = reg.Init(ctx)
 		if err == nil {

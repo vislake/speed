@@ -357,6 +357,59 @@ func TestLoad_ResolvesSchemaDeclaredKeyMaterial(t *testing.T) {
 	})
 }
 
+// badTagSchema is a schema whose tag vocabulary cannot be described: the
+// loader's gather reports it as the component's own declaration problem
+// rather than resolving half of it.
+type badTagSchema struct {
+	Key []byte `json:"key" config:"nonsense"`
+}
+
+// TestLoad_RefusesASchemaWhoseKeyMaterialCannotBeRead pins the refusal of a
+// component whose ConfigSchema cannot be projected: the loader names the
+// component and the reason, at the stage, before anything is constructed --
+// the same treatment a malformed BootstrapKeys declaration gets.
+func TestLoad_RefusesASchemaWhoseKeyMaterialCannotBeRead(t *testing.T) {
+	var host testHostConfig
+	c := schemaKeyComponent("brokenkey", "brokenkey")
+	c.ConfigSchema = (*badTagSchema)(nil)
+	reg := loaderTestRegistry(t, c)
+
+	err := Load(context.Background(), reg, LoadSpec{
+		Host:    &host,
+		Options: testConfigOptions(),
+		Args:    []string{},
+	})
+	if err == nil {
+		t.Fatal("Load() with an undescribable schema error = nil, want a refusal")
+	}
+	for _, want := range []string{"stage prepare", `component "brokenkey"`, "cannot be read"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("refusal misses %q: %v", want, err)
+		}
+	}
+}
+
+// schemaBootstrapKeysFor drives the declaration gather for one component
+// directly, the white-box reading the Load-level tests cannot reach.
+func schemaBootstrapKeysFor(t *testing.T, reg *pkgcore.ComponentRegistry, c pkgcore.Component) ([]pkgcore.BootstrapKey, error) {
+	t.Helper()
+	return schemaBootstrapKeys(reg, c)
+}
+
+// TestSchemaBootstrapKeys_RefusesTheUndescribable pins the gather's two
+// failure returns: a schema the projection cannot read, and a component the
+// registry does not carry (no namespace to resolve the fields under).
+func TestSchemaBootstrapKeys_RefusesTheUndescribable(t *testing.T) {
+	reg := loaderTestRegistry(t, schemaKeyComponent("schemakey", "schemakey"))
+
+	if _, err := schemaBootstrapKeysFor(t, reg, pkgcore.Component{Name: "schemakey", ConfigSchema: (*badTagSchema)(nil)}); err == nil {
+		t.Error("an undescribable schema = nil error, want the projection's refusal")
+	}
+	if _, err := schemaBootstrapKeysFor(t, reg, pkgcore.Component{Name: "ghost", ConfigSchema: (*schemaKeySchema)(nil)}); err == nil {
+		t.Error("an unregistered component = nil error, want the namespace refusal")
+	}
+}
+
 // TestLoad_LeavesAnUnresolvedDeclaredKeyAbsent pins the semantic the
 // declaration removed the binding check for: a declared key no source
 // supplies and no table entry stands for is not a failure -- the assembly
