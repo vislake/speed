@@ -149,8 +149,9 @@ func ExampleRunAssembly() {
 // file may supply, and a derive field that resolves to key material the
 // root key derives or a declared default stands in for -- and the engine's
 // resolver merges those sources into the block before New runs. Every
-// source spells the field's key path: the flag is --components.<component>.
-// <field>.
+// source spells the field's key path: the component declares no namespace,
+// so the flag is the bare --zone and the dev-defaults entry is keyed
+// "stamp".
 func ExampleComponentConfig() {
 	type clockConfig struct {
 		Zone  string `json:"zone" config:"expose,required"`
@@ -187,8 +188,8 @@ func ExampleComponentConfig() {
 			// required declaration is satisfied by whichever source supplies
 			// the field, and the assembly fails before New runs when none
 			// does.
-			app.ConfigArgs([]string{"--components.clock.zone=UTC"}),
-			app.ConfigDevDefaults(map[string][]byte{"components.clock.stamp": make([]byte, 32)}),
+			app.ConfigArgs([]string{"--zone=UTC"}),
+			app.ConfigDevDefaults(map[string][]byte{"stamp": make([]byte, 32)}),
 		},
 		Args: []string{},
 	}
@@ -310,16 +311,16 @@ func ExampleRenderComponentConfigHelp() {
 	// environment variable, config-file entry or derivation spells):
 	//
 	// example.lister
-	//   components.example.lister.addr  string  group=network
+	//   addr  string  group=network
 	//       source: flag > environment > config file > the configuration block's value
-	//       flag: --components.example.lister.addr
+	//       flag: --addr
 	//       env: APP_LISTEN_ADDR (pinned by the declaration)
-	//   components.example.lister.cipher_key  []byte  derive required sensitive group=security
+	//   cipher_key  []byte  derive required sensitive group=security
 	//       source: flag > environment > config file > root-key derivation > declared default
-	//       flag: --components.example.lister.cipher_key
-	//       env: APP_COMPONENTS__EXAMPLE__LISTER__CIPHER_KEY
+	//       flag: --cipher_key
+	//       env: APP_CIPHER_KEY
 	//       description: 32 bytes the lister seals its cache with
 	//       default: [redacted]
-	//   components.example.lister.cache_ttl  int  group=tuning
+	//   cache_ttl  int  group=tuning
 	//       source: the component's configuration block only
 }

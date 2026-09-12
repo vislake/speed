@@ -40,8 +40,9 @@ import (
 //
 // A field's key path is the component's namespace prefix (pkgcore's
 // Component.ConfigNamespace, mirrored by componentConfigPrefix) followed by
-// the field's local key path. The spellings follow the loader's own rules:
-// the flag is --<key path>, the environment variable is the pinned name
+// the field's local key path -- the bare local path when the component
+// declares no namespace. The spellings follow the loader's own rules: the
+// flag is --<key path>, the environment variable is the pinned name
 // (config "env=NAME") or the loader's derived spelling of the key path
 // under its prefix, and a config file entry sits at the key path itself.
 
@@ -151,11 +152,12 @@ func isSignedIntKind(kind reflect.Kind) bool {
 // componentConfigPrefix returns the namespace prefix componentName's schema
 // fields resolve under. It mirrors pkgcore's own key-path rule
 // (config_schema.go's configKeyPrefix, unexported, and restated here because
-// this module reaches pkgcore only through its exported surface): the
-// default "components.<name>.", nothing at all for NoConfigNamespace, and
-// the declared namespace -- normalized to end in a dot -- otherwise. The
-// assembly's own one-key-path-per-source check runs the same rule over the
-// same descriptors, so a drift here would surface as an unresolved field.
+// this module reaches pkgcore only through its exported surface): no prefix
+// when the component declares none -- the fields resolve at their bare
+// local paths -- and the declared namespace -- normalized to end in a dot --
+// otherwise. The assembly's own one-key-path-per-source check runs the same
+// rule over the same descriptors, so a drift here would surface as an
+// unresolved field.
 //
 // The namespace is read off the registry's descriptors rather than the
 // process-wide registration, so a component a host registered on this
@@ -165,17 +167,13 @@ func componentConfigPrefix(reg *pkgcore.ComponentRegistry, componentName string)
 		if c.Name != componentName {
 			continue
 		}
-		switch namespace := c.ConfigNamespace; namespace {
-		case "":
-			return "components." + componentName + ".", nil
-		case pkgcore.NoConfigNamespace:
-			return "", nil
-		default:
+		if namespace := c.ConfigNamespace; namespace != "" {
 			if !strings.HasSuffix(namespace, ".") {
 				namespace += "."
 			}
 			return namespace, nil
 		}
+		return "", nil
 	}
 	return "", fmt.Errorf("component %q is not registered in this assembly; a schema's key path has no namespace to resolve under", componentName)
 }

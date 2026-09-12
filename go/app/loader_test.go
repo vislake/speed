@@ -303,9 +303,9 @@ func TestLoad_ResolvesSchemaDeclaredKeyMaterial(t *testing.T) {
 		}
 	})
 
-	t.Run("the default namespace prefixes the component name", func(t *testing.T) {
+	t.Run("no namespace keeps the bare key path", func(t *testing.T) {
 		wantKey := testKey(0x66)
-		envName := pkgconfig.EnvName(testEnvPrefix, "components.schemakey.blind_index_key")
+		envName := pkgconfig.EnvName(testEnvPrefix, "blind_index_key")
 		t.Setenv(envName, hex.EncodeToString(wantKey))
 
 		var host testHostConfig
@@ -323,8 +323,8 @@ func TestLoad_ResolvesSchemaDeclaredKeyMaterial(t *testing.T) {
 		if err != nil {
 			t.Fatalf("read the published material source: %v", err)
 		}
-		if key, ok := material.Material("components.schemakey.blind_index_key"); !ok || !bytes.Equal(key, wantKey) {
-			t.Errorf("material components.schemakey.blind_index_key = %x (present %v), want the value set as %s", key, ok, envName)
+		if key, ok := material.Material("blind_index_key"); !ok || !bytes.Equal(key, wantKey) {
+			t.Errorf("material blind_index_key = %x (present %v), want the value set as %s", key, ok, envName)
 		}
 	})
 

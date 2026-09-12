@@ -134,11 +134,13 @@ func (a resolverAssembly) assemble(t *testing.T) (resolverSchema, error) {
 }
 
 // resolverFile writes a config file carrying one host value at the
-// component's own key path.
+// component's own key path. The fixture component declares no namespace,
+// so the key path is the bare local path, and the file spells it the way
+// the loader reads any declared key.
 func resolverFile(t *testing.T, host string) string {
 	t.Helper()
 
-	body := fmt.Sprintf("components:\n  %s:\n    host: %s\n", resolverName, host)
+	body := fmt.Sprintf("host: %s\n", host)
 	path := filepath.Join(t.TempDir(), "resolver.yaml")
 	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
 		t.Fatalf("write config file: %v", err)
@@ -181,8 +183,8 @@ func resolverMaterial(t *testing.T, keyPath string) []byte {
 func TestResolverComponentConfig_FiveSourceLadder(t *testing.T) {
 	t.Parallel()
 
-	const flag = "--components.cfgresolver.host=from-flag"
-	env := "TEST_COMPONENTS__CFGRESOLVER__HOST=from-env"
+	const flag = "--host=from-flag"
+	env := "TEST_HOST=from-env"
 	file := resolverFile(t, "from-file")
 	block := map[string]any{"host": "from-block", "port": 8080}
 
@@ -249,7 +251,7 @@ func TestResolverComponentConfig_FiveSourceLadder(t *testing.T) {
 func TestResolverComponentConfig_DeriveMaterialLadder(t *testing.T) {
 	t.Parallel()
 
-	keyPath := "components.cfgresolver.cipher_key"
+	keyPath := "cipher_key"
 	derived := resolverMaterial(t, keyPath)
 	explicit := strings.Repeat("ab", 32)
 	explicitBytes := slices.Repeat([]byte{0xab}, 32)
@@ -259,7 +261,7 @@ func TestResolverComponentConfig_DeriveMaterialLadder(t *testing.T) {
 		t.Parallel()
 
 		cfg, err := resolverAssembly{
-			environ: []string{"TEST_COMPONENTS__CFGRESOLVER__CIPHER_KEY=" + explicit},
+			environ: []string{"TEST_CIPHER_KEY=" + explicit},
 			options: []ConfigOption{ConfigRootKey(resolverRootKey()), ConfigKeyDerivation(resolverDeriver)},
 		}.assemble(t)
 		if err != nil {
@@ -341,7 +343,7 @@ func requiredResolverComponent() pkgcore.Component {
 func TestResolverComponentConfig_DeriveMaterialSatisfiesRequired(t *testing.T) {
 	t.Parallel()
 
-	keyPath := "components.cfgresolver.cipher_key"
+	keyPath := "cipher_key"
 
 	t.Run("the derivation satisfies the required key", func(t *testing.T) {
 		t.Parallel()
@@ -374,7 +376,7 @@ func TestResolverComponentConfig_DeriveMaterialSatisfiesRequired(t *testing.T) {
 
 		reg, err := resolverAssembly{
 			component: requiredResolverComponent(),
-			args:      []string{"--components.cfgresolver.port=0"},
+			args:      []string{"--port=0"},
 			options:   []ConfigOption{ConfigDevDefaults(map[string][]byte{keyPath: slices.Repeat([]byte{0x0d}, 32)})},
 		}.run(t)
 		if err != nil {
@@ -419,7 +421,7 @@ func TestResolverComponentConfig_SkippedFieldsLeaveTheBlock(t *testing.T) {
 			"internal": "must-not-arrive",
 			"managed":  map[string]any{"address": "must-not-arrive-either"},
 		},
-		args: []string{"--components.cfgresolver.internal=also-refused"},
+		args: []string{"--internal=also-refused"},
 	}.assemble(t)
 	if err != nil {
 		t.Fatalf("assemble: %v", err)
@@ -445,7 +447,7 @@ func TestResolverComponentConfig_PinnedEnvironmentName(t *testing.T) {
 		t.Parallel()
 
 		cfg, err := resolverAssembly{
-			environ: []string{"RESOLVER_PINNED_ADDR=pinned-value", "TEST_COMPONENTS__CFGRESOLVER__PINNED=derived-value"},
+			environ: []string{"RESOLVER_PINNED_ADDR=pinned-value", "TEST_PINNED=derived-value"},
 		}.assemble(t)
 		if err != nil {
 			t.Fatalf("assemble: %v", err)
@@ -459,7 +461,7 @@ func TestResolverComponentConfig_PinnedEnvironmentName(t *testing.T) {
 		t.Parallel()
 
 		cfg, err := resolverAssembly{
-			environ: []string{"TEST_COMPONENTS__CFGRESOLVER__PINNED=derived-value"},
+			environ: []string{"TEST_PINNED=derived-value"},
 		}.assemble(t)
 		if err != nil {
 			t.Fatalf("assemble: %v", err)
@@ -479,8 +481,8 @@ func TestResolverComponentConfig_UntaggedFieldsStayBlockOnly(t *testing.T) {
 
 	cfg, err := resolverAssembly{
 		block:   map[string]any{"plain": "from-block", "port": 8080},
-		args:    []string{"--components.cfgresolver.plain=from-flag"},
-		environ: []string{"TEST_COMPONENTS__CFGRESOLVER__PLAIN=from-env"},
+		args:    []string{"--plain=from-flag"},
+		environ: []string{"TEST_PLAIN=from-env"},
 	}.assemble(t)
 	if err != nil {
 		t.Fatalf("assemble: %v", err)
@@ -498,7 +500,7 @@ func TestResolverComponentConfig_TypedAndTextValuesDecode(t *testing.T) {
 	t.Parallel()
 
 	cfg, err := resolverAssembly{
-		args: []string{"--components.cfgresolver.port=0x2a", "--components.cfgresolver.ttl=90s", "--components.cfgresolver.debug=true"},
+		args: []string{"--port=0x2a", "--ttl=90s", "--debug=true"},
 	}.assemble(t)
 	if err != nil {
 		t.Fatalf("assemble: %v", err)
@@ -513,8 +515,8 @@ func TestResolverComponentConfig_TypedAndTextValuesDecode(t *testing.T) {
 		t.Errorf("Debug = %v, want the flag's true", cfg.Debug)
 	}
 
-	_, err = resolverAssembly{args: []string{"--components.cfgresolver.port=not-a-number"}}.assemble(t)
-	if err == nil || !strings.Contains(err.Error(), "components.cfgresolver.port") {
+	_, err = resolverAssembly{args: []string{"--port=not-a-number"}}.assemble(t)
+	if err == nil || !strings.Contains(err.Error(), "port") {
 		t.Errorf("assemble error = %v, want the malformed integer named by its key path", err)
 	}
 }
@@ -562,7 +564,7 @@ func TestResolverComponentConfig_NoDeclarationsKeepTheBlock(t *testing.T) {
 	if err := reg.Register(component); err != nil {
 		t.Fatalf("register: %v", err)
 	}
-	loader := pkgconfig.New(pkgconfig.WithArgs([]string{"--components.cfgresolver.host=from-flag"}))
+	loader := pkgconfig.New(pkgconfig.WithArgs([]string{"--host=from-flag"}))
 	resolver := newComponentConfigResolver(loader, reg)
 
 	block := pkgcore.ComponentConfig{}.With("host", "from-block").With("port", 8080)
@@ -596,9 +598,10 @@ func TestResolverComponentConfig_UnregisteredComponentIsRefused(t *testing.T) {
 	}
 }
 
-// TestComponentConfigPrefix pins the three namespace forms the resolver
-// computes, mirroring pkgcore's own key-path rule (config_schema.go's
-// configKeyPrefix).
+// TestComponentConfigPrefix pins the namespace forms the resolver computes,
+// mirroring pkgcore's own key-path rule (config_schema.go's
+// configKeyPrefix): no prefix when the component declares none, and the
+// declared namespace normalized to end with a dot otherwise.
 func TestComponentConfigPrefix(t *testing.T) {
 	t.Parallel()
 
@@ -607,8 +610,7 @@ func TestComponentConfigPrefix(t *testing.T) {
 		namespace string
 		want      string
 	}{
-		{name: "default", namespace: "", want: "components.namespaced."},
-		{name: "no namespace", namespace: pkgcore.NoConfigNamespace, want: ""},
+		{name: "empty namespace", namespace: "", want: ""},
 		{name: "custom without a dot", namespace: "platform.authn", want: "platform.authn."},
 		{name: "custom with a dot", namespace: "platform.authn.", want: "platform.authn."},
 	}
@@ -831,7 +833,7 @@ func (*hostConfigResolver) ResolveComponentConfig(_ string, _ any, fileConfig pk
 func TestRunAssembly_ResolvesComponentConfiguration(t *testing.T) {
 	var host testHostConfig
 	spec := driverLoadSpec(t, &host)
-	spec.Options = append(spec.Options, ConfigArgs([]string{"--components.cfgresolver.host=from-flag", "--components.cfgresolver.port=7070"}))
+	spec.Options = append(spec.Options, ConfigArgs([]string{"--host=from-flag", "--port=7070"}))
 	spec.Args = []string{}
 	spec.Overrides = &CompositionOverrides{Config: pkgcore.ComponentConfig{}.With("components",
 		pkgcore.ComponentConfig{}.With(resolverName, nil).With("observability", false))}

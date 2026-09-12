@@ -99,11 +99,11 @@ func TestCollectComponentConfig_SchemaCarryingComponentsOnly(t *testing.T) {
 		t.Errorf("components without resolvable fields appear in the surface: %v", names)
 	}
 	wantKeys := []string{
-		"components.cfghelp.helper.host",
-		"components.cfghelp.helper.port",
-		"components.cfghelp.helper.cipher_key",
-		"components.cfghelp.helper.plain",
-		"components.cfghelp.helper.ttl",
+		"host",
+		"port",
+		"cipher_key",
+		"plain",
+		"ttl",
 	}
 	if len(keys) != len(wantKeys) {
 		t.Fatalf("fixture keys = %v, want %v", keys, wantKeys)
@@ -227,30 +227,30 @@ configuration reference reads; a key path is the address its flag,
 environment variable, config-file entry or derivation spells):
 
 cfghelp.helper
-  components.cfghelp.helper.host  string  group=network
+  host  string  group=network
       source: flag > environment > config file > the configuration block's value
-      flag: --components.cfghelp.helper.host
-      env: APP_COMPONENTS__CFGHELP__HELPER__HOST
+      flag: --host
+      env: APP_HOST
       description: the address the helper binds
       default: 127.0.0.1:0
       example: 0.0.0.0:8080
-  components.cfghelp.helper.port  int  required
+  port  int  required
       source: flag > environment > config file > the configuration block's value
-      flag: --components.cfghelp.helper.port
+      flag: --port
       env: HELP_PORT (pinned by the declaration)
-  components.cfghelp.helper.cipher_key  []byte  derive required sensitive group=security
+  cipher_key  []byte  derive required sensitive group=security
       source: flag > environment > config file > root-key derivation > declared default
-      flag: --components.cfghelp.helper.cipher_key
-      env: APP_COMPONENTS__CFGHELP__HELPER__CIPHER_KEY
+      flag: --cipher_key
+      env: APP_CIPHER_KEY
       description: 32 bytes of key material the helper seals with
       default: [redacted]
       example: [redacted]
-  components.cfghelp.helper.plain  string
+  plain  string
       source: the component's configuration block only
-  components.cfghelp.helper.ttl  time.Duration
+  ttl  time.Duration
       source: flag > environment > config file > the configuration block's value
-      flag: --components.cfghelp.helper.ttl
-      env: APP_COMPONENTS__CFGHELP__HELPER__TTL
+      flag: --ttl
+      env: APP_TTL
 `
 	if out.String() != want {
 		t.Errorf("rendered help differs from the pinned surface:\n--- got ---\n%s--- want ---\n%s", out.String(), want)
@@ -278,7 +278,7 @@ func TestRenderComponentConfigHelp_DefaultPrefixWhenUnset(t *testing.T) {
 	surfaces := []ComponentConfigSurface{{
 		Name: "solo",
 		Fields: []pkgcore.FieldDescriptor{{
-			Key:    "components.solo.addr",
+			Key:    "addr",
 			Type:   "string",
 			Expose: true,
 		}},
@@ -286,7 +286,7 @@ func TestRenderComponentConfigHelp_DefaultPrefixWhenUnset(t *testing.T) {
 	if err := RenderComponentConfigHelp(&out, surfaces, ""); err != nil {
 		t.Fatalf("RenderComponentConfigHelp() error = %v, want nil", err)
 	}
-	if want := "env: SPEED_COMPONENTS__SOLO__ADDR\n"; !strings.Contains(out.String(), want) {
+	if want := "env: SPEED_ADDR\n"; !strings.Contains(out.String(), want) {
 		t.Errorf("rendering lacks the loader's default-prefix spelling %q:\n%s", want, out.String())
 	}
 }
@@ -317,7 +317,7 @@ func (failingWriter) Write([]byte) (int, error) {
 func TestRenderComponentConfigHelp_WriteErrorPropagates(t *testing.T) {
 	err := RenderComponentConfigHelp(failingWriter{}, []ComponentConfigSurface{{
 		Name:   "solo",
-		Fields: []pkgcore.FieldDescriptor{{Key: "components.solo.addr", Type: "string"}},
+		Fields: []pkgcore.FieldDescriptor{{Key: "addr", Type: "string"}},
 	}}, "APP_")
 	if err == nil {
 		t.Fatal("RenderComponentConfigHelp() error = nil, want the writer's error")
