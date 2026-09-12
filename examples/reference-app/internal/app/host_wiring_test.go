@@ -13,6 +13,7 @@ import (
 	"reflect"
 	"testing"
 
+	aigateway "github.com/vislake/speed/go/ai-gateway"
 	speedapp "github.com/vislake/speed/go/app"
 	"github.com/vislake/speed/go/org"
 	"github.com/vislake/speed/go/pkgcore"
@@ -261,6 +262,48 @@ func TestComposition_SelectsTheResolvedImplementations(t *testing.T) {
 				t.Errorf("entry %q = %v, want the explicit deselection of the built-in the host stands in for", off, value)
 			}
 		}
+		// The ai-gateway provider members are credential-conditioned: a
+		// plain boot configures no provider credential, so neither member is
+		// selected and the provider names stay on the package-level
+		// registries -- the module's documented fallback.
+		for _, absent := range []string{"chat.openai-compatible", "image.openai-compatible"} {
+			if value, ok := block.Get(absent); ok {
+				t.Errorf("the plain boot carries entry %q = %v, want it absent: the member is selected only when its platform credential is configured", absent, value)
+			}
+		}
+	})
+
+	t.Run("the provider-configured boot", func(t *testing.T) {
+		b := newServerBuild(ServerConfig{
+			AIGatewayBaseURL:      "https://chat-upstream.example.test/v1",
+			AIGatewayAPIKey:       "sk-assembly-chat",
+			AIGatewayImageBaseURL: "https://image-upstream.example.test/v1",
+			AIGatewayImageAPIKey:  "sk-assembly-image",
+		})
+		block := componentsBlock(t, b.composition(false))
+		for _, tc := range []struct {
+			name    string
+			baseURL string
+			apiKey  string
+		}{
+			{"chat.openai-compatible", b.cfg.AIGatewayBaseURL, b.cfg.AIGatewayAPIKey},
+			{"image.openai-compatible", b.cfg.AIGatewayImageBaseURL, b.cfg.AIGatewayImageAPIKey},
+		} {
+			value, ok := selectedEntry(block, tc.name)
+			if !ok {
+				t.Fatalf("a boot with the %s platform credential does not select its provider component", tc.name)
+			}
+			entry, isBlock := value.(pkgcore.ComponentConfig)
+			if !isBlock {
+				t.Fatalf("%q's entry carries a %T, want a ComponentConfig", tc.name, value)
+			}
+			if got, _ := entry.Get("base_url"); got != tc.baseURL {
+				t.Errorf("%s block base_url = %v, want %q", tc.name, got, tc.baseURL)
+			}
+			if got, _ := entry.Get("api_key"); got != tc.apiKey {
+				t.Errorf("%s block api_key = %v, want %q", tc.name, got, tc.apiKey)
+			}
+		}
 	})
 
 	t.Run("the configured boot", func(t *testing.T) {
@@ -329,7 +372,9 @@ func TestComposition_SelectsTheResolvedImplementations(t *testing.T) {
 // composes the face without listening (BuildServer's drive), and the
 // two-phase shutdown releases everything. The composition's strict mode
 // makes this the completeness check: a token no selected component provides
-// fails the assembly by name.
+// fails the assembly by name. The boot carries a configured provider pair,
+// so the credential-conditioned ai-gateway member selection is part of this
+// check too.
 func TestAssemble_ComposesAndClosesTheWholeApplication(t *testing.T) {
 	cfg := ServerConfig{
 		DeploymentMode: pkgcore.DeploymentModeStandalone,
@@ -337,6 +382,12 @@ func TestAssemble_ComposesAndClosesTheWholeApplication(t *testing.T) {
 		SQLitePath:     filepath.Join(t.TempDir(), "assembly.db"),
 		HostTenants:    demo.DemoHostTenants,
 		Memberships:    NewSignInMemberships(),
+		// The provider pair: a configured chat and image credential, under
+		// the same condition the boot's platform-credential write uses.
+		AIGatewayBaseURL:      "https://chat-upstream.example.test/v1",
+		AIGatewayAPIKey:       "sk-assembly-chat",
+		AIGatewayImageBaseURL: "https://image-upstream.example.test/v1",
+		AIGatewayImageAPIKey:  "sk-assembly-image",
 	}
 	b := newServerBuild(cfg)
 	reg, err := b.assemble(context.Background(), false)
@@ -352,6 +403,28 @@ func TestAssemble_ComposesAndClosesTheWholeApplication(t *testing.T) {
 	}
 	if face.server != nil {
 		t.Fatal("BuildServer's drive started a listener, want the face composed without one")
+	}
+
+	// The provider members are selected members of the real assembly and
+	// construct through the component face: the names the module's routes
+	// carry resolve as the selected components (ai-gateway's buildChat/
+	// buildImage prefer a selected member over the package-level registry
+	// for exactly these names), and the per-call construction shape works
+	// over the assembled plan. The two faces construct the same
+	// implementation, so this is the selection half of the switch; the
+	// preference itself is pinned in ai-gateway's own suite.
+	if got := pkgcore.MemberNames(reg, "chat"); !reflect.DeepEqual(got, []string{aigateway.ProviderOpenAICompatible}) {
+		t.Errorf("MemberNames(chat) = %v, want [%s]", got, aigateway.ProviderOpenAICompatible)
+	}
+	if got := pkgcore.MemberNames(reg, "image"); !reflect.DeepEqual(got, []string{aigateway.ProviderOpenAICompatibleImage}) {
+		t.Errorf("MemberNames(image) = %v, want [%s]", got, aigateway.ProviderOpenAICompatibleImage)
+	}
+	provider, err := pkgcore.Build[aigateway.ChatProvider](context.Background(), reg, aigateway.ProviderOpenAICompatible, nil)
+	if err != nil {
+		t.Fatalf("building %s through the component face: %v", aigateway.ProviderOpenAICompatible, err)
+	}
+	if provider == nil {
+		t.Fatal("the component face built no provider")
 	}
 	// The migration ledger keys every set by the module its component
 	// implements, never by the host-prefixed component name the assembly
