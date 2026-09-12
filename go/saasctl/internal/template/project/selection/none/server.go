@@ -14,6 +14,7 @@ import (
 	speedapp "github.com/vislake/speed/go/app"
 	"github.com/vislake/speed/go/config"
 	"github.com/vislake/speed/go/dbkit"
+
 	// Blank-imported for its init side effect: registers dbkit.DialectSQLite,
 	// the dialect the database component this composition selects opens --
 	// this skeleton's own database always speaks SQLite, regardless of which
@@ -21,6 +22,7 @@ import (
 	_ "github.com/vislake/speed/go/dbkit/dialect/sqlite"
 	obs "github.com/vislake/speed/go/observability"
 	"github.com/vislake/speed/go/pkgcore"
+
 	// Blank-imported for their init() side effects: each registers the
 	// distributed component the composition selects when the matching
 	// variable is set ("eventbus.redis" and "kv.redis" for APP_REDIS_ADDR).
@@ -29,6 +31,7 @@ import (
 	// built-in makes.
 	_ "github.com/vislake/speed/go/pkgcore/eventbus/redis"
 	_ "github.com/vislake/speed/go/pkgcore/kv/redis"
+
 	// Imported (and thereby registered) for its init() side effect and read
 	// by the composition below: the "objectstore.s3" component the APP_S3_*
 	// group selects, and the addressing-style enum the resolved serverConfig
