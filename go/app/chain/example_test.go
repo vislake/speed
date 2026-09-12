@@ -9,7 +9,6 @@ package chain_test
 import (
 	"context"
 	"crypto"
-	"embed"
 	"errors"
 	"fmt"
 	"net/http"
@@ -20,7 +19,6 @@ import (
 	"github.com/vislake/speed/go/app/chain"
 	"github.com/vislake/speed/go/authn"
 	"github.com/vislake/speed/go/pkgcore"
-	"github.com/vislake/speed/go/pkgcore/componenttest"
 )
 
 // exampleKeySource is an authn.KeySource carrying no verification keys, so
@@ -46,43 +44,44 @@ func (exampleKeySource) VerificationKeys(context.Context, string) ([]struct {
 	return nil, nil
 }
 
-// exampleModule is a module mounting one route, so the example can
-// bootstrap a registry without any business module; a real host's registry
-// comes from the assembly over its own module set.
-type exampleModule struct{}
-
-func (exampleModule) Name() string         { return "example" }
-func (exampleModule) DependsOn() []string  { return nil }
-func (exampleModule) Migrations() embed.FS { return embed.FS{} }
-func (exampleModule) Locales() embed.FS    { return embed.FS{} }
-func (exampleModule) OpenAPISpec() []byte  { return nil }
-func (m exampleModule) Register(reg *pkgcore.ComponentRegistry) error {
-	reg.RoutesSeat().Mount(app.AuthnAPIPath, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_, _ = fmt.Fprintf(w, "authn handler: %s", r.URL.Path)
-	}))
-	reg.RoutesSeat().Mount("/api/v1/notes", http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		_, _ = fmt.Fprint(w, "notes")
-	}))
-	return nil
+// exampleRouteSource is the RouteSource Standard derives its partition
+// from: here a literal fixture standing in for the http component's product
+// (go/app/httpserve's *Face), which accumulates the same declarations during
+// the assembly's Init stage and answers the same two readings.
+type exampleRouteSource struct {
+	routes      []pkgcore.MountedRoute
+	middlewares []func(http.Handler) http.Handler
 }
 
-// ExampleStandard shows the derivation a host composes when its route
-// layout is the registry's own: Standard reads the mounted routes from the
-// bootstrapped registry, admits them through the host's route-authorization
-// table, splits the authn subtree out, and mounts the rest on the host's
-// protected face. With no rbac module in this example's registry there is
-// no rule table to pass, which is why the option is omitted -- a host with
-// an authorization domain adds WithAuthorization.
+func (s exampleRouteSource) MountedRoutes() []pkgcore.MountedRoute {
+	return s.routes
+}
+
+func (s exampleRouteSource) Middlewares() []func(http.Handler) http.Handler {
+	return s.middlewares
+}
+
+// ExampleStandard shows the derivation a host composes for its http
+// component's product: Standard reads the accumulated routes, admits them
+// through the host's route-authorization table, splits the authn subtree
+// out, and mounts the rest on the host's protected face. With no rbac
+// module in this example there is no rule table to pass, which is why the
+// option is omitted -- a host with an authorization domain adds
+// WithAuthorization.
 func ExampleStandard() {
 	verifier, err := authn.NewVerifier(exampleKeySource{})
 	if err != nil {
 		panic(err)
 	}
 
-	reg, err := componenttest.DeclareModules(exampleModule{})
-	if err != nil {
-		panic(err)
-	}
+	face := exampleRouteSource{routes: []pkgcore.MountedRoute{
+		{Path: app.AuthnAPIPath, Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			_, _ = fmt.Fprintf(w, "authn handler: %s", r.URL.Path)
+		})},
+		{Path: "/api/v1/notes", Handler: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			_, _ = fmt.Fprint(w, "notes")
+		})},
+	}}
 
 	// The host's protected face: the mux the application engine prepared,
 	// carrying the platform liveness route and the host's own routes.
@@ -91,7 +90,7 @@ func ExampleStandard() {
 		_, _ = fmt.Fprint(w, "ok")
 	})
 
-	handler, err := chain.Standard(reg, verifier, protected)
+	handler, err := chain.Standard(face, verifier, protected)
 	if err != nil {
 		panic(err)
 	}

@@ -30,14 +30,16 @@ func (m *routesModule) Locales() embed.FS    { return embed.FS{} }
 func (m *routesModule) OpenAPISpec() []byte  { return nil }
 func (m *routesModule) Register(reg *pkgcore.ComponentRegistry) error {
 	for _, route := range m.routes {
-		reg.RoutesSeat().Mount(route.Path, route.Handler)
+		if err := pkgcore.MountRoute(reg, route.Path, route.Handler); err != nil {
+			return err
+		}
 	}
 	return nil
 }
 
 // middlewareModule is a module that declares exactly the middleware a test
 // hands it, through the same declaration window a real component's Init
-// uses, so a Standard test can exercise the Middleware seat without any
+// uses, so a Standard test can exercise the middleware face without any
 // HTTP-facing module of its own.
 type middlewareModule struct {
 	name string
@@ -50,18 +52,30 @@ func (m *middlewareModule) Migrations() embed.FS { return embed.FS{} }
 func (m *middlewareModule) Locales() embed.FS    { return embed.FS{} }
 func (m *middlewareModule) OpenAPISpec() []byte  { return nil }
 func (m *middlewareModule) Register(reg *pkgcore.ComponentRegistry) error {
-	return reg.Middleware.Add(m.mws...)
+	registrar, ok, err := pkgcore.GetOptional[pkgcore.MiddlewareRegistrar](reg)
+	if err != nil {
+		return err
+	}
+	if !ok {
+		return nil
+	}
+	return registrar.Add(m.mws...)
 }
 
-// testRegistry drives the assembly over the modules, returning the registry
-// Standard derives its partition from.
-func testRegistry(t *testing.T, modules ...componenttest.Declarer) *pkgcore.ComponentRegistry {
+// testFace drives the assembly over the modules through a FaceRecorder --
+// the stand-in for the http component's product -- and returns that
+// recorder: the modules' declaration bodies mount and declare on it, and
+// Standard derives its partition and its outermost middleware layer from
+// the very same value, exactly the shape a real boot has.
+func testFace(t *testing.T, modules ...componenttest.Declarer) *componenttest.FaceRecorder {
 	t.Helper()
-	reg, err := componenttest.DeclareModules(modules...)
-	if err != nil {
+	face := componenttest.NewFaceRecorder()
+	reg := componenttest.NewRegistry()
+	reg.Put(face)
+	if err := componenttest.DeclareInto(reg, modules...); err != nil {
 		t.Fatalf("assembly: %v", err)
 	}
-	return reg
+	return face
 }
 
 // countingHandler records how often it answered.
@@ -139,7 +153,7 @@ func newStandardFixture(t *testing.T, mutate func(*[]Option, *stubAuthorizer)) *
 		protected: &countingHandler{},
 		az:        &stubAuthorizer{allowed: true},
 	}
-	reg := testRegistry(t, &routesModule{name: "fixture", routes: []pkgcore.MountedRoute{
+	face := testFace(t, &routesModule{name: "fixture", routes: []pkgcore.MountedRoute{
 		{Path: app.AuthnAPIPath, Handler: f.authn},
 		{Path: "/api/v1/admin", Handler: f.admin},
 		{Path: "/api/v1/notes", Handler: f.notes},
@@ -171,7 +185,7 @@ func newStandardFixture(t *testing.T, mutate func(*[]Option, *stubAuthorizer)) *
 		mutate(&opts, f.az)
 	}
 
-	handler, err := Standard(reg, newTestVerifier(t), protected, opts...)
+	handler, err := Standard(face, newTestVerifier(t), protected, opts...)
 	if err != nil {
 		t.Fatalf("Standard: %v", err)
 	}
@@ -206,21 +220,26 @@ func TestStandard_PartitionsTheMountedRoutes(t *testing.T) {
 // routesProbe is the trivial product of the component-registry fixture.
 type routesProbe struct{}
 
-// TestStandard_AcceptsAComponentRegistry pins the route source's second
-// shape: the component assembly's registry answers the same route reading as
-// the module registry, so a host whose assembly produced that registry
-// composes the same chain from the same declarations.
-func TestStandard_AcceptsAComponentRegistry(t *testing.T) {
+// TestStandard_AcceptsAComponentProduct pins the route source's shape: the
+// http component's product answers the route reading, so a host whose
+// assembly produced that product composes the chain from the declarations
+// the component accumulated -- here a fixture component declaring through
+// the same optional dependency a real module declares.
+func TestStandard_AcceptsAComponentProduct(t *testing.T) {
+	face := componenttest.NewFaceRecorder()
 	reg := pkgcore.NewComponentRegistry()
+	reg.Put(face)
 	authn := &countingHandler{}
 	err := reg.Register(pkgcore.Component{
 		Name: "fixture.routes",
+		Requires: []pkgcore.Requirement{
+			{Token: (*pkgcore.RouteRegistrar)(nil), Optional: true},
+		},
 		New: func(context.Context, *pkgcore.ComponentRegistry, pkgcore.ComponentConfig) (any, error) {
 			return &routesProbe{}, nil
 		},
 		Init: func(_ context.Context, r *pkgcore.ComponentRegistry, _ any) error {
-			r.Routes.Mount(app.AuthnAPIPath, authn)
-			return nil
+			return pkgcore.MountRoute(r, app.AuthnAPIPath, authn)
 		},
 	})
 	if err != nil {
@@ -245,17 +264,17 @@ func TestStandard_AcceptsAComponentRegistry(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = reg.Close(context.Background()) })
 
-	handler, err := Standard(reg, newTestVerifier(t), http.NewServeMux())
+	handler, err := Standard(face, newTestVerifier(t), http.NewServeMux())
 	if err != nil {
-		t.Fatalf("Standard over a component registry: %v", err)
+		t.Fatalf("Standard over a component product: %v", err)
 	}
 	if rec := do(handler, http.MethodGet, app.AuthnAPIPath+"/register", nil); authn.hits != 1 {
-		t.Fatalf("GET %s/register: status %d, authn hits %d; the component registry's routes must partition like the module registry's", app.AuthnAPIPath, rec.Code, authn.hits)
+		t.Fatalf("GET %s/register: status %d, authn hits %d; the component product's routes must partition like the module registry's", app.AuthnAPIPath, rec.Code, authn.hits)
 	}
 }
 
 // probeMiddleware returns a middleware recording its enter and exit under
-// name into order, so a test can observe where the seat's layer wrapped and
+// name into order, so a test can observe where the face's layer wrapped and
 // how several registered middlewares nested.
 func probeMiddleware(order *[]string, name string) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
@@ -267,16 +286,16 @@ func probeMiddleware(order *[]string, name string) func(http.Handler) http.Handl
 	}
 }
 
-// TestStandard_AppliesTheMiddlewareSeatOutermost pins the seat layer's
-// position and nesting: the middleware declared on the Middleware seat wraps
+// TestStandard_AppliesTheMiddlewareFaceOutermost pins the declared layer's
+// position and nesting: the middleware declared on the middleware face wraps
 // the finished chain OUTSIDE authn.Middleware -- a request authn itself
 // refuses (an invalid bearer) still passes through every probe -- on both
 // the protected face and the structurally exempt branches, and the first
 // registered middleware wraps outermost.
-func TestStandard_AppliesTheMiddlewareSeatOutermost(t *testing.T) {
+func TestStandard_AppliesTheMiddlewareFaceOutermost(t *testing.T) {
 	var order []string
 	authn := &countingHandler{}
-	reg := testRegistry(t,
+	face := testFace(t,
 		&routesModule{name: "fixture", routes: []pkgcore.MountedRoute{
 			{Path: app.AuthnAPIPath, Handler: authn},
 			{Path: "/api/v1/notes", Handler: &countingHandler{}},
@@ -289,13 +308,13 @@ func TestStandard_AppliesTheMiddlewareSeatOutermost(t *testing.T) {
 	protected := http.NewServeMux()
 	protected.Handle("/", http.NotFoundHandler())
 
-	handler, err := Standard(reg, newTestVerifier(t), protected)
+	handler, err := Standard(face, newTestVerifier(t), protected)
 	if err != nil {
 		t.Fatalf("Standard: %v", err)
 	}
 
 	// The invalid bearer 401s inside authn.Middleware, before anything else
-	// in the chain runs; the probes still saw the request, so the seat's
+	// in the chain runs; the probes still saw the request, so the face's
 	// layer must sit outside authn -- and it must nest first-registered-
 	// outermost.
 	rec := do(handler, http.MethodGet, "/api/v1/notes", map[string]string{"Authorization": "Bearer not-a-token"})
@@ -304,7 +323,7 @@ func TestStandard_AppliesTheMiddlewareSeatOutermost(t *testing.T) {
 	}
 	want := []string{"outer:in", "inner:in", "inner:out", "outer:out"}
 	if !slices.Equal(order, want) {
-		t.Fatalf("probe order for a request authn refused = %v, want %v: the seat's middleware wraps outside authn.Middleware, first registered outermost", order, want)
+		t.Fatalf("probe order for a request authn refused = %v, want %v: the face's middleware wraps outside authn.Middleware, first registered outermost", order, want)
 	}
 
 	// The structurally exempt branch passes through the same layer: the
@@ -314,7 +333,7 @@ func TestStandard_AppliesTheMiddlewareSeatOutermost(t *testing.T) {
 		t.Fatalf("GET %s/register: status %d, authn hits %d; the exempt branch must serve the request", app.AuthnAPIPath, rec.Code, authn.hits)
 	}
 	if !slices.Equal(order, want) {
-		t.Fatalf("probe order for an exempt-branch request = %v, want %v: every request passes through the seat's layer", order, want)
+		t.Fatalf("probe order for an exempt-branch request = %v, want %v: every request passes through the face's layer", order, want)
 	}
 }
 
@@ -414,29 +433,29 @@ func TestStandard_RejectsMissingRequiredPieces(t *testing.T) {
 		}
 	})
 	t.Run("nil protected", func(t *testing.T) {
-		reg := testRegistry(t, &routesModule{name: "authn-only", routes: []pkgcore.MountedRoute{{Path: app.AuthnAPIPath, Handler: http.NewServeMux()}}})
-		if _, err := Standard(reg, verifier, nil, WithAdminPrefix("")); err == nil {
+		face := testFace(t, &routesModule{name: "authn-only", routes: []pkgcore.MountedRoute{{Path: app.AuthnAPIPath, Handler: http.NewServeMux()}}})
+		if _, err := Standard(face, verifier, nil, WithAdminPrefix("")); err == nil {
 			t.Fatal("Standard accepted a nil protected mux")
 		}
 	})
 	t.Run("authorization half declared", func(t *testing.T) {
-		reg := testRegistry(t, &routesModule{name: "authn-only", routes: []pkgcore.MountedRoute{{Path: app.AuthnAPIPath, Handler: http.NewServeMux()}}})
-		if _, err := Standard(reg, verifier, http.NewServeMux(), WithAuthorization(&stubAuthorizer{}, nil)); err == nil {
+		face := testFace(t, &routesModule{name: "authn-only", routes: []pkgcore.MountedRoute{{Path: app.AuthnAPIPath, Handler: http.NewServeMux()}}})
+		if _, err := Standard(face, verifier, http.NewServeMux(), WithAuthorization(&stubAuthorizer{}, nil)); err == nil {
 			t.Fatal("Standard accepted an authorizer with no rule table")
 		}
-		if _, err := Standard(reg, verifier, http.NewServeMux(), WithAuthorization(nil, []rbac.RouteRule{{Path: app.AuthnAPIPath, Access: pkgcore.RouteAccess{Public: true}}})); err == nil {
+		if _, err := Standard(face, verifier, http.NewServeMux(), WithAuthorization(nil, []rbac.RouteRule{{Path: app.AuthnAPIPath, Access: pkgcore.RouteAccess{Public: true}}})); err == nil {
 			t.Fatal("Standard accepted a rule table with no authorizer")
 		}
 	})
 	t.Run("admin prefix nothing mounts", func(t *testing.T) {
-		reg := testRegistry(t, &routesModule{name: "authn-only", routes: []pkgcore.MountedRoute{{Path: app.AuthnAPIPath, Handler: http.NewServeMux()}}})
-		if _, err := Standard(reg, verifier, http.NewServeMux(), WithAdminPrefix("/api/v1/admin")); err == nil {
+		face := testFace(t, &routesModule{name: "authn-only", routes: []pkgcore.MountedRoute{{Path: app.AuthnAPIPath, Handler: http.NewServeMux()}}})
+		if _, err := Standard(face, verifier, http.NewServeMux(), WithAdminPrefix("/api/v1/admin")); err == nil {
 			t.Fatal("Standard accepted an admin prefix no mounted route lies below")
 		}
 	})
 	t.Run("no authn route", func(t *testing.T) {
-		reg := testRegistry(t, &routesModule{name: "empty"})
-		if _, err := Standard(reg, verifier, http.NewServeMux()); err == nil {
+		face := testFace(t, &routesModule{name: "empty"})
+		if _, err := Standard(face, verifier, http.NewServeMux()); err == nil {
 			t.Fatal("Standard accepted a registry with no authn subtree")
 		}
 	})
@@ -468,14 +487,14 @@ func TestStandard_FailedCompositionLeavesTheProtectedMuxUntouched(t *testing.T) 
 			if tc.dropAuthn {
 				routes = routes[1:]
 			}
-			reg := testRegistry(t, &routesModule{name: "fixture", routes: routes})
+			face := testFace(t, &routesModule{name: "fixture", routes: routes})
 
 			var opts []Option
 			if tc.adminPrefix {
 				opts = append(opts, WithAdminPrefix("/api/v1/admin"))
 			}
 			protected := http.NewServeMux()
-			if _, err := Standard(reg, newTestVerifier(t), protected, opts...); err == nil {
+			if _, err := Standard(face, newTestVerifier(t), protected, opts...); err == nil {
 				t.Fatal("Standard accepted a composition it must refuse")
 			}
 
@@ -492,11 +511,11 @@ func TestStandard_FailedCompositionLeavesTheProtectedMuxUntouched(t *testing.T) 
 // table does not name refuses the composition rather than being mounted
 // ungated.
 func TestStandard_UndeclaredRouteFailsTheGuard(t *testing.T) {
-	reg := testRegistry(t, &routesModule{name: "fixture", routes: []pkgcore.MountedRoute{
+	face := testFace(t, &routesModule{name: "fixture", routes: []pkgcore.MountedRoute{
 		{Path: app.AuthnAPIPath, Handler: http.NewServeMux()},
 		{Path: "/api/v1/notes", Handler: http.NewServeMux()},
 	}})
-	_, err := Standard(reg, newTestVerifier(t), http.NewServeMux(), WithAuthorization(&stubAuthorizer{}, []rbac.RouteRule{
+	_, err := Standard(face, newTestVerifier(t), http.NewServeMux(), WithAuthorization(&stubAuthorizer{}, []rbac.RouteRule{
 		{Path: app.AuthnAPIPath, Access: pkgcore.RouteAccess{Public: true}},
 	}))
 	if err == nil {
