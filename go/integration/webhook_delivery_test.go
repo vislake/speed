@@ -374,12 +374,13 @@ func TestHandler_IntegrationListWebhookDeliveries_BlockedDial_LastErrorNamesNoRe
 	if rec.Code != http.StatusOK {
 		t.Fatalf("deliveries status = %d, body %q", rec.Code, rec.Body.String())
 	}
+	body := rec.Body.Bytes()
 	var list api.IntegrationListWebhookDeliveriesResponse
-	if err := json.NewDecoder(rec.Body).Decode(&list); err != nil {
+	if err := json.Unmarshal(body, &list); err != nil {
 		t.Fatalf("decode deliveries response: %v", err)
 	}
 	if list.Deliveries == nil || len(*list.Deliveries) != 1 {
-		t.Fatalf("deliveries = %+v, want exactly one row (body %q)", list.Deliveries, rec.Body.String())
+		t.Fatalf("deliveries = %+v, want exactly one row (body %q)", list.Deliveries, body)
 	}
 	row := (*list.Deliveries)[0]
 	if row.LastError == nil {

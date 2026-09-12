@@ -75,21 +75,41 @@ func doRequest(h *Handler, ctx context.Context, method, path string, body any) *
 }
 
 // assertErrorCode fails t unless rec's body is an IntegrationError carrying
-// code, at wantStatus.
+// code, at wantStatus. The raw bytes are captured before decoding so the
+// failure message carries the real body: the decoder consumes the recorder's
+// buffer, and a message reading rec.Body afterwards would print an empty
+// body.
 func assertErrorCode(t *testing.T, rec *httptest.ResponseRecorder, wantStatus int, code string) {
 	t.Helper()
 	if rec.Code != wantStatus {
 		t.Fatalf("status = %d, want %d (body %q)", rec.Code, wantStatus, rec.Body.String())
 	}
+	body := rec.Body.Bytes()
 	var got api.IntegrationError
-	if err := json.NewDecoder(rec.Body).Decode(&got); err != nil {
-		t.Fatalf("decode response body %q: %v", rec.Body.String(), err)
+	if err := json.Unmarshal(body, &got); err != nil {
+		t.Fatalf("decode response body %q: %v", body, err)
 	}
 	if got.Code == nil {
 		t.Fatalf("error code = <nil>, want %q", code)
 	}
 	if *got.Code != code {
 		t.Fatalf("error code = %q, want %q", *got.Code, code)
+	}
+}
+
+// TestAssertErrorCode_KeepsTheBodyReadable pins that a decode leaves the
+// recorder's buffer intact, so a diagnostic read after it still sees the
+// real body.
+func TestAssertErrorCode_KeepsTheBodyReadable(t *testing.T) {
+	rec := httptest.NewRecorder()
+	rec.Code = http.StatusBadRequest
+	body := `{"code":"` + ErrInvalidRequestBody.Code + `"}`
+	rec.Body.WriteString(body)
+
+	assertErrorCode(t, rec, http.StatusBadRequest, ErrInvalidRequestBody.Code)
+
+	if got := rec.Body.String(); got != body {
+		t.Fatalf("rec.Body.String() = %q after assertErrorCode, want the full body %q -- the decode must leave the recorder's buffer readable", got, body)
 	}
 }
 
@@ -105,9 +125,10 @@ func assertAuditGapSuccess(t *testing.T, rec *httptest.ResponseRecorder, wantSta
 	if rec.Code != wantStatus {
 		t.Fatalf("status = %d, want %d (body %q)", rec.Code, wantStatus, rec.Body.String())
 	}
+	body := rec.Body.Bytes()
 	var raw map[string]any
-	if err := json.NewDecoder(rec.Body).Decode(&raw); err != nil {
-		t.Fatalf("decode response body %q: %v", rec.Body.String(), err)
+	if err := json.Unmarshal(body, &raw); err != nil {
+		t.Fatalf("decode response body %q: %v", body, err)
 	}
 	for _, forbidden := range []string{"code", "params"} {
 		if _, present := raw[forbidden]; present {
@@ -115,7 +136,7 @@ func assertAuditGapSuccess(t *testing.T, rec *httptest.ResponseRecorder, wantSta
 		}
 	}
 	if gap, _ := raw["auditRecordMissing"].(bool); !gap {
-		t.Fatalf("auditRecordMissing = %v, want true (body %q)", raw["auditRecordMissing"], rec.Body.String())
+		t.Fatalf("auditRecordMissing = %v, want true (body %q)", raw["auditRecordMissing"], body)
 	}
 	return raw
 }
@@ -295,13 +316,14 @@ func TestHandler_WebhookSubscriptionLifecycle_OverHTTP(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("list status = %d, body %q", rec.Code, rec.Body.String())
 	}
+	listBody := rec.Body.Bytes()
 	var listRaw map[string]any
-	if err := json.NewDecoder(rec.Body).Decode(&listRaw); err != nil {
+	if err := json.Unmarshal(listBody, &listRaw); err != nil {
 		t.Fatalf("decode list response: %v", err)
 	}
 	listItems, _ := listRaw["webhookSubscriptions"].([]any)
 	if len(listItems) != 1 {
-		t.Fatalf("len(webhookSubscriptions) = %d, want 1 (body %q)", len(listItems), rec.Body.String())
+		t.Fatalf("len(webhookSubscriptions) = %d, want 1 (body %q)", len(listItems), listBody)
 	}
 	row, _ := listItems[0].(map[string]any)
 	if _, present := row["secret"]; present {
@@ -352,12 +374,13 @@ func TestHandler_WebhookSubscriptionLifecycle_OverHTTP(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("list-after-delete status = %d, body %q", rec.Code, rec.Body.String())
 	}
+	emptyBody := rec.Body.Bytes()
 	var emptyRaw map[string]any
-	if err := json.NewDecoder(rec.Body).Decode(&emptyRaw); err != nil {
+	if err := json.Unmarshal(emptyBody, &emptyRaw); err != nil {
 		t.Fatalf("decode list-after-delete response: %v", err)
 	}
 	if emptyItems, _ := emptyRaw["webhookSubscriptions"].([]any); len(emptyItems) != 0 {
-		t.Fatalf("len(webhookSubscriptions) after delete = %d, want 0 (body %q)", len(emptyItems), rec.Body.String())
+		t.Fatalf("len(webhookSubscriptions) after delete = %d, want 0 (body %q)", len(emptyItems), emptyBody)
 	}
 
 	// restore: 204, and the subscription is listable again -- paused, never
@@ -370,13 +393,14 @@ func TestHandler_WebhookSubscriptionLifecycle_OverHTTP(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("list-after-restore status = %d, body %q", rec.Code, rec.Body.String())
 	}
+	restoredBody := rec.Body.Bytes()
 	var restoredRaw map[string]any
-	if err := json.NewDecoder(rec.Body).Decode(&restoredRaw); err != nil {
+	if err := json.Unmarshal(restoredBody, &restoredRaw); err != nil {
 		t.Fatalf("decode list-after-restore response: %v", err)
 	}
 	restoredItems, _ := restoredRaw["webhookSubscriptions"].([]any)
 	if len(restoredItems) != 1 {
-		t.Fatalf("len(webhookSubscriptions) after restore = %d, want 1 (body %q)", len(restoredItems), rec.Body.String())
+		t.Fatalf("len(webhookSubscriptions) after restore = %d, want 1 (body %q)", len(restoredItems), restoredBody)
 	}
 	restored, _ := restoredItems[0].(map[string]any)
 	if restored["url"] != "https://example.com/hook-v2" {
@@ -515,13 +539,14 @@ func TestHandler_IntegrationListAPIKeys_NeverExposesRawKeyOrHash(t *testing.T) {
 	// generated types have no Key or Hash field at all, so decoding
 	// through them could never prove the wire body omits one -- only a
 	// generic map decode can.
+	body := rec.Body.Bytes()
 	var raw map[string]any
-	if err := json.NewDecoder(rec.Body).Decode(&raw); err != nil {
+	if err := json.Unmarshal(body, &raw); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
 	items, _ := raw["apiKeys"].([]any)
 	if len(items) != 1 {
-		t.Fatalf("len(apiKeys) = %d, want 1 (body %q)", len(items), rec.Body.String())
+		t.Fatalf("len(apiKeys) = %d, want 1 (body %q)", len(items), body)
 	}
 	row, _ := items[0].(map[string]any)
 	for _, forbidden := range []string{"key", "hash"} {
