@@ -1,7 +1,6 @@
 package aigateway
 
 import (
-	"encoding/json"
 	"net/http"
 
 	"github.com/vislake/speed/go/observability"
@@ -11,10 +10,6 @@ import (
 
 	"github.com/vislake/speed/go/ai-gateway/api"
 )
-
-// jsonContentType is the Content-Type every response below writes, the
-// same JSON type the coded refusals carry (see pkgcore/httpapi).
-const jsonContentType = "application/json; charset=utf-8"
 
 // handlerSystemActor is the pkgcore.SystemReason.Actor
 // AiGatewaySetPlatformCredential attributes its audited system context to.
@@ -147,7 +142,7 @@ func (h *Handler) AiGatewayGetCredential(w http.ResponseWriter, r *http.Request,
 		writeError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, toCredentialResponse(cred.Provider, cred.Scope, cred.BaseURL))
+	httpapi.WriteJSON(w, http.StatusOK, toCredentialResponse(cred.Provider, cred.Scope, cred.BaseURL))
 }
 
 // AiGatewaySetTenantCredential implements api.ServerInterface: PUT
@@ -169,7 +164,7 @@ func (h *Handler) AiGatewaySetTenantCredential(w http.ResponseWriter, r *http.Re
 		writeError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, toCredentialResponse(provider, CredentialScopeTenant, baseURL))
+	httpapi.WriteJSON(w, http.StatusOK, toCredentialResponse(provider, CredentialScopeTenant, baseURL))
 }
 
 // AiGatewaySetPlatformCredential implements api.ServerInterface: PUT
@@ -223,14 +218,7 @@ func (h *Handler) AiGatewaySetPlatformCredential(w http.ResponseWriter, r *http.
 		writeError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, toCredentialResponse(provider, CredentialScopeSystem, baseURL))
-}
-
-// writeJSON writes v to w as JSON with the given status code.
-func writeJSON(w http.ResponseWriter, status int, v any) {
-	w.Header().Set("Content-Type", jsonContentType)
-	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(v)
+	httpapi.WriteJSON(w, http.StatusOK, toCredentialResponse(provider, CredentialScopeSystem, baseURL))
 }
 
 // writeError writes err to w as the coded error envelope (see

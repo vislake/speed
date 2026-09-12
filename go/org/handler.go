@@ -1,7 +1,6 @@
 package org
 
 import (
-	"encoding/json"
 	"net/http"
 
 	obs "github.com/vislake/speed/go/observability"
@@ -10,10 +9,6 @@ import (
 	"github.com/vislake/speed/go/pkgcore/apperr"
 	"github.com/vislake/speed/go/pkgcore/httpapi"
 )
-
-// jsonContentType is the Content-Type every response below writes, matching
-// notes' and config's own handler constant of the same name.
-const jsonContentType = "application/json; charset=utf-8"
 
 // Handler serves org's HTTP endpoints by implementing the spec-generated
 // api.ServerInterface (see api/org-server.gen.go, regenerated from this
@@ -149,7 +144,7 @@ func (h *Handler) OrgListNodes(w http.ResponseWriter, r *http.Request, params ap
 	for i := range nodes {
 		items = append(items, toNodeResponse(&nodes[i]))
 	}
-	writeJSON(w, http.StatusOK, api.OrgListNodesResponse{Nodes: &items})
+	httpapi.WriteJSON(w, http.StatusOK, api.OrgListNodesResponse{Nodes: &items})
 }
 
 // OrgCreateNode implements api.ServerInterface: POST /api/v1/org/nodes.
@@ -185,7 +180,7 @@ func (h *Handler) OrgCreateNode(w http.ResponseWriter, r *http.Request) {
 	}
 
 	obs.FromContext(ctx).Info("org node created", "node_id", node.ID, "parent_id", node.ParentID)
-	writeJSON(w, http.StatusCreated, toNodeResponse(node))
+	httpapi.WriteJSON(w, http.StatusCreated, toNodeResponse(node))
 }
 
 // OrgGetNode implements api.ServerInterface: GET /api/v1/org/nodes/{nodeId}.
@@ -199,7 +194,7 @@ func (h *Handler) OrgGetNode(w http.ResponseWriter, r *http.Request, nodeID api.
 		writeError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, toNodeResponse(node))
+	httpapi.WriteJSON(w, http.StatusOK, toNodeResponse(node))
 }
 
 // OrgRenameNode implements api.ServerInterface: PATCH
@@ -218,7 +213,7 @@ func (h *Handler) OrgRenameNode(w http.ResponseWriter, r *http.Request, nodeID a
 		writeError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, toNodeResponse(node))
+	httpapi.WriteJSON(w, http.StatusOK, toNodeResponse(node))
 }
 
 // OrgMoveNode implements api.ServerInterface: POST
@@ -238,7 +233,7 @@ func (h *Handler) OrgMoveNode(w http.ResponseWriter, r *http.Request, nodeID api
 		return
 	}
 	obs.FromContext(ctx).Info("org node moved", "node_id", node.ID, "new_parent_id", node.ParentID)
-	writeJSON(w, http.StatusOK, toNodeResponse(node))
+	httpapi.WriteJSON(w, http.StatusOK, toNodeResponse(node))
 }
 
 // OrgDeleteNode implements api.ServerInterface: DELETE
@@ -275,7 +270,7 @@ func (h *Handler) OrgListMembers(w http.ResponseWriter, r *http.Request, params 
 		root, err := h.tree.Root(ctx)
 		switch {
 		case apperr.HasCode(err, ErrNodeNotFound.Code):
-			writeJSON(w, http.StatusOK, api.OrgListMembersResponse{Members: &[]api.OrgMembership{}})
+			httpapi.WriteJSON(w, http.StatusOK, api.OrgListMembersResponse{Members: &[]api.OrgMembership{}})
 			return
 		case err != nil:
 			writeError(w, err)
@@ -294,7 +289,7 @@ func (h *Handler) OrgListMembers(w http.ResponseWriter, r *http.Request, params 
 	for i := range members {
 		items = append(items, toMembershipResponse(&members[i]))
 	}
-	writeJSON(w, http.StatusOK, api.OrgListMembersResponse{Members: &items})
+	httpapi.WriteJSON(w, http.StatusOK, api.OrgListMembersResponse{Members: &items})
 }
 
 // OrgRemoveMember implements api.ServerInterface: DELETE
@@ -347,7 +342,7 @@ func (h *Handler) OrgCreateInvitation(w http.ResponseWriter, r *http.Request) {
 	// comment. toInvitationResponse never touches it either.
 	obs.FromContext(ctx).Info("org invitation created",
 		"invitation_id", result.Invitation.ID, "node_id", result.Invitation.NodeID)
-	writeJSON(w, http.StatusCreated, toInvitationResponse(result.Invitation))
+	httpapi.WriteJSON(w, http.StatusCreated, toInvitationResponse(result.Invitation))
 }
 
 // OrgListInvitations implements api.ServerInterface: GET
@@ -366,7 +361,7 @@ func (h *Handler) OrgListInvitations(w http.ResponseWriter, r *http.Request) {
 	for i := range invitations {
 		items = append(items, toInvitationResponse(&invitations[i]))
 	}
-	writeJSON(w, http.StatusOK, api.OrgListInvitationsResponse{Invitations: &items})
+	httpapi.WriteJSON(w, http.StatusOK, api.OrgListInvitationsResponse{Invitations: &items})
 }
 
 // OrgAcceptInvitation implements api.ServerInterface: POST
@@ -402,7 +397,7 @@ func (h *Handler) OrgAcceptInvitation(w http.ResponseWriter, r *http.Request) {
 	}
 	obs.FromContext(ctx).Info("org invitation accepted",
 		"membership_id", membership.ID, "node_id", membership.NodeID)
-	writeJSON(w, http.StatusOK, toMembershipResponse(membership))
+	httpapi.WriteJSON(w, http.StatusOK, toMembershipResponse(membership))
 }
 
 // declaredInviteeLocale reads the explicitly declared invitee locale off an
@@ -476,13 +471,6 @@ func toInvitationResponse(inv *Invitation) api.OrgInvitation {
 		ExpiresAt: &inv.ExpiresAt,
 		CreatedAt: &inv.CreatedAt,
 	}
-}
-
-// writeJSON writes v to w as JSON with the given status code.
-func writeJSON(w http.ResponseWriter, status int, v any) {
-	w.Header().Set("Content-Type", jsonContentType)
-	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(v)
 }
 
 // writeError writes err to w as the coded error envelope (see

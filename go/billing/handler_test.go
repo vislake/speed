@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"github.com/vislake/speed/go/pkgcore"
+	"github.com/vislake/speed/go/pkgcore/httpapi"
 
 	"github.com/vislake/speed/go/billing/api"
 )
@@ -334,8 +335,8 @@ func TestHandler_ListCreditTransactions_MalformedLimit_AnswersTheCodedEnvelope(t
 	if got, ok := (*env.Params)["parameter"]; !ok || got != "limit" {
 		t.Errorf("malformed-limit envelope params = %v, want parameter = \"limit\"", *env.Params)
 	}
-	if ct := rec.Header().Get("Content-Type"); ct != jsonContentType {
-		t.Errorf("malformed-limit Content-Type = %q, want %q -- the answer must be the JSON envelope, not plain text", ct, jsonContentType)
+	if ct := rec.Header().Get("Content-Type"); ct != httpapi.JSONContentType {
+		t.Errorf("malformed-limit Content-Type = %q, want %q -- the answer must be the JSON envelope, not plain text", ct, httpapi.JSONContentType)
 	}
 }
 

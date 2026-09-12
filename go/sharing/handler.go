@@ -2,7 +2,6 @@ package sharing
 
 import (
 	"context"
-	"encoding/json"
 	"io"
 	"net"
 	"net/http"
@@ -14,10 +13,6 @@ import (
 
 	"github.com/vislake/speed/go/sharing/api"
 )
-
-// jsonContentType is the Content-Type every response below writes, the
-// same JSON type the coded refusals carry (see pkgcore/httpapi).
-const jsonContentType = "application/json; charset=utf-8"
 
 // octetStreamContentType is the fallback Content-Type a granted access
 // writes when the resolved ResourceContent carries no MIME at all.
@@ -397,7 +392,7 @@ func (h *Handler) SharingListShares(w http.ResponseWriter, r *http.Request, para
 	for i := range shares {
 		items = append(items, toShareResponse(&shares[i]))
 	}
-	writeJSON(w, http.StatusOK, api.SharingListSharesResponse{Shares: &items})
+	httpapi.WriteJSON(w, http.StatusOK, api.SharingListSharesResponse{Shares: &items})
 }
 
 // SharingCreateShare implements api.ServerInterface: POST
@@ -427,7 +422,7 @@ func (h *Handler) SharingCreateShare(w http.ResponseWriter, r *http.Request) {
 		writeError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusCreated, api.SharingCreateShareResponse{
+	httpapi.WriteJSON(w, http.StatusCreated, api.SharingCreateShareResponse{
 		Share: toShareResponse(created.Share),
 		Token: created.Token,
 	})
@@ -441,7 +436,7 @@ func (h *Handler) SharingGetShare(w http.ResponseWriter, r *http.Request, shareI
 		writeError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, toShareResponse(share))
+	httpapi.WriteJSON(w, http.StatusOK, toShareResponse(share))
 }
 
 // SharingRevokeShare implements api.ServerInterface: POST
@@ -464,7 +459,7 @@ func (h *Handler) SharingRevokeShare(w http.ResponseWriter, r *http.Request, sha
 		writeError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, toShareResponse(share))
+	httpapi.WriteJSON(w, http.StatusOK, toShareResponse(share))
 }
 
 // SharingListShareAccessLog implements api.ServerInterface: GET
@@ -483,7 +478,7 @@ func (h *Handler) SharingListShareAccessLog(w http.ResponseWriter, r *http.Reque
 	for i := range entries {
 		items = append(items, toAccessLogEntryResponse(&entries[i]))
 	}
-	writeJSON(w, http.StatusOK, api.SharingListAccessLogResponse{Entries: &items})
+	httpapi.WriteJSON(w, http.StatusOK, api.SharingListAccessLogResponse{Entries: &items})
 }
 
 // toShareResponse converts s to its spec-generated JSON response type.
@@ -537,13 +532,6 @@ func clientIP(r *http.Request) string {
 		return r.RemoteAddr
 	}
 	return host
-}
-
-// writeJSON writes v to w as JSON with the given status code.
-func writeJSON(w http.ResponseWriter, status int, v any) {
-	w.Header().Set("Content-Type", jsonContentType)
-	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(v)
 }
 
 // writeError writes err to w as the coded error envelope (see

@@ -2,7 +2,6 @@ package config
 
 import (
 	"context"
-	"encoding/json"
 	"net"
 	"net/http"
 	"strconv"
@@ -86,11 +85,6 @@ func setPublicCacheHeaders(w http.ResponseWriter) {
 	w.Header().Set("Vary", "Host")
 }
 
-// jsonContentType is the Content-Type every response below writes. It is
-// the same constant notes' handler uses, kept locally because the module
-// cannot import the reference app.
-const jsonContentType = "application/json; charset=utf-8"
-
 // writeError writes err to w as the coded error envelope the fragment
 // declares for every refusal on both operations (see pkgcore/httpapi). An
 // err that is not an *apperr.Error -- something below this handler failed
@@ -125,17 +119,16 @@ const methodNotAllowedCode = "config.method_not_allowed"
 // is what keeps the endpoint's own structured refusal in front of that
 // built-in. Like every other refusal it carries Cache-Control: no-store.
 //
-// The body is the one envelope write in the platform outside
+// The body is the one envelope in the platform built outside
 // pkgcore/httpapi.WriteError, the deliberate exception recorded in that
 // package's doc: the 405 is the fragment's HTTP method-contract answer,
 // not an apperr-classified operation, so it is built directly from the
-// fragment's generated api.ConfigError type.
+// fragment's generated api.ConfigError type and written through the
+// shared httpapi.WriteJSON.
 func handleMethodNotAllowed(w http.ResponseWriter, _ *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("Allow", "GET, HEAD")
-	w.Header().Set("Content-Type", jsonContentType)
-	w.WriteHeader(http.StatusMethodNotAllowed)
-	_ = json.NewEncoder(w).Encode(api.ConfigError{Code: methodNotAllowedCode})
+	httpapi.WriteJSON(w, http.StatusMethodNotAllowed, api.ConfigError{Code: methodNotAllowedCode})
 }
 
 // preAuthHandler returns the http.Handler both pre-auth paths are mounted
@@ -212,9 +205,7 @@ func (m *Module) ConfigGetPublicConfig(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	setPublicCacheHeaders(w)
-	w.Header().Set("Content-Type", jsonContentType)
-	w.WriteHeader(http.StatusOK)
-	_ = json.NewEncoder(w).Encode(api.ConfigPublicSnapshot{
+	httpapi.WriteJSON(w, http.StatusOK, api.ConfigPublicSnapshot{
 		Config:   values,
 		Features: features,
 	})
@@ -245,9 +236,7 @@ func (m *Module) ConfigGetSystemFeatures(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	setPublicCacheHeaders(w)
-	w.Header().Set("Content-Type", jsonContentType)
-	w.WriteHeader(http.StatusOK)
-	_ = json.NewEncoder(w).Encode(api.ConfigSystemFeatures{Features: features})
+	httpapi.WriteJSON(w, http.StatusOK, api.ConfigSystemFeatures{Features: features})
 }
 
 // requestContext returns the request's context carrying the tenant the

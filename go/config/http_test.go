@@ -19,6 +19,7 @@ import (
 	"github.com/vislake/speed/go/dbkit"
 	"github.com/vislake/speed/go/pkgcore"
 	"github.com/vislake/speed/go/pkgcore/componenttest"
+	"github.com/vislake/speed/go/pkgcore/httpapi"
 	"github.com/vislake/speed/go/tenancy"
 )
 
@@ -413,8 +414,8 @@ func TestHTTP_MethodGating_AdmitsGetAndHeadOnly(t *testing.T) {
 	if get.recorder.Code != http.StatusOK {
 		t.Fatalf("GET %s = %d, want 200", PathPublic, get.recorder.Code)
 	}
-	if ct := get.recorder.Header().Get("Content-Type"); ct != jsonContentType {
-		t.Fatalf("GET %s Content-Type = %q, want %q", PathPublic, ct, jsonContentType)
+	if ct := get.recorder.Header().Get("Content-Type"); ct != httpapi.JSONContentType {
+		t.Fatalf("GET %s Content-Type = %q, want %q", PathPublic, ct, httpapi.JSONContentType)
 	}
 	head := doRequest(t, mux, http.MethodHead, PathPublic, "anything.example.com")
 	if head.recorder.Code != http.StatusOK {

@@ -1,7 +1,6 @@
 package storage
 
 import (
-	"encoding/json"
 	"io"
 	"net/http"
 	"strconv"
@@ -13,10 +12,6 @@ import (
 
 	"github.com/vislake/speed/go/storage/api"
 )
-
-// jsonContentType is the Content-Type every response below writes, the
-// same JSON type the coded refusals carry (see pkgcore/httpapi).
-const jsonContentType = "application/json; charset=utf-8"
 
 // The page-size bound this module's surface promises. The spec's
 // storage_listObjects documents the same 1-200 window with a default of 50;
@@ -147,7 +142,7 @@ func (h *Handler) StorageListObjects(w http.ResponseWriter, r *http.Request, par
 	for i := range objects {
 		items = append(items, toObjectResponse(&objects[i]))
 	}
-	writeJSON(w, http.StatusOK, api.StorageListObjectsResponse{Objects: &items})
+	httpapi.WriteJSON(w, http.StatusOK, api.StorageListObjectsResponse{Objects: &items})
 }
 
 // StorageCreateObject implements api.ServerInterface: POST
@@ -214,7 +209,7 @@ func (h *Handler) StorageCreateObject(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	observability.FromContext(ctx).Info("storage object declared", "object_id", row.ID)
-	writeJSON(w, http.StatusCreated, toObjectResponse(&row))
+	httpapi.WriteJSON(w, http.StatusCreated, toObjectResponse(&row))
 }
 
 // StorageGetObject implements api.ServerInterface: GET
@@ -246,7 +241,7 @@ func (h *Handler) StorageGetObject(w http.ResponseWriter, r *http.Request, objec
 	}
 	resp := toObjectResponse(&obj)
 	resp.Derivatives = &items
-	writeJSON(w, http.StatusOK, resp)
+	httpapi.WriteJSON(w, http.StatusOK, resp)
 }
 
 // StorageDeleteObject implements api.ServerInterface: DELETE
@@ -309,7 +304,7 @@ func (h *Handler) StorageCompleteObject(w http.ResponseWriter, r *http.Request, 
 		return
 	}
 	observability.FromContext(ctx).Info("storage object completed", "object_id", row.ID)
-	writeJSON(w, http.StatusOK, toObjectResponse(&row))
+	httpapi.WriteJSON(w, http.StatusOK, toObjectResponse(&row))
 }
 
 // StorageUploadObjectContent implements api.ServerInterface: PUT
@@ -439,13 +434,6 @@ func toDerivativeResponse(d *ObjectDerivative) api.StorageObjectDerivative {
 		Height:    d.Height,
 		CreatedAt: &d.CreatedAt,
 	}
-}
-
-// writeJSON writes v to w as JSON with the given status code.
-func writeJSON(w http.ResponseWriter, status int, v any) {
-	w.Header().Set("Content-Type", jsonContentType)
-	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(v)
 }
 
 // writeError writes err to w as the coded error envelope (see

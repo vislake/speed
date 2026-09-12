@@ -1,7 +1,6 @@
 package billing
 
 import (
-	"encoding/json"
 	"errors"
 	"net/http"
 
@@ -27,10 +26,6 @@ const (
 	minListLimit        = 1
 	maxListLimit        = 100
 )
-
-// jsonContentType is the media type every response this file writes
-// carries -- the same named constant go/storage's handler.go uses.
-const jsonContentType = "application/json; charset=utf-8"
 
 // Handler implements api.ServerInterface -- the app-side implementation of
 // the spec fragment's four read operations: GET /api/v1/billing/credits/
@@ -152,7 +147,7 @@ func (h *Handler) BillingGetCreditBalance(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	writeJSON(w, http.StatusOK, api.BillingCreditBalance{
+	httpapi.WriteJSON(w, http.StatusOK, api.BillingCreditBalance{
 		Available: bal.Available,
 		Reserved:  bal.Reserved,
 		UpdatedAt: bal.UpdatedAt,
@@ -206,7 +201,7 @@ func (h *Handler) BillingListCreditTransactions(w http.ResponseWriter, r *http.R
 	for i := range rows {
 		items = append(items, toTransactionResponse(&rows[i]))
 	}
-	writeJSON(w, http.StatusOK, api.BillingListCreditTransactionsResponse{Transactions: items})
+	httpapi.WriteJSON(w, http.StatusOK, api.BillingListCreditTransactionsResponse{Transactions: items})
 }
 
 // toTransactionResponse maps one ledger row to its wire shape. Amount and
@@ -275,7 +270,7 @@ func (h *Handler) BillingListInvoices(w http.ResponseWriter, r *http.Request, pa
 	for i := range rows {
 		items = append(items, toInvoiceResponse(&rows[i]))
 	}
-	writeJSON(w, http.StatusOK, api.BillingListInvoicesResponse{Invoices: items})
+	httpapi.WriteJSON(w, http.StatusOK, api.BillingListInvoicesResponse{Invoices: items})
 }
 
 // BillingGetInvoice implements api.ServerInterface: GET
@@ -301,7 +296,7 @@ func (h *Handler) BillingGetInvoice(w http.ResponseWriter, r *http.Request, id s
 		writeError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, toInvoiceResponse(inv))
+	httpapi.WriteJSON(w, http.StatusOK, toInvoiceResponse(inv))
 }
 
 // toInvoiceResponse maps one Invoice row to its wire shape. Amount,
@@ -332,13 +327,6 @@ func toInvoiceResponse(inv *Invoice) api.BillingInvoice {
 // either way.
 func writeError(w http.ResponseWriter, err error) {
 	httpapi.WriteError(w, err, ErrInternal)
-}
-
-// writeJSON writes body to w as JSON with the surface's content type.
-func writeJSON(w http.ResponseWriter, status int, body any) {
-	w.Header().Set("Content-Type", jsonContentType)
-	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(body)
 }
 
 // compile-time check that *Handler implements every operation the spec

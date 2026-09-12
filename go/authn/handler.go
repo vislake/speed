@@ -4,7 +4,6 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
-	"encoding/json"
 	"net"
 	"net/http"
 	"net/netip"
@@ -19,10 +18,6 @@ import (
 	"github.com/vislake/speed/go/pkgcore/apperr"
 	"github.com/vislake/speed/go/pkgcore/httpapi"
 )
-
-// jsonContentType is the Content-Type every response below writes, the
-// same JSON type the coded refusals carry (see pkgcore/httpapi).
-const jsonContentType = "application/json; charset=utf-8"
 
 // preAuthCookieName names the cookie a browser carries across an
 // authorization round trip -- registration is never required to have one,
@@ -592,7 +587,7 @@ func (h *Handler) AuthnRegister(w http.ResponseWriter, r *http.Request) {
 		audit.Resource{Type: "user", ID: user.ID},
 		audit.Result{Success: true})
 	obs.FromContext(ctx).Info("account registered", "user_id", user.ID)
-	writeJSON(w, http.StatusCreated, toUserResponse(user))
+	httpapi.WriteJSON(w, http.StatusCreated, toUserResponse(user))
 }
 
 // AuthnLoginWithPassword implements api.ServerInterface.
@@ -627,7 +622,7 @@ func (h *Handler) AuthnLoginWithPassword(w http.ResponseWriter, r *http.Request)
 		audit.Resource{Type: "user", ID: pair.Principal.UserID},
 		audit.Result{Success: true})
 	obs.FromContext(ctx).Info("password sign-in succeeded", "user_id", pair.Principal.UserID, "session_id", pair.Principal.SessionID)
-	writeJSON(w, http.StatusOK, toTokenPairResponse(pair))
+	httpapi.WriteJSON(w, http.StatusOK, toTokenPairResponse(pair))
 }
 
 // AuthnRequestSMSCode implements api.ServerInterface.
@@ -679,7 +674,7 @@ func (h *Handler) AuthnLoginWithSMSCode(w http.ResponseWriter, r *http.Request) 
 		audit.Resource{Type: "user", ID: pair.Principal.UserID},
 		audit.Result{Success: true})
 	obs.FromContext(ctx).Info("sms sign-in succeeded", "user_id", pair.Principal.UserID, "session_id", pair.Principal.SessionID)
-	writeJSON(w, http.StatusOK, toTokenPairResponse(pair))
+	httpapi.WriteJSON(w, http.StatusOK, toTokenPairResponse(pair))
 }
 
 // AuthnRefreshToken implements api.ServerInterface.
@@ -694,7 +689,7 @@ func (h *Handler) AuthnRefreshToken(w http.ResponseWriter, r *http.Request) {
 		writeAppError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, toTokenPairResponse(pair))
+	httpapi.WriteJSON(w, http.StatusOK, toTokenPairResponse(pair))
 }
 
 // AuthnLogout implements api.ServerInterface.
@@ -720,7 +715,7 @@ func (h *Handler) AuthnGetMe(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	writeJSON(w, http.StatusOK, toPrincipalResponse(principal))
+	httpapi.WriteJSON(w, http.StatusOK, toPrincipalResponse(principal))
 }
 
 // AuthnGetPreferences implements api.ServerInterface: the caller's own
@@ -737,7 +732,7 @@ func (h *Handler) AuthnGetPreferences(w http.ResponseWriter, r *http.Request) {
 		writeAppError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, toPreferencesResponse(prefs))
+	httpapi.WriteJSON(w, http.StatusOK, toPreferencesResponse(prefs))
 }
 
 // AuthnUpdatePreferences implements api.ServerInterface: the partial
@@ -764,7 +759,7 @@ func (h *Handler) AuthnUpdatePreferences(w http.ResponseWriter, r *http.Request)
 		writeAppError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, toPreferencesResponse(prefs))
+	httpapi.WriteJSON(w, http.StatusOK, toPreferencesResponse(prefs))
 }
 
 // AuthnSocialAuthorize implements api.ServerInterface.
@@ -795,7 +790,7 @@ func (h *Handler) AuthnSocialAuthorize(w http.ResponseWriter, r *http.Request, p
 		writeAppError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, api.AuthnSocialAuthorizeResponse{AuthorizeURL: &url})
+	httpapi.WriteJSON(w, http.StatusOK, api.AuthnSocialAuthorizeResponse{AuthorizeURL: &url})
 }
 
 // AuthnSocialCallback implements api.ServerInterface.
@@ -862,7 +857,7 @@ func (h *Handler) AuthnSocialCallback(w http.ResponseWriter, r *http.Request, pr
 			audit.Result{Success: true})
 	}
 	obs.FromContext(ctx).Info("social callback completed", "provider", provider, "bound", result.Bound, "created", result.Created)
-	writeJSON(w, http.StatusOK, toSocialLoginResponse(result))
+	httpapi.WriteJSON(w, http.StatusOK, toSocialLoginResponse(result))
 }
 
 // AuthnListIdentities implements api.ServerInterface.
@@ -880,7 +875,7 @@ func (h *Handler) AuthnListIdentities(w http.ResponseWriter, r *http.Request) {
 	for i := range identities {
 		items = append(items, toIdentityResponse(&identities[i]))
 	}
-	writeJSON(w, http.StatusOK, api.AuthnListIdentitiesResponse{Identities: &items})
+	httpapi.WriteJSON(w, http.StatusOK, api.AuthnListIdentitiesResponse{Identities: &items})
 }
 
 // AuthnUnbindIdentity implements api.ServerInterface.
@@ -918,7 +913,7 @@ func (h *Handler) AuthnEnrollTOTP(w http.ResponseWriter, r *http.Request) {
 		writeAppError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, api.AuthnEnrollTOTPResponse{
+	httpapi.WriteJSON(w, http.StatusOK, api.AuthnEnrollTOTPResponse{
 		Secret:          &result.Secret,
 		ProvisioningURI: &result.ProvisioningURI,
 	})
@@ -944,7 +939,7 @@ func (h *Handler) AuthnConfirmTOTP(w http.ResponseWriter, r *http.Request) {
 	h.recordAudit(ctx, principal.TenantID, principal.UserID, AuditActionMFAEnroll,
 		audit.Resource{Type: "mfa_factor", ID: principal.UserID},
 		audit.Result{Success: true})
-	writeJSON(w, http.StatusOK, api.AuthnRecoveryCodesResponse{RecoveryCodes: &codes})
+	httpapi.WriteJSON(w, http.StatusOK, api.AuthnRecoveryCodesResponse{RecoveryCodes: &codes})
 }
 
 // AuthnRegenerateRecoveryCodes implements api.ServerInterface.
@@ -970,7 +965,7 @@ func (h *Handler) AuthnRegenerateRecoveryCodes(w http.ResponseWriter, r *http.Re
 		h.recordAudit(ctx, principal.TenantID, principal.UserID, AuditActionMFARecoveryCodesRegenerate,
 			audit.Resource{Type: "mfa_recovery_codes", ID: principal.UserID},
 			audit.Result{Success: true})
-		writeJSON(w, http.StatusOK, api.AuthnRecoveryCodesResponse{RecoveryCodes: &codes})
+		httpapi.WriteJSON(w, http.StatusOK, api.AuthnRecoveryCodesResponse{RecoveryCodes: &codes})
 	})).ServeHTTP(w, r)
 }
 
@@ -989,7 +984,7 @@ func (h *Handler) AuthnVerifyStepUp(w http.ResponseWriter, r *http.Request) {
 		writeAppError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, toTokenPairResponse(pair))
+	httpapi.WriteJSON(w, http.StatusOK, toTokenPairResponse(pair))
 }
 
 // AuthnSwitchTenant implements api.ServerInterface.
@@ -1014,7 +1009,7 @@ func (h *Handler) AuthnSwitchTenant(w http.ResponseWriter, r *http.Request) {
 	h.recordAudit(ctx, principal.TenantID, principal.UserID, AuditActionTenantSwitch,
 		audit.Resource{Type: "session", ID: principal.SessionID},
 		audit.Result{Success: true})
-	writeJSON(w, http.StatusOK, toTokenPairResponse(pair))
+	httpapi.WriteJSON(w, http.StatusOK, toTokenPairResponse(pair))
 }
 
 // AuthnListSessions implements api.ServerInterface.
@@ -1032,7 +1027,7 @@ func (h *Handler) AuthnListSessions(w http.ResponseWriter, r *http.Request) {
 	for i := range sessions {
 		items = append(items, toSessionResponse(&sessions[i], principal.SessionID))
 	}
-	writeJSON(w, http.StatusOK, api.AuthnListSessionsResponse{Sessions: &items})
+	httpapi.WriteJSON(w, http.StatusOK, api.AuthnListSessionsResponse{Sessions: &items})
 }
 
 // AuthnRevokeSession implements api.ServerInterface.
@@ -1072,7 +1067,7 @@ func (h *Handler) AuthnRevokeOtherSessions(w http.ResponseWriter, r *http.Reques
 	h.recordAudit(ctx, principal.TenantID, principal.UserID, AuditActionSessionRevoke,
 		audit.Resource{Type: "session", ID: principal.SessionID, DisplayName: "other sessions"},
 		audit.Result{Success: true})
-	writeJSON(w, http.StatusOK, api.AuthnRevokeOtherSessionsResponse{RevokedCount: &revoked})
+	httpapi.WriteJSON(w, http.StatusOK, api.AuthnRevokeOtherSessionsResponse{RevokedCount: &revoked})
 }
 
 // AuthnListLoginHistory implements api.ServerInterface.
@@ -1094,7 +1089,7 @@ func (h *Handler) AuthnListLoginHistory(w http.ResponseWriter, r *http.Request, 
 	for i := range attempts {
 		items = append(items, toLoginAttemptResponse(&attempts[i]))
 	}
-	writeJSON(w, http.StatusOK, api.AuthnListLoginHistoryResponse{Attempts: &items})
+	httpapi.WriteJSON(w, http.StatusOK, api.AuthnListLoginHistoryResponse{Attempts: &items})
 }
 
 // toUserResponse converts user to its spec-generated JSON response type.
@@ -1256,23 +1251,6 @@ func toLoginAttemptResponse(attempt *LoginAttempt) api.AuthnLoginAttempt {
 		UserAgent:     str(attempt.UserAgent),
 		CreatedAt:     &createdAt,
 	}
-}
-
-// writeJSON writes v as a JSON body with status.
-//
-// A structured error goes through writeAppError instead (middleware.go),
-// which this Handler shares with Middleware and RequireAuthenticated so
-// every authn error response -- from token verification, from
-// RequireAuthenticated, and from every operation below -- has exactly one
-// shape and exactly one place that decides what a Retry-After header is
-// worth. Its {code, params} wire shape matches api.AuthnError's JSON tags
-// exactly, even though pkgcore/httpapi.WriteError -- which writeAppError
-// delegates the body to -- builds it from that package's own envelope
-// type rather than the generated one.
-func writeJSON(w http.ResponseWriter, status int, v any) {
-	w.Header().Set("Content-Type", jsonContentType)
-	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(v)
 }
 
 // compile-time check that *Handler implements the api.ServerInterface

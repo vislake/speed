@@ -18,8 +18,6 @@ import (
 	"github.com/vislake/speed/go/admin/api"
 )
 
-const jsonContentType = "application/json; charset=utf-8"
-
 // errInternal is written when an error reaching writeError is not an
 // *apperr.Error at all -- an unexpected internal failure this module
 // never classified, matching every other handler's identical fallback.
@@ -150,7 +148,7 @@ func (h *Handler) AdminListTenants(w http.ResponseWriter, r *http.Request, param
 	for _, row := range rows {
 		resp.Tenants = append(resp.Tenants, toAdminTenant(row))
 	}
-	writeJSON(w, http.StatusOK, resp)
+	httpapi.WriteJSON(w, http.StatusOK, resp)
 }
 
 // AdminCreateTenant implements api.ServerInterface.
@@ -175,7 +173,7 @@ func (h *Handler) AdminCreateTenant(w http.ResponseWriter, r *http.Request) {
 		writeError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusCreated, toAdminTenant(*t))
+	httpapi.WriteJSON(w, http.StatusCreated, toAdminTenant(*t))
 }
 
 // AdminGetTenant implements api.ServerInterface.
@@ -185,7 +183,7 @@ func (h *Handler) AdminGetTenant(w http.ResponseWriter, r *http.Request, id stri
 		writeError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, toAdminTenant(*t))
+	httpapi.WriteJSON(w, http.StatusOK, toAdminTenant(*t))
 }
 
 // AdminUpdateTenant implements api.ServerInterface.
@@ -230,7 +228,7 @@ func (h *Handler) AdminUpdateTenant(w http.ResponseWriter, r *http.Request, id s
 		writeError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, toAdminTenant(*t))
+	httpapi.WriteJSON(w, http.StatusOK, toAdminTenant(*t))
 }
 
 func toAdminTenant(t Tenant) api.AdminTenant {
@@ -296,7 +294,7 @@ func (h *Handler) AdminSearchUsers(w http.ResponseWriter, r *http.Request, param
 		}
 		resp.Users = append(resp.Users, out)
 	}
-	writeJSON(w, http.StatusOK, resp)
+	httpapi.WriteJSON(w, http.StatusOK, resp)
 }
 
 // AdminListUserMemberships implements api.ServerInterface.
@@ -315,7 +313,7 @@ func (h *Handler) AdminListUserMemberships(w http.ResponseWriter, r *http.Reques
 	for _, t := range tenants {
 		resp.TenantIds = append(resp.TenantIds, string(t))
 	}
-	writeJSON(w, http.StatusOK, resp)
+	httpapi.WriteJSON(w, http.StatusOK, resp)
 }
 
 // --- impersonation -----------------------------------------------------
@@ -352,7 +350,7 @@ func (h *Handler) AdminStartImpersonation(w http.ResponseWriter, r *http.Request
 		writeError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusCreated, toAdminGrant(*grant))
+	httpapi.WriteJSON(w, http.StatusCreated, toAdminGrant(*grant))
 }
 
 // AdminEndImpersonation implements api.ServerInterface.
@@ -367,7 +365,7 @@ func (h *Handler) AdminEndImpersonation(w http.ResponseWriter, r *http.Request, 
 		writeError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, toAdminGrant(*grant))
+	httpapi.WriteJSON(w, http.StatusOK, toAdminGrant(*grant))
 }
 
 // AdminListImpersonationGrants implements api.ServerInterface.
@@ -381,7 +379,7 @@ func (h *Handler) AdminListImpersonationGrants(w http.ResponseWriter, r *http.Re
 	for _, g := range grants {
 		resp.Grants = append(resp.Grants, toAdminGrant(g))
 	}
-	writeJSON(w, http.StatusOK, resp)
+	httpapi.WriteJSON(w, http.StatusOK, resp)
 }
 
 func toAdminGrant(g ImpersonationGrant) api.AdminImpersonationGrant {
@@ -462,7 +460,7 @@ func (h *Handler) AdminListAuditEvents(w http.ResponseWriter, r *http.Request, p
 	for _, e := range events {
 		resp.Events = append(resp.Events, toAdminAuditEvent(e))
 	}
-	writeJSON(w, http.StatusOK, resp)
+	httpapi.WriteJSON(w, http.StatusOK, resp)
 }
 
 // paginate returns events[offset:offset+limit], clamped to a valid slice
@@ -580,7 +578,7 @@ func (h *Handler) AdminExportAuditEvents(w http.ResponseWriter, r *http.Request)
 		writeError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusAccepted, api.AdminExportAuditEventsResponse{JobID: string(jobID)})
+	httpapi.WriteJSON(w, http.StatusAccepted, api.AdminExportAuditEventsResponse{JobID: string(jobID)})
 }
 
 // --- role management -----------------------------------------------------
@@ -616,7 +614,7 @@ func (h *Handler) AdminListDeclaredPermissions(w http.ResponseWriter, r *http.Re
 		writeError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, api.AdminListDeclaredPermissionsResponse{Permissions: perms})
+	httpapi.WriteJSON(w, http.StatusOK, api.AdminListDeclaredPermissionsResponse{Permissions: perms})
 }
 
 // AdminDefineRole implements api.ServerInterface.
@@ -639,7 +637,7 @@ func (h *Handler) AdminDefineRole(w http.ResponseWriter, r *http.Request) {
 		writeError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusCreated, api.AdminRole{
+	httpapi.WriteJSON(w, http.StatusCreated, api.AdminRole{
 		ID:             role.ID,
 		TenantID:       role.TenantID,
 		Key:            role.Key,
@@ -671,7 +669,7 @@ func (h *Handler) AdminCreateRoleBinding(w http.ResponseWriter, r *http.Request,
 	if nodeID != "" {
 		out.NodeID = &nodeID
 	}
-	writeJSON(w, http.StatusCreated, out)
+	httpapi.WriteJSON(w, http.StatusCreated, out)
 }
 
 // --- usage/billing dashboard ---------------------------------------------
@@ -692,7 +690,7 @@ func (h *Handler) AdminGetUsageSummary(w http.ResponseWriter, r *http.Request) {
 	for _, row := range rows {
 		resp.Rows = append(resp.Rows, toAdminUsageSummaryRow(row))
 	}
-	writeJSON(w, http.StatusOK, resp)
+	httpapi.WriteJSON(w, http.StatusOK, resp)
 }
 
 func toAdminUsageSummaryRow(row UsageSummaryRow) api.AdminUsageSummaryRow {
@@ -784,7 +782,7 @@ func (h *Handler) AdminListSendRecords(w http.ResponseWriter, r *http.Request, p
 	for _, rec := range records {
 		resp.Records = append(resp.Records, toAdminSendRecord(rec))
 	}
-	writeJSON(w, http.StatusOK, resp)
+	httpapi.WriteJSON(w, http.StatusOK, resp)
 }
 
 func toAdminSendRecord(rec notification.SendRecord) api.AdminSendRecord {
@@ -813,12 +811,6 @@ func toAdminSendRecord(rec notification.SendRecord) api.AdminSendRecord {
 }
 
 // --- shared response helpers ------------------------------------------------
-
-func writeJSON(w http.ResponseWriter, status int, body any) {
-	w.Header().Set("Content-Type", jsonContentType)
-	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(body)
-}
 
 // writeError writes err to w as the coded error envelope (see
 // pkgcore/httpapi): an *apperr.Error keeps its own code and status,

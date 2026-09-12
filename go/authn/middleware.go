@@ -252,6 +252,10 @@ func (*PrincipalResolver) Resolve(r *http.Request) (pkgcore.TenantID, error) {
 // exactly one place that decides what a Retry-After header is worth. An
 // uncoded error is folded into ErrInternal carrying err as its cause,
 // which stays server-side.
+//
+// The body is built from pkgcore/httpapi's own envelope type rather than
+// the fragment's generated one; its {code, params} wire shape matches
+// api.AuthnError's JSON tags exactly.
 func writeAppError(w http.ResponseWriter, err error) {
 	if appErr, ok := apperr.As(err); ok {
 		if seconds, ok := retryAfterSeconds(appErr); ok {

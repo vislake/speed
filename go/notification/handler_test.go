@@ -39,6 +39,7 @@ import (
 	"github.com/vislake/speed/go/notification/api"
 	"github.com/vislake/speed/go/pkgcore"
 	"github.com/vislake/speed/go/pkgcore/componenttest"
+	"github.com/vislake/speed/go/pkgcore/httpapi"
 	"github.com/vislake/speed/go/pkgcore/testkit"
 )
 
@@ -212,7 +213,7 @@ func (e *handlerEnv) doCtx(t *testing.T, ctx context.Context, method, path strin
 	}
 	req := httptest.NewRequest(method, path, bodyReader)
 	if body != nil {
-		req.Header.Set("Content-Type", jsonContentType)
+		req.Header.Set("Content-Type", httpapi.JSONContentType)
 	}
 	for key, value := range header {
 		req.Header.Set(key, value)

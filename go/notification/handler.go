@@ -16,11 +16,6 @@ import (
 	"github.com/vislake/speed/go/pkgcore/i18n"
 )
 
-// jsonContentType is the Content-Type every JSON response this handler
-// writes carries. It matches what org's handler and the reference app's
-// notes handler send, keeping the modules' HTTP surfaces uniform.
-const jsonContentType = "application/json; charset=utf-8"
-
 // Handler serves notification's HTTP surface: the inbox, the preference
 // matrix, the tenant's contact roster and the inbox stream, exactly the
 // eleven operations openapi.yaml's fragment declares plus the one route the
@@ -244,7 +239,7 @@ func (h *Handler) NotificationListContacts(w http.ResponseWriter, r *http.Reques
 	for i := range contacts {
 		items = append(items, toContactResponse(&contacts[i]))
 	}
-	h.writeJSON(w, http.StatusOK, api.NotificationListContactsResponse{Items: items})
+	httpapi.WriteJSON(w, http.StatusOK, api.NotificationListContactsResponse{Items: items})
 }
 
 // NotificationCreateContact serves POST /api/v1/notifications/contacts:
@@ -285,7 +280,7 @@ func (h *Handler) NotificationCreateContact(w http.ResponseWriter, r *http.Reque
 		h.writeError(w, err)
 		return
 	}
-	h.writeJSON(w, http.StatusCreated, toContactResponse(contact))
+	httpapi.WriteJSON(w, http.StatusCreated, toContactResponse(contact))
 }
 
 // NotificationVerifyContact serves POST
@@ -313,7 +308,7 @@ func (h *Handler) NotificationVerifyContact(w http.ResponseWriter, r *http.Reque
 		h.writeError(w, err)
 		return
 	}
-	h.writeJSON(w, http.StatusOK, toContactResponse(contact))
+	httpapi.WriteJSON(w, http.StatusOK, toContactResponse(contact))
 }
 
 // NotificationResendContactCode serves POST
@@ -384,7 +379,7 @@ func (h *Handler) NotificationListMessages(w http.ResponseWriter, r *http.Reques
 		}
 		items = append(items, item)
 	}
-	h.writeJSON(w, http.StatusOK, api.NotificationListMessagesResponse{Items: items})
+	httpapi.WriteJSON(w, http.StatusOK, api.NotificationListMessagesResponse{Items: items})
 }
 
 // listPage resolves a list request's paging parameters: the spec's default
@@ -436,7 +431,7 @@ func (h *Handler) NotificationGetUnreadCount(w http.ResponseWriter, r *http.Requ
 		h.writeError(w, ErrInternal.WithCause(err))
 		return
 	}
-	h.writeJSON(w, http.StatusOK, api.NotificationUnreadCountResponse{Count: count})
+	httpapi.WriteJSON(w, http.StatusOK, api.NotificationUnreadCountResponse{Count: count})
 }
 
 // NotificationMarkAllMessagesRead serves
@@ -457,7 +452,7 @@ func (h *Handler) NotificationMarkAllMessagesRead(w http.ResponseWriter, r *http
 		h.writeError(w, ErrInternal.WithCause(err))
 		return
 	}
-	h.writeJSON(w, http.StatusOK, api.NotificationReadAllResponse{ReadCount: read})
+	httpapi.WriteJSON(w, http.StatusOK, api.NotificationReadAllResponse{ReadCount: read})
 }
 
 // NotificationMarkMessageRead serves
@@ -527,7 +522,7 @@ func (h *Handler) NotificationListTypes(w http.ResponseWriter, r *http.Request) 
 		}
 		items = append(items, toTypeResponse(typ, description))
 	}
-	h.writeJSON(w, http.StatusOK, api.NotificationListTypesResponse{Items: items})
+	httpapi.WriteJSON(w, http.StatusOK, api.NotificationListTypesResponse{Items: items})
 }
 
 // NotificationListPreferences serves
@@ -572,7 +567,7 @@ func (h *Handler) NotificationListPreferences(w http.ResponseWriter, r *http.Req
 		}
 		items = append(items, toPreferenceResponse(typ.Key, channels))
 	}
-	h.writeJSON(w, http.StatusOK, api.NotificationListPreferencesResponse{Items: items})
+	httpapi.WriteJSON(w, http.StatusOK, api.NotificationListPreferencesResponse{Items: items})
 }
 
 // NotificationUpdatePreference serves
@@ -633,14 +628,14 @@ func (h *Handler) NotificationUpdatePreference(w http.ResponseWriter, r *http.Re
 		wanted = slices.DeleteFunc(wanted, func(c string) bool { return c == ch })
 	}
 	if slices.Equal(wanted, current) {
-		h.writeJSON(w, http.StatusOK, toPreferenceResponse(typeKey, sortedChannels(wanted)))
+		httpapi.WriteJSON(w, http.StatusOK, toPreferenceResponse(typeKey, sortedChannels(wanted)))
 		return
 	}
 	if err := h.prefs.Set(ctx, userID, typeKey, wanted); err != nil {
 		h.writeError(w, err)
 		return
 	}
-	h.writeJSON(w, http.StatusOK, toPreferenceResponse(typeKey, sortedChannels(wanted)))
+	httpapi.WriteJSON(w, http.StatusOK, toPreferenceResponse(typeKey, sortedChannels(wanted)))
 }
 
 // handleStream serves GET /api/v1/notifications/stream -- the inbox stream
@@ -814,19 +809,6 @@ func (h *Handler) decodeJSON(w http.ResponseWriter, r *http.Request, dst any) bo
 		return false
 	}
 	return httpapi.DecodeJSON(w, r, 0, dst, ErrInvalidRequestBody)
-}
-
-// writeJSON writes body as the JSON response of status. The Content-Type
-// carries the charset explicitly, matching org and the reference app's
-// notes handler. An encode failure after the status line went out is a
-// broken client connection, not a response defect; there is nothing to do
-// about it but stop.
-func (h *Handler) writeJSON(w http.ResponseWriter, status int, body any) {
-	w.Header().Set("Content-Type", jsonContentType)
-	w.WriteHeader(status)
-	if err := json.NewEncoder(w).Encode(body); err != nil {
-		return
-	}
 }
 
 // writeError writes err as the coded error envelope (see pkgcore/httpapi):

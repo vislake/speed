@@ -13,10 +13,6 @@ import (
 	"github.com/vislake/speed/go/pki/api"
 )
 
-// jsonContentType is the Content-Type every JSON response below writes, the
-// same JSON type the coded refusals carry (see pkgcore/httpapi).
-const jsonContentType = "application/json; charset=utf-8"
-
 // pemContentType is the Content-Type PkiGetAuthorityCrl writes -- the CRL
 // operation's response is a PEM document, not JSON.
 const pemContentType = "application/x-pem-file; charset=utf-8"
@@ -158,7 +154,7 @@ func (h *Handler) PkiRevokeSigningKey(w http.ResponseWriter, r *http.Request, ki
 
 	h.recordAudit(ctx, AuditActionKeyRevoke, "pki_signing_key", key.ID)
 	observability.FromContext(ctx).Info("pki signing key revoked via HTTP", "kid", kid)
-	writeJSON(w, http.StatusOK, toSigningKeyResponse(key))
+	httpapi.WriteJSON(w, http.StatusOK, toSigningKeyResponse(key))
 }
 
 // PkiRevokeCertificate implements api.ServerInterface: POST
@@ -189,7 +185,7 @@ func (h *Handler) PkiRevokeCertificate(w http.ResponseWriter, r *http.Request, c
 
 	h.recordAudit(ctx, AuditActionCertificateRevoke, "pki_certificate", cert.ID)
 	observability.FromContext(ctx).Info("pki certificate revoked via HTTP", "certificate_id", certificateID)
-	writeJSON(w, http.StatusOK, toCertificateResponse(cert))
+	httpapi.WriteJSON(w, http.StatusOK, toCertificateResponse(cert))
 }
 
 // PkiGetKeyJwks implements api.ServerInterface: GET /api/v1/pki/jwks.
@@ -200,7 +196,7 @@ func (h *Handler) PkiGetKeyJwks(w http.ResponseWriter, r *http.Request, params a
 		writeError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, jwks)
+	httpapi.WriteJSON(w, http.StatusOK, jwks)
 }
 
 // PkiGetAuthorityJwks implements api.ServerInterface: GET
@@ -212,7 +208,7 @@ func (h *Handler) PkiGetAuthorityJwks(w http.ResponseWriter, r *http.Request, au
 		writeError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, jwks)
+	httpapi.WriteJSON(w, http.StatusOK, jwks)
 }
 
 // PkiGetAuthorityCrl implements api.ServerInterface: GET
@@ -308,13 +304,6 @@ func toCertificateResponse(cert *Certificate) api.PkiCertificate {
 		resp.RevocationReason = &cert.RevocationReason
 	}
 	return resp
-}
-
-// writeJSON writes v to w as JSON with the given status code.
-func writeJSON(w http.ResponseWriter, status int, v any) {
-	w.Header().Set("Content-Type", jsonContentType)
-	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(v)
 }
 
 // writeError writes err to w as the coded error envelope (see

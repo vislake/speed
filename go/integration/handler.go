@@ -13,10 +13,6 @@ import (
 	"github.com/vislake/speed/go/integration/api"
 )
 
-// jsonContentType is the Content-Type every response below writes, the
-// same JSON type the coded refusals carry (see pkgcore/httpapi).
-const jsonContentType = "application/json; charset=utf-8"
-
 // Handler serves this module's spec-generated HTTP surface by implementing
 // the spec-generated api.ServerInterface (see api/integration-server.gen.go,
 // regenerated from this module's api/openapi.yaml by task api:gen -- the
@@ -215,7 +211,7 @@ func (h *Handler) IntegrationCreateAPIKey(w http.ResponseWriter, r *http.Request
 			resp := toCreatedAPIKeyResponse(created)
 			auditGap := true
 			resp.AuditRecordMissing = &auditGap
-			writeJSON(w, http.StatusCreated, resp)
+			httpapi.WriteJSON(w, http.StatusCreated, resp)
 			return
 		}
 		writeError(w, err)
@@ -228,7 +224,7 @@ func (h *Handler) IntegrationCreateAPIKey(w http.ResponseWriter, r *http.Request
 	// hide this harmless UUID behind [REDACTED] for no security benefit --
 	// the log message itself already says what this id identifies.
 	obs.FromContext(ctx).Info("integration api key created", "id", created.ID, "created_by", created.CreatedBy)
-	writeJSON(w, http.StatusCreated, toCreatedAPIKeyResponse(created))
+	httpapi.WriteJSON(w, http.StatusCreated, toCreatedAPIKeyResponse(created))
 }
 
 // IntegrationListAPIKeys implements api.ServerInterface: GET
@@ -253,7 +249,7 @@ func (h *Handler) IntegrationListAPIKeys(w http.ResponseWriter, r *http.Request)
 	for i := range summaries {
 		items = append(items, toAPIKeySummaryResponse(&summaries[i]))
 	}
-	writeJSON(w, http.StatusOK, api.IntegrationListAPIKeysResponse{APIKeys: &items})
+	httpapi.WriteJSON(w, http.StatusOK, api.IntegrationListAPIKeysResponse{APIKeys: &items})
 }
 
 // IntegrationRotateAPIKey implements api.ServerInterface: POST
@@ -294,14 +290,14 @@ func (h *Handler) IntegrationRotateAPIKey(w http.ResponseWriter, r *http.Request
 			resp := toCreatedAPIKeyResponse(created)
 			auditGap := true
 			resp.AuditRecordMissing = &auditGap
-			writeJSON(w, http.StatusOK, resp)
+			httpapi.WriteJSON(w, http.StatusOK, resp)
 			return
 		}
 		writeError(w, err)
 		return
 	}
 	obs.FromContext(ctx).Info("integration api key rotated", "predecessor_id", keyID, "id", created.ID)
-	writeJSON(w, http.StatusOK, toCreatedAPIKeyResponse(created))
+	httpapi.WriteJSON(w, http.StatusOK, toCreatedAPIKeyResponse(created))
 }
 
 // IntegrationRevokeAPIKey implements api.ServerInterface: DELETE
@@ -348,7 +344,7 @@ func (h *Handler) IntegrationListWebhookSubscriptions(w http.ResponseWriter, r *
 	for i := range summaries {
 		items = append(items, toWebhookSubscriptionSummaryResponse(&summaries[i]))
 	}
-	writeJSON(w, http.StatusOK, api.IntegrationListWebhookSubscriptionsResponse{WebhookSubscriptions: &items})
+	httpapi.WriteJSON(w, http.StatusOK, api.IntegrationListWebhookSubscriptionsResponse{WebhookSubscriptions: &items})
 }
 
 // IntegrationCreateWebhookSubscription implements api.ServerInterface: POST
@@ -403,14 +399,14 @@ func (h *Handler) IntegrationCreateWebhookSubscription(w http.ResponseWriter, r 
 			resp := toCreatedWebhookSubscriptionResponse(created)
 			auditGap := true
 			resp.AuditRecordMissing = &auditGap
-			writeJSON(w, http.StatusCreated, resp)
+			httpapi.WriteJSON(w, http.StatusCreated, resp)
 			return
 		}
 		writeError(w, err)
 		return
 	}
 	obs.FromContext(ctx).Info("integration webhook subscription created", "id", created.ID, "created_by", created.CreatedBy)
-	writeJSON(w, http.StatusCreated, toCreatedWebhookSubscriptionResponse(created))
+	httpapi.WriteJSON(w, http.StatusCreated, toCreatedWebhookSubscriptionResponse(created))
 }
 
 // IntegrationUpdateWebhookSubscription implements api.ServerInterface: PATCH
@@ -450,7 +446,7 @@ func (h *Handler) IntegrationUpdateWebhookSubscription(w http.ResponseWriter, r 
 		return
 	}
 	obs.FromContext(ctx).Info("integration webhook subscription updated", "id", updated.ID)
-	writeJSON(w, http.StatusOK, toWebhookSubscriptionSummaryResponse(updated))
+	httpapi.WriteJSON(w, http.StatusOK, toWebhookSubscriptionSummaryResponse(updated))
 }
 
 // IntegrationDeleteWebhookSubscription implements api.ServerInterface:
@@ -527,7 +523,7 @@ func (h *Handler) IntegrationListWebhookDeliveries(w http.ResponseWriter, r *htt
 	for i := range deliveries {
 		items = append(items, toWebhookDeliverySummaryResponse(&deliveries[i]))
 	}
-	writeJSON(w, http.StatusOK, api.IntegrationListWebhookDeliveriesResponse{Deliveries: &items})
+	httpapi.WriteJSON(w, http.StatusOK, api.IntegrationListWebhookDeliveriesResponse{Deliveries: &items})
 }
 
 // toCreatedAPIKeyResponse maps a *CreatedAPIKey onto the spec-generated
@@ -610,14 +606,6 @@ func toWebhookDeliverySummaryResponse(d *WebhookDeliverySummary) api.Integration
 		DeliveredAt:    d.DeliveredAt,
 		CreatedAt:      &d.CreatedAt,
 	}
-}
-
-// writeJSON writes v to w as a JSON body with status, matching org's and
-// storage's identical helper.
-func writeJSON(w http.ResponseWriter, status int, v any) {
-	w.Header().Set("Content-Type", jsonContentType)
-	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(v)
 }
 
 // writeError writes err to w as the coded error envelope (see

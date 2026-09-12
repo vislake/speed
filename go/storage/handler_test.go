@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/vislake/speed/go/pkgcore"
+	"github.com/vislake/speed/go/pkgcore/httpapi"
 	"github.com/vislake/speed/go/pkgcore/testkit"
 
 	"github.com/vislake/speed/go/storage/api"
@@ -111,8 +112,8 @@ func assertEnvelope(t *testing.T, rec *httptest.ResponseRecorder, wantStatus int
 	if rec.Code != wantStatus {
 		t.Fatalf("status = %d, want %d (body %s)", rec.Code, wantStatus, rec.Body.String())
 	}
-	if ct := rec.Header().Get("Content-Type"); ct != jsonContentType {
-		t.Errorf("Content-Type = %q, want %q", ct, jsonContentType)
+	if ct := rec.Header().Get("Content-Type"); ct != httpapi.JSONContentType {
+		t.Errorf("Content-Type = %q, want %q", ct, httpapi.JSONContentType)
 	}
 	var e envelope
 	if err := json.Unmarshal(rec.Body.Bytes(), &e); err != nil {
@@ -163,8 +164,8 @@ func TestHandler_StorageCreateObject_DeclaresAnUpload(t *testing.T) {
 		"declaredType": "Image/Jpeg;foo=bar", // a free-form header: canonicalized server-side
 	}))
 	obj := assertObject(t, rec, http.StatusCreated)
-	if rec.Header().Get("Content-Type") != jsonContentType {
-		t.Errorf("Content-Type = %q, want %q", rec.Header().Get("Content-Type"), jsonContentType)
+	if rec.Header().Get("Content-Type") != httpapi.JSONContentType {
+		t.Errorf("Content-Type = %q, want %q", rec.Header().Get("Content-Type"), httpapi.JSONContentType)
 	}
 
 	if obj.ID == nil || len(*obj.ID) != objectIDLen {
