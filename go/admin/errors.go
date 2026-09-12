@@ -105,11 +105,11 @@ var (
 	// id for the audit trail.
 	ErrPrincipalRequired = apperr.Unauthorized("admin.principal_required")
 
-	// The four wiring errors below are boot-time failures Module.Register
-	// returns when a mandatory host seam was never injected through the
-	// matching With* option. They are never returned from an HTTP handler;
-	// they fail the assembly itself, naming exactly which option the
-	// host forgot.
+	// The five wiring errors below are boot-time failures Module.Register
+	// returns when a mandatory host-supplied dependency was never injected
+	// through the matching With* option. They are never returned from an
+	// HTTP handler; they fail the assembly itself, naming exactly which
+	// option the host forgot.
 
 	// ErrAuthnServiceRequired is returned when no *authn.Service was
 	// injected with WithAuthn -- the cross-tenant user search has nothing
