@@ -6,12 +6,10 @@ import (
 )
 
 // Capability is a bitmask of properties a seam implementation declares about
-// itself on the component descriptor that provides it, or that a
-// SeamRegistry registration carries for a name-resolved implementation.
-// Deployment mode and implementation composition are two orthogonal axes:
-// the deployment mode never selects an implementation, it only states which
-// capabilities the composition it runs must have, and the assembly compares
-// the two.
+// itself on the component descriptor that provides it. Deployment mode and
+// implementation composition are two orthogonal axes: the deployment mode
+// never selects an implementation, it only states which capabilities the
+// composition it runs must have, and the assembly compares the two.
 //
 // The set is deliberately small -- MultiReplicaSafe, SurvivesRestart and
 // Stateless, plus the signer-specific bit below -- and it grows by adding a
@@ -71,9 +69,9 @@ const (
 	// KeyNeverLeavesBoundary means a private key this implementation
 	// protects never exists in plaintext inside this process's memory. Unlike the three bits above, this one is not
 	// about an infrastructure seam's own state; it is declared by go/pki's
-	// Signer implementations,
-	// which self-register through a pkgcore.SeamRegistry[Signer] the
-	// identical way EventBus/KVStore/Mailer/ObjectStore implementations do.
+	// Signer implementation components -- the two direct-sign names
+	// ("signer.vault-direct", "signer.aws-kms-direct") carry it, the
+	// envelope-mode signers and "signer.local" do not.
 	// go/pki's LocalSigner does not have it: Sign decrypts the private key
 	// into this process's memory for the duration of one signing call. A
 	// KMS- or Vault-backed Signer has it only in direct-sign mode, where the
@@ -83,20 +81,15 @@ const (
 	// the same reason LocalSigner does not. No deployment mode requires this
 	// capability the way DeploymentModeDistributed requires MultiReplicaSafe.
 	//
-	// Unlike the three bits above, this one is NOT enforced by
-	// the assembly: the assembly compares capabilities only on the
-	// descriptors of the components a composition selects, and pki's signers
-	// are reached through go/pki's own package-level SeamRegistry[Signer]
-	// rather than a pkgcore seam. pki carries its own equivalent check:
-	// BuildSignerRequiring (go/pki/signer_registry.go) compares the
-	// Capability a registration declared against the caller's requirement
-	// and refuses a miss with an error wrapping this package's
-	// ErrCapabilityUnsatisfied -- while SignerRegistry.Build merely returns
-	// the declared Capability without comparing it to anything, and
-	// pki.Module.WithSigner takes no Capability/requirement parameter at
-	// all. A host that injects a signer directly, or that never declares a
-	// requirement, therefore gets no check; both residuals are recorded in
-	// go/pki's own documentation.
+	// Because no deployment mode requires the bit, the assembly's
+	// mode-driven validation never refuses a selected signer over its
+	// absence. A caller that intends to require it reads the selected
+	// signer component's declaration through ComponentCapabilities and
+	// compares; two residuals stay uncheckable: a host that never reads
+	// gets no check, and a Signer injected directly through
+	// pki.Module.WithSigner -- which takes no Capability/requirement
+	// parameter -- carries no declaration for anything to compare. Both
+	// are recorded in go/pki's own documentation.
 	KeyNeverLeavesBoundary
 )
 

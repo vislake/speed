@@ -105,9 +105,9 @@ type SMS struct {
 // distributed-mode authn refuses to boot without an explicitly wired sender
 // rather than defaulting to one that prints to a writer nobody reads). What
 // the seam lacks is not resolution but the surface the other four carry: no
-// ComponentRegistry accessor returns it and no SeamRegistry directory lists
-// it, so a host building a module outside the assembly still wires the
-// sender through that module's own option. The promotion makes the seam a
+// ComponentRegistry accessor returns it, so a host building a module
+// outside the assembly still wires the sender through that module's own
+// option. The promotion makes the seam a
 // shared contract and shared implementations.
 // The console implementation (sms_console.go) is the zero-external-dependency
 // one; NewHTTPSMSSender (sms_http.go) is the operator-gateway transport, and

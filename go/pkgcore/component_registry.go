@@ -627,11 +627,10 @@ func (r *ComponentRegistry) Close(ctx context.Context) error {
 // descriptor declares a Close callback is released through it, and the
 // callback owns the release entirely. A component that declares none is
 // released through its product's own Close() error when it has one -- the
-// standard io.Closer declaration of resource ownership, the same
-// structural contract Registration documents for a value resolved through
-// SeamRegistry.Build -- so an implementation whose constructor builds the
-// resources it owns needs no adapter callback on its descriptor. A product
-// without a Close method has nothing to release and is skipped.
+// standard io.Closer declaration of resource ownership -- so an
+// implementation whose constructor builds the resources it owns needs no
+// adapter callback on its descriptor. A product without a Close method has
+// nothing to release and is skipped.
 func (r *ComponentRegistry) closeEntries(ctx context.Context, entries []constructedEntry) ([]string, error) {
 	var rolled []string
 	var errs []error
@@ -1066,9 +1065,8 @@ func Build[T any](ctx context.Context, r *ComponentRegistry, name string, overri
 // named name declares on its descriptor: Capabilities is the declaration
 // the Prepare stage compares against the deployment mode's requirement, and
 // this is its independent read, so a caller that needs the declaration
-// alongside a built product -- the pairing SeamRegistry.Build returns for a
-// name-resolved seam implementation -- reads it here instead of Build
-// growing a second return value.
+// alongside a built product reads it here instead of Build growing a second
+// return value.
 //
 // name resolves exactly as Build's does: against the assembly plan the
 // Prepare stage wrote, so the reading follows the selection the composition

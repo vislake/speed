@@ -96,10 +96,9 @@ func ExampleNewComponentRegistry() {
 
 // ExampleComponentCapabilities shows the independent capability read: the
 // declaration a selected component carries is read on its own, so a caller
-// that must compare a capability before wiring the product -- the pairing
-// SeamRegistry.Build hands back for a name-resolved implementation -- gets
-// it without Build growing a second return value. The read follows the
-// assembly plan, so an unselected name reports the selection gap.
+// that must compare a capability before wiring the product gets it without
+// Build growing a second return value. The read follows the assembly plan,
+// so an unselected name reports the selection gap.
 func ExampleComponentCapabilities() {
 	reg := pkgcore.NewComponentRegistry()
 	if err := reg.Register(pkgcore.Component{

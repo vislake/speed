@@ -532,39 +532,6 @@ func ExampleCapability() {
 	// none
 }
 
-// ExampleSeamRegistry shows the name-to-constructor directory mechanism a
-// module keeps its own implementations in -- the shape go/ai-gateway's
-// provider registries and go/pki's signer registry use to build a member
-// chosen by a name their own configuration carries.
-func ExampleSeamRegistry() {
-	registry := pkgcore.NewSeamRegistry[pkgcore.KVStore]()
-
-	err := registry.Register(pkgcore.Registration[pkgcore.KVStore]{
-		Name:         "kv.example",
-		Capabilities: pkgcore.MultiReplicaSafe,
-		New:          func(pkgcore.Config) (pkgcore.KVStore, error) { return pkgcore.NewMemoryKVStore(), nil },
-	})
-	fmt.Println("register:", err)
-
-	store, caps, err := registry.Build("kv.example", pkgcore.Config{})
-	fmt.Println("build:", err, store != nil, caps)
-
-	// Registering the same name twice is rejected; the original registration
-	// is left in place.
-	err = registry.Register(pkgcore.Registration[pkgcore.KVStore]{Name: "kv.example"})
-	fmt.Println("duplicate:", errors.Is(err, pkgcore.ErrDuplicateImplementation))
-
-	// Building a name nothing registered is rejected too.
-	_, _, err = registry.Build("kv.nonexistent", pkgcore.Config{})
-	fmt.Println("unknown:", errors.Is(err, pkgcore.ErrUnknownImplementation))
-
-	// Output:
-	// register: <nil>
-	// build: <nil> true MultiReplicaSafe
-	// duplicate: true
-	// unknown: true
-}
-
 // ExampleDeploymentMode_RequiredCapabilities shows what the assembly's
 // Prepare stage compares every selected component's declared Capability
 // against.

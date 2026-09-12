@@ -749,9 +749,8 @@ func (c *productCloser) Close() error {
 
 // TestCloseReleasesCallbacklessProducts pins the registry's release rule for
 // a component that declares no Close callback: its product's own Close()
-// error is the ownership declaration -- the same structural contract
-// Registration documents for a value resolved through SeamRegistry.Build --
-// so the close stage must run it, exactly once and in reverse construction
+// error is the ownership declaration (the standard io.Closer shape) -- so
+// the close stage must run it, exactly once and in reverse construction
 // order, route its failure into the aggregated Close result under the
 // component's name, and record the component in the rollback set as any
 // other released member. A declared callback supersedes the fallback, and a
