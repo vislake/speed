@@ -12,9 +12,9 @@ import (
 	"github.com/vislake/speed/go/pki"
 )
 
-// kmsawsComponentSettings returns the settings both resolution paths are
-// fed from: the component's composition block and the seam registration's
-// flat pkgcore.Config carry the identical key set and values.
+// kmsawsComponentSettings returns the settings these tests feed the
+// component's composition block: componentBlock wraps them into the block's
+// map shape below.
 func kmsawsComponentSettings() pkgcore.Config {
 	return pkgcore.Config{
 		"region":            "eu-west-1",

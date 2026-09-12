@@ -31,13 +31,13 @@ type signerComponentConfig struct {
 
 // signerAWSKMSComponent is the component descriptor for "signer.aws-kms":
 // the envelope-mode AWS KMS signer over the configuration the component's
-// own block spells out, declaring the same 0 capabilities the seam
-// registration declares -- envelope mode decrypts the real key into this
-// process's memory to sign, so it does not satisfy
+// own block spells out, declaring 0 capabilities -- envelope mode decrypts
+// the real key into this process's memory to sign, so it does not satisfy
 // pkgcore.KeyNeverLeavesBoundary. Its New funnels through
 // envelopeSignerFromConfig -- the package's one construction path for this
-// name -- so the component face and the seam face cannot diverge on the
-// forced mode, the required-field checks or the coded config refusal. The
+// name -- so a composition block and a flat pkgcore.Config cannot diverge
+// on the forced mode, the required-field checks or the coded config
+// refusal. The
 // component requires no database: NewSigner builds a KMS client that issues
 // no request until its first operation, and the block carries the region
 // and credentials itself.
@@ -66,8 +66,8 @@ var signerAWSKMSComponent = pkgcore.Component{
 // "signer.aws-kms-direct": the direct-sign-mode AWS KMS signer, mirroring
 // signerAWSKMSComponent's shape with the other forced mode and the matching
 // capability declaration -- the key is generated inside, and never leaves,
-// the AWS KMS service, so this component satisfies
-// pkgcore.KeyNeverLeavesBoundary exactly as its registration declares.
+// the AWS KMS service, so this component declares
+// pkgcore.KeyNeverLeavesBoundary.
 var signerAWSKMSDirectComponent = pkgcore.Component{
 	Name:         "signer.aws-kms-direct",
 	Module:       "signer",

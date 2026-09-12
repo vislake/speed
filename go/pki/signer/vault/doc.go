@@ -26,13 +26,13 @@
 // something read back off the constructed value -- so a single
 // "signer.vault" name cannot correctly answer "does this have
 // KeyNeverLeavesBoundary" when that answer depends on which Mode a
-// particular Config selects. Rather than have Build lie about the
-// capability of whichever mode a given cfg happened to choose, this package
-// registers the two modes as two separate, honestly-labelled names, exactly
-// mirroring how pkgcore's own mailer registers "mailer.console" (a
-// component declaring Stateless) and "mailer.smtp" (declaring
-// MultiReplicaSafe|Stateless) as two named components rather than one
-// name whose capability depends on configuration.
+// particular Config selects. Rather than have one name's declaration lie
+// about the capability of whichever mode a given cfg happened to choose,
+// this package registers the two modes as two separate, honestly-labelled
+// names, exactly mirroring how pkgcore's own mailer registers
+// "mailer.console" (a component declaring Stateless) and "mailer.smtp"
+// (declaring MultiReplicaSafe|Stateless) as two named components rather
+// than one name whose capability depends on configuration.
 //
 // # In-place Transit key rotation is not governed by this module's
 // # lifecycle state machine -- read this before choosing a direct-sign name

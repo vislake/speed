@@ -31,13 +31,13 @@ type signerComponentConfig struct {
 
 // signerVaultComponent is the component descriptor for "signer.vault": the
 // envelope-mode Vault Transit signer over the configuration the component's
-// own block spells out, declaring the same 0 capabilities the seam
-// registration declares -- envelope mode decrypts the real key into this
-// process's memory to sign, so it does not satisfy
+// own block spells out, declaring 0 capabilities -- envelope mode decrypts
+// the real key into this process's memory to sign, so it does not satisfy
 // pkgcore.KeyNeverLeavesBoundary. Its New funnels through
 // envelopeSignerFromConfig -- the package's one construction path for this
-// name -- so the component face and the seam face cannot diverge on the
-// forced mode, the required-field checks or the coded config refusal. The
+// name -- so a composition block and a flat pkgcore.Config cannot diverge
+// on the forced mode, the required-field checks or the coded config
+// refusal. The
 // component requires no database: NewSigner builds a Vault client that
 // dials lazily, and the block carries the endpoint and token itself.
 var signerVaultComponent = pkgcore.Component{
@@ -65,8 +65,8 @@ var signerVaultComponent = pkgcore.Component{
 // "signer.vault-direct": the direct-sign-mode Vault signer, mirroring
 // signerVaultComponent's shape with the other forced mode and the matching
 // capability declaration -- the key is generated inside, and never leaves,
-// the Vault service, so this component satisfies
-// pkgcore.KeyNeverLeavesBoundary exactly as its registration declares.
+// the Vault service, so this component declares
+// pkgcore.KeyNeverLeavesBoundary.
 var signerVaultDirectComponent = pkgcore.Component{
 	Name:         "signer.vault-direct",
 	Module:       "signer",

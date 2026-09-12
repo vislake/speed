@@ -287,16 +287,17 @@ func TestComponent_SelfWiresTheSettingsReaderFromAConfigComponent(t *testing.T) 
 
 // TestSignerLocalComponent_WellFormed runs the descriptor through the
 // component contract: the naming convention, the typed tokens (no schema --
-// the shared connection replaces the registry entry's dialect/dsn pair).
+// the component takes no settings; the shared connection is the
+// construction input).
 func TestSignerLocalComponent_WellFormed(t *testing.T) {
 	t.Parallel()
 	componenttest.AssertWellFormed(t, signerLocalComponent)
 }
 
 // TestSignerLocalComponent_DeclaresCapabilities pins the declaration: 0
-// bits, the same non-declaration the seam registration records -- LocalSigner
-// decrypts the private key into this process's memory for the duration of a
-// signing call, so it must not claim KeyNeverLeavesBoundary.
+// bits -- LocalSigner decrypts the private key into this process's memory
+// for the duration of a signing call, so it must not claim
+// KeyNeverLeavesBoundary.
 func TestSignerLocalComponent_DeclaresCapabilities(t *testing.T) {
 	t.Parallel()
 	if signerLocalComponent.Capabilities != 0 {
@@ -309,9 +310,8 @@ func TestSignerLocalComponent_DeclaresCapabilities(t *testing.T) {
 
 // TestSignerLocalComponent_ConstructsOverTheSharedConnection drives the
 // component through a real assembly: it resolves the *gorm.DB the database
-// provider put, builds the LocalSigner over that very connection -- not the
-// second connection the registry entry's own constructor must open for
-// itself -- and the signer's writes land in the shared database.
+// provider put and builds the LocalSigner over that very connection, so the
+// signer's writes land in the shared database.
 func TestSignerLocalComponent_ConstructsOverTheSharedConnection(t *testing.T) {
 	ctx := context.Background()
 	db := newTestDB(t)

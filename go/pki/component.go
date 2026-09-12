@@ -221,19 +221,15 @@ func component() pkgcore.Component {
 // can use as a double. signer is a binding module -- exactly one
 // implementation is selected -- and this component is the
 // zero-external-dependency one, beside the vault and kmsaws providers that
-// register their own names from their subpackages; the seam registration of
-// the same name (signer_registry.go) stays the name-based path for a
-// flat-config caller.
+// register their own component names from their subpackages.
 //
 // Requires the database (its *gorm.DB product) and builds the signer over
-// that shared connection -- not the second connection the registry entry's
-// own constructor must open for itself, because a flat Config cannot carry
-// a *gorm.DB.
+// that shared connection, so the signer's key rows live in the same
+// database as the module's every other table.
 // Provides (*Signer)(nil), the contract a consumer's token resolves through.
-// Capabilities are deliberately 0, the same non-declaration the seam
-// registration records: LocalSigner decrypts the private key into this
-// process's memory for the duration of a signing call, so it does not
-// declare KeyNeverLeavesBoundary. Like every LocalSigner caller, this
+// Capabilities are deliberately 0: LocalSigner decrypts the private key
+// into this process's memory for the duration of a signing call, so it does
+// not declare KeyNeverLeavesBoundary. Like every LocalSigner caller, this
 // component expects LocalKeySerializerName to be registered (once, at
 // bootstrap, before any connection using the schema opens) against the
 // cipher the host injected; the pki component's own host wiring is where
@@ -243,7 +239,7 @@ var signerLocalComponent = pkgcore.Component{
 	Module:       signerModuleName,
 	Provides:     []any{(*Signer)(nil)},
 	Capabilities: 0,
-	ConfigSchema: nil, // the shared connection replaces the registry entry's dialect/dsn pair
+	ConfigSchema: nil, // no per-component settings: the shared connection is the construction input
 	Requires:     []pkgcore.Requirement{{Token: (*gorm.DB)(nil)}},
 	New: func(_ context.Context, reg *pkgcore.ComponentRegistry, _ pkgcore.ComponentConfig) (any, error) {
 		db, err := pkgcore.Get[*gorm.DB](reg)
