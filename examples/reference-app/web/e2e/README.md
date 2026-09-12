@@ -7,7 +7,7 @@ real composed UI against a real, freshly booted reference-app server.
 # from examples/reference-app/web
 pnpm test:e2e                     # boots both servers, runs the default tier
 pnpm test:e2e:budget              # the verified gates the budget excludes
-pnpm test:e2e:pending             # the gates for defects still open
+pnpm test:e2e:pending             # for still-broken things -- no gate today
 pnpm test:e2e --headed            # watch it happen
 pnpm exec playwright show-report  # the last run's report
 
@@ -26,7 +26,7 @@ budget below rather than anything about the gates.
 | *(none)* | Verified, and it fits the budget | `pnpm test:e2e` |
 | `@budget` | **Verified passing.** Out of the default run only because the suite has no sign-in left to spend | `pnpm test:e2e:budget` |
 | `@pending` | The thing it checks is **still broken**, or its surface does not exist yet | `pnpm test:e2e:pending` |
-| | **No `@pending` gate is waiting on a DEFECT any more** -- every one of those has seen its fix land. The two that carry the tag today are waiting on a *surface that does not exist*, which is the tag's second meaning | |
+| | **No gate carries the tag today** -- every `@pending` gate has seen its fix land, and the tier answers "No tests found"; "Open defects with a gate waiting on them: none" below is the closed list | |
 | `@deployment` | Safe to run against a long-running deployment (needs no sign-in, or one) | any of the above with `E2E_BASE_URL` |
 
 `@budget` and `@pending` were one tag once, and merging them cost the

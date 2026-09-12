@@ -256,17 +256,13 @@ export default defineConfig({
   // TWO TIERS SIT OUTSIDE THE DEFAULT RUN, FOR TWO DIFFERENT REASONS
   //
   //   @pending -- the thing it checks is still broken, or the surface it
-  //   drives does not exist yet (core-journey.pending.spec.ts: the upload
-  //   / generate / compare / share / cost journey the product is for;
-  //   sessions-are-distinguishable and offered-channels-work each carry
-  //   their own open acceptance blocker, and current-clinic-is-visible
-  //   carries ONE @pending test beside its two @budget ones -- the
-  //   clinic a self-service registration creates is still shown as a
-  //   raw tenant id and named on no surface, which is the same missing
-  //   capability its file header points at rather than a UI omission).
-  //   Each one is an acceptance criterion, checkable the day it lands
-  //   -- but a suite that is permanently red says nothing, so they are
-  //   asked for by name:
+  //   drives does not exist yet. NO GATE CARRIES THE TAG TODAY: every
+  //   gate that waited on a defect or an unbuilt surface has seen its
+  //   fix land (e2e/README.md keeps the closed list), and the tier
+  //   answers "No tests found" until a gate needs holding back again --
+  //   an acceptance criterion, checkable the day its fix lands, but a
+  //   suite that is permanently red says nothing, so a held-back gate
+  //   is asked for by name:
   //
   //     pnpm test:e2e:pending
   //
