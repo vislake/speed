@@ -1048,6 +1048,32 @@ func Build[T any](ctx context.Context, r *ComponentRegistry, name string, overri
 	return value, nil
 }
 
+// ComponentCapabilities returns the capabilities the selected component
+// named name declares on its descriptor: Capabilities is the declaration
+// the Prepare stage compares against the deployment mode's requirement, and
+// this is its independent read, so a caller that needs the declaration
+// alongside a built product -- the pairing SeamRegistry.Build returns for a
+// name-resolved seam implementation -- reads it here instead of Build
+// growing a second return value.
+//
+// name resolves exactly as Build's does: against the assembly plan the
+// Prepare stage wrote, so the reading follows the selection the composition
+// actually made, under whatever name the host selected the component by. An
+// unselected name that is registered, and a name nothing registered, fail
+// with ErrUnknownComponent naming the case, exactly as Build's two cases do.
+// A selected component that declares no bits reads as the zero Capability,
+// never an error: declaring nothing is a declaration.
+func ComponentCapabilities(r *ComponentRegistry, name string) (Capability, error) {
+	p, selected := r.planned(name)
+	if !selected {
+		if _, exists := r.registered(name); exists {
+			return 0, fmt.Errorf("%w (stage %s): component %q is not selected in this assembly; select it in the composition configuration", ErrUnknownComponent, r.currentStage(), name)
+		}
+		return 0, fmt.Errorf("%w (stage %s): component %q is not registered; registered components: %s", ErrUnknownComponent, r.currentStage(), name, joinNames(r.registeredOrder()))
+	}
+	return p.component.Capabilities, nil
+}
+
 // currentStage reads the current stage marker for error text.
 func (r *ComponentRegistry) currentStage() stage {
 	r.mu.RLock()

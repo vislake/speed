@@ -2,6 +2,7 @@ package pkgcore_test
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/vislake/speed/go/pkgcore"
@@ -91,4 +92,44 @@ func ExampleNewComponentRegistry() {
 	// Output:
 	// greeting: hi
 	// members: [greeter]
+}
+
+// ExampleComponentCapabilities shows the independent capability read: the
+// declaration a selected component carries is read on its own, so a caller
+// that must compare a capability before wiring the product -- the pairing
+// SeamRegistry.Build hands back for a name-resolved implementation -- gets
+// it without Build growing a second return value. The read follows the
+// assembly plan, so an unselected name reports the selection gap.
+func ExampleComponentCapabilities() {
+	reg := pkgcore.NewComponentRegistry()
+	if err := reg.Register(pkgcore.Component{
+		Name:         "example.queue",
+		Module:       "example",
+		Capabilities: pkgcore.MultiReplicaSafe,
+		New: func(context.Context, *pkgcore.ComponentRegistry, pkgcore.ComponentConfig) (any, error) {
+			return &struct{}{}, nil
+		},
+	}); err != nil {
+		fmt.Println("register:", err)
+		return
+	}
+	reg.Put(pkgcore.NewComponentConfig(map[string]any{
+		"components": map[string]any{"example.queue": nil},
+	}))
+	if err := reg.Prepare(context.Background()); err != nil {
+		fmt.Println("prepare:", err)
+		return
+	}
+
+	caps, err := pkgcore.ComponentCapabilities(reg, "example.queue")
+	fmt.Println(caps, err)
+	fmt.Println(caps.Has(pkgcore.MultiReplicaSafe), caps.Has(pkgcore.SurvivesRestart))
+
+	_, err = pkgcore.ComponentCapabilities(reg, "example.unselected")
+	fmt.Println(errors.Is(err, pkgcore.ErrUnknownComponent))
+
+	// Output:
+	// MultiReplicaSafe <nil>
+	// true false
+	// true
 }

@@ -795,6 +795,46 @@ func TestBuild(t *testing.T) {
 	}
 }
 
+func TestComponentCapabilities(t *testing.T) {
+	ctx := context.Background()
+	log := &stageLog{}
+	declared := recordingComponent(log, "capdeclared", "capdeclared", &compTokenA{}, func(c *Component) {
+		c.Capabilities = MultiReplicaSafe | Stateless
+	})
+	bare := recordingComponent(log, "capbare", "capbare", &compTokenB{}, nil)
+	unselected := recordingComponent(log, "capunselected", "capunselected", &compSpreadImpl{}, func(c *Component) {
+		c.Capabilities = SurvivesRestart
+	})
+
+	reg := newTestRegistry(t, declared, bare, unselected)
+	reg.Put(testComposition(
+		configEntry{key: "capdeclared", value: nil},
+		configEntry{key: "capbare", value: nil},
+	))
+	if err := runStages(ctx, reg); err != nil {
+		t.Fatalf("stages = %v", err)
+	}
+
+	caps, err := ComponentCapabilities(reg, "capdeclared")
+	if err != nil || caps != MultiReplicaSafe|Stateless {
+		t.Errorf("ComponentCapabilities(capdeclared) = (%v, %v), want the declared MultiReplicaSafe|Stateless", caps, err)
+	}
+
+	caps, err = ComponentCapabilities(reg, "capbare")
+	if err != nil || caps != 0 {
+		t.Errorf("ComponentCapabilities(capbare) = (%v, %v), want the zero Capability without an error", caps, err)
+	}
+
+	// The read follows the selection, not the registration: an unselected
+	// descriptor's declaration is not in effect.
+	if _, err := ComponentCapabilities(reg, "capunselected"); !errors.Is(err, ErrUnknownComponent) || !strings.Contains(err.Error(), "not selected") {
+		t.Errorf("ComponentCapabilities of an unselected component = %v, want ErrUnknownComponent naming the selection gap", err)
+	}
+	if _, err := ComponentCapabilities(reg, "never.registered"); !errors.Is(err, ErrUnknownComponent) || !strings.Contains(err.Error(), "not registered") {
+		t.Errorf("ComponentCapabilities of an unregistered component = %v, want ErrUnknownComponent naming the registration gap", err)
+	}
+}
+
 func TestMemberNames(t *testing.T) {
 	ctx := context.Background()
 	log := &stageLog{}
