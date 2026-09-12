@@ -315,6 +315,14 @@
 - **登记理由**：宿主可见面新增（引擎新增一档组件配置解析行为——新环境变量/flag 拼写面——加 `go/pkgcore/config` 两个公共符号），按"宿主可见面变更须带 `!BREAKING` footer 或登记本清单"的纪律登记（纯新增，不带 footer）。
 - **出处**：`4e2d10a9`（`feat(config): project a configuration declaration's fields through Describe`）+ `1016b59a`（`feat(config): pin a declaration's environment variable name`）+ `d39bc0ae`（`feat(app): resolve component configuration through the loader's five sources`）。
 
+### （待编号）六模块：BootstrapKeys 迁入组件 `ConfigSchema` `derive` 字段（宿主可见面变更登记）
+
+- **面**：六条平台 key path（`authn.pii_cipher_key`、`authn.blind_index_key`、`config.cipher_key`、`notification.contact_index_key`、`org.invitation_email_index_key`、`pki.local_key_cipher_key`）的声明位从五个组件描述符的 `BootstrapKeys` 移到各自组件 `ConfigSchema` 的 `derive` 字段；五个组件（authn/config/notification/org/pki）以模块名作 `ConfigNamespace`，六条 key path、环境变量拼写、flag 拼写、派生 purpose 与五源优先级逐字不变（path 即派生身份，迁移零轮换）。引擎侧：`go/app` 的 loader 声明采集同时读两面（`BootstrapKeys` 席位 + schema `derive` 字段，同一 key path 折叠/冲突同旧规则），material 按同一地址发布，故 authn 的 Prepare/New、宿主 crypto 组件与两个 indexer 构建的既有 by-path 读法行为不变（flowtests 等价 oracle 逐值证明）；`pkgcore.validateOneLayerPerKey` 从"BootstrapKeys vs runtime item"扩为"密钥材料（含 schema `derive` 字段）vs runtime item"，普通 schema 字段按既有语义仍可与同名 runtime item 共存。五个模块各导出 key path 常量（`authn.PIICipherKeyPath`/`authn.BlindIndexKeyPath`/`config.CipherKeyPath`/`notification.ContactIndexKeyPath`/`org.InvitationEmailIndexKeyPath`/`pki.LocalKeyCipherKeyPath`），宿主与模板不再自行拼写路径。
+- **消费者影响**：① 以 `BootstrapKeys` 枚举做宿主键绑定检查的宿主（如 `config.Verify` 式自查）：六键不再出现在该席位，改经 `pkgcore.DescribeComponentSchema` 读 schema 面或直接用模块导出常量 + material；② 五个组件其余 schema 字段的 key path 由 `components.<模块名>.<字段>` 位移为 `<模块名>.<字段>`（命名空间声明的直接效果；不改变其"仅配置文件"供给与块内地址 `components.<模块名>`，纯声明面位移）；其中 authn 的 `access_token_ttl`/`refresh_token_ttl`/`session_ttl`/`sms_code_ttl` 与 pki 的 `propagation_window`/`renewal_lead_time` 由此与同名 runtime item 共享字面路径——构造期值作为其运行时读取的回退，属既有语义，一键一层校验按设计只管密钥材料；③ 读 material 的宿主无感（值同、路径同）；④ 直接调 `speedapp.Load` 后立即读 material 的代码不受影响（schema 声明在 load 期即采集）。
+- **替代路径**：机制本体保留——`BootstrapKey` 席位、`BootstrapMaterial`、`BootstrapKeyPurpose` 全部在册（当前无仓内成员），没有天然组件归属的平台密钥仍走该独立声明路径（32 号文 §5 三判据）；
+- **登记理由**：宿主可见面变更（六键声明位 + 五个组件 schema 字段地址面 + 五个新导出符号），本批五个模块提交带 `!BREAKING` footer，同时在此登记。`configrefgen` 生成物在迁移前后逐字不变（声明面变化，操作面合同不变），`saasctl new` 五变体 materialize 构建经实测。
+- **出处**：`469d51ef`（`feat(app): publish a schema-declared key's material at its resolved key path`）+ `66496f6e`（`feat(pkgcore): refuse key material a schema field and the runtime seat share`）+ `2582f727`/`0db08cd9`/`337b2c05`/`d528eded`/`843ea4e7`（五个模块各自的 `feat(...)!: declare ... as a schema derive field`）+ `d8a80c74`（`refactor(reference-app): read key material by the modules' exported key paths`）+ `261aa4d7`（`refactor(saasctl): ...`）+ `41e46c1e`（`feat(configrefgen): render declared keys from the schema face too`）。
+
 ## 6. D 组：configrefgen 工具内部迁移（工具面，非宿主面）
 
 - **面**：`tools/configrefgen` 的内部实现从旧内核面迁到组件面（工具自身不在消费者依赖面内）。

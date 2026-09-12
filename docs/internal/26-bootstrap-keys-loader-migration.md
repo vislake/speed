@@ -8,6 +8,10 @@
 
 文中的"现状"陈述于 2026-09-10 对照工作树逐条复核,引用处符号名优先(步骤一/二落地后早期行号已失效,§9.2 末条记录该改写)。
 
+## 0 归属变更注记（后补）
+
+本文设计的 `BootstrapKeys` 声明机制本体保留（席位、格式闭集、Sensitive/Description 配对、全局 key path 去重、独立声明路径的全部语义），但仓内六键的归属已变更：`authn.pii_cipher_key`、`authn.blind_index_key`、`config.cipher_key`、`notification.contact_index_key`、`org.invitation_email_index_key`、`pki.local_key_cipher_key` 现均声明为各自组件 `ConfigSchema` 的 `derive` 字段（五个组件以模块名作 `ConfigNamespace`，key path 与派生 purpose 逐字不变），引擎 loader 的声明采集同时读两面、按同一 key path 发布 material，宿主与组件的既有 by-path 读法不变；`Component.BootstrapKeys` 席位当前无仓内成员，保留给同时满足 32 号文 §5 三条判据、没有天然组件归属的平台密钥。演变判据与终态见 `docs/internal/32-component-config-contract.md` §5。
+
 ## 1 现状核对
 
 ### 1.1 loader 机制现状(go/pkgcore/config)

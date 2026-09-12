@@ -87,3 +87,5 @@ func Describe(target any) ([]FieldSummary, error)
 3. key path 本身承担派生稳定性契约（重命名即轮换），必须保持全局扁平，不随组件重命名或多实例化而变化。
 
 绝大多数模块自己的密钥材料（例如一个模块自身消费的对称密钥、盲索引 HMAC 密钥）不满足这三条中的第二条——它们是该模块 `ConfigSchema` 的 `derive` 字段，直接落在该模块自己的命名空间下。真正符合三条判据、没有天然组件归属的极少数平台密钥，走独立于 `ConfigSchema` 的声明路径,由装配阶段统一解析,同样纳入第 3 节的全局 key path 去重校验。
+
+**当前无成员**：本仓库六个既有平台密钥（`authn.pii_cipher_key`、`authn.blind_index_key`、`config.cipher_key`、`notification.contact_index_key`、`org.invitation_email_index_key`、`pki.local_key_cipher_key`）逐一对照三条判据，无一满足第 2 条——每一个都是所在组件构造（`New`）或 Prepare 的输入——已全部迁入各自组件的 `ConfigSchema` `derive` 字段（五个组件以模块名作 `ConfigNamespace`，六条 key path 逐字保持，派生 purpose 不变），独立声明路径（`Component.BootstrapKeys`）本体保留但仓内无成员。够格标准即三条判据本身，逐条实例化：① 密钥身份不属于任何具体组件实例——例如一个被多个模块或有宿主侧消费者共享、且其身份不随任何单一组件命名的密钥；② 没有任何组件的构造天然拥有它——它不是被某组件的 `New`/`Prepare` 消费的构造输入；③ key path 承担派生稳定性契约且必须全局扁平——不随组件重命名或多实例化改变。三者同时成立才回到独立声明路径；届时该 path 同样纳入第 3 节全局去重，且任何迁移都不得改动 path（重命名即轮换）。
