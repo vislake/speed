@@ -243,6 +243,14 @@
 - **登记理由**：组装契约边界（直接构造路径新增宿主缝挂载要求）的登记，按"宿主可见面变更须带 `!BREAKING` footer 或登记本清单"的纪律登记（装配宿主零行为变化，不带 footer）。
 - **出处**：`a05c3e57`（`refactor(authn): render the SMS body from the host's merged i18n catalog`）+ `bf28ebd7`（`test(authn): pin the catalog render and run the locale census through the catalog`）。
 
+### （待编号）（收编阶段 1）成员组件化与组件面能力位读法（非破坏，新增面登记）
+
+- **面**：四族既有包级 `pkgcore.SeamRegistry` 的实现目录新增组件面（描述符均为纯新增，旧 SeamRegistry 注册与解析路径原样保留）。`pkgcore` 新增导出读法 `ComponentCapabilities(reg *ComponentRegistry, name string) (Capability, error)`：按装配计划读取**被选中**组件描述符声明的 `Capabilities`——未选中 / 未注册分别以 `ErrUnknownComponent` 报出（与 `Build` 的两个错误分支同文），零声明读作零值；`Build[T]` 签名不变，该读法即"组件面拿能力位、`Build` 只出产品"的配对读法。`go/billing/gateway/{stripe,alipay,wechat}` 各新增组件描述符，名字与注册名逐字一致（`gateway.stripe` / `gateway.alipay` / `gateway.wechat`，模块 `gateway`），组合块键集与扁平 `pkgcore.Config` 相同，两面共用同一构造路径（`gatewayFromConfig` → `NewGateway`）。`go/ai-gateway` 新增 `chat.openai-compatible` / `image.openai-compatible` 组件（模块 `chat` / `image`）：route 的 provider 逻辑名即组件名（与凭据解析键、注册键同一字符串），"route 逻辑名 → 组件名"的解析为模块内恒等并由名字与能力位的对照测试钉住——宿主既有 route 字符串与凭据行零迁移；`Build[T]` 的 override 参数形态即"每次请求按已解析凭据构造 provider"的组件面形状。`go/pki/signer/{vault,kmsaws}` 各新增两个组件（`signer.vault` / `signer.vault-direct`、`signer.aws-kms` / `signer.aws-kms-direct`），与既有 `signer.local` 并列；能力位与注册声明逐一对齐（envelope 模式与 `signer.local` 声明 0，两个 `-direct` 声明 `pkgcore.KeyNeverLeavesBoundary`）。
+- **消费者影响**：无破坏、无升级动作。新名字默认不选中，不选入组合即零影响；选入时按普通组件参与装配（含部署模式的能力位校验）。双轨并存由各族对照测试钉住：同一名字的两面构造同一实现、声明同一能力位、以同一方式拒绝缺配置；pki 侧另钉住组件面能力位读法与 `BuildSignerRequiring` 的注册面比较结论一致。`ComponentCapabilities` 为纯新增导出符号，`Build[T]` 与各 `SeamRegistry` 方法签名均不变。
+- **替代路径**：无（纯新增面）。
+- **登记理由**：宿主可见面新增（新的可选组件名 + pkgcore 导出读法），按"宿主可见面变更须带 `!BREAKING` footer 或登记本清单"的纪律登记（纯新增面，不带 footer）。
+- **出处**：`c3915cf7`（`feat(pkgcore): read a selected component's capabilities without building it`）+ `a2d1873f`（`feat(billing): add component descriptors for the three payment gateways`）+ `684f6ba3`（`feat(ai-gateway): add component descriptors for the default chat and image providers`）+ `0dadae09`（`feat(pki): add component descriptors for the vault and kmsaws signers`）。
+
 ## 6. D 组：configrefgen 工具内部迁移（工具面，非宿主面）
 
 - **面**：`tools/configrefgen` 的内部实现从旧内核面迁到组件面（工具自身不在消费者依赖面内）。
