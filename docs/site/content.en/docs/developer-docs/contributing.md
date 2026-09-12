@@ -151,15 +151,14 @@ every claim can be checked against its origin.
 | `api-contract.yml` | PRs touching the API-contract toolchain, matching pushes to `main` | regenerates backend interfaces and the frontend SDK from the specs, consistency-gates committed artifacts, rebuilds the reference app |
 | `security.yml` | every PR, plus a daily schedule | dependency audits, gitleaks secret scan, CodeQL, license scan |
 | `scaffold-verify.yml` | daily schedule | materializes, builds, migrates and boots a starter project in both deployment modes |
-| `e2e.yml` | daily schedule, manual dispatch | the reference app's browser end-to-end suite on real runners: three Playwright projects (chromium, webkit, iPad) over two browser engines — the iPad device profile runs on webkit — one matrix row each against a freshly booted server; the push-to-main trigger stays off until the first dispatched run is green |
+| `e2e.yml` | daily schedule, manual dispatch, every push to `main` | the reference app's browser end-to-end suite on real runners: three Playwright projects (chromium, webkit, iPad) over two browser engines — the iPad device profile runs on webkit — one matrix row each against a freshly booted server |
 | `docs-site-deploy.yml` | pushes to `main` touching `docs/site/**`, manual dispatch | builds and deploys this site |
 | `release.yml` | manual dispatch | offline lockstep release-plan verification, then the real release for the verified version: pushes the module tags and the repo root tag, and publishes every `@speed` package to the GitHub Packages registry |
 | `docker-image-ci.yml` | pushes to `main` touching the image build's input paths, plus manual dispatch | container image build |
 
 `nightly.yml` is a gated stub, never triggering on pull requests;
-`e2e.yml` currently runs on its daily schedule and on demand, its
-push-to-main trigger deliberately unset until that first green
-dispatched run.
+`e2e.yml` also runs on every push to `main`, its push trigger having
+opened once a dispatched run on the file had gone green.
 
 ```mermaid
 flowchart LR
