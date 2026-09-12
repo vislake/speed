@@ -220,6 +220,14 @@
 - **登记理由**：宿主可见面（已设配置行由死声明变为生效开关 + 签发语义收窄）的行为变更，按"宿主可见面变更须带 `!BREAKING` footer 或登记本清单"的纪律登记（非破坏，不带 footer）。
 - **出处**：`221672b3`（`feat(pki): read the declared config items at their read points`）+ `f237410d`（`test(pki): pin the config-item read points end to end`）+ `0c7b7df6`（`docs(pki): describe the configuration read points in the module guide`）。
 
+### （待编号）go/app：RunAssembly 增加可选 serve 回调（公共面新增登记）
+
+- **面**：`go/app` 的 `RunAssembly` 新增第三个参数——可选 serve 回调 `ServeFunc`（新导出类型，`func(ctx context.Context, reg *pkgcore.ComponentRegistry) error`）：引擎在装配 Start 完成后、两相关停（Stop→Close）之前调用它一次，把信号叠加后的 context 与活注册表交给宿主；回调返回即结束 serve 阶段，引擎随后照常两拍关闭。`nil` 回调保持原语义——引擎自己等 context（无 serve 步骤的进程，即签名变更前的行为）；serve 返回错误不跳过关闭，错误与关闭结果 join 后一并带回调用方。调用形态由 `RunAssembly(ctx, spec, extra...)` 变为 `RunAssembly(ctx, spec, serve, extra...)`。
+- **消费者影响**：既有调用方在 spec 之后补 `nil` 即保持原行为；有自身服务生命周期的宿主把 serve 步骤填入新参数，不再手抄 signal+两相关停循环。仓内两宿主已迁移：reference-app 的 `Run` 与 saasctl 五份 selection 模板——宿主各自在自己的注册表上读描述符构建组件集，连 serve 步骤一起交给引擎组装（`examples/reference-app/internal/app/server.go` 的 `Run`/`serveHost`，五份 `selection/*/server.go` 的 `runServer`/`serveHost`）。`tools/check_host_composition.py` 的 `signal.NotifyContext` 宿主允许点随之退役：信号叠加归引擎，该禁令现无允许点。
+- **替代路径**：`app.RunAssembly`（nil 回调=原签名行为）；主动驱动注册表、自持 serve 的宿主继续用 `Assemble` + `Shutdown`。
+- **登记理由**：公共符号面变更（`RunAssembly` 签名新增参数 + 新导出类型 `ServeFunc`），按"宿主可见面变更须带 `!BREAKING` footer 或登记本清单"的纪律**双轨**登记（三个提交均带 `!` footer，先例同 §5.8）。
+- **出处**：`a3de33d3`（`feat(app)!: hand the host's serve step to RunAssembly`）+ `b6e1ac74`（`refactor(saasctl)!: hand the skeleton's serve step to RunAssembly`）+ `d0ccca95`（`refactor(reference-app)!: run the app through RunAssembly's serve step`）。
+
 ## 6. D 组：configrefgen 工具内部迁移（工具面，非宿主面）
 
 - **面**：`tools/configrefgen` 的内部实现从旧内核面迁到组件面（工具自身不在消费者依赖面内）。
