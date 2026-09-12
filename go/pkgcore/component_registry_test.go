@@ -732,6 +732,183 @@ func TestStopIgnoresFailuresAndDoesNotClose(t *testing.T) {
 	}
 }
 
+// productCloser is a component product that owns a resource the way an
+// implementation built from its own configuration does: the ownership is
+// declared by the standard Close() error alone, with no adapter on the
+// descriptor.
+type productCloser struct {
+	log  *stageLog
+	name string
+	err  error
+}
+
+func (c *productCloser) Close() error {
+	c.log.record(c.name + ".product.close")
+	return c.err
+}
+
+// TestCloseReleasesCallbacklessProducts pins the registry's release rule for
+// a component that declares no Close callback: its product's own Close()
+// error is the ownership declaration -- the same structural contract
+// Registration documents for a value resolved through SeamRegistry.Build --
+// so the close stage must run it, exactly once and in reverse construction
+// order, route its failure into the aggregated Close result under the
+// component's name, and record the component in the rollback set as any
+// other released member. A declared callback supersedes the fallback, and a
+// product without a closer is skipped.
+func TestCloseReleasesCallbacklessProducts(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("released in reverse order without a declared callback", func(t *testing.T) {
+		log := &stageLog{}
+		aaa := recordingComponent(log, "aaa", "", &productCloser{log: log, name: "aaa"}, func(c *Component) { c.Close = nil })
+		bbb := recordingComponent(log, "bbb", "", &productCloser{log: log, name: "bbb"}, func(c *Component) { c.Close = nil })
+
+		reg := newTestRegistry(t, aaa, bbb)
+		reg.Put(testComposition(
+			configEntry{key: "aaa", value: nil},
+			configEntry{key: "bbb", value: nil},
+		))
+		if err := runStages(ctx, reg); err != nil {
+			t.Fatalf("stages = %v", err)
+		}
+		if err := reg.Close(ctx); err != nil {
+			t.Fatalf("Close = %v, want the products released", err)
+		}
+		order := []string{}
+		for _, e := range log.all() {
+			if strings.HasSuffix(e, ".product.close") {
+				order = append(order, e)
+			}
+		}
+		if want := []string{"bbb.product.close", "aaa.product.close"}; !reflect.DeepEqual(order, want) {
+			t.Errorf("release order = %v, want reverse construction order %v", order, want)
+		}
+
+		// The exactly-once result is cached like any other Close result.
+		if err := reg.Close(ctx); err != nil {
+			t.Errorf("second Close = %v, want the cached nil", err)
+		}
+		if got := log.count("aaa.product.close") + log.count("bbb.product.close"); got != 2 {
+			t.Errorf("products released %d times, want exactly once each", got)
+		}
+	})
+
+	t.Run("declared callback supersedes the product closer", func(t *testing.T) {
+		log := &stageLog{}
+		// The fixture keeps its default Close callback; the product's own
+		// Close must not run on top of it, so its record would be the
+		// failure.
+		ccc := recordingComponent(log, "ccc", "", &productCloser{log: log, name: "ccc"}, nil)
+
+		reg := newTestRegistry(t, ccc)
+		reg.Put(testComposition(configEntry{key: "ccc", value: nil}))
+		if err := runStages(ctx, reg); err != nil {
+			t.Fatalf("stages = %v", err)
+		}
+		if err := reg.Close(ctx); err != nil {
+			t.Fatalf("Close = %v", err)
+		}
+		if got := log.count("ccc.close"); got != 1 {
+			t.Errorf("declared callback ran %d times, want exactly once", got)
+		}
+		if got := log.count("ccc.product.close"); got != 0 {
+			t.Errorf("product Close ran %d times behind a declared callback, want none", got)
+		}
+	})
+
+	t.Run("product failure is aggregated under the component name", func(t *testing.T) {
+		log := &stageLog{}
+		boom := errors.New("release failed")
+		ddd := recordingComponent(log, "ddd", "", &productCloser{log: log, name: "ddd", err: boom}, func(c *Component) { c.Close = nil })
+
+		reg := newTestRegistry(t, ddd)
+		reg.Put(testComposition(configEntry{key: "ddd", value: nil}))
+		if err := runStages(ctx, reg); err != nil {
+			t.Fatalf("stages = %v", err)
+		}
+		err := reg.Close(ctx)
+		if !errors.Is(err, boom) {
+			t.Fatalf("Close = %v, want the product's failure wrapped", err)
+		}
+		for _, want := range []string{`component "ddd"`, "(stage close)"} {
+			if !strings.Contains(err.Error(), want) {
+				t.Errorf("Close error %q does not carry %q", err, want)
+			}
+		}
+		if again := reg.Close(ctx); !errors.Is(again, boom) {
+			t.Errorf("second Close = %v, want the cached failure", again)
+		}
+		if got := log.count("ddd.product.close"); got != 1 {
+			t.Errorf("product released %d times, want exactly once", got)
+		}
+	})
+
+	t.Run("rollback releases callbackless products too", func(t *testing.T) {
+		log := &stageLog{}
+		aaa := recordingComponent(log, "aaa", "", &productCloser{log: log, name: "aaa"}, func(c *Component) { c.Close = nil })
+		bbb := recordingComponent(log, "bbb", "", &compTokenB{}, func(c *Component) {
+			c.New = func(context.Context, *ComponentRegistry, ComponentConfig) (any, error) {
+				return nil, errors.New("dial tcp: refused")
+			}
+		})
+
+		reg := newTestRegistry(t, aaa, bbb)
+		reg.Put(testComposition(
+			configEntry{key: "aaa", value: nil},
+			configEntry{key: "bbb", value: nil},
+		))
+		if err := reg.Prepare(ctx); err != nil {
+			t.Fatalf("Prepare = %v", err)
+		}
+		err := reg.Construct(ctx)
+		if !errors.Is(err, ErrComponentFailed) {
+			t.Fatalf("Construct = %v, want ErrComponentFailed", err)
+		}
+		if !strings.Contains(err.Error(), "rolled back: aaa") {
+			t.Errorf("Construct error %q does not record the released product in its rollback set", err)
+		}
+		if got := log.count("aaa.product.close"); got != 1 {
+			t.Errorf("aaa's product released %d times during rollback, want exactly once", got)
+		}
+	})
+
+	t.Run("product without a closer is skipped", func(t *testing.T) {
+		log := &stageLog{}
+		eee := recordingComponent(log, "eee", "", &compTokenA{}, func(c *Component) { c.Close = nil })
+		reg := newTestRegistry(t, eee)
+		reg.Put(testComposition(configEntry{key: "eee", value: nil}))
+		if err := runStages(ctx, reg); err != nil {
+			t.Fatalf("stages = %v", err)
+		}
+		if err := reg.Close(ctx); err != nil {
+			t.Errorf("Close = %v, want nil for a product with nothing to release", err)
+		}
+	})
+
+	t.Run("Stop does not release products", func(t *testing.T) {
+		log := &stageLog{}
+		fff := recordingComponent(log, "fff", "", &productCloser{log: log, name: "fff"}, func(c *Component) { c.Close = nil })
+		reg := newTestRegistry(t, fff)
+		reg.Put(testComposition(configEntry{key: "fff", value: nil}))
+		if err := runStages(ctx, reg); err != nil {
+			t.Fatalf("stages = %v", err)
+		}
+		if err := reg.Stop(ctx); err != nil {
+			t.Fatalf("Stop = %v", err)
+		}
+		if got := log.count("fff.product.close"); got != 0 {
+			t.Errorf("Stop released %d products, want none: the release belongs to the close stage", got)
+		}
+		if err := reg.Close(ctx); err != nil {
+			t.Fatalf("Close = %v", err)
+		}
+		if got := log.count("fff.product.close"); got != 1 {
+			t.Errorf("Close after Stop released %d products, want exactly once", got)
+		}
+	})
+}
+
 // buildProduct is the product of the Build fixture component; its tag proves
 // which configuration New received.
 type buildProduct struct{ tag string }

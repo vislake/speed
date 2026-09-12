@@ -47,11 +47,14 @@ var ErrInvalidComponent = errors.New("pkgcore: invalid component")
 // lifecycle ComponentRegistry drives (see its Prepare through Close methods
 // for what each stage does as a whole). New is the one required callback --
 // it produces the component's product; every other callback is optional, and
-// a component that does not declare one simply skips that stage. Verify,
-// Init, Start, Stop and Close receive the instance New produced as their
-// third parameter, so a callback acts on its own product directly instead of
-// retrieving it from the registry; Prepare runs before any instance exists
-// and New is the callback that creates one, so neither receives it.
+// a component that does not declare one simply skips that stage, with the
+// one Close exception the Close field itself documents: a product carrying
+// its own Close() error is released by the registry even without a declared
+// callback. Verify, Init, Start, Stop and Close receive the instance New
+// produced as their third parameter, so a callback acts on its own product
+// directly instead of retrieving it from the registry; Prepare runs before
+// any instance exists and New is the callback that creates one, so neither
+// receives it.
 //
 // # What a component provides and requires
 //
@@ -130,8 +133,16 @@ type Component struct {
 
 	// Close releases resources, once, in reverse dependency order after the
 	// Stop notification has gone out. Close callback failures are
-	// aggregated and reported together. A component that owns nothing
-	// closable simply does not declare Close.
+	// aggregated and reported together. Declaring Close is not required to
+	// release a resource the product owns: a product that implements the
+	// standard Close() error -- io.Closer, the same structural declaration
+	// a seam implementation makes on the value its constructor returns --
+	// is released by the registry even when the descriptor declares no
+	// callback, so a component whose New builds what it owns needs no
+	// adapter here. A declared callback supersedes that fallback and owns
+	// the release entirely, which is what a release needing the context,
+	// the registry or a custom teardown declares. A component whose
+	// product owns nothing closable declares neither.
 	Close func(ctx context.Context, reg *ComponentRegistry, instance any) error
 
 	// Requires declares the contract tokens this component consumes: one

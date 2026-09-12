@@ -5,6 +5,7 @@ import (
 	"embed"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"reflect"
 	"strings"
@@ -591,14 +592,14 @@ func (r *ComponentRegistry) Stop(ctx context.Context) error {
 	return nil
 }
 
-// Close runs the seventh stage: every constructed component's Close callback
-// in reverse dependency order, waiting out the drain Stop announced. It runs
+// Close runs the seventh stage: every constructed component's release in
+// reverse dependency order, waiting out the drain Stop announced. It runs
 // exactly once -- a second call reports the first call's result -- and
-// aggregates the failures of every Close callback rather than stopping at
-// the first. The registry also calls Close itself when any stage from
-// Construct on fails, so a failed assembly is always fully torn down before
-// its error reaches the host; a host that joins reg.Close(ctx) into the
-// failure it is handling observes the same, already computed result.
+// aggregates the failures of every release rather than stopping at the
+// first. The registry also calls Close itself when any stage from Construct
+// on fails, so a failed assembly is always fully torn down before its error
+// reaches the host; a host that joins reg.Close(ctx) into the failure it is
+// handling observes the same, already computed result.
 func (r *ComponentRegistry) Close(ctx context.Context) error {
 	r.mu.Lock()
 	if r.closed {
@@ -621,19 +622,32 @@ func (r *ComponentRegistry) Close(ctx context.Context) error {
 	return err
 }
 
-// closeEntries closes entries in reverse construction order, aggregating
-// failures, and returns the names whose Close callback ran.
+// closeEntries releases entries in reverse construction order, aggregating
+// failures, and returns the names that were released. A component whose
+// descriptor declares a Close callback is released through it, and the
+// callback owns the release entirely. A component that declares none is
+// released through its product's own Close() error when it has one -- the
+// standard io.Closer declaration of resource ownership, the same
+// structural contract Registration documents for a value resolved through
+// SeamRegistry.Build -- so an implementation whose constructor builds the
+// resources it owns needs no adapter callback on its descriptor. A product
+// without a Close method has nothing to release and is skipped.
 func (r *ComponentRegistry) closeEntries(ctx context.Context, entries []constructedEntry) ([]string, error) {
 	var rolled []string
 	var errs []error
 	for i := len(entries) - 1; i >= 0; i-- {
 		e := entries[i]
-		if e.component.Close == nil {
+		var closeErr error
+		if e.component.Close != nil {
+			closeErr = e.component.Close(ctx, r, e.instance)
+		} else if closable, ok := e.instance.(io.Closer); ok {
+			closeErr = closable.Close()
+		} else {
 			continue
 		}
 		rolled = append(rolled, e.name)
-		if err := e.component.Close(ctx, r, e.instance); err != nil {
-			errs = append(errs, fmt.Errorf("pkgcore: component %q (stage close): %w", e.name, err))
+		if closeErr != nil {
+			errs = append(errs, fmt.Errorf("pkgcore: component %q (stage close): %w", e.name, closeErr))
 		}
 	}
 	return rolled, errors.Join(errs...)
