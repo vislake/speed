@@ -194,6 +194,21 @@ tenantless calls explicitly.
   and both faces funnel through the same constructors
   (`openaiCompatibleFromConfig` / `openaiCompatibleImageFromConfig`), so
   neither can diverge on validation or on the coded config refusal.
+  **Resolution prefers the component face**: a Gateway attached to an
+  assembly (`Module.Register` hands it the registry) resolves a route's
+  provider through the selected member that carries the route's name first
+  and falls back to the package-level `ChatProviderRegistry` /
+  `ImageProviderRegistry` for a name the composition did not select -- so a
+  composition selecting a provider component serves every request through
+  the component face, an unselected name (or a Gateway built outside any
+  assembly) behaves exactly as before, and
+  `WithChatProviderRegistry` / `WithImageProviderRegistry` are the overrides
+  of that fallback face. The two faces build the same implementation under
+  the same name, which is what makes the preference behavior-preserving;
+  the preference itself is pinned by
+  `provider_resolution_test.go` (a route naming a selected component is
+  served by its own instance; a route naming an unselected name keeps the
+  registry path).
 - `OpenAICompatibleImageProvider` (`openai_compatible_image.go`): the
   default, zero-vendor-SDK `ImageProvider`, implemented directly against
   the OpenAI-compatible images wire schema with stdlib `net/http` +
