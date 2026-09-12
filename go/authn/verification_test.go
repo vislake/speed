@@ -703,35 +703,20 @@ var errSMSSendFailed = errors.New("verification_test: sms send deliberately fail
 // number. Only the registered branch ever renders -- the unknown-number
 // branch burns a code and stops -- so surfacing the render error as
 // ErrInternal would answer 500 for registered numbers while unregistered
-// ones answered nil, a registration oracle for as long as the locale
-// bundles are broken.
+// ones answered nil, a registration oracle for as long as the catalog the
+// render reads is broken.
 //
-// Deliberately NOT t.Parallel(): it swaps the package-level SMS locale
-// cache (loadSMSLocaleMessages' smsLocaleOnce/smsLocaleMessages/smsLocaleErr)
-// for one with no bundles at all, which makes renderSMSCode fail for any
-// locale. The serialization argument is
-// TestRequestSMSCode_TimingParity_KnownAndUnknownPhoneAnswerInComparableTime's:
-// a non-parallel test's body never runs concurrently with a parallel test's,
-// so no other test can observe the fake. The cleanup re-fires the cache from
-// the real embedded files rather than restoring saved values, because a
-// sync.Once cannot be copied.
+// The failure is injected through the host seam -- a host whose Locales()
+// answers nil, the state a catalog-less host would present -- so the test
+// is race-safe and parallel: the fixture's own host is swapped for this
+// request only.
 func TestRequestSMSCode_RenderFailure_AnswersLikeAnUnknownNumber(t *testing.T) {
-	smsLocaleOnce = sync.Once{}
-	smsLocaleMessages = map[string]map[string]string{}
-	smsLocaleErr = nil
-	smsLocaleOnce.Do(func() {})
-	t.Cleanup(func() {
-		smsLocaleOnce = sync.Once{}
-		smsLocaleMessages = nil
-		smsLocaleErr = nil
-		if _, err := loadSMSLocaleMessages(); err != nil {
-			t.Errorf("restore the real SMS locale bundles: %v", err)
-		}
-	})
+	t.Parallel()
 
 	var buf bytes.Buffer
 	f := newSMSServiceFixture(t, &buf)
 	registerPhoneUser(t, f, testPhone, testTenantA)
+	f.svc.host = &authnTestHost{}
 
 	if err := f.svc.RequestSMSCode(t.Context(), RequestSMSCodeInput{Phone: testPhone, IP: "203.0.113.10"}); err != nil {
 		t.Fatalf("RequestSMSCode(registered phone, render failure) error = %v, want nil: a render failure must answer exactly like the unknown-number branch, or it discloses that the number is registered", err)
@@ -843,6 +828,63 @@ func TestRequestSMSCode_LanguageChain_DeliversInTheNegotiatedLanguage(t *testing
 		}
 		if sent := buf.String(); !strings.Contains(sent, smsEnUSMarker) {
 			t.Errorf("sent SMS %q, want the platform default's %q template", sent, smsEnUSMarker)
+		}
+	})
+}
+
+// TestRenderSMSCode_MatchesTheShippedTemplates pins the render one-for-one
+// against the text the module's locale files carry: for each shipped
+// language the composed body is exactly the file's
+// authn.sms.verification_code entry with the code and the minute count
+// interpolated, and the reported usedLocale is the language actually
+// rendered in. The expectations are that entry's copy with its
+// placeholders filled, so a change to the shipped text fails here until
+// the expectation is updated with it -- and a locale whose render stops
+// matching its file is caught for exactly that reason.
+func TestRenderSMSCode_MatchesTheShippedTemplates(t *testing.T) {
+	t.Parallel()
+
+	f := newServiceFixture(t)
+	const (
+		code    = "123456"
+		minutes = 5
+	)
+	for _, tc := range []struct {
+		name   string
+		locale string
+		want   string
+	}{
+		{"zh-CN renders its own template", "zh-CN", "您的验证码是 123456，5 分钟内有效，请勿告知他人。"},
+		{"en-US renders its own template", "en-US", "Your verification code is 123456. It is valid for 5 minutes. Do not share it with anyone."},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			text, usedLocale, err := f.svc.renderSMSCode(tc.locale, code, minutes)
+			if err != nil {
+				t.Fatalf("renderSMSCode(%q) error = %v", tc.locale, err)
+			}
+			if usedLocale != tc.locale {
+				t.Errorf("usedLocale = %q, want %q", usedLocale, tc.locale)
+			}
+			if text != tc.want {
+				t.Errorf("rendered body = %q, want %q", text, tc.want)
+			}
+		})
+	}
+
+	t.Run("an unsupported locale renders the platform default and reports it", func(t *testing.T) {
+		t.Parallel()
+
+		text, usedLocale, err := f.svc.renderSMSCode("fr-FR", code, minutes)
+		if err != nil {
+			t.Fatalf("renderSMSCode(fr-FR) error = %v", err)
+		}
+		if usedLocale != DefaultLocale {
+			t.Errorf("usedLocale = %q, want the post-fallback %q", usedLocale, DefaultLocale)
+		}
+		if want := "Your verification code is 123456. It is valid for 5 minutes. Do not share it with anyone."; text != want {
+			t.Errorf("rendered body = %q, want the %s default %q", text, DefaultLocale, want)
 		}
 	})
 }

@@ -184,9 +184,10 @@ func TestHandler_Register_MalformedBody_ReturnsCatalogedInvalidRequestBodyCode(t
 	if !slices.Contains(errorCodes, *errBody.Code) {
 		t.Errorf("returned code %q is not in errorCodes; a client has no locale-backed text to render for it", *errBody.Code)
 	}
+	catalog := newAuthnCatalog(t)
 	for _, language := range []string{"zh-CN", "en-US"} {
-		if _, ok := loadLocale(t, language)[*errBody.Code]; !ok {
-			t.Errorf("%s locale carries no message for %q", language, *errBody.Code)
+		if _, err := catalog.Lookup(language, *errBody.Code, map[string]any{}); err != nil {
+			t.Errorf("%s locale carries no message for %q: %v", language, *errBody.Code, err)
 		}
 	}
 }

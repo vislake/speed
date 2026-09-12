@@ -19,10 +19,12 @@ import (
 	"gorm.io/gorm"
 
 	"github.com/vislake/speed/go/authn/internal/testutil"
+	"github.com/vislake/speed/go/authn/locales"
 	"github.com/vislake/speed/go/dbkit/audit"
 	"github.com/vislake/speed/go/pkgcore"
 	"github.com/vislake/speed/go/pkgcore/apperr"
 	"github.com/vislake/speed/go/pkgcore/componenttest"
+	"github.com/vislake/speed/go/pkgcore/i18n"
 	"github.com/vislake/speed/go/tenancy"
 )
 
@@ -59,6 +61,39 @@ func newServiceFixtureWithKV(t *testing.T, kv pkgcore.KVStore, extra ...Option) 
 	return newServiceFixtureOn(t, pkgcore.NewMemoryEventBus(), kv, extra...)
 }
 
+// authnTestHost is the fake host seam view the fixtures attach the way
+// Module.Register attaches the real registry, so a Service built directly
+// through NewService renders its SMS bodies through a merged catalog
+// exactly as a registered module does. The zero value (a nil catalog) is
+// the "no catalog wired" state the render-failure tests inject.
+type authnTestHost struct {
+	catalog *i18n.Catalog
+}
+
+func (h *authnTestHost) Locales() *i18n.Catalog { return h.catalog }
+
+var _ hostSeams = (*authnTestHost)(nil)
+
+// newAuthnCatalog builds authn's REAL locale bundle through the same
+// i18n.Builder the assembly uses, so the tests render from the exact text
+// the shipped files carry: a message id the SMS render looks up but never
+// shipped fails here, in the test, rather than in production.
+func newAuthnCatalog(t *testing.T) *i18n.Catalog {
+	t.Helper()
+	builder := i18n.NewBuilder()
+	if err := builder.AddModule(moduleName, locales.FS); err != nil {
+		t.Fatalf("build the authn message catalog: %v", err)
+	}
+	return builder.Build()
+}
+
+// newAuthnTestHost is newAuthnCatalog behind the host seam, attached the
+// way Module.Register attaches the real registry.
+func newAuthnTestHost(t *testing.T) *authnTestHost {
+	t.Helper()
+	return &authnTestHost{catalog: newAuthnCatalog(t)}
+}
+
 // newServiceFixtureOn is newServiceFixtureWithKV over an injected bus: the
 // service is wired exactly the same way, but bus is the one the test
 // provides, so a test can observe the service's own publishes (the sign-in
@@ -90,6 +125,10 @@ func newServiceFixtureOn(t *testing.T, bus pkgcore.EventBus, kv pkgcore.KVStore,
 	if err != nil {
 		t.Fatalf("NewService() error = %v", err)
 	}
+	// The host seam a registered module gets from Register: every fixture
+	// renders its SMS bodies through the module's real catalog, so the
+	// tests exercise the same render path a host runs.
+	svc.host = newAuthnTestHost(t)
 	return &serviceFixture{svc: svc, db: db, kv: kv, bus: bus, clock: clock, members: members, events: events, keys: keys}
 }
 
