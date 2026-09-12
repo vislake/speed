@@ -40,11 +40,10 @@ import (
 
 // main is deliberately thin process-lifecycle glue: it attaches the
 // process's logger and hands the loaded bootstrap configuration to the
-// selection's own assembly (cmd/server/server.go), whose runServer owns
-// the signal-derived lifecycle: the host's components register, the whole
-// set assembles through the engine's Assemble, the application component
-// serves until the signal, and the assembly then shuts down in two
-// phases through the engine's Shutdown
+// selection's own assembly (cmd/server/server.go), whose runServer hands
+// the host's components and its serve step to the engine's RunAssembly:
+// the whole set assembles, the application component serves until the
+// signal, and the engine then shuts down in two phases
 // (github.com/vislake/speed/go/app). It has no main_test.go for that
 // reason: the testable seam is the composition in server.go, which the
 // repository's own scaffold integration test boots end to end, and the

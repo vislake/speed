@@ -9,9 +9,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
-	"os/signal"
 	"sync"
-	"syscall"
 
 	"gorm.io/gorm"
 
@@ -98,10 +96,10 @@ type serverBuild struct {
 	configService *config.Service
 }
 
-// runServer assembles this project through the component assembly and serves
-// it until the process is signalled: the signal-derived context is what the
-// serve waits on, and the two-phase shutdown -- the Stop notification, then
-// the drain and release -- runs once it is done.
+// runServer assembles this project through the component assembly and runs
+// it under the engine's lifecycle: RunAssembly overlays the signals, calls
+// this host's serve step (serveHost), and runs the two-phase shutdown -- the
+// Stop notification, then the drain and release -- once the step returns.
 //
 // This composition wires the authn and config modules (the
 // generator's --with set for this project). Each module is selected through
@@ -135,55 +133,43 @@ type serverBuild struct {
 // static unauthenticated Host map would violate tenancy's own Resolver
 // contract, go/tenancy/resolver.go).
 func runServer(baseCtx context.Context, cfg serverConfig, hc hostConfig) error {
-	// The signal-derived context is the assembly's own lifecycle, and
-	// baseCtx stays the request base context the composed face hands its
-	// listener: a shutdown signal must never cancel in-flight requests
-	// ahead of the graceful drain (net/http's Server.BaseContext contract).
-	ctx, stop := signal.NotifyContext(baseCtx, syscall.SIGINT, syscall.SIGTERM)
-	defer stop()
-
 	b := &serverBuild{cfg: cfg, hostConfig: hc}
-	reg, err := b.assemble(ctx, baseCtx)
+	// The host's component set is built against a fresh registry seeded with
+	// the global registration -- the override copies read the module
+	// descriptors from that seed -- and the engine assembles the set on the
+	// registry it owns. The engine's RunAssembly drives the whole boot: the
+	// loader, the seven stages, this host's serve step and the two-beat
+	// close, with SIGINT and SIGTERM overlaid on baseCtx. baseCtx itself
+	// stays the request base context the composed face hands its listener,
+	// so a shutdown signal never cancels in-flight requests ahead of the
+	// graceful drain (net/http's Server.BaseContext contract). A failure
+	// needs no host-side teardown: the assembly's own rollback closes every
+	// constructed component in reverse order, exactly once, before the
+	// error returns.
+	components, err := b.hostComponents(pkgcore.NewComponentRegistry(), baseCtx)
 	if err != nil {
 		return err
 	}
-	<-ctx.Done()
-	if err := speedapp.Shutdown(context.WithoutCancel(ctx), reg); err != nil {
-		return err
-	}
-	obs.FromContext(ctx).Info("server stopped cleanly")
-	return nil
-}
-
-// assemble builds the host's component set over a fresh registry and drives
-// the whole assembly: the host's own components (the providers, the
-// overrides and the assembly steps) register first, the loader resolves the
-// configuration and the composition, and the registry walks Prepare through
-// Start. ctx is the assembly's lifecycle context; baseCtx is the context
-// served requests inherit. A failure needs no host-side teardown: the
-// assembly's own rollback closes every constructed component in reverse
-// order, exactly once, before the error returns.
-func (b *serverBuild) assemble(ctx context.Context, baseCtx context.Context) (*pkgcore.ComponentRegistry, error) {
-	reg := pkgcore.NewComponentRegistry()
-	components, err := b.hostComponents(reg, baseCtx)
-	if err != nil {
-		return nil, err
-	}
-	for _, c := range components {
-		if err := reg.Register(c); err != nil {
-			return nil, err
-		}
-	}
-
 	spec := speedapp.LoadSpec{
 		Host:      &b.hostConfig,
 		Options:   b.loaderOptions(),
 		Overrides: &speedapp.CompositionOverrides{Config: b.composition()},
 	}
-	if err := speedapp.Assemble(ctx, reg, spec); err != nil {
-		return nil, err
+	if err := speedapp.RunAssembly(baseCtx, spec, serveHost, components...); err != nil {
+		return err
 	}
-	return reg, nil
+	obs.FromContext(baseCtx).Info("server stopped cleanly")
+	return nil
+}
+
+// serveHost is this host's serve step, run by the engine between Start and
+// the two-beat close: the application component's Start already owns the
+// listener, so the step is the process's own serving lifetime -- it holds
+// until the lifecycle context ends (the engine's signal overlay is what ends
+// it) and returns, and the engine then drains through Stop and Close.
+func serveHost(ctx context.Context, _ *pkgcore.ComponentRegistry) error {
+	<-ctx.Done()
+	return nil
 }
 
 // loaderOptions returns the loader options the assembly's configuration
@@ -322,8 +308,10 @@ func s3BucketLookupText(lookup objectstores3.BucketLookupType) string {
 // descriptors read while constructing), the override components (the copies
 // of the selected modules' descriptors carrying this project's own
 // construction), and the assembly steps -- the post-bootstrap step, then the
-// application component that owns the HTTP face. reg is the assembly
-// instance the override components copy their modules' descriptors from.
+// application component that owns the HTTP face. reg is the registry the
+// override components copy their modules' descriptors from (a fresh
+// registration-seeded instance; the built set is registered on the registry
+// the engine owns).
 func (b *serverBuild) hostComponents(reg *pkgcore.ComponentRegistry, baseCtx context.Context) ([]pkgcore.Component, error) {
 	components := []pkgcore.Component{b.cryptoComponent()}
 
