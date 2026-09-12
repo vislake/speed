@@ -40,7 +40,7 @@
 ### B1. `app.Application.Kernel()` 退役
 
 - **面**：`go/app` 的 `Application` 不再暴露 `Kernel()`。
-- **替代路径**：宿主直接操作 `pkgcore.ComponentRegistry`（`app.Assemble` 驱动七阶段），不再经过内核对象。
+- **替代路径**：宿主直接操作 `pkgcore.ComponentRegistry`（`app.Assemble` 驱动八阶段），不再经过内核对象。
 - **出处**：`336e14fe`（`refactor(app)!: assemble the option surface through the component machinery`）。
 
 ### B2. `go/app` option 面整体删除（23 符号）
@@ -57,7 +57,7 @@
 
 ### B4. E 组宿主组装契约翻转：宿主步骤即组件
 
-- **面**：宿主的组装单元由"宿主步骤描述符"翻转为"普通组件"（`pkgcore.Component`），七阶段驱动（Prepare/Construct/Verify/Init/Start/…）统一处理；宿主自身也通过 `ComponentRegistry` 注册路由/中间件/生命周期。
+- **面**：宿主的组装单元由"宿主步骤描述符"翻转为"普通组件"（`pkgcore.Component`），八阶段驱动（Prepare/Construct/Verify/Init/Start/…）统一处理；宿主自身也通过 `ComponentRegistry` 注册路由/中间件/生命周期。
 - **替代路径**：`examples/reference-app/internal/app/attach.go` 与 `saasctl` 五份 selection 模板是新面样板（`go/app` 的 `Assemble`/`RunAssembly`）。
 - **出处**：`f44887b6` + `477ef65b` + `904d0e92` + `5191b044` + `33ae0308` + `c02a1ad3`。
 
@@ -75,7 +75,7 @@
 
 | 删除面 | 替代路径 |
 |---|---|
-| `pkgcore.Kernel`、`NewKernel`、`KernelOption`、`Kernel.Bootstrap`、`Kernel.Shutdown`、`WithDeploymentMode` | 宿主建 `pkgcore.ComponentRegistry`（`pkgcore.NewComponentRegistry`），由 `app.Assemble`/`app.RunAssembly` 驱动七阶段；拓扑声明走组件组合配置的 deployment 字段 |
+| `pkgcore.Kernel`、`NewKernel`、`KernelOption`、`Kernel.Bootstrap`、`Kernel.Shutdown`、`WithDeploymentMode` | 宿主建 `pkgcore.ComponentRegistry`（`pkgcore.NewComponentRegistry`），由 `app.Assemble`/`app.RunAssembly` 驱动八阶段；拓扑声明走组件组合配置的 deployment 字段 |
 | `pkgcore.Module`（接口）、`Registrar`、`NewRegistry`、`Registry` | "模块契约"（`Name`/`DependsOn`/`Migrations`/`Locales`/`OpenAPISpec`/`Register(*pkgcore.ComponentRegistry) error`）为结构性约定，不再有接口类型；注册表为 `pkgcore.ComponentRegistry` |
 | `SeamPreset`、`Preset`、`PresetStandalone`、`PresetDistributed`、`WithPreset` | 组件组合配置（`ComponentConfig` 的 `components` 块 + 每个组件的配置块）；八种分布式实现各自以组件名注册（`eventbus.redis`、`kv.nats`、`objectstore.s3` …） |
 | `WithEventBus`、`WithKVStore`、`WithMailer`、`WithObjectStore` | `reg.Put(value)` 放入 ByType 上下文（由提供该 seam 的组件或宿主完成），能力位在组件描述符的 `Capabilities` 上声明 |
@@ -255,7 +255,7 @@
 
 ### 5.21. pkgcore：组件关闭阶段直接释放带 `Close` 的产品（描述符可省适配回调）（非破坏，组装契约登记）
 
-- **面**：`ComponentRegistry` 第七阶段（Close）的释放规则放宽。描述符未声明 `Close` 回调的组件，其构造产品若实现 `Close() error`（标准 `io.Closer`），由注册表直接调用释放（`closeEntries` 的 `io.Closer` 探测）；描述符声明了 `Close` 回调的组件行为完全不变（回调独占释放，产品自身的 `Close` 不被叠加）；产品无 `Close` 方法则跳过。回滚集合（`rolled back:` 名单）与关闭失败聚合的错误文本对两类释放一视同仁，未变。同时八个内置分布式实现（`eventbus/{redis,postgres,nats}`、`kv/{redis,postgres,nats,memcached}`、`objectstore.local`）描述符上逐字复制的适配回调删除，每个可关闭产品类型旁改以编译期 `var _ io.Closer = (*T)(nil)` 断言钉住声明。
+- **面**：`ComponentRegistry` 的关闭阶段（Close）释放规则放宽。描述符未声明 `Close` 回调的组件，其构造产品若实现 `Close() error`（标准 `io.Closer`），由注册表直接调用释放（`closeEntries` 的 `io.Closer` 探测）；描述符声明了 `Close` 回调的组件行为完全不变（回调独占释放，产品自身的 `Close` 不被叠加）；产品无 `Close` 方法则跳过。回滚集合（`rolled back:` 名单）与关闭失败聚合的错误文本对两类释放一视同仁，未变。同时八个内置分布式实现（`eventbus/{redis,postgres,nats}`、`kv/{redis,postgres,nats,memcached}`、`objectstore.local`）描述符上逐字复制的适配回调删除，每个可关闭产品类型旁改以编译期 `var _ io.Closer = (*T)(nil)` 断言钉住声明。
 - **消费者影响**：宿主代码无需改动。对"产品实现 `Close() error` 但描述符未声明 `Close` 回调"的宿主组件，其产品现在会在装配关闭（含构造后失败的回滚）时被释放——此前不会；这正是 `go/pkgcore/AGENTS.md` 一直记载的契约（"声明所有权的方式是在 `New` 返回的值上实现 `Close() error`"），本次是机制对齐文档。内置实现的产品释放行为与删除适配回调前逐项等价（同一 `Close` 方法、同一逆序、同一失败聚合与 `rolled back` 名单）。唯一的语义约束：产品类型上的 `Close() error` 即"装配关闭时释放我"的声明，语义不符的产品不应以该形态暴露（`io.Closer` 的标准含义即释放所拥有的资源）。
 - **替代路径**：无（行为放宽）；需要 context / registry / 自定义拆解的释放继续声明描述符 `Close` 回调（优先级不变）。
 - **登记理由**：宿主可见面（组装契约：关闭阶段多释放一类产品）的行为变更，按"宿主可见面变更须带 `!BREAKING` footer 或登记本清单"的纪律登记（非破坏，不带 footer）。
@@ -370,6 +370,14 @@
 - **替代路径**：无（契约本身）。一个目录加第二实现的路径从"不可表达"变为"显式选中即可"；读取整表用 `Members[T]`，按调用构造维持 `Build[T]` 的 override 形态。
 - **登记理由**：宿主可见面变更（`pkgcore` 新增导出字段/符号 `Component.ProvidesMember`、`Requirement.Catalog`/`MinMembers`、`Member[T]`/`Members[T]`；组装契约事实：成员产物不进单值上下文、目录依赖边与下界校验、两条新拒绝；`ai-gateway` 与 `billing/gateway` 两族组件的声明形态由 `Provides` 改为 `ProvidesMember`，曾按类型 `Get` 读这两族产物的宿主需改按名读取），按"宿主可见面变更须带 `!BREAKING` footer 或登记本清单"的纪律登记（以新增面为主、读面收窄，不带 footer）。随轮套件（pkgcore / ai-gateway / billing / reference-app，含 flowtests）、lint、CJK 扫描与覆盖率基线全绿。
 - **出处**：`5d1b6646`（`feat(pkgcore): add the catalog delivery contract to the component assembly`）+ `2c88e2d7`（`refactor(ai-gateway): deliver providers as catalog members`）+ `f6512ff4`（`refactor(billing): deliver gateways as catalog members`）+ `f2fa6447`（`refactor(reference-app): read provider members by name`）。
+
+### （待编号）pkgcore 与 go/app：Serve 阶段、阶段只读读法与 Stop 两拍（组装契约登记）
+
+- **面**：① 组件生命周期在 `Start` 之后新增第六阶段 `Serve`：`Component` 新增 `Serve` 回调字段；语义是"入口开始接受外部请求"（HTTP 监听、队列消费、调度触发），全体 `Start` 完成之后开始的一整轮，声明了该回调的组件在轮内按依赖序执行、未声明者不受影响；独立成阶段的原因：依赖序只能表达"排在我的依赖之后"，而入口的流量可打到任何组件，需要"排在全体之后"。`Serve` 失败与 `Start` 失败同语义（逆序回滚，`ErrComponentFailed` 点名阶段与组件）。`ComponentRegistry` 新增 `Serve(ctx) error` 方法（第六阶段）与阶段值 `StageServe`。② `go/app` 的 `Assemble` 驱动终点后移到 `Serve`（Prepare→Construct→Verify→Init→Start→Serve）；`RunAssembly` 的 `ServeFunc` 语义不变，仍是宿主级等待钩子，宿主等待发生在 `Serve` 轮完成之后。③ `Stop` 分两拍：第一拍先通知声明了 `Serve` 的组件（入口最先停止接受新请求，让在飞请求对着仍然完整的系统排空），第二拍再按逆依赖序通知其余；`Close` 未变。④ 新增导出读法 `(*ComponentRegistry).Stage() Stage` 与 `type Stage string`（`StageIdle` 起九个阶段常量）：装配契约的一部分——声明面下放后组件自持写入门禁时据以拒绝越界写入；`StageIdle` 渲染 `"not started"`，各阶段值的渲染与既有错误文本逐字一致。
+- **消费者影响**：无破坏、无升级动作。现行仓内组件无一声明 `Serve`：`Assemble` 到 `Serve` 的驱动对既有组合是空转轮（pkgcore 与 go/app 各有测试钉住"无 Serve 声明者的纯后台组合：装配成功、`Serve` 轮空转、正常关停"）；`Stop` 两拍在无 `Serve` 声明者时与旧序逐字相同（全部落第二拍，仍为逆依赖序）；`RunAssembly` 的 serve 回调位置相对旧行为不变（仍在装配完成之后、关停之前）。声明 `Serve` 的组件获得"排在全体 `Start` 之后"的次序保证；阶段顺序违规与重复执行照既有形态拒绝（`ErrStageViolation`，点名所需阶段）。
+- **替代路径**：无（纯新增面）。
+- **登记理由**：宿主可见面新增（`pkgcore` 新增导出字段 `Component.Serve`、导出类型 `Stage` 与九个阶段常量、`(*ComponentRegistry).Serve` 方法与 `(*ComponentRegistry).Stage()` 读法；组装契约事实：`Assemble` 驱动终点后移一个阶段、`Stop` 两拍次序），按"宿主可见面变更须带 `!BREAKING` footer 或登记本清单"的纪律登记（纯新增，不带 footer）。
+- **出处**：`e1f29aae`（`feat(pkgcore): add the Serve stage and the stage reading`）+ `8cab555f`（`feat(app): drive the assembly through the Serve stage`）+ `5f60035d`（`docs: restate the component lifecycle as eight stages`）。
 
 ## 6. D 组：configrefgen 工具内部迁移（工具面，非宿主面）
 
