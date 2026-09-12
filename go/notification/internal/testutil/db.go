@@ -1,7 +1,6 @@
 // Package testutil holds the database helpers the notification module's own
 // tests share: a migrated, per-test SQLite database built from the module's
-// real migration files (NewSQLite), the PostgreSQL counterpart its
-// integration tier uses (NewPostgres), and the Migrate step both rest on --
+// real migration files (NewSQLite), and the Migrate step it rests on --
 // each a thin spelling of dbkit/dbtest's shared mechanism (dbtest.Migrate).
 // The helpers are deliberately free of any import of the notification
 // module itself, so test code can migrate a database without dragging the
@@ -31,23 +30,6 @@ func NewSQLite(t *testing.T, moduleName string, fs embed.FS) *gorm.DB {
 	t.Helper()
 	db := dbtest.NewSQLite(t)
 	dbtest.Migrate(t, db, dbkit.DialectSQLite, dbtest.Migration{Module: moduleName, FS: fs})
-	return db
-}
-
-// NewPostgres returns a migrated PostgreSQL *gorm.DB, backed by a real
-// server started with testcontainers. It skips the test when no Docker
-// daemon is reachable, so callers need no availability check of their own.
-//
-// It is the integration tier's counterpart to NewSQLite and applies the
-// identical migration files from the postgres/ subdirectory, so a test can
-// run the same assertions against both dialects by swapping the constructor
-// alone. Its callers are the module's integration_test/ package
-// (go/notification/integration_test, run as `go test -tags=integration
-// ./integration_test/...` from the module directory).
-func NewPostgres(t *testing.T, moduleName string, fs embed.FS) *gorm.DB {
-	t.Helper()
-	db := dbtest.NewPostgres(t)
-	dbtest.Migrate(t, db, dbkit.DialectPostgres, dbtest.Migration{Module: moduleName, FS: fs})
 	return db
 }
 
