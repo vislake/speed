@@ -159,10 +159,10 @@ name: docs-check
 #   * the error-code gates' construction-site residue: the error-code
 #     census scans every *.go file under go/ and examples/ (test and
 #     generated files excluded), but a construction starts this pipeline
-#     only when it falls under a listed path: go/**/errors.go, a listed
-#     go/ root (go/pkgcore/**, go/dbkit/**, go/ratelimit/**,
-#     go/config/**), or examples/reference-app/internal/**, the app
-#     root. Elsewhere in go/ -- go/jobs' refusal sites, go/tenancy's
+#     only when its file falls under one of the Go paths listed below:
+#     the go/**/errors.go glob, a listed go/ tree or module.go
+#     declaration site, or examples/reference-app/internal/**, the app's
+#     own sources. Elsewhere in go/ -- go/jobs' refusal sites, go/tenancy's
 #     middleware and system-context refusals,
 #     go/sharing/ratelimit.go, go/ai-gateway/ratelimit.go,
 #     go/admin/handler.go, go/integration/module.go, and
