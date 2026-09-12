@@ -279,7 +279,7 @@ tasks:
     # pinned at 8.17.0 and run from web/ via pnpm dlx (orval is never a
     # workspace dependency), followed by
     # web/scripts/orval-nodenext-fixup.mjs -- see that package's AGENTS.md
-    # for the seam and the fixup's why. Every platform module with an HTTP
+    # for the binding and the fixup's why. Every platform module with an HTTP
     # fragment belongs to the merged document and the generated SDK: the
     # api-contract consistency gates pin the generated surface, which does
     # not rot from being uncalled, and whether a surface has an
@@ -412,7 +412,7 @@ tasks:
     #      orval.config.ts (examples/reference-app/web/orval.config.ts),
     #      followed by the shared nodenext fixup
     #      web/scripts/orval-nodenext-fixup.mjs over the app's generated
-    #      entry and seam.
+    #      entry and binding.
     #
     # The generated SDK entry (examples/reference-app/web/src/app-api/
     # index.ts) is committed and consistency-gated by the porcelain gate
@@ -420,7 +420,7 @@ tasks:
     # commands -- keep the two in lockstep. The app web host imports
     # this app-local SDK for its own operations, and the platform
     # @speed/api-sdk for platform operations, both riding the same
-    # @speed/api-sdk/runtime binding seam (the app SDK's seam re-exports
+    # @speed/api-sdk/runtime binding (the app SDK's binding re-exports
     # it).
     cmds:
       - |
