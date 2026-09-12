@@ -20,9 +20,10 @@ info:
     one tenancy.Middleware already resolved from the request -- never a
     caller-supplied value. Recipients and addresses are likewise never named by
     the client: the caller's identity comes from the host-injected subject
-    seam (handler.go's SubjectResolver, the org seam pattern), and every
-    query is scoped through it. Inbox rows and preferences are the calling
-    user's own -- a message id that belongs to another user answers 404,
+    module (handler.go's SubjectResolver, the same structural interface
+    pattern org declares), and every query is scoped through it. Inbox
+    rows and preferences are the calling user's own -- a message id that
+    belongs to another user answers 404,
     never another user's data -- while contacts are the tenant's
     external-recipient roster, shared by the tenant's identified users:
     an external contact exists only inside the tenant that verified it,

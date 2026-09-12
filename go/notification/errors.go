@@ -25,14 +25,14 @@ import (
 // delivery group belongs to the outbound-delivery pipeline DeliveryService
 // owns; the inbox group (between the delivery and wiring groups) belongs to
 // the in-app inbox's read surface -- the Repository methods of repository.go
-// and the HTTP handler over them, which share this package; the wiring group
-// reports a Module whose required seams were not supplied before Register
-// validated them; and the HTTP-transport group (after the wiring group)
-// reports a request that failed before any service was reached. The wiring
-// entries are boot-time failures a caller cannot trigger once the module is
-// registered, listed here because an *apperr sentinel per code is this
-// module's convention for every error it can surface, however unreachable at
-// request time.
+// and the HTTP handler over them, which share this package; the wiring
+// group reports a Module whose required host-supplied options were missing
+// when Register validated them; and the HTTP-transport group (after the
+// wiring group) reports a request that failed before any service was
+// reached. The wiring entries are boot-time failures a caller cannot
+// trigger once the module is registered, listed here because an *apperr
+// sentinel per code is this module's convention for every error it can
+// surface, however unreachable at request time.
 var (
 	// ErrRecipientRequired reports a preference write whose recipient is
 	// missing. A preference row is meaningless without the user it applies
@@ -312,12 +312,12 @@ var (
 )
 
 // The wiring group: a Module whose Register-time validation failed because
-// a required seam was never supplied through NewModule. Each error names
-// the missing seam; the module is unbootable until the host supplies it,
-// exactly as org's Register validates its own required seams (see org's
-// ErrEmailIndexerRequired). All six are Internal: a caller cannot trigger
-// them once the module is registered, and a host hitting one has a
-// configuration bug, not a bad request.
+// a required host-supplied option was never passed to NewModule. Each
+// error names the missing option; the module is unbootable until the host
+// supplies it, exactly as org's Register validates its own required
+// options (see org's ErrEmailIndexerRequired). All six are Internal: a
+// caller cannot trigger them once the module is registered, and a host
+// hitting one has a configuration bug, not a bad request.
 var (
 	// ErrSMSSenderRequired reports a Register whose Module has no SMS
 	// sender. The module sends verification codes by SMS as its
