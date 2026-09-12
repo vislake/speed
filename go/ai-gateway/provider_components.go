@@ -30,9 +30,9 @@ import (
 )
 
 // openAICompatibleComponentConfig is the configuration schema both provider
-// components share: the same two keys the registry adapters read from a
-// flat pkgcore.Config, so a composition block and a flat Config spell the
-// same settings. At assembly time the block carries the provider's
+// components share: the same two keys the package's flat-Config adapters
+// read, so a composition block and a flat pkgcore.Config spell the same
+// settings. At assembly time the block carries the provider's
 // assembly-wide endpoint and credential; the per-request path builds fresh
 // instances through pkgcore.Build's override instead (see the descriptors'
 // own doc comments).
@@ -43,17 +43,16 @@ type openAICompatibleComponentConfig struct {
 
 // chatProviderComponent is the component descriptor for
 // "chat.openai-compatible": the OpenAI-compatible chat provider over the
-// configuration the component's own block spells out, carrying the same
-// MultiReplicaSafe|SurvivesRestart|Stateless declaration the seam
-// registration carries (the provider holds no connection and no
-// process-local state -- every call is an independent HTTP request). Its
-// New funnels through openaiCompatibleFromConfig -- the package's one
-// construction path -- so the component face and the seam face cannot
-// diverge on validation or on the coded config refusal. Gateway.Chat /
-// ChatStream reach a provider per request, and the component-face shape of
-// that is Build with an override carrying the credential just resolved, so
-// the assembly-time construction here is one instance of the same
-// constructor, not a cached singleton.
+// configuration the component's own block spells out, declaring
+// MultiReplicaSafe|SurvivesRestart|Stateless (the provider holds no
+// connection and no process-local state -- every call is an independent
+// HTTP request). Its New funnels through openaiCompatibleFromConfig -- the
+// package's one construction path -- so a composition block and a flat
+// pkgcore.Config cannot diverge on validation or on the coded config
+// refusal. Gateway.Chat / ChatStream reach a provider per request, and the
+// component-face shape of that is Build with an override carrying the
+// credential just resolved, so the assembly-time construction here is one
+// instance of the same constructor, not a cached singleton.
 var chatProviderComponent = pkgcore.Component{
 	Name:         ProviderOpenAICompatible,
 	Module:       "chat",
