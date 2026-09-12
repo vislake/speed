@@ -181,10 +181,15 @@ tenantless calls explicitly.
   `openaiCompatibleImageFromConfig` is its one construction path.
 - Both built-ins are `pkgcore.Component`s (`provider_components.go`):
   `chat.openai-compatible` (module `"chat"`) and
-  `image.openai-compatible` (module `"image"`), each `Providing` its
-  contract type, declaring the same
-  `MultiReplicaSafe|SurvivesRestart|Stateless` bits, and taking the same
-  two-key block (`base_url`, `api_key`) the flat construction path reads.
+  `image.openai-compatible` (module `"image"`), each contributing a member
+  of its directory (`ProvidesMember`) -- several vendors of one directory
+  coexist as selected members, read by name through `pkgcore.Members` /
+  `pkgcore.Build` and never through the by-type context -- declaring the
+  same `MultiReplicaSafe|SurvivesRestart|Stateless` bits, and taking the
+  same two-key block (`base_url`, `api_key`) the flat construction path
+  reads. The `ai-gateway` component consumes both directories as
+  `Catalog` requirements, so every selected member is a dependency edge
+  and constructs before the gateway.
   The component name IS the route's logical provider name -- the string
   `WithModelRoute` takes, credential rows are keyed by and the descriptors
   carry -- so the route-to-component

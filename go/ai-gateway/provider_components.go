@@ -46,19 +46,22 @@ type openAICompatibleComponentConfig struct {
 // configuration the component's own block spells out, declaring
 // MultiReplicaSafe|SurvivesRestart|Stateless (the provider holds no
 // connection and no process-local state -- every call is an independent
-// HTTP request). Its New funnels through openaiCompatibleFromConfig -- the
-// package's one construction path -- so a composition block and a flat
-// pkgcore.Config cannot diverge on validation or on the coded config
-// refusal. Gateway.Chat / ChatStream reach a provider per request, and the
+// HTTP request). It contributes a member of the "chat" catalog
+// (ProvidesMember), so several vendors of the directory coexist as selected
+// members read by name (Members, Build) rather than as one bound provider.
+// Its New funnels through openaiCompatibleFromConfig -- the package's one
+// construction path -- so a composition block and a flat pkgcore.Config
+// cannot diverge on validation or on the coded config refusal.
+// Gateway.Chat / ChatStream reach a provider per request, and the
 // component-face shape of that is Build with an override carrying the
 // credential just resolved, so the assembly-time construction here is one
 // instance of the same constructor, not a cached singleton.
 var chatProviderComponent = pkgcore.Component{
-	Name:         ProviderOpenAICompatible,
-	Module:       "chat",
-	Provides:     []any{(*ChatProvider)(nil)},
-	Capabilities: pkgcore.MultiReplicaSafe | pkgcore.SurvivesRestart | pkgcore.Stateless,
-	ConfigSchema: (*openAICompatibleComponentConfig)(nil),
+	Name:           ProviderOpenAICompatible,
+	Module:         "chat",
+	ProvidesMember: []any{(*ChatProvider)(nil)},
+	Capabilities:   pkgcore.MultiReplicaSafe | pkgcore.SurvivesRestart | pkgcore.Stateless,
+	ConfigSchema:   (*openAICompatibleComponentConfig)(nil),
 	New: func(_ context.Context, _ *pkgcore.ComponentRegistry, cfg pkgcore.ComponentConfig) (any, error) {
 		var c openAICompatibleComponentConfig
 		if err := cfg.Decode(&c); err != nil {
@@ -74,14 +77,15 @@ var chatProviderComponent = pkgcore.Component{
 // imageProviderComponent is the component descriptor for
 // "image.openai-compatible", the image-generation counterpart of
 // chatProviderComponent with the identical shape: the same two-key schema,
-// the same capability declaration, and New funneling through
+// the same capability declaration, one member of the "image" catalog
+// (ProvidesMember), and New funneling through
 // openaiCompatibleImageFromConfig, the image side's one construction path.
 var imageProviderComponent = pkgcore.Component{
-	Name:         ProviderOpenAICompatibleImage,
-	Module:       "image",
-	Provides:     []any{(*ImageProvider)(nil)},
-	Capabilities: pkgcore.MultiReplicaSafe | pkgcore.SurvivesRestart | pkgcore.Stateless,
-	ConfigSchema: (*openAICompatibleComponentConfig)(nil),
+	Name:           ProviderOpenAICompatibleImage,
+	Module:         "image",
+	ProvidesMember: []any{(*ImageProvider)(nil)},
+	Capabilities:   pkgcore.MultiReplicaSafe | pkgcore.SurvivesRestart | pkgcore.Stateless,
+	ConfigSchema:   (*openAICompatibleComponentConfig)(nil),
 	New: func(_ context.Context, _ *pkgcore.ComponentRegistry, cfg pkgcore.ComponentConfig) (any, error) {
 		var c openAICompatibleComponentConfig
 		if err := cfg.Decode(&c); err != nil {

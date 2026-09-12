@@ -54,16 +54,16 @@ var _ ImageProvider = (*fakeImageProvider)(nil)
 
 const fakeImageProviderName = "image.fake-test-provider"
 
-// fakeImageComponent returns a component descriptor serving provider
-// verbatim under name in the "image" directory -- the fake every image
-// pipeline test selects, isolating it from the process-global component
-// set the way a real assembly's selection does, mirroring
-// fakeChatComponent's identical role for chat.
+// fakeImageComponent returns a component descriptor contributing provider as
+// a member of the "image" directory under name -- the fake every image
+// pipeline test selects, isolating it from the process-global component set
+// the way a real assembly's selection does, mirroring fakeChatComponent's
+// identical role for chat.
 func fakeImageComponent(name string, provider ImageProvider) pkgcore.Component {
 	return pkgcore.Component{
-		Name:     name,
-		Module:   "image",
-		Provides: []any{(*ImageProvider)(nil)},
+		Name:           name,
+		Module:         "image",
+		ProvidesMember: []any{(*ImageProvider)(nil)},
 		New: func(context.Context, *pkgcore.ComponentRegistry, pkgcore.ComponentConfig) (any, error) {
 			return provider, nil
 		},

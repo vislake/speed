@@ -46,15 +46,15 @@ var _ ChatProvider = (*fakeChatProvider)(nil)
 
 const fakeProviderName = "chat.fake-test-provider"
 
-// fakeChatComponent returns a component descriptor serving provider
-// verbatim under name in the "chat" directory -- the fake every Gateway
-// pipeline test selects, isolating it from the process-global component
-// set the way a real assembly's selection does.
+// fakeChatComponent returns a component descriptor contributing provider as
+// a member of the "chat" directory under name -- the fake every Gateway
+// pipeline test selects, isolating it from the process-global component set
+// the way a real assembly's selection does.
 func fakeChatComponent(name string, provider ChatProvider) pkgcore.Component {
 	return pkgcore.Component{
-		Name:     name,
-		Module:   "chat",
-		Provides: []any{(*ChatProvider)(nil)},
+		Name:           name,
+		Module:         "chat",
+		ProvidesMember: []any{(*ChatProvider)(nil)},
 		New: func(context.Context, *pkgcore.ComponentRegistry, pkgcore.ComponentConfig) (any, error) {
 			return provider, nil
 		},

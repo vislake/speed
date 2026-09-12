@@ -36,6 +36,13 @@ import (
 // recording). The key-value store backs the per-tenant rate limiter and
 // fails closed when absent.
 //
+// The chat and image provider directories are consumed as catalogs
+// (Catalog, zero bound): every selected member delivering ChatProvider or
+// ImageProvider is a dependency edge, so the members construct before this
+// component, and a deployment that selects no provider is the module's
+// documented no-provider shape. A catalog never auto-pulls, so a registered
+// provider joins only by explicit selection.
+//
 // Init runs the module's one declaration entry point, Register, inside the
 // assembly's Init stage -- the one stage whose seats accept writes -- so the
 // component world declares exactly what the module's Register declares.
@@ -64,6 +71,8 @@ var aiGatewayComponent = pkgcore.Component{
 		{Token: (*Entitlements)(nil), Optional: true},
 		{Token: (*UsageRecorder)(nil), Optional: true},
 		{Token: (*pkgcore.KVStore)(nil), Optional: true},
+		{Token: (*ChatProvider)(nil), Catalog: true},
+		{Token: (*ImageProvider)(nil), Catalog: true},
 	},
 	Migrations:  migrations.FS,
 	OpenAPISpec: openAPISpecYAML,

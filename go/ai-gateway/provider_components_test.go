@@ -99,19 +99,21 @@ func TestProviderComponentsAssembleAndBuildPerCall(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = reg.Close(context.Background()) })
 
-	chat, err := pkgcore.Get[ChatProvider](reg)
-	if err != nil {
-		t.Fatalf("Get[ChatProvider] error = %v, want the chat component's product", err)
+	chatMembers := pkgcore.Members[ChatProvider](reg)
+	if len(chatMembers) != 1 || chatMembers[0].Name != ProviderOpenAICompatible {
+		t.Fatalf("Members[ChatProvider] = %+v, want exactly the %s member", chatMembers, ProviderOpenAICompatible)
 	}
+	chat := chatMembers[0].Value
 	if _, ok := chat.(*OpenAICompatibleProvider); !ok {
-		t.Errorf("Get[ChatProvider] = %T, want *OpenAICompatibleProvider", chat)
+		t.Errorf("Members[ChatProvider] = %T, want *OpenAICompatibleProvider", chat)
 	}
-	image, err := pkgcore.Get[ImageProvider](reg)
-	if err != nil {
-		t.Fatalf("Get[ImageProvider] error = %v, want the image component's product", err)
+	imageMembers := pkgcore.Members[ImageProvider](reg)
+	if len(imageMembers) != 1 || imageMembers[0].Name != ProviderOpenAICompatibleImage {
+		t.Fatalf("Members[ImageProvider] = %+v, want exactly the %s member", imageMembers, ProviderOpenAICompatibleImage)
 	}
+	image := imageMembers[0].Value
 	if _, ok := image.(*OpenAICompatibleImageProvider); !ok {
-		t.Errorf("Get[ImageProvider] = %T, want *OpenAICompatibleImageProvider", image)
+		t.Errorf("Members[ImageProvider] = %T, want *OpenAICompatibleImageProvider", image)
 	}
 
 	caps, err := pkgcore.ComponentCapabilities(reg, ProviderOpenAICompatible)
@@ -135,6 +137,69 @@ func TestProviderComponentsAssembleAndBuildPerCall(t *testing.T) {
 	}
 	if perCall == chat {
 		t.Error("Build(override) returned the assembly-time product; a per-call construction must produce a fresh instance")
+	}
+}
+
+// secondChatVendorName is the fixture second vendor's component name: a
+// "chat" directory member beside the built-in chat provider.
+const secondChatVendorName = "chat.test-vendor"
+
+// fixtureSecondChatVendor stands in for a non-built-in chat vendor: the
+// second member a deployment selects beside chat.openai-compatible, over
+// the package's fake provider implementation.
+func fixtureSecondChatVendor() pkgcore.Component {
+	return pkgcore.Component{
+		Name:           secondChatVendorName,
+		Module:         "chat",
+		ProvidesMember: []any{(*ChatProvider)(nil)},
+		New: func(context.Context, *pkgcore.ComponentRegistry, pkgcore.ComponentConfig) (any, error) {
+			return &fakeChatProvider{}, nil
+		},
+	}
+}
+
+// TestProviderComponents_SecondVendorOfTheChatDirectory selects two vendors
+// of the one "chat" directory together: multiple implementations of the
+// directory is what the directory exists for, so the assembly accepts them
+// as catalog members, each readable by name and each absent from the
+// by-type context.
+func TestProviderComponents_SecondVendorOfTheChatDirectory(t *testing.T) {
+	ctx := context.Background()
+	reg := pkgcore.NewComponentRegistry()
+	if err := reg.Register(fixtureSecondChatVendor()); err != nil {
+		t.Fatalf("register the second vendor: %v", err)
+	}
+	reg.Put(pkgcore.NewComponentConfig(map[string]any{
+		"components": map[string]any{
+			ProviderOpenAICompatible: componentBlock(providerComponentSettings()),
+			secondChatVendorName:     nil,
+		},
+		"strict": true,
+	}))
+	if err := reg.Prepare(ctx); err != nil {
+		t.Fatalf("Prepare() error = %v, want two chat-directory vendors selected together", err)
+	}
+	if err := reg.Construct(ctx); err != nil {
+		t.Fatalf("Construct() error = %v, want both vendors constructed", err)
+	}
+	t.Cleanup(func() { _ = reg.Close(context.Background()) })
+
+	members := pkgcore.Members[ChatProvider](reg)
+	if len(members) != 2 {
+		t.Fatalf("Members[ChatProvider] = %d entries, want both vendors", len(members))
+	}
+	byName := make(map[string]ChatProvider, len(members))
+	for _, member := range members {
+		byName[member.Name] = member.Value
+	}
+	if _, ok := byName[ProviderOpenAICompatible].(*OpenAICompatibleProvider); !ok {
+		t.Errorf("%s built %T, want *OpenAICompatibleProvider", ProviderOpenAICompatible, byName[ProviderOpenAICompatible])
+	}
+	if _, ok := byName[secondChatVendorName].(*fakeChatProvider); !ok {
+		t.Errorf("%s built %T, want the fixture vendor's *fakeChatProvider", secondChatVendorName, byName[secondChatVendorName])
+	}
+	if _, err := pkgcore.Get[ChatProvider](reg); !errors.Is(err, pkgcore.ErrMissingRequirement) {
+		t.Errorf("Get[ChatProvider] = %v, want ErrMissingRequirement: member products are not put", err)
 	}
 }
 
