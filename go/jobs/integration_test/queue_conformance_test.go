@@ -16,12 +16,8 @@ import (
 // StandaloneQueue's, proven by go/jobs's own
 // TestStandaloneQueue_ConformsToQueueContract) agree on Enqueue/Get/
 // Cancel/idempotency/retry/dead-letter semantics -- the suite's subtests
-// supersede four independently hand-maintained tests in this package
-// (TestRedisQueue_EnqueueExecuteRoundTrip, TestRedisQueue_Idempotency,
-// TestRedisQueue_RetryOnFailure, TestRedisQueue_DeadLetterAndFailureHook,
-// plus TestRedisQueue_Cancel_PendingJobNeverRuns's tenant-isolation-and-
-// idempotency assertions) that duplicated, assertion for assertion, what
-// go/jobs's own queue_standalone_test.go already proved for StandaloneQueue.
+// are the single maintained proof of those semantics; this package keeps
+// no hand-maintained duplicates of them.
 //
 // Every subtest spins up its own disposable Redis container via
 // newTestAsynqQueue (redis_container_test.go), matching every other test in

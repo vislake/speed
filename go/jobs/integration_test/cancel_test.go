@@ -12,15 +12,17 @@ import (
 	"github.com/vislake/speed/go/pkgcore/testkit"
 )
 
-// TestRedisQueue_Cancel_PendingJobNeverRuns proves a cancelled-before-its-
-// delay-elapsed Job's Handle genuinely never runs: the task is removed
-// from asynq's own scheduled set rather than merely marked cancelled in
-// this module's own status column. This is asynq-specific behavior with no
-// StandaloneQueue counterpart (the shared conformance suite covers the
-// portable cancel semantics via its
-// "cancel_tenant_isolation_and_idempotency" subtest, driven by
-// TestAsynqQueue_ConformsToQueueContract); the non-dispatch half is
-// pinned here, against a real asynq/Redis pipeline.
+// Cancel coverage splits two ways. The portable semantics -- the
+// tenant-scoped access rule, idempotency, and the cancelled status Get()
+// reports off the intact task record -- are proven for both
+// implementations by the shared conformance suite's
+// "cancel_tenant_isolation_and_idempotency" subtest (driven here by
+// TestAsynqQueue_ConformsToQueueContract, queue_conformance_test.go); the
+// dispatch-suppression decision -- a readable cancellation marker skips
+// Handle -- is pinned at the unit tier by queue/asynq's
+// TestQueue_DispatchAfterMarkerRead_FailsClosedOnUnreadableMarker. What
+// stays asynq-specific and integration-tier is the running-Job behavior
+// below.
 
 // TestRedisQueue_Cancel_RunningJob proves Cancel on a StatusRunning Job
 // marks it StatusCancelled immediately -- without waiting for the

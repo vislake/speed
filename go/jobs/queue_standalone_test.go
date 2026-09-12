@@ -187,8 +187,8 @@ func TestEnqueue_InvalidTask_ReturnsError(t *testing.T) {
 	}
 }
 
-// TestEnqueue_Get_HappyPath, TestGet_TenantIsolation and
-// TestCancel_TenantIsolation_And_Idempotency live in
+// The enqueue/get happy path, Get's tenant-scoped access rule and Cancel's
+// tenant-scoped, idempotent semantics are covered in
 // unittest/queue_conformance_test.go's
 // TestStandaloneQueue_ConformsToQueueContract, which drives the shared
 // go/jobs/queuetest.AssertConforms suite (its own "enqueue_get_happy_path",
@@ -282,8 +282,8 @@ func TestDelayedExecution_DoesNotRunEarly(t *testing.T) {
 
 // flakyHandler fails its first failuresBefore attempts, then succeeds. It
 // also implements FailureHook, so this same fixture proves the hook is
-// NOT invoked on an eventual success -- only TestDeadLetter_* proves the
-// positive case.
+// NOT invoked on an eventual success -- only the conformance suite's
+// dead-letter subtest proves the positive case.
 type flakyHandler struct {
 	failuresBefore int32
 	attempts       atomic.Int32
@@ -303,9 +303,8 @@ func (h *flakyHandler) OnFailure(context.Context, *Job, error) {
 	h.onFailureCalls.Add(1)
 }
 
-// TestRetry_SucceedsAfterTransientFailures and
-// TestDeadLetter_ExhaustsRetries_And_InvokesFailureHook live in
-// unittest/queue_conformance_test.go's
+// The transient-failure retry and the dead-letter-with-OnFailure semantics
+// are covered in unittest/queue_conformance_test.go's
 // TestStandaloneQueue_ConformsToQueueContract, which drives the shared
 // go/jobs/queuetest.AssertConforms suite (its own
 // "retry_succeeds_after_transient_failures" and

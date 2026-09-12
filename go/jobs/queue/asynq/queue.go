@@ -884,8 +884,11 @@ func (q *Queue) Get(ctx context.Context, id jobs.JobID) (*jobs.Job, error) {
 // cancelled Job. That failure is only reachable through a real delete
 // against a real backend -- a unit test built on a hand-constructed
 // *asynqlib.TaskInfo can never exercise it -- which is why the property is
-// pinned by integration_test/cancel_test.go's
-// TestRedisQueue_Cancel_PendingJobNeverRuns running against a real Redis.
+// pinned, against a real Redis, by the Queue conformance suite's
+// "cancel_tenant_isolation_and_idempotency" subtest
+// (integration_test/queue_conformance_test.go, driven by
+// TestAsynqQueue_ConformsToQueueContract): a deleted record would make
+// its Cancel-then-Get() leg answer jobs.ErrJobNotFound.
 // Instead:
 //
 //  1. Cancel leaves the task's own asynq record alone, and just writes the
