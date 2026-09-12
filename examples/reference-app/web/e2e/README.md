@@ -206,7 +206,7 @@ is still the fast way to check one block:
 
 ```bash
 E2E_RUN_TAGGED=1 pnpm exec playwright test \
-  e2e/core-journey.pending.spec.ts --grep "block C"
+  e2e/core-journey.spec.ts --grep "block C"
 ```
 
 This matters most to a round whose acceptance criterion is one of these
@@ -669,25 +669,28 @@ covers cannot say what it is missing.
 | Patient-facing shareable link | Yes -- block C |
 | Credit / usage system | Yes -- block D, balance and ledger |
 | Multi-location account support | Yes -- the tenant switcher, and the clinic named on every work surface |
-| **Download the result** | **No surface** -- the practice can share a link, but nothing offers the image itself |
-| **Team / user management** | **No surface** -- invitations work through the API only, so a practice cannot add a colleague by clicking |
-| **Subscription billing** | **No surface** -- credits are visible, but nothing shows or changes a plan |
-| **Usage analytics** | **No surface** |
-| **Admin dashboard** | **No surface** |
+| Download the result | Yes -- `keep-the-result.spec.ts`: a real `<a download>` of the clinic's own copy |
+| Team / user management | Yes -- `add-a-colleague.spec.ts`: a Team surface of its own in the navigation |
+| Subscription billing | **No surface** -- credits are visible, but nothing shows or changes a plan |
+| Usage analytics | Yes, platform operator only -- the usage dashboard (`#/admin/usage`); no gate drives it |
+| Admin dashboard | Yes, platform operator only -- `platform-staff-can-administer.spec.ts` drives it |
 
-The five with no surface are not gated, and deliberately so: a gate
+The one with no surface is not gated, and deliberately so: a gate
 against a surface nobody has designed would be inventing the design.
-They are listed because "the core journey works" and "the product is
-what it was described as" are different claims, and this suite can only
+It is listed because "the core journey works" and "the product is what
+it was described as" are different claims, and this suite can only
 speak to the first.
 
-Team management is the one worth singling out. An invitation is a real,
-working flow (`org-invitation-sign-in.spec.ts` drives it), but its setup
-steps go through the API because there is no team surface to click --
-so a practice that hires a second dentist cannot add them, and the gate
-that proves invitations work had to reach around the product to set
-itself up. That gap is invisible from the gate's green result, which is
-exactly why it is written here.
+Team management is kept here as the row that shows what the column is
+for. An invitation was always a real, working flow
+(`org-invitation-sign-in.spec.ts` drives it), but with no team surface
+to click its setup had to go through the API, so a practice that hired
+a second dentist could not add them -- and that gap was invisible from
+the gate's green result. The Team surface now exists and
+`add-a-colleague.spec.ts` drives it by clicking;
+`org-invitation-sign-in.spec.ts` still sets its own invitation up
+through the API, and its header gives the reason -- harness plumbing,
+and an invitation token never appears in an API response.
 
 ## Before a fix round relies on a gate, check the gate
 
@@ -758,8 +761,10 @@ table -- read the file when it matters.
 | `password-sign-in.spec.ts` | Signing in, being refused, the SMS channel, a single-tenant account's scope |
 | `registration.spec.ts` | Creating an account, the policy refusals, the duplicate-address conflict |
 | `self-service-signup.spec.ts` | A practice registering itself: it gets in, and can do an owner's work |
+| `new-practice-can-work.spec.ts` | A practice that registered itself gets past the plan and credit refusals to an actual simulation; no seeded-account gate can see that grant |
 | `provisioning-recovery.spec.ts` | A registration whose clinic failed to open on the first try still gets in |
 | `org-invitation-sign-in.spec.ts` | An invited colleague accepts and can then work in that organization |
+| `add-a-colleague.spec.ts` | A practice adds a colleague by clicking: the invite goes out and stays visible as outstanding, and the members list names people -- for a seeded and a self-registered practice alike |
 | `session-lifecycle.spec.ts` | Signing out, the session-ended branch, signing back in, reloading |
 | `restart-survival.spec.ts` | A member signs in against a process that booted over an existing database |
 | `back-button.spec.ts` | Back moves the view and keeps the person signed in; no full reload |
@@ -774,7 +779,11 @@ table -- read the file when it matters.
 | `visible-controls.spec.ts` | Every control in the chrome is legible against what is behind it |
 | `deployment-serves-the-app.spec.ts` | The address serves the app, mounts it, and loads without a failed asset |
 | `offered-channels-work.spec.ts` | A channel the product offers either works or says why it cannot |
-| `core-journey.pending.spec.ts` | The product's reason to exist, in four blocks: case and photo, generate and compare, share with the patient, what it cost |
+| `core-journey.spec.ts` | The product's reason to exist, in four blocks: case and photo, generate and compare, share with the patient, what it cost |
+| `keep-the-result.spec.ts` | The clinic keeps the simulation it paid for: a real `<a download>` over the bytes the result image already fetched |
+| `refund-on-failed-generation.spec.ts` | A refused generation gives the credits back, asserted on the refunded ledger row rather than on a balance that returned |
+| `the-ledger-reads-as-a-statement.spec.ts` | The credits ledger reads like a statement: no machine annotation reaches the row a clinic owner reads |
+| `platform-staff-can-administer.spec.ts` | A platform operator reaches the administration surface and reads the tenant ledger from it, and a clinic owner is not offered it (the presence half skips without the operator's own password) |
 | `harness-failure-guards.spec.ts` | The suite's own failure guards: a browser crash and a lost session are named by the wait they stopped; the enabled-state wait is satisfied by enablement, not visibility; a route still fetching when its test ends does not fail the run |
 | `test-utils/accounts.ts` | The seeded demo accounts and the grants each one carries |
 | `test-utils/journeys.ts` | Shared journey steps and every en-US string the specs assert on |
@@ -912,9 +921,9 @@ the one a gate cannot check: whether the name is something a dentist
 can still recognise in a downloads folder a week later, which is the
 point of keeping the file at all.
 
-**Both remaining gates wait on a surface the brief names and nobody
-built. No gate here waits on a defect.** Four defects were found by
-walking the product by hand in this session and all four are closed --
+**No gate here waits on a surface the brief names, and no gate waits
+on a defect.** Four defects were found by walking the product by hand
+in this session and all four are closed --
 the home surface's unactionable instruction, the share panel's
 placeholder, the home intro contradicting the empty state, and the
 credits ledger showing `go/billing`'s machine annotation to the clinic
@@ -1091,16 +1100,23 @@ that journey has been walked locally and not on the deployment.
 
 **Not gated at all, and why:**
 
-- **Subscription billing, usage analytics, the admin console.** No
-  browser surface exists for any of them, and none has a gate yet.
+- **Subscription billing.** No surface shows or changes a plan (the
+  operator dashboard renders a subscription's state read-only), and
+  nothing is gated.
+- **Usage analytics.** The operator-only usage dashboard is reachable
+  but has no gate driving it. The administration console is the
+  counter-case: `platform-staff-can-administer.spec.ts` drives its
+  ledger half.
 
 Team management and downloading the result used to sit here, and what
 moved them out is the point: a missing surface can be gated, and until it
 is, its absence is invisible from every green result the suite produces.
 `org-invitation-sign-in` is the sharpest case -- it proves the whole
-invitation cycle and passes, while driving the API directly, because
-there is no surface to click. Its green says the backend is sound and
-says nothing about whether a dentist can add a colleague.
+invitation cycle and passes, while driving its setup through the API
+directly, which is harness plumbing rather than a missing surface (an
+invitation token never appears in an API response). Its green says the
+backend is sound and says nothing about whether a dentist can add a
+colleague.
 
 The refund entry used to sit here for the same reason the
 provisioning-recovery one below did -- the vendor could refuse
