@@ -670,12 +670,10 @@ import (
 	obs "github.com/vislake/speed/go/observability"
 	"github.com/vislake/speed/go/pkgcore"
 	"github.com/vislake/speed/go/pkgcore/apperr"
+	"github.com/vislake/speed/go/pkgcore/httpapi"
 
 	"__APP_MODULE__/internal/__NAME__/api"
 )
-
-// jsonContentType is the Content-Type every response below writes.
-const jsonContentType = "application/json; charset=utf-8"
 
 // maxNameLength is the maximum number of characters -- Unicode code
 // points, not bytes -- a __ENTITY_KEY__ name may contain. It must match
@@ -790,9 +788,7 @@ func (h *Handler) __CI__Create__ENTITY__(w http.ResponseWriter, r *http.Request)
 
 	obs.FromContext(ctx).Info("__ENTITY_KEY__ created", "__ENTITY_KEY___id", record.ID)
 
-	w.Header().Set("Content-Type", jsonContentType)
-	w.WriteHeader(http.StatusCreated)
-	_ = json.NewEncoder(w).Encode(to__ENTITY__Response(record))
+	httpapi.WriteJSON(w, http.StatusCreated, to__ENTITY__Response(record))
 }
 
 // __CI__List implements api.ServerInterface: it handles
@@ -818,9 +814,7 @@ func (h *Handler) __CI__List(w http.ResponseWriter, r *http.Request) {
 
 	obs.FromContext(ctx).Info("__ENTITY_KEY__s listed", "__ENTITY_KEY___count", len(items))
 
-	w.Header().Set("Content-Type", jsonContentType)
-	w.WriteHeader(http.StatusOK)
-	_ = json.NewEncoder(w).Encode(resp)
+	httpapi.WriteJSON(w, http.StatusOK, resp)
 }
 
 // recordCreatedAudit records an AuditEvent for the new record through
@@ -882,23 +876,13 @@ func to__ENTITY__Response(record *__ENTITY__) api.__CI____ENTITY__ {
 	}
 }
 
-// writeError writes err to w as the JSON {code, params} body the
-// spec-generated error type carries -- the structured-error envelope
-// every speed API returns instead of localized text. An err that is not
-// an *apperr.Error is folded into errInternal so a caller never sees raw
-// Go error text.
+// writeError writes err to w as the coded error envelope (see
+// pkgcore/httpapi): an *apperr.Error keeps its own code, params and
+// status; anything else -- something below this handler did not classify
+// it -- is folded into errInternal so a caller never sees raw Go error
+// text either way.
 func writeError(w http.ResponseWriter, err error) {
-	appErr, ok := apperr.As(err)
-	if !ok {
-		appErr = errInternal
-	}
-	envelope := api.__CI__Error{Code: &appErr.Code}
-	if appErr.Params != nil {
-		envelope.Params = &appErr.Params
-	}
-	w.Header().Set("Content-Type", jsonContentType)
-	w.WriteHeader(appErr.Status)
-	_ = json.NewEncoder(w).Encode(envelope)
+	httpapi.WriteError(w, err, errInternal)
 }
 
 // compile-time check that *Handler implements the api.ServerInterface
