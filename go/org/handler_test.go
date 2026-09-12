@@ -57,11 +57,33 @@ func doRequest(h *Handler, ctx context.Context, method, path string, body any) *
 	return rec
 }
 
-// decodeBody decodes rec's JSON body into dst, failing t on any error.
+// decodeBody decodes rec's JSON body into dst, failing t on any error. The
+// raw bytes are captured before decoding so the failure message carries the
+// real body: the decoder consumes the recorder's buffer, and a message
+// reading rec.Body afterwards would print an empty body.
 func decodeBody(t *testing.T, rec *httptest.ResponseRecorder, dst any) {
 	t.Helper()
-	if err := json.NewDecoder(rec.Body).Decode(dst); err != nil {
-		t.Fatalf("decode response body %q: %v", rec.Body.String(), err)
+	body := rec.Body.Bytes()
+	if err := json.Unmarshal(body, dst); err != nil {
+		t.Fatalf("decode response body %q: %v", body, err)
+	}
+}
+
+// TestDecodeBody_KeepsTheBodyReadable pins that a decode leaves the
+// recorder's buffer intact, so a diagnostic read after it still sees the
+// real body.
+func TestDecodeBody_KeepsTheBodyReadable(t *testing.T) {
+	rec := httptest.NewRecorder()
+	const body = `{"name":"Acme Dental"}`
+	rec.Body.WriteString(body)
+
+	var node api.OrgNode
+	decodeBody(t, rec, &node)
+	if node.Name == nil || *node.Name != "Acme Dental" {
+		t.Fatalf("decoded Name = %v, want the written body's name", node.Name)
+	}
+	if got := rec.Body.String(); got != body {
+		t.Fatalf("rec.Body.String() = %q after decodeBody, want the full body %q -- a failure message reading the body must not find it consumed", got, body)
 	}
 }
 
