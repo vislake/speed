@@ -313,10 +313,19 @@
 
 ## 8. 附录：2026-09 以来全部 `!` 提交
 
-以下为 `git log origin/main --grep '!:' --oneline`（2026-09-01 起）的完整清单，供 release note 逐条改写使用：
+以下为 `git log origin/main --grep '!:' --oneline`（2026-09-01 起）的完整清单（43 枚：表 42 行 + 注 1 枚），供 release note 逐条改写使用：
 
 | sha | 一句话 |
 |---|---|
+| `b4afb1a0` | billing PaymentGatewayRegistry 退役（收编阶段 3，§5.26） |
+| `5f47c462` | pki SignerRegistry 退役（收编阶段 3，§5.26） |
+| `1bf726cf` | ai-gateway provider 解析改只走组件面（收编阶段 3，§5.26） |
+| `16ec5d52` | 泛型 SeamRegistry/Registration 注册机制退役（收编阶段 3，§5.26） |
+| `c5f2b9ae` | reference-app 改走 RunAssembly 的 serve 回调（§5.17） |
+| `a25b73f9` | saasctl 骨架 serve 步骤交给 RunAssembly（§5.17） |
+| `aaea1cc7` | RunAssembly 新增可选 serve 回调（§5.17） |
+| `1267ce1c` | Mailer 地址结构预校验：`Send` 拒绝不可寻址的地址（§5.14） |
+| `86f84548` | 对账清单按实测 log 重修（附录补齐落后提交、出处 sha 重指 main 实况对象） |
 | `58ffd7e3` | reference-app 宿主接线的可选依赖读取改错误传播（§5.8） |
 | `760a73db` | saasctl 模板的 SMS sender 读取改错误传播（§5.8） |
 | `69651edb` | 七个模块组件构造的可选依赖读取改错误传播（§5.8） |
@@ -324,8 +333,7 @@
 | `0c7a61a8` | notification 永久传输失败哨兵改挂 pkgcore（ErrTransportPermanent 移除） |
 | `0a62299d` | pki RootCAParams / IntermediateCAParams 合并为 CAParams |
 | `09fffdc9` | billing ExpireInput 并入 PreDeductInput |
-| `1267ce1c` | Mailer 地址结构预校验：`Send` 拒绝不可寻址的地址（§5.14） |
-| `a92adfb6` | 三条 integration 腿与三处运行时文案迁到组件面（本轮） |
+| `a92adfb6` | 三条 integration 腿与三处运行时文案迁到组件面 |
 | `53a824b8` | reference-app 选用模块自身描述符（去宿主拷贝面） |
 | `91ffde15` | config/rbac 快照服务改在 Start 补齐（不再发布 Provides token） |
 | `12c1ef4f` | pkgcore 每条 Provides 声明钉到构造期交付 |
