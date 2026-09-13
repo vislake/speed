@@ -1,6 +1,6 @@
 ---
 name: frontend-coding-standards
-description: speed Frontend Coding Standards — Mandatory package boundaries, component, state, theming, i18n, accessibility and API-client rules for writing, editing and reviewing all React/TypeScript code under web/
+description: speed Frontend Coding Standards — Mandatory package boundaries, component, state, theming, i18n, accessibility and API-client rules for the React/TypeScript code under web/, an earlier implementation that the Makefile and CI do not build or check. Nothing here applies to the Go modules under pkg/, which follow CLAUDE.md and docs/design.
 triggers:
   - writing frontend code
   - editing frontend code
@@ -22,7 +22,7 @@ globs:
 
 # speed Frontend Coding Standards
 
-This is the single authoritative standard for the frontend. Design rationale lives in the repository's internal design documents (Chinese, internal design discussion); the discipline list lives in the root `CLAUDE.md`. **This document tells you how to write the code.**
+**Scope: the `web/` tree.** That tree is an earlier implementation — the root `Makefile` and CI neither build nor check it, and its design rationale lives in the repository's internal design documents (Chinese, internal design discussion). **Inside `web/`, this document tells you how to write the code.**
 
 **The premise that overrides everything else**: these packages are installed into business projects via `npm install` — they are not an application. A component's props are public API, and changing a required prop breaks every delivered project. Every dependency bundled here ends up in someone else's build output.
 
@@ -67,7 +67,7 @@ const myRequest = (url) => fetch(...)     // a homegrown wrapper is equally wron
 ```
 
 - **DO NOT** hand-write any backend call. `fetch` / `axios` are permitted only inside `@speed/api-client`, enforced by an ESLint rule.
-- **DO NOT** hand-write endpoint paths or response types — they come from `api/openapi.yaml` through `task api:gen`.
+- **DO NOT** hand-write endpoint paths or response types — they come from `api/openapi.yaml` through the SDK generator.
 - **DO NOT** edit any file in `@speed/api-sdk` — it is generated and overwritten wholesale on every release.
 - When an endpoint does not fit your need, change the spec, not the frontend. The order is fixed: edit the spec first, regenerate, fix whatever the regenerated interfaces break, then consume — never the reverse.
 

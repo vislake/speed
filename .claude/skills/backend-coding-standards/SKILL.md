@@ -1,6 +1,6 @@
 ---
 name: backend-coding-standards
-description: speed Backend Coding Standards — Mandatory module boundaries, multi-tenant isolation, dual deployment modes, error handling, API, logging and testing rules for writing, editing and reviewing all Go code under go/
+description: speed Backend Coding Standards — Mandatory module boundaries, multi-tenant isolation, dual deployment modes, error handling, API, logging and testing rules for the Go code under go/, an earlier implementation that the Makefile and CI do not build or check. Code under pkg/ follows CLAUDE.md, docs/design and the module's own AGENTS.md instead, not this document.
 triggers:
   - writing backend code
   - editing backend code
@@ -22,7 +22,7 @@ globs:
 
 # speed Backend Coding Standards
 
-This is the single authoritative standard for the Go side. Design rationale lives in `docs/internal/` (written in Chinese, for internal design discussion); the discipline list lives in the root `CLAUDE.md`. **This document tells you how to write the code.**
+**Scope: the `go/` tree.** That tree is an earlier implementation — the root `Makefile` and CI neither build nor check it, and its design rationale lives in `docs/internal/` (written in Chinese, for internal design discussion). Code under `pkg/` and `examples/` follows the root `CLAUDE.md`, the design under `docs/design` and each module's own `AGENTS.md`; nothing below applies to it. **Inside `go/`, this document tells you how to write the code.**
 
 **The premise that overrides everything else**: speed is not an application — it is a set of libraries that business projects pull in via `go get`. Every exported signature change propagates to every delivered project; every extra dependency lands in someone else's `go.sum`. This premise outranks any stylistic preference below.
 
@@ -34,10 +34,9 @@ Independent Go modules, each with its own `go.mod`, developed together through `
 
 **Required:**
 - Module path is `github.com/<org>/speed/go/<module>`.
-- **Package name derives from the directory by stripping hyphens**, since `-` is not a legal character in a Go identifier: `ai-gateway` → package `aigateway`. (A subpackage takes its own directory name: `go/billing/gateway` is package `gateway`.) Lowercase, no separator — do not substitute an underscore or camelCase. The scaffolder applies this rule (`tools/new_module.py`, wrapped by `task new:module`) rather than leaving it to individual judgement.
-- The canonical stub is the scaffolder's three files (`go.mod` + `doc.go` + `AGENTS.md`); a module grows the assets of the surfaces it ships: `locales/{zh-CN,en-US}.toml` for every module with text, `migrations/{postgres,sqlite}/` for every schema owner, and `api/openapi.yaml` plus its `oapi-codegen.yaml` for the fragment-shipping modules — the package universe and per-module facts live in each module's own `AGENTS.md`, not in a list here.
+- **Package name derives from the directory by stripping hyphens**, since `-` is not a legal character in a Go identifier: `ai-gateway` → package `aigateway`. (A subpackage takes its own directory name: `go/billing/gateway` is package `gateway`.) Lowercase, no separator — do not substitute an underscore or camelCase.
+- The canonical stub is three files (`go.mod` + `doc.go` + `AGENTS.md`); a module grows the assets of the surfaces it ships: `locales/{zh-CN,en-US}.toml` for every module with text, `migrations/{postgres,sqlite}/` for every schema owner, and `api/openapi.yaml` plus its `oapi-codegen.yaml` for the fragment-shipping modules — the package universe and per-module facts live in each module's own `AGENTS.md`, not in a list here.
 - Public API stays in the module root package; implementation details go under `internal/` so consumers cannot import them.
-- Create new modules with the scaffolder, `python3 tools/new_module.py` (the `task new:module` Taskfile wrapper calls it, and it derives the stub's go directive from the repository's `go.work`). The script prints a registration checklist — the go.work `use` entry (the module's whole CI and release registration), the coverage-baseline row, the integration-tier rows when the module ships one — the entries hand-rolling a module always misses; it never edits those shared files itself.
 
 **Prohibited:**
 - **DO NOT** let `rbac` depend on `authn`. Authorization only knows `Subject{TenantID, UserID}`; whoever authenticates assembles the Subject and calls authorization.
@@ -121,7 +120,7 @@ ctx, err = pkgcore.WithSystemContext(ctx, pkgcore.SystemReason{
 
 The purpose is a `pkgcore.SystemPurpose` constant the module owning the flow declares and registers (`go/admin`'s `SystemPurposeAdminCrossTenant` is one; `pkgcore.RegisterSystemPurpose` refuses an empty actor or an unregistered purpose, which is what makes the field an enum rather than free text).
 
-- Callable only from `admin`, `compliance`, `jobs` and `authn` — plus `tenancy`'s audited wrapper `tenancy.WithSystemContext`, which business code should call instead of the raw primitive. The caller whitelist is enforced by code review / CODEOWNERS on `go/pkgcore` and `go/tenancy` plus the doc comments on both functions, NOT by depguard: depguard denies whole import paths per file and cannot single out one symbol (`WithSystemContext`) from the rest of an otherwise-needed package. `pkgcore`'s root package also holds `TenantID`/`WithTenant`/`apperr`, which `go/dbkit` — real code, not on the whitelist — legitimately imports; a draft rule shaped "only the whitelist may import `pkgcore`" flagged 23 of dbkit's pre-existing unrelated imports as collateral damage and was reverted. The full reasoning lives in the `.golangci.yml` depguard comment; making this checkable would mean moving `WithSystemContext` into its own `pkgcore` subpackage (a public API decision, not a lint-config side effect).
+- Callable only from `admin`, `compliance`, `jobs` and `authn` — plus `tenancy`'s audited wrapper `tenancy.WithSystemContext`, which business code should call instead of the raw primitive. The caller whitelist is enforced by code review on `go/pkgcore` and `go/tenancy` plus the doc comments on both functions, NOT by depguard: depguard denies whole import paths per file and cannot single out one symbol (`WithSystemContext`) from the rest of an otherwise-needed package. `pkgcore`'s root package also holds `TenantID`/`WithTenant`/`apperr`, which `go/dbkit` — real code, not on the whitelist — legitimately imports; a draft rule shaped "only the whitelist may import `pkgcore`" flagged 23 of dbkit's pre-existing unrelated imports as collateral damage and was reverted. Making this checkable would mean moving `WithSystemContext` into its own `pkgcore` subpackage (a public API decision, not a lint-config side effect).
 - Keep the scope as narrow as possible — **DO NOT** enable it "conveniently" in middleware.
 - It bypasses tenant filtering only. **It never bypasses RBAC.**
 
@@ -180,7 +179,7 @@ The serializer name is the module's own: the module registers it with `dbkit.Reg
 
 ### 6.1 Spec-first — the order is not negotiable
 
-The only correct sequence for changing an endpoint: **edit `api/openapi.yaml` → `task api:gen` → compilation failures reveal every handler to fix → implement → update the frontend → commit together**.
+The only correct sequence for changing an endpoint: **edit `api/openapi.yaml` → regenerate the server interface → compilation failures reveal every handler to fix → implement → update the frontend → commit together**.
 
 - **DO NOT** change the implementation first and backfill the spec — that is code-first again and throws away the entire compile-time guarantee.
 - Handlers must implement the generated server interface. Do not hand-write route binding or parameter parsing.

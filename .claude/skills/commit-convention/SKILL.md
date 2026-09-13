@@ -46,13 +46,13 @@ Follows [Conventional Commits](https://www.conventionalcommits.org/); the conven
 | `test` | Adding or updating tests |
 | `chore` | Build, tooling, dependencies, CI |
 | `i18n` | Adding or updating zh-CN / en-US resources |
-| `api` | OpenAPI spec change, together with the regenerated artifacts |
+| `api` | OpenAPI spec change |
 
 ## Scopes
 
-### Backend Go modules (`go/<scope>/`)
+### Go modules
 
-The scope of a Go module is its directory name under `go/`. The membership authority is the root `go.work` `use` block -- the same source every CI module set derives from -- so read it rather than a list here, which would go stale; a CLI module (`saasctl`) takes its own name as scope like any other.
+The scope of a Go module is its own directory name: `pkg/core` commits under `core`. The membership authority is the root `go.work` `use` block -- the same source the Makefile derives every module loop from -- so read it rather than a list here, which would go stale. A commit inside the earlier implementation under `go/` takes the directory name there the same way, even though `go.work` does not list it.
 
 ### Frontend npm packages (`web/packages/<scope>/`)
 
@@ -60,7 +60,7 @@ Same rule: the scope is the package directory name under `web/packages/`, and `w
 
 ### Cross-cutting
 
-`openapi` (spec and generation pipeline), `deps`, `ci`, `compose`, `templates` (CLI skeletons), `reference-app`, `release`, `adr`
+`deps`, `ci`, `reference-app`, `adr`
 
 Repository-level:
 - `internal` — design documents under `docs/internal/`
@@ -102,9 +102,9 @@ docs/upgrade/v1-to-v2.md
 3. **No generic messages.** "fix bug", "update code", "misc" are rejected.
 4. **Breaking changes** get `BREAKING CHANGE:` in the footer and a `!` after the scope.
    This repository ships libraries consumed via `go get` / `npm install`, so **any change to an exported signature is breaking**, even when the internal behaviour is unchanged.
-5. **Lockstep versioning.** Never tag a single module by hand. Releases tag every module with the same version through the release pipeline.
-6. **API changes commit the spec and the implementation together.** Editing `api/openapi.yaml` means committing the regenerated backend interface and frontend sdk in the same commit; CI regenerates and diffs. Use the `api` type.
-7. **New user-facing text is bilingual in the same commit** — zh-CN and en-US both, CI checks the key sets match.
+5. **Do not tag a release by hand.** How versions are cut is a design decision; `docs/design` and `docs/adr` are where it is settled.
+6. **API changes commit the spec and the implementation together.** Editing `api/openapi.yaml` means committing the regenerated backend interface and frontend sdk in the same commit. Use the `api` type.
+7. **New user-facing text is bilingual in the same commit** — zh-CN and en-US both, with matching key sets.
 8. **Every bug fix carries a test that reproduces the bug** (failing before the fix, passing after). If a test genuinely cannot be added, say so in the body with the reason and the follow-up plan.
 9. **Rebase before merging; fast-forward merges only.** Branch protection on `main` rejects merge commits, keeping history linear.
 10. **Test helper directories are not scopes.** When touching `testutil` or `testdata`, use the domain scope they serve, e.g. `test(billing): ...`.
