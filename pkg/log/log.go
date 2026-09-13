@@ -36,6 +36,10 @@ type Logger interface {
 // to remove one or to switch the layer off, so a registration that is too wide
 // is corrected by changing the registering code, not at run time.
 //
+// A registration that carries no usable rule panics. It is a programming error
+// at the call site, and a registration returns nothing, so dropping it would
+// leave the registrant believing it holds a protection it does not have.
+//
 // A rule only governs judgements made after it is registered, and judgements
 // happen at two moments: a record's own attributes are judged as the record is
 // written, while an attribute bound through With is judged once at binding time
@@ -44,11 +48,12 @@ type Logger interface {
 type Redaction interface {
 	// AddKeys registers sensitive key names. A key path is compared segment
 	// by segment, so a registered name matches a group opened by WithGroup
-	// as well as a leaf attribute.
+	// as well as a leaf attribute. An empty name panics, and the whole call
+	// is checked before anything is registered.
 	AddKeys(keys ...string)
 	// AddPattern registers a value-shape rule under a name. The matcher runs
 	// on every resolved string value and error text of every record, so its
-	// cost lands on the whole process's logging path.
+	// cost lands on the whole process's logging path. A nil matcher panics.
 	AddPattern(name string, match Matcher)
 }
 

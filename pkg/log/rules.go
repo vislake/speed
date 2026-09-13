@@ -1,6 +1,7 @@
 package log
 
 import (
+	"fmt"
 	"maps"
 	"slices"
 	"strings"
@@ -132,9 +133,25 @@ type redactionRegistry struct{}
 // append-only, so it needs no lifecycle of its own.
 var processRedaction Redaction = redactionRegistry{}
 
-// AddKeys registers sensitive key names. Empty names are ignored: they would
-// match nothing, since a key path segment is only compared when it is non-empty.
+// AddKeys registers sensitive key names. An empty name panics: it is a
+// programming error at the call site, unrelated to data, and it shows up
+// deterministically on first execution. Dropping it instead would leave the
+// registrant — which gets nothing back — believing it holds a protection it
+// does not have, and that difference only becomes visible once something has
+// leaked.
+//
+// The whole call is checked before anything is registered, so a call carrying
+// an unusable name registers none of its names rather than half of them.
 func (redactionRegistry) AddKeys(keys ...string) {
+	for i, key := range keys {
+		if key == "" {
+			panic(fmt.Sprintf("log: AddKeys[%d]: the key name is empty. An empty name "+
+				"carries no rule, and comparing it against the empty segments of a key "+
+				"path would mask everything under an anonymous group; pass the key the "+
+				"sensitive attribute is logged under", i))
+		}
+	}
+
 	rootMu.Lock()
 	defer rootMu.Unlock()
 
@@ -146,9 +163,6 @@ func (redactionRegistry) AddKeys(keys ...string) {
 	maps.Copy(next.keys, current.keys)
 	added := false
 	for _, key := range keys {
-		if key == "" {
-			continue
-		}
 		if _, ok := next.keys[key]; ok {
 			continue
 		}
@@ -161,11 +175,14 @@ func (redactionRegistry) AddKeys(keys ...string) {
 	rules.Store(next)
 }
 
-// AddPattern registers a value-shape rule. A nil matcher is ignored rather than
-// stored, because storing it would panic on the first record that reaches it.
+// AddPattern registers a value-shape rule. A nil matcher panics here, for the
+// reason an empty key name does: it is a programming error at the call site,
+// and stored it would crash instead on the first record that reached it, on
+// the logging path of the whole process.
 func (redactionRegistry) AddPattern(name string, match Matcher) {
 	if match == nil {
-		return
+		panic(fmt.Sprintf("log: AddPattern(%q): the matcher is nil. A rule needs the "+
+			"function that reports which spans of a value to mask", name))
 	}
 	rootMu.Lock()
 	defer rootMu.Unlock()

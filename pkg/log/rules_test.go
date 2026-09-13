@@ -7,7 +7,6 @@ import (
 	"strings"
 	"sync"
 	"testing"
-	"time"
 )
 
 // TestRuleSetSnapshotIsReadWithoutLock pins the two properties of the snapshot:
@@ -174,34 +173,63 @@ func TestOverlappingSpansAreMaskedOnce(t *testing.T) {
 	}
 }
 
-// TestUnusableRegistrationsAreIgnored pins the two registrations that carry no
-// rule: an empty key name, which would otherwise have to be compared against
-// the empty segments of a key path, and a nil matcher, which would panic on the
-// first record that reached it.
-func TestUnusableRegistrationsAreIgnored(t *testing.T) {
-	isolateRules(t)
-	processRedaction.AddKeys("")
-	processRedaction.AddPattern("nil-matcher", nil)
-
-	rules := currentRules()
-	if rules.matchesKey("") {
-		t.Error("the empty key name was registered")
-	}
-	if len(rules.patterns) != 0 {
-		t.Errorf("a nil matcher was registered: %d patterns", len(rules.patterns))
-	}
-
-	capture := newCapture()
-	handler := newRedactHandler(capture)
-	record := slog.NewRecord(time.Now(), slog.LevelInfo, "judge", 0)
-	record.AddAttrs(slog.String("", "a value under an anonymous key"), slog.String("key", "value"))
-	if err := handler.Handle(context.Background(), record); err != nil {
-		t.Fatalf("Handle: %v", err)
-	}
-	capture.state.last(t).Attrs(func(a slog.Attr) bool {
-		if a.Value.String() == maskText {
-			t.Errorf("attribute %q was masked by a registration that carries no rule", a.Key)
+// TestUnusableRegistrationsPanic pins that a registration carrying no rule
+// fails at the call site instead of being dropped. An empty key name would
+// have to be compared against the empty segments of a key path, and a nil
+// matcher would panic on the first record that reached it; both are
+// programming errors at the registering call site.
+//
+// Dropping one quietly is the failure shape redaction can least afford: a
+// registration returns nothing, so the registrant goes on believing it holds a
+// protection it does not have, and the difference shows up only once something
+// has leaked.
+func TestUnusableRegistrationsPanic(t *testing.T) {
+	// The assertions name the position of the unusable argument, not its
+	// value: the value is the empty string, and AddKeys is variadic, so only
+	// the index says which of the names a caller passed is at fault.
+	t.Run("empty key name", func(t *testing.T) {
+		isolateRules(t)
+		got := panicText(t, func() { processRedaction.AddKeys("") })
+		if !strings.Contains(got, "AddKeys[0]") {
+			t.Errorf("the panic reads %q, want it to name the position of the unusable name", got)
 		}
-		return true
 	})
+
+	t.Run("nil matcher", func(t *testing.T) {
+		isolateRules(t)
+		got := panicText(t, func() { processRedaction.AddPattern("nil-matcher", nil) })
+		for _, want := range []string{"AddPattern", "nil-matcher"} {
+			if !strings.Contains(got, want) {
+				t.Errorf("the panic reads %q, want it to name %q", got, want)
+			}
+		}
+	})
+
+	// The whole call is checked before anything is registered, so a call that
+	// carries one usable name and one unusable one registers neither. An
+	// implementation that wrote each name as it walked them, and panicked only
+	// on reaching the empty one, passes the two cases above and leaves half a
+	// registration behind.
+	t.Run("nothing is registered before the check", func(t *testing.T) {
+		isolateRules(t)
+		panicText(t, func() { processRedaction.AddKeys("kept", "") })
+		if currentRules().matchesKey("kept") {
+			t.Error("the name ahead of the unusable one was registered")
+		}
+	})
+}
+
+// panicText runs fn and renders what it panicked with, for an assertion on the
+// message. It fails the test when fn returns normally.
+func panicText(t *testing.T, fn func()) string {
+	t.Helper()
+	var recovered any
+	func() {
+		defer func() { recovered = recover() }()
+		fn()
+	}()
+	if recovered == nil {
+		t.Fatal("the registration returned instead of panicking")
+	}
+	return fmt.Sprint(recovered)
 }
