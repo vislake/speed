@@ -48,7 +48,7 @@ toolchain they need comes from `mise install`, which reads `.mise.toml`.
 | `tools/` | Repository self-checks. `tools/README.md` says what each one does. |
 | `Makefile`, `.mise.toml`, `.golangci.yml`, `.github/workflows/` | The engineering machinery: entry points, toolchain pins, lint configuration, CI. |
 | `.claude/skills/` | How the work is done. Each handbook's own description says what it covers; the ones that apply here are at the bottom of this file. |
-| `go/`, `web/`, `examples/reference-app`, `docs/internal/`, `docs/site/` | An earlier implementation and its documentation. No command in this repository builds or checks them. |
+| `go/`, `web/`, `examples/reference-app`, `docs/internal/`, `docs/site/` | An earlier implementation and its documentation. Nothing `make check` runs builds or checks them: every leg of it is scoped to the modules `go.work` lists. |
 
 ## Boundaries
 

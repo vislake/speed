@@ -10,10 +10,11 @@ no network. Run directly:
 
 This suite needs `go` and `gofmt` on PATH (the same toolchain the script
 itself requires) but never touches the network and never depends on this
-repository's own go/* modules existing on disk: every complete-block test
+repository's own modules existing on disk: every complete-block test
 below is a self-contained snippet with no github.com/vislake/speed/...
 imports, so `go mod tidy`/`go build` resolve against nothing but the
-standard library.
+standard library. Where a test needs a module roster it writes its own
+go.work into a temporary directory.
 
 Regression coverage: a bare `...` used as an "elided code" placeholder
 in a position where Go's grammar requires a real token must be a
@@ -24,7 +25,15 @@ regression of the same shape fails the suite.
 
 Corpus coverage: NestedCheckoutTests pins that the discovery walk does
 not descend into .claude/worktrees/ (nested git checkouts whose own
-AGENTS.md/README trees are another checkout's corpus).
+AGENTS.md/README trees are another checkout's corpus). InScopeTests pins
+that the corpus follows the workspace roster in both directions -- prose
+outside every workspace module is not checked, and prose inside a module
+is, whichever module the roster happens to list.
+
+Roster coverage: ReadWorkspaceTests pins that both legal spellings of a
+use directive yield the same roster, and that a roster listing no module
+is an error rather than an empty corpus that would report success
+without checking anything.
 """
 
 from __future__ import annotations
@@ -40,43 +49,91 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 import check_markdown_examples as m  # noqa: E402
 
 
+# A roster of the shape go.work carries: module directories relative to
+# the repository root.
+ROSTER = frozenset({"pkg/core", "pkg/config", "examples/minimal-host"})
+
+
+def write_workspace(root: pathlib.Path, dirs, inline: bool = False) -> None:
+    """Write a go.work listing dirs, in either legal spelling."""
+    if inline:
+        body = "".join(f"use ./{d}\n" for d in dirs)
+    else:
+        body = "use (\n" + "".join(f"\t./{d}\n" for d in dirs) + ")\n"
+    (root / "go.work").write_text("go 1.25\n\n" + body, encoding="utf-8")
+
+
 class InScopeTests(unittest.TestCase):
-    def test_agents_md_anywhere_is_in_scope(self):
-        self.assertTrue(m._in_scope("go/notification/AGENTS.md"))
-        self.assertTrue(m._in_scope("AGENTS.md"))
-        self.assertTrue(m._in_scope("web/packages/ui-kit/AGENTS.md"))
+    def test_root_prose_is_in_scope(self):
+        self.assertTrue(m._in_scope("AGENTS.md", ROSTER))
+        self.assertTrue(m._in_scope("README.md", ROSTER))
 
-    def test_go_module_readme_is_in_scope(self):
-        self.assertTrue(m._in_scope("go/dbkit/README.md"))
+    def test_module_prose_is_in_scope(self):
+        self.assertTrue(m._in_scope("pkg/core/AGENTS.md", ROSTER))
+        self.assertTrue(m._in_scope("pkg/core/README.md", ROSTER))
+        self.assertTrue(m._in_scope("examples/minimal-host/AGENTS.md", ROSTER))
 
-    def test_web_package_readme_is_in_scope(self):
-        self.assertTrue(m._in_scope("web/packages/ui-kit/README.md"))
+    def test_prose_below_a_module_is_in_scope(self):
+        # A subpackage's own prose belongs to the module that holds it.
+        self.assertTrue(m._in_scope("pkg/config/source/file/AGENTS.md", ROSTER))
 
-    def test_root_readme_is_in_scope(self):
-        self.assertTrue(m._in_scope("README.md"))
+    def test_prose_outside_every_workspace_module_is_out_of_scope(self):
+        # The corpus is the workspace. Prose in a tree no use directive
+        # names is not checked, and the root guide's statement that no
+        # command builds or checks those trees stays true.
+        self.assertFalse(m._in_scope("go/dbkit/AGENTS.md", ROSTER))
+        self.assertFalse(m._in_scope("go/dbkit/README.md", ROSTER))
+        self.assertFalse(m._in_scope("web/packages/ui-kit/README.md", ROSTER))
+        self.assertFalse(m._in_scope("examples/reference-app/README.md", ROSTER))
 
-    def test_non_root_non_module_readme_is_out_of_scope(self):
-        # A README that is neither the root one, nor under go/, nor under
-        # web/packages/ -- e.g. an example app's own README -- carries no
-        # compile-harness obligation here.
-        self.assertFalse(m._in_scope("examples/reference-app/README.md"))
+    def test_scope_follows_the_roster_rather_than_a_denylist(self):
+        # The same path is in scope once the workspace lists the module it
+        # lives in: adding a module registers its prose, and no list of
+        # trees is maintained in the script.
+        self.assertTrue(m._in_scope("go/dbkit/AGENTS.md", ROSTER | {"go/dbkit"}))
 
-    def test_decision_record_is_out_of_scope(self):
-        # The documentation trees sketch shapes under design; a sketch that
-        # does not parse is normal there and must not fail this check.
-        self.assertFalse(m._in_scope("docs/adr/0001-something.md"))
+    def test_documentation_tree_is_out_of_scope(self):
+        # Design and decision documents sketch shapes under design; a
+        # sketch that does not parse is normal there.
+        self.assertFalse(m._in_scope("docs/adr/0001-something.md", ROSTER))
+        self.assertFalse(m._in_scope("docs/design/modules/design-core.md", ROSTER))
+        self.assertFalse(m._in_scope("docs/internal/AGENTS.md", ROSTER))
+        self.assertFalse(m._in_scope("docs/internal/07-platform-services.md", ROSTER))
 
-    def test_design_doc_is_out_of_scope(self):
-        self.assertFalse(m._in_scope("docs/design/modules/design-core.md"))
+    def test_other_markdown_in_a_module_is_out_of_scope(self):
+        self.assertFalse(m._in_scope("pkg/core/CHANGELOG.md", ROSTER))
 
-    def test_docs_tree_is_out_of_scope_even_as_agents_md(self):
-        self.assertFalse(m._in_scope("docs/internal/AGENTS.md"))
 
-    def test_docs_prose_is_out_of_scope(self):
-        self.assertFalse(m._in_scope("docs/internal/07-platform-services.md"))
+class ReadWorkspaceTests(unittest.TestCase):
+    def setUp(self):
+        import shutil
 
-    def test_unrelated_markdown_is_out_of_scope(self):
-        self.assertFalse(m._in_scope("go/dbkit/CHANGELOG.md"))
+        if shutil.which("go") is None:
+            self.skipTest("go not on PATH")
+
+    def test_block_and_inline_use_directives_yield_the_same_roster(self):
+        # Both spellings are legal go.work. A roster read from only one of
+        # them would come up empty on the other -- silently, since every
+        # check this gate runs is per-module.
+        for inline in (False, True):
+            with self.subTest(inline=inline), tempfile.TemporaryDirectory() as td:
+                root = pathlib.Path(td)
+                write_workspace(root, ["pkg/core", "pkg/config"], inline=inline)
+                workspace = m.read_workspace(root)
+                self.assertEqual(workspace.module_dirs, {"pkg/core", "pkg/config"})
+                self.assertEqual(workspace.go_directive, "1.25")
+
+    def test_workspace_listing_no_module_is_an_error(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = pathlib.Path(td)
+            (root / "go.work").write_text("go 1.25\n", encoding="utf-8")
+            with self.assertRaises(m.WorkspaceError):
+                m.read_workspace(root)
+
+    def test_absent_workspace_is_an_error(self):
+        with tempfile.TemporaryDirectory() as td:
+            with self.assertRaises(m.WorkspaceError):
+                m.read_workspace(pathlib.Path(td))
 
 
 class NestedCheckoutTests(unittest.TestCase):
@@ -92,9 +149,11 @@ class NestedCheckoutTests(unittest.TestCase):
             wt = root / ".claude" / "worktrees" / "wt"
             wt.mkdir(parents=True)
             (wt / "AGENTS.md").write_text("# nested checkout\n", encoding="utf-8")
-            (wt / "go").mkdir()
-            (wt / "go" / "README.md").write_text("# nested readme\n", encoding="utf-8")
-            found = m.discover_markdown_files(root)
+            (wt / "pkg" / "core").mkdir(parents=True)
+            (wt / "pkg" / "core" / "README.md").write_text(
+                "# nested readme\n", encoding="utf-8"
+            )
+            found = m.discover_markdown_files(root, ROSTER)
             self.assertEqual(found, ["AGENTS.md"])
 
 
@@ -182,41 +241,52 @@ class ClassifyTests(unittest.TestCase):
 
 class ModuleDirsForBlockTests(unittest.TestCase):
     def test_direct_module_import(self):
-        body = 'import "github.com/vislake/speed/go/pkgcore"\n'
-        self.assertEqual(m._module_dirs_for_block(body), {"go/pkgcore"})
+        body = 'import "github.com/vislake/speed/pkg/core"\n'
+        self.assertEqual(m._module_dirs_for_block(body, ROSTER), ({"pkg/core"}, set()))
 
     def test_subpackage_import_maps_to_owning_module(self):
-        body = 'import "github.com/vislake/speed/go/pkgcore/i18n"\n'
-        self.assertEqual(m._module_dirs_for_block(body), {"go/pkgcore"})
+        body = 'import "github.com/vislake/speed/pkg/config/source/file"\n'
+        self.assertEqual(
+            m._module_dirs_for_block(body, ROSTER), ({"pkg/config"}, set())
+        )
 
     def test_multiple_distinct_modules(self):
         body = (
             'import (\n'
-            '\t"github.com/vislake/speed/go/dbkit"\n'
-            '\t"github.com/vislake/speed/go/pkgcore"\n'
+            '\t"github.com/vislake/speed/pkg/core"\n'
+            '\t"github.com/vislake/speed/pkg/config"\n'
             ')\n'
         )
-        self.assertEqual(m._module_dirs_for_block(body), {"go/dbkit", "go/pkgcore"})
-
-    def test_pkg_module_import(self):
-        body = 'import "github.com/vislake/speed/pkg/core"\n'
-        self.assertEqual(m._module_dirs_for_block(body), {"pkg/core"})
-
-    def test_pkg_subpackage_import_maps_to_owning_module(self):
-        body = 'import "github.com/vislake/speed/pkg/config/source/file"\n'
-        self.assertEqual(m._module_dirs_for_block(body), {"pkg/config"})
+        self.assertEqual(
+            m._module_dirs_for_block(body, ROSTER),
+            ({"pkg/core", "pkg/config"}, set()),
+        )
 
     def test_example_host_import(self):
         body = 'import "github.com/vislake/speed/examples/minimal-host"\n'
-        self.assertEqual(m._module_dirs_for_block(body), {"examples/minimal-host"})
+        self.assertEqual(
+            m._module_dirs_for_block(body, ROSTER), ({"examples/minimal-host"}, set())
+        )
 
-    def test_reference_app_import(self):
-        body = 'import "github.com/vislake/speed/examples/reference-app/internal/notes"\n'
-        self.assertEqual(m._module_dirs_for_block(body), {"examples/reference-app"})
+    def test_import_outside_the_workspace_is_unresolved(self):
+        # Nothing in the workspace provides it, and the script does not
+        # guess a directory from the import path -- the caller reports it.
+        body = 'import "github.com/vislake/speed/go/pkgcore/i18n"\n'
+        self.assertEqual(
+            m._module_dirs_for_block(body, ROSTER),
+            (set(), {"go/pkgcore/i18n"}),
+        )
 
-    def test_no_speed_imports_yields_empty_set(self):
+    def test_longest_matching_module_wins(self):
+        roster = ROSTER | {"pkg/config/plugin"}
+        body = 'import "github.com/vislake/speed/pkg/config/plugin/extra"\n'
+        self.assertEqual(
+            m._module_dirs_for_block(body, roster), ({"pkg/config/plugin"}, set())
+        )
+
+    def test_no_speed_imports_yields_nothing(self):
         body = 'import "context"\n'
-        self.assertEqual(m._module_dirs_for_block(body), set())
+        self.assertEqual(m._module_dirs_for_block(body, ROSTER), (set(), set()))
 
 
 class LocalReplacementsTests(unittest.TestCase):
@@ -341,11 +411,15 @@ class CheckCompleteBlockTests(unittest.TestCase):
         if shutil.which("go") is None:
             self.skipTest("go not on PATH")
 
+    workspace = m.Workspace("1.25", ROSTER)
+
     def test_self_contained_valid_program_builds_clean(self):
         with tempfile.TemporaryDirectory() as td:
             root = pathlib.Path(td)
             block = m.GoBlock(1, 3, "package p\n\nfunc F() int { return 1 }\n", False)
-            violations = m.check_complete_block(root, "fake.md", block, keep_temp=False)
+            violations = m.check_complete_block(
+                root, "fake.md", block, self.workspace, keep_temp=False
+            )
         self.assertEqual(violations, [])
 
     def test_broken_program_is_reported_as_a_violation(self):
@@ -354,60 +428,112 @@ class CheckCompleteBlockTests(unittest.TestCase):
             block = m.GoBlock(
                 1, 3, "package p\n\nfunc F() int { return undefinedThing() }\n", False
             )
-            violations = m.check_complete_block(root, "fake.md", block, keep_temp=False)
+            violations = m.check_complete_block(
+                root, "fake.md", block, self.workspace, keep_temp=False
+            )
         self.assertEqual(len(violations), 1)
         self.assertIn("fake.md:1", violations[0])
         self.assertIn("undefinedThing", violations[0])
 
-    def test_import_of_nonexistent_module_is_reported_without_attempting_a_build(self):
+    def test_import_outside_the_workspace_is_reported_without_a_build(self):
         with tempfile.TemporaryDirectory() as td:
             root = pathlib.Path(td)
             body = (
                 'package p\n\n'
-                'import "github.com/vislake/speed/go/doesnotexist"\n\n'
-                'func F() { doesnotexist.Foo() }\n'
+                'import "github.com/vislake/speed/go/dbkit"\n\n'
+                'func F() { dbkit.Foo() }\n'
             )
             block = m.GoBlock(1, 5, body, False)
-            violations = m.check_complete_block(root, "fake.md", block, keep_temp=False)
+            violations = m.check_complete_block(
+                root, "fake.md", block, self.workspace, keep_temp=False
+            )
         self.assertEqual(len(violations), 1)
-        self.assertIn("go/doesnotexist", violations[0])
+        self.assertIn("go/dbkit", violations[0])
+        self.assertIn("go.work", violations[0])
+
+    def test_roster_entry_without_a_module_is_reported(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = pathlib.Path(td)
+            body = (
+                'package p\n\n'
+                'import "github.com/vislake/speed/pkg/core"\n\n'
+                'func F() { core.Foo() }\n'
+            )
+            block = m.GoBlock(1, 5, body, False)
+            violations = m.check_complete_block(
+                root, "fake.md", block, self.workspace, keep_temp=False
+            )
+        self.assertEqual(len(violations), 1)
+        self.assertIn("pkg/core/go.mod", violations[0])
 
 
 class MainExitCodeTests(unittest.TestCase):
+    def _tree(self, root: pathlib.Path, prose: str, rel: str = "AGENTS.md") -> None:
+        write_workspace(root, ["pkg/core"])
+        target = root / rel
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(prose, encoding="utf-8")
+
     def test_missing_root_is_infrastructure_error(self):
         rc = m.main(["--root", "/this/path/does/not/exist/at/all"])
         self.assertEqual(rc, 2)
 
-    def test_survey_mode_on_empty_tree_exits_zero(self):
+    def test_unreadable_roster_is_infrastructure_error(self):
+        # No go.work: the corpus is undefined, and reporting success over
+        # an undefined corpus is the failure mode this guards.
         with tempfile.TemporaryDirectory() as td:
+            rc = m.main(["--root", td])
+        self.assertEqual(rc, 2)
+
+    def test_survey_mode_exits_zero(self):
+        with tempfile.TemporaryDirectory() as td:
+            self._tree(pathlib.Path(td), "# Fake\n")
             rc = m.main(["--root", td, "--survey"])
         self.assertEqual(rc, 0)
 
     def test_clean_tree_exits_zero(self):
         with tempfile.TemporaryDirectory() as td:
-            root = pathlib.Path(td)
-            (root / "AGENTS.md").write_text(
-                "# Fake\n\n```go\npackage p\n\nfunc F() {}\n```\n", encoding="utf-8"
+            self._tree(
+                pathlib.Path(td),
+                "# Fake\n\n```go\npackage p\n\nfunc F() {}\n```\n",
             )
             rc = m.main(["--root", td])
         self.assertEqual(rc, 0)
 
     def test_tree_with_a_broken_fragment_exits_one(self):
         with tempfile.TemporaryDirectory() as td:
-            root = pathlib.Path(td)
-            (root / "AGENTS.md").write_text(
-                "# Fake\n\n```go\nnot go at all {{{ ]]]\n```\n", encoding="utf-8"
+            self._tree(pathlib.Path(td), "# Fake\n\n```go\nnot go at all {{{ ]]]\n```\n")
+            rc = m.main(["--root", td])
+        self.assertEqual(rc, 1)
+
+    def test_broken_block_outside_the_workspace_is_not_checked(self):
+        # The same broken block, in prose no workspace module holds. The
+        # gate reports success because that tree is not its corpus.
+        with tempfile.TemporaryDirectory() as td:
+            self._tree(
+                pathlib.Path(td),
+                "# Fake\n\n```go\nnot go at all {{{ ]]]\n```\n",
+                rel="go/dbkit/AGENTS.md",
+            )
+            rc = m.main(["--root", td])
+        self.assertEqual(rc, 0)
+
+    def test_broken_block_inside_the_workspace_is_checked(self):
+        with tempfile.TemporaryDirectory() as td:
+            self._tree(
+                pathlib.Path(td),
+                "# Fake\n\n```go\nnot go at all {{{ ]]]\n```\n",
+                rel="pkg/core/AGENTS.md",
             )
             rc = m.main(["--root", td])
         self.assertEqual(rc, 1)
 
     def test_skip_marker_lets_a_broken_fragment_pass(self):
         with tempfile.TemporaryDirectory() as td:
-            root = pathlib.Path(td)
-            (root / "AGENTS.md").write_text(
+            self._tree(
+                pathlib.Path(td),
                 "<!-- markdown-example: no-parse-check -->\n"
                 "```go\nnot go at all {{{ ]]]\n```\n",
-                encoding="utf-8",
             )
             rc = m.main(["--root", td])
         self.assertEqual(rc, 0)

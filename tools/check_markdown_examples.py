@@ -19,9 +19,9 @@ clause:
 
   * A COMPLETE block (own `package` clause) is a claim that this is real,
     working code. It is compiled for real: written into a throwaway Go
-    module, `replace`-directived onto whichever github.com/vislake/speed/
-    go/<module> packages its own import list names (inferred from the
-    import paths themselves -- no guessing beyond that), then `go build`
+    module, `replace`-directived onto whichever workspace modules its own
+    import list names (inferred from the import paths themselves -- no
+    guessing beyond that), then `go build`
     and `go vet` are run against it with GOWORK=off (so it never inherits
     the repo's own go.work) and the default GOPROXY (a `replace` directive
     always wins over the proxy regardless of GOPROXY, so the repo's own
@@ -60,22 +60,37 @@ clause:
     overrides it when the fragment is genuinely, unavoidably not
     wrappable.
 
-Survey: run with --survey to re-print the corpus census. The census
-answers the honest-check question above: the corpus's fenced ```go
-blocks are overwhelmingly partial illustrative fragments, which is why
-the package-clause distinction exists. The documentation trees under
-docs/ also contain ```go blocks but are out of scope by design: they are
-design discussion and decision records, whose code blocks sketch shapes
-under design rather than document a shipped API -- not the gap this
-script closes. A design sketch that does not parse is normal there and
-must not fail this check.
+Survey: run with --survey to re-print the corpus census, and the census
+of the ```go blocks this gate leaves alone. The first answers the
+honest-check question above: the corpus's fenced ```go blocks are
+overwhelmingly partial illustrative fragments, which is why the
+package-clause distinction exists. The second keeps the scope decision
+below checkable rather than assumed.
 
 CORPUS -- exactly:
-  * every **/AGENTS.md
-  * every go/*/README.md and web/packages/*/README.md package README, plus
-    the root README.md
-  * NOT docs/** (see above)
+  * the repository root's own AGENTS.md and README.md
+  * every AGENTS.md and README.md inside a module the go.work workspace
+    lists
+  * NOT prose outside the workspace (see below)
   * NOT any path under .git/, node_modules/ or vendor/
+
+The workspace is the scope, and go.work is where it is read from, for
+two reasons. One is truthfulness: `make check` runs this gate, so
+whatever it reaches is a tree this repository builds and checks, and the
+root CLAUDE.md says which trees those are. A gate reaching past the
+workspace would make that statement false, quietly, in a file every
+agent reads first. The other is cost: compiling a complete block
+resolves the dependency graph of every module it imports, so a block in
+a tree outside the workspace would pull that tree's whole dependency
+graph into every CI run, on a cold module cache, before the first
+in-workspace example compiles. Scoping by the roster also means no list
+of paths is maintained here: a module joining the workspace brings its
+prose into the corpus with it.
+
+Design and decision documents are out of scope by the same rule, and
+would be even if they lived inside a module directory: their code blocks
+sketch shapes under design rather than document a shipped API, so a
+sketch that does not parse is normal there and must not fail this check.
 
 ESCAPE HATCH: a fragment that is genuinely, unavoidably unwrappable (a
 snippet illustrating invalid-on-purpose code, say) can be marked with an
@@ -90,10 +105,10 @@ This is a hard, git-diff-visible, per-block opt-out a reviewer sees in the
 same pull request that adds it: recorded and reviewed, never silent.
 
 Exit codes: 0 clean; 1 a block failed its check (a complete block did not
-build/vet clean, or a fragment parsed under no wrapping); 2 infrastructure
-error (go or gofmt missing, an imported module has no such directory under
---root, --root is not a repository, or a build harness step could not even
-run).
+build/vet clean, a complete block imported a module the workspace does
+not list, or a fragment parsed under no wrapping); 2 infrastructure error
+(go or gofmt missing, the go.work roster unreadable or listing no module,
+--root is not a directory, or a build harness step could not even run).
 
 Usage:
   python3 tools/check_markdown_examples.py             # check the repo
@@ -116,12 +131,15 @@ only a complete block carries enough context to build at all.
 from __future__ import annotations
 
 import argparse
+import json
 import os
+import posixpath
 import re
 import shutil
 import subprocess
 import sys
 import tempfile
+from dataclasses import dataclass
 from pathlib import Path
 
 # ---------------------------------------------------------------------------
@@ -142,30 +160,92 @@ NON_SCANNED_DIR_PATHS = frozenset({".claude/worktrees"})
 
 _SKIP_MARKER = "<!-- markdown-example: no-parse-check -->"
 
+# The prose a module ships. A module's other markdown (a changelog, say)
+# makes no claim about the API and carries no compile obligation.
+_CORPUS_FILENAMES = frozenset({"AGENTS.md", "README.md"})
+
 _FENCE_OPEN = re.compile(r"^```go\s*$")
 _FENCE_CLOSE = re.compile(r"^```\s*$")
 
 
-def _in_scope(rel: str) -> bool:
+@dataclass(frozen=True)
+class Workspace:
+    """What go.work says: the go directive and the module directories."""
+
+    go_directive: str
+    module_dirs: frozenset[str]
+
+
+class WorkspaceError(Exception):
+    """go.work could not be read, or lists no module."""
+
+
+def _normalize_module_dir(disk_path: str) -> str:
+    """A use directive's path as a posix path relative to the root."""
+    return posixpath.normpath(disk_path.replace(os.sep, "/")).lstrip("/")
+
+
+def read_workspace(root: Path) -> Workspace:
+    """Read the module roster, letting the go toolchain parse it.
+
+    go.work is the roster, and `go work edit -json` is the parser here for
+    the same reason it is the parser in the Makefile: a use directive has
+    two legal spellings -- a parenthesised block and a bare `use ./dir`
+    line -- and a matcher written here would have to know both or come up
+    empty on the one it does not know, without saying so.
+
+    A roster that lists no module is an error rather than an empty corpus.
+    Everything this gate checks belongs to a module, so an unreadable or
+    empty roster would otherwise report a clean tree it never looked at.
+    """
+    if shutil.which("go") is None:
+        raise WorkspaceError("'go' must be on PATH to read the go.work roster")
+    gowork = root / "go.work"
+    proc = subprocess.run(
+        ["go", "work", "edit", "-json", str(gowork)],
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    if proc.returncode != 0:
+        detail = (proc.stderr + proc.stdout).strip()
+        raise WorkspaceError(f"could not read {gowork}: {detail}")
+    try:
+        document = json.loads(proc.stdout)
+    except json.JSONDecodeError as exc:
+        raise WorkspaceError(f"could not parse the roster of {gowork}: {exc}") from exc
+    module_dirs = frozenset(
+        _normalize_module_dir(entry["DiskPath"])
+        for entry in (document.get("Use") or [])
+        if entry.get("DiskPath")
+    )
+    if not module_dirs:
+        raise WorkspaceError(
+            f"{gowork} lists no module, so this gate would check nothing and "
+            "still report success"
+        )
+    return Workspace(str(document.get("Go") or "1.25"), module_dirs)
+
+
+def _in_scope(rel: str, module_dirs: frozenset[str]) -> bool:
     """Whether rel (posix-style, relative to --root) is part of the corpus.
 
-    Exactly: any AGENTS.md, any go/*/README.md or web/packages/*/README.md
-    or the root README.md. Explicitly NOT the documentation trees -- see
-    this module's docstring "Survey" section for why.
+    Exactly: the root's own AGENTS.md and README.md, plus either file
+    inside a module the workspace lists. See this module's docstring
+    "CORPUS" section for why the workspace is the scope.
     """
-    if rel.startswith("docs/"):
-        return False
     base = os.path.basename(rel)
-    if base == "AGENTS.md":
+    if base not in _CORPUS_FILENAMES:
+        return False
+    if rel == base:
         return True
-    if base == "README.md" and (
-        rel.startswith("go/") or rel.startswith("web/packages/") or rel == "README.md"
-    ):
-        return True
-    return False
+    return any(
+        directory == "." or rel.startswith(directory + "/")
+        for directory in module_dirs
+    )
 
 
-def discover_markdown_files(root: Path) -> list[str]:
+def discover_markdown_files(root: Path, module_dirs: frozenset[str]) -> list[str]:
     """Return in-scope markdown file paths, relative to root, posix-style."""
     found = []
     for dirpath, dirnames, filenames in os.walk(root):
@@ -180,33 +260,41 @@ def discover_markdown_files(root: Path) -> list[str]:
                 continue
             full = Path(dirpath) / fn
             rel = full.relative_to(root).as_posix()
-            if _in_scope(rel):
+            if _in_scope(rel, module_dirs):
                 found.append(rel)
     return sorted(found)
 
 
-def discover_docs_go_blocks(root: Path) -> dict[str, int]:
-    """Census only: which docs/**.md files carry ```go blocks, and how many
-    -- reported by --survey so the out-of-scope decision stays checkable
-    rather than assumed. Never fed into the pass/fail check."""
+def discover_out_of_scope_go_blocks(
+    root: Path, module_dirs: frozenset[str]
+) -> dict[str, int]:
+    """Census only: how many ```go blocks sit in markdown this gate does
+    not check, counted per top-level directory -- reported by --survey so
+    the scope decision stays checkable rather than assumed. Never fed into
+    the pass/fail check."""
     counts: dict[str, int] = {}
-    docs_root = root / "docs"
-    if not docs_root.is_dir():
-        return counts
-    for dirpath, dirnames, filenames in os.walk(docs_root):
-        dirnames[:] = [d for d in dirnames if d not in _EXCLUDED_DIR_NAMES]
+    for dirpath, dirnames, filenames in os.walk(root):
+        rel_dir = Path(dirpath).relative_to(root)
+        dirnames[:] = [
+            d for d in dirnames
+            if d not in _EXCLUDED_DIR_NAMES
+            and (rel_dir / d).as_posix() not in NON_SCANNED_DIR_PATHS
+        ]
         for fn in filenames:
             if not fn.endswith(".md"):
                 continue
             full = Path(dirpath) / fn
             rel = full.relative_to(root).as_posix()
+            if _in_scope(rel, module_dirs):
+                continue
             try:
                 text = full.read_text(encoding="utf-8")
             except OSError:
                 continue
             n = len(extract_go_blocks(text))
             if n:
-                counts[rel] = n
+                tree = rel.split("/")[0] if "/" in rel else "."
+                counts[tree] = counts.get(tree, 0) + n
     return counts
 
 
@@ -272,33 +360,39 @@ def classify(body: str) -> str:
 
 _SPEED_IMPORT_RE = re.compile(r'"github\.com/vislake/speed/([^"]+)"')
 
-# Top-level directories under which this repository keeps Go modules. The
-# module itself is the next segment down; its go.mod is what proves it.
-_MODULE_TREES = ("pkg", "go", "examples")
-
 # A replace directive pointing at a path inside this repository.
 _LOCAL_REPLACE_RE = re.compile(
     r'^replace\s+(github\.com/vislake/speed/\S+)\s+=>\s+(\.\.?/\S+)', re.MULTILINE
 )
 
 
-def _module_dirs_for_block(body: str) -> set[str]:
-    """Infer which github.com/vislake/speed/<module_dir> this block's own
-    import list needs, from the import paths alone -- e.g. an import of
-    ".../pkg/config/source/file" needs the pkg/config module (source/file
-    is a subpackage, not a separate module); ".../examples/minimal-host"
-    needs the examples/minimal-host module.
+def _module_dirs_for_block(
+    body: str, module_dirs: frozenset[str]
+) -> tuple[set[str], set[str]]:
+    """Split this block's own github.com/vislake/speed/... imports into the
+    workspace modules that provide them, and the import paths no workspace
+    module does.
 
-    A module directory is the first two path segments under the repository
-    import prefix, for every tree that holds modules. Whether such a
-    directory really is a module is decided by its go.mod, by the caller,
-    so no list of module names lives here."""
-    dirs: set[str] = set()
-    for m in _SPEED_IMPORT_RE.finditer(body):
-        segments = m.group(1).split("/")
-        if len(segments) >= 2 and segments[0] in _MODULE_TREES:
-            dirs.add(f"{segments[0]}/{segments[1]}")
-    return dirs
+    An import resolves to the longest workspace module directory that
+    prefixes it: ".../pkg/config/source/file" resolves to pkg/config,
+    source/file being a subpackage rather than a module of its own. No
+    list of module names lives here -- go.work is the list, and an import
+    it cannot account for is returned as unresolved rather than guessed
+    at."""
+    needed: set[str] = set()
+    unresolved: set[str] = set()
+    for match in _SPEED_IMPORT_RE.finditer(body):
+        import_path = match.group(1)
+        candidates = [
+            directory for directory in module_dirs
+            if directory != "."
+            and (import_path == directory or import_path.startswith(directory + "/"))
+        ]
+        if candidates:
+            needed.add(max(candidates, key=len))
+        else:
+            unresolved.add(import_path)
+    return needed, unresolved
 
 
 def _local_replacements(root: Path, dirs: set[str]) -> dict[str, Path]:
@@ -336,32 +430,31 @@ def _local_replacements(root: Path, dirs: set[str]) -> dict[str, Path]:
     return found
 
 
-def _repo_go_directive(root: Path) -> str:
-    goword = root / "go.work"
-    try:
-        text = goword.read_text(encoding="utf-8")
-    except OSError:
-        return "1.25"
-    m = re.search(r"^go\s+(\S+)", text, re.MULTILINE)
-    return m.group(1) if m else "1.25"
-
-
 def check_complete_block(
-    root: Path, rel: str, block: GoBlock, keep_temp: bool
+    root: Path, rel: str, block: GoBlock, workspace: Workspace, keep_temp: bool
 ) -> list[str]:
     """Build and vet a complete block for real. Returns violation strings
     (empty means clean)."""
-    module_dirs = _module_dirs_for_block(block.body)
+    module_dirs, unresolved = _module_dirs_for_block(block.body, workspace.module_dirs)
+    if unresolved:
+        named = ", ".join(
+            f"github.com/vislake/speed/{path}" for path in sorted(unresolved)
+        )
+        return [
+            f"{rel}:{block.start_line}: imports {named}, which go.work does not "
+            "list -- this gate builds an example against the workspace, and a "
+            "module outside it has no local source to build against"
+        ]
     for d in module_dirs:
         modfile = root / d / "go.mod"
         if not modfile.is_file():
             return [
                 f"{rel}:{block.start_line}: imports github.com/vislake/speed/{d}/..., "
-                f"but {d}/go.mod does not exist under --root -- the example names a "
-                "module that is not part of this repository"
+                f"but {d}/go.mod does not exist under --root -- go.work lists a "
+                "module directory that does not hold a module"
             ]
 
-    go_directive = _repo_go_directive(root)
+    go_directive = workspace.go_directive
     package_match = re.search(r"^\s*package\s+(\w+)", block.body, re.MULTILINE)
     if not package_match:
         return [f"{rel}:{block.start_line}: classified complete but has no package clause (internal error)"]
@@ -477,9 +570,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--survey",
         action="store_true",
-        help="print the corpus census (files, block counts, complete/fragment split, "
-        "the docs/** out-of-scope count) and exit 0 without compiling or "
-        "parsing anything",
+        help="print the corpus census (files, block counts, complete/fragment "
+        "split, and the blocks left out of scope) and exit 0 without compiling "
+        "or parsing anything",
     )
     parser.add_argument(
         "--keep-temp",
@@ -494,10 +587,16 @@ def main(argv: list[str] | None = None) -> int:
         print(f"error: --root is not a directory: {args.root}", file=sys.stderr)
         return 2
 
-    files = discover_markdown_files(root)
+    try:
+        workspace = read_workspace(root)
+    except WorkspaceError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+
+    files = discover_markdown_files(root, workspace.module_dirs)
 
     if args.survey:
-        out_of_scope = discover_docs_go_blocks(root)
+        out_of_scope = discover_out_of_scope_go_blocks(root, workspace.module_dirs)
         total_blocks = 0
         total_complete = 0
         total_fragment = 0
@@ -514,12 +613,13 @@ def main(argv: list[str] | None = None) -> int:
                     total_complete += 1
                 else:
                     total_fragment += 1
+        print(f"workspace modules: {' '.join(sorted(workspace.module_dirs))}")
         print(f"in-scope markdown files: {len(files)}")
         print(f"in-scope files with >=1 go block: {files_with_blocks}")
         print(f"total go blocks: {total_blocks}  complete: {total_complete}  fragment: {total_fragment}")
-        print(f"docs/** files with go blocks (out of scope): {len(out_of_scope)}")
-        for rel, n in sorted(out_of_scope.items()):
-            print(f"  {rel}: {n} blocks")
+        print(f"go blocks outside the corpus: {sum(out_of_scope.values())}")
+        for tree, n in sorted(out_of_scope.items()):
+            print(f"  {tree}: {n} blocks")
         return 0
 
     go_bin = shutil.which("go")
@@ -549,7 +649,9 @@ def main(argv: list[str] | None = None) -> int:
             kind = classify(block.body)
             if kind == "complete":
                 checked_complete += 1
-                violations += check_complete_block(root, rel, block, args.keep_temp)
+                violations += check_complete_block(
+                    root, rel, block, workspace, args.keep_temp
+                )
             else:
                 checked_fragment += 1
                 ok, strategy, err = check_fragment(gofmt_bin, block.body)
