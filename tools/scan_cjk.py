@@ -35,9 +35,7 @@ Carve-outs (a whole subtree is exempt):
                           resource directory (files there legitimately
                           carry CJK user-facing text, e.g.
                           .../notes/locales/zh-CN.toml) and its whole
-                          subtree is exempt. This is the same discovery
-                          rule tools/check_i18n_keys.py uses, so the two
-                          tools agree on what a locale directory is; a
+                          subtree is exempt; a
                           directory merely NAMED locales/locale/i18n/
                           translations that holds no such file is scanned
                           like any other source tree (go/pkgcore/i18n and
@@ -91,8 +89,8 @@ and its kind, with the offending source line on the next line.
 Exit codes: 0 = no CJK found; 1 = at least one violation; 2 = bad usage or
 an unrecoverable error (reported on stderr).
 
-Standard library only; requires Python >= 3.11 (tomllib import is used by
-check_i18n_keys.py, not here, but the scripts share a floor).
+Standard library only; requires Python >= 3.11, the floor this
+directory's scripts share.
 """
 
 from __future__ import annotations
@@ -103,9 +101,8 @@ import os
 import sys
 
 # File-name prefixes identifying user-facing translation resources: the
-# zh-CN.* / en-US.* pair files every locale directory ships (the same
-# discovery rule tools/check_i18n_keys.py applies). Resource-directory
-# exemption is judged by CONTENT: a directory that directly holds a file
+# zh-CN.* / en-US.* pair files every locale directory ships.
+# Resource-directory exemption is judged by CONTENT: a directory that directly holds a file
 # with one of these prefixes is a resource directory (whole subtree
 # exempt), whatever its name -- and a directory that holds no such file
 # is scanned like any other source tree, whatever its name.
@@ -410,9 +407,9 @@ def _is_resource_dir(filenames: list[str]) -> bool:
     """Whether this directory is a locale resource directory, by content.
 
     A directory that directly holds a zh-CN.* or en-US.* file is a
-    resource directory (the discovery rule tools/check_i18n_keys.py
-    applies); its whole subtree -- the pair files and anything beside them
-    -- legitimately carries CJK user-facing text and is exempt.
+    resource directory; its whole subtree -- the pair files and anything
+    beside them -- legitimately carries CJK user-facing text and is
+    exempt.
     """
     return any(fn.startswith(LOCALE_FILE_PREFIXES) for fn in filenames)
 

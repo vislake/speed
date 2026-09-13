@@ -10,8 +10,8 @@ executables with no third-party dependencies" convention (tools/README.md's
 Regression coverage: resource directories are judged by CONTENT, never
 by directory BASENAME (locales, locale, i18n, translations) -- a
 directory is a resource directory only when it really holds a zh-CN.* /
-en-US.* file, the same discovery rule check_i18n_keys.py applies -- so
-i18n-named source trees are scanned like any other tree:
+en-US.* file -- so i18n-named source trees are scanned like any other
+tree:
 go/pkgcore/i18n and web/packages/i18n are real Go/TS source trees and
 are scanned (test_i18n_named_source_dir_is_scanned) while genuine
 locale bundles stay exempt (test_locale_bundle_directory_stays_exempt).

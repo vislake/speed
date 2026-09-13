@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Unit tests for check_toolchain.py's exit-code contract and Taskfile read.
+"""Unit tests for check_toolchain.py's exit-code contract and go.work read.
 
 Stdlib-only (unittest + tempfile), matching this directory's own "plain
 executables with no third-party dependencies" convention (tools/README.md's
@@ -7,66 +7,42 @@ executables with no third-party dependencies" convention (tools/README.md's
 
     python3 tools/test_check_toolchain.py
 
-Regression coverage for two defects on this gate:
-
-  * Exit-code contract (module docstring): an infrastructure error -- a
-    source file missing or unparsable, or an expected tool absent from
-    .mise.toml -- must exit 2, while genuine version drift stays a
-    content error exiting 1. The readers must not fall through
-    sys.exit("error: ..."), which exits 1 and would make a missing
-    input file indistinguishable from drift (test_missing_source_file_exits_2,
-    test_missing_mise_exits_2, test_absent_tool_exits_2).
-  * The task pin is read by pulling TASK_HEADER_LIMIT lines with
-    next(fh); a file shorter than the limit must keep every line
-    already read rather than discarding them, so a freshly scaffolded
-    2-line Taskfile whose pin sits on line 1 resolves its pin. The read
-    iterates readline() and keeps every line it gets
-    (test_short_taskfile_pin_is_found).
+The contract under test is the gate's exit codes: an infrastructure error
+-- a source file missing or unparsable, or an expected tool absent from
+.mise.toml -- exits 2, while genuine version drift stays a content error
+exiting 1. The readers must not fall through sys.exit("error: ..."),
+which exits 1 and would make a missing input file indistinguishable from
+drift.
 """
 
 from __future__ import annotations
 
 import contextlib
 import io
-import json
 import pathlib
 import sys
 import tempfile
 import unittest
-from unittest import mock
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 
 import check_toolchain as m  # noqa: E402
 
-# A coherent fixture tree: every .mise.toml mirror equals its source
-# (values copied from the real tree), so tests can drift or delete one
-# piece and know which failure they caused.
+# A coherent fixture tree: the .mise.toml mirror equals its source (values
+# copied from the real tree), so a test can drift or delete one piece and
+# know which failure it caused.
 MISE = """\
 [tools]
-task = "3.53.1"
 go = "1.26.8"
-node = "24"
-pnpm = "11.1.2"
+golangci-lint = "2.11.4"
+python = "3.14.7"
 """
 
 
 def write_fixture(root: pathlib.Path) -> None:
     """Write the fully-consistent fixture tree under root."""
     (root / ".mise.toml").write_text(MISE, encoding="utf-8")
-    (root / "Taskfile.yml").write_text(
-        "version: '3'\n\n"
-        "# Taskfile.yml header comment: task 3.53.1 (the\n"
-        "# version verified against this file)\n",
-        encoding="utf-8",
-    )
     (root / "go.work").write_text("go 1.26.8\n", encoding="utf-8")
-    web = root / "web"
-    web.mkdir()
-    (web / ".nvmrc").write_text("24\n", encoding="utf-8")
-    (web / "package.json").write_text(
-        json.dumps({"packageManager": "pnpm@11.1.2"}), encoding="utf-8"
-    )
 
 
 class ToolchainGateTests(unittest.TestCase):
@@ -92,28 +68,24 @@ class ToolchainGateTests(unittest.TestCase):
     def test_consistent_tree_passes(self) -> None:
         code, out = self._run()
         self.assertEqual(code, 0)
-        self.assertIn("toolchain: ok          task:", out)
+        self.assertIn("toolchain: ok          go:", out)
 
-    def test_short_taskfile_pin_is_found(self) -> None:
-        # A 2-line Taskfile whose pin sits on line 1 (a freshly
-        # scaffolded file, say) must report the pin: the read is bounded
-        # by the header limit but keeps what it got. Fails before the
-        # fix -- the StopIteration branch discarded the line already read
-        # and the gate reported "no 'task <version>' pin found".
-        (self.root / "Taskfile.yml").write_text(
-            "task 3.53.1 (the version verified against this file)\n"
-            "# a second line\n",
+    def test_unmirrored_tools_are_not_checked(self) -> None:
+        # Only the tools in SOURCES are mirrors. Everything else
+        # .mise.toml pins is pinned there alone, so changing it is not
+        # drift and must not fail the gate.
+        (self.root / ".mise.toml").write_text(
+            MISE.replace('golangci-lint = "2.11.4"', 'golangci-lint = "9.9.9"'),
             encoding="utf-8",
         )
-        code, out = self._run()
+        code, _ = self._run()
         self.assertEqual(code, 0)
-        self.assertIn("toolchain: ok          task:", out)
 
     def test_drift_stays_a_content_error_exit_1(self) -> None:
         # Genuine version drift is the gate's content finding: exit 1,
         # never 2.
         (self.root / ".mise.toml").write_text(
-            MISE.replace('task = "3.53.1"', 'task = "9.9.9"'),
+            MISE.replace('go = "1.26.8"', 'go = "9.9.9"'),
             encoding="utf-8",
         )
         code, out = self._run()
@@ -135,21 +107,18 @@ class ToolchainGateTests(unittest.TestCase):
 
     def test_absent_tool_exits_2(self) -> None:
         # An expected tool absent from .mise.toml is infrastructure
-        # (nothing to compare a mirror against): exit 2. Fails before the
-        # fix -- absence was tallied as drift and exited 1.
+        # (nothing to compare a mirror against): exit 2.
         (self.root / ".mise.toml").write_text(
-            MISE.replace("pnpm = \"11.1.2\"\n", ""), encoding="utf-8"
+            MISE.replace('go = "1.26.8"\n', ""), encoding="utf-8"
         )
         code, out = self._run()
         self.assertEqual(code, 2)
-        self.assertIn("pnpm is absent from .mise.toml", out)
+        self.assertIn("go is absent from .mise.toml", out)
 
-    def test_taskfile_without_pin_exits_2(self) -> None:
-        # A Taskfile that exists but carries no task pin is an unparsable
-        # source: exit 2, not the drift code.
-        (self.root / "Taskfile.yml").write_text(
-            "version: '3'\n# nothing pinned here\n", encoding="utf-8"
-        )
+    def test_go_work_without_directive_exits_2(self) -> None:
+        # A go.work that exists but carries no go directive is an
+        # unparsable source: exit 2, not the drift code.
+        (self.root / "go.work").write_text("use ./pkg/core\n", encoding="utf-8")
         exc = self._run_expect_system_exit()
         self.assertEqual(exc.code, 2)
 

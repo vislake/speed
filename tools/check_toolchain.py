@@ -1,19 +1,15 @@
 #!/usr/bin/env python3
 """Toolchain drift gate for the root .mise.toml.
 
-The developer toolchain is pinned with mise; the root .mise.toml
-carries the versions. Every .mise.toml version is a MIRROR of an
-authoritative source elsewhere in the repository -- the file a tool of
-its own already reads -- and this gate fails when a mirror drifts from
-its source. The sources, one per tool:
+The developer toolchain is pinned with mise; the root .mise.toml carries
+the versions. One of those versions is a MIRROR of an authoritative
+source elsewhere in the repository -- the file a tool of its own already
+reads -- and this gate fails when the mirror drifts from its source:
 
-  task          the Taskfile.yml header comment -- "task 3.53.1 (the
-                version verified against this file)" -- the one tool
-                whose only pin lives there (scanned over the header's
-                first 40 lines)
   go            go.work's `go` directive
-  node          web/.nvmrc
-  pnpm          web/package.json's packageManager field
+
+The other tools .mise.toml pins are pinned there and nowhere else, so
+they have no source to drift from and this gate does not check them.
 
 Bump the authoritative source and the mirror together; this gate exists
 because they are separate files and will drift without it.
@@ -28,15 +24,10 @@ report are relative to --root.
 from __future__ import annotations
 
 import argparse
-import json
 import os
 import re
 import sys
 import tomllib
-
-# Tools .mise.toml is expected to pin, with the authoritative source each
-# mirrors. The value is a (file, reader, what) triple used in the report.
-TASK_HEADER_LIMIT = 40  # the header comment's task pin lives in these lines
 
 
 def _infra(message: str) -> None:
@@ -67,35 +58,6 @@ def _read_mise_tools(root: str) -> dict[str, str]:
     return {str(k): str(v) for k, v in tools.items()}
 
 
-def _read_task_pin(root: str) -> str:
-    path = os.path.join(root, "Taskfile.yml")
-    try:
-        with open(path, encoding="utf-8") as fh:
-            # Read up to TASK_HEADER_LIMIT lines one at a time, keeping
-            # what was actually read: a file shorter than the limit (a
-            # freshly scaffolded one, say) must still report a pin that
-            # lives in its readable lines. The old form -- a list
-            # comprehension of next(fh) calls that raised StopIteration
-            # mid-read and discarded the lines already collected -- turned
-            # a short Taskfile whose pin sat on line 1 into "pin not
-            # found".
-            lines: list[str] = []
-            for _ in range(TASK_HEADER_LIMIT):
-                line = fh.readline()
-                if not line:
-                    break
-                lines.append(line)
-    except FileNotFoundError:
-        _infra(f"error: {path} is missing -- the source of the task pin")
-    m = re.search(r"\btask\s+(\d+\.\d+(?:\.\d+)?)", "".join(lines))
-    if not m:
-        _infra(
-            f"error: no 'task <version>' pin found in the first "
-            f"{TASK_HEADER_LIMIT} lines of {path}"
-        )
-    return m.group(1)
-
-
 def _read_go_version(root: str) -> str:
     path = os.path.join(root, "go.work")
     try:
@@ -109,50 +71,18 @@ def _read_go_version(root: str) -> str:
     return m.group(1)
 
 
-def _read_nvmrc(root: str) -> str:
-    path = os.path.join(root, "web", ".nvmrc")
-    try:
-        with open(path, encoding="utf-8") as fh:
-            version = fh.read().strip()
-    except FileNotFoundError:
-        _infra(f"error: {path} is missing -- the source of the node pin")
-    if not version:
-        _infra(f"error: {path} is empty -- the source of the node pin")
-    return version
-
-
-def _read_package_manager(root: str) -> str:
-    path = os.path.join(root, "web", "package.json")
-    try:
-        with open(path, encoding="utf-8") as fh:
-            data = json.load(fh)
-    except FileNotFoundError:
-        _infra(f"error: {path} is missing -- the source of the pnpm pin")
-    except json.JSONDecodeError as exc:
-        _infra(f"error: {path} is not parsable JSON: {exc}")
-    field = data.get("packageManager")
-    if not isinstance(field, str):
-        _infra(f"error: {path} has no packageManager string field")
-    m = re.match(r"^pnpm@(\d+\.\d+(?:\.\d+)?)", field)
-    if not m:
-        _infra(f"error: {path}'s packageManager is not 'pnpm@<version>': {field}")
-    return m.group(1)
-
-
+# Tools .mise.toml mirrors, with the authoritative source each one mirrors
+# and the name the report calls that source.
 SOURCES = [
-    ("task", _read_task_pin, "Taskfile.yml header comment"),
     ("go", _read_go_version, "go.work's go directive"),
-    ("node", _read_nvmrc, "web/.nvmrc"),
-    ("pnpm", _read_package_manager, "web/package.json's packageManager"),
 ]
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         description=(
-            "Fail when a version pinned in the root .mise.toml no longer mirrors "
-            "its authoritative source (Taskfile.yml header, go.work, web/.nvmrc, "
-            "web/package.json)."
+            "Fail when a version pinned in the root .mise.toml no longer "
+            "mirrors its authoritative source (go.work)."
         )
     )
     parser.add_argument(

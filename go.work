@@ -2,30 +2,6 @@ go 1.26.8
 
 use (
 	./examples/minimal-host
-	./examples/reference-app
-	./go/admin
-	./go/ai-gateway
-	./go/app
-	./go/authn
-	./go/billing
-	./go/compliance
-	./go/config
-	./go/dbkit
-	./go/integration
-	./go/jobs
-	./go/metering
-	./go/notification
-	./go/observability
-	./go/org
-	./go/pkgcore
-	./go/pki
-	./go/ratelimit
-	./go/rbac
-	./go/saasctl
-	./go/sharing
-	./go/storage
-	./go/tenancy
 	./pkg/config
 	./pkg/core
-	./tools/configrefgen
 )
