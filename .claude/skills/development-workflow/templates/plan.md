@@ -33,6 +33,13 @@ Progress has exactly one source of truth in this file:
 Statuses are a closed vocabulary:
   planned -> coding -> review -> fixing -> done, plus blocked.
 
+The last move is the one that gets skipped. An item that is coded, reviewed and
+merged still reads review until somebody writes done, and the acceptance
+criteria under a row that never says done are never checked by anyone -- so a
+plan can be archived with every box unticked and nothing will have said so. The
+last stage makes that final move for every item, and check_plan.py --final is
+what refuses the archive until it has.
+
 **A status move is written before the work it announces, never after it.**
 Starting W1 means: edit W1's row to coding, save this file, and only then open
 the first source file. The same order holds for every later move. This is a
@@ -117,7 +124,14 @@ lands here never reaches the user.
 <!--
 Review findings not yet resolved. A finding the author disputes stays here with
 both positions recorded -- dropping it silently is what this table prevents.
-State: open | fixed | disputed | accepted-as-is.
+
+State: open | fixed | disputed | accepted-as-is | moved: <task-slug>
+
+Archiving requires fixed, accepted-as-is or moved. Use moved for a finding that
+is real but belongs to a decision this task does not own, and name the task that
+will settle it -- that slug is the only link between the two. open and disputed
+are states for work in flight: left in an archived plan, which is untracked and
+read by nobody, they are findings thrown away.
 -->
 
 | ID | Item | Finding | Raised by | State |
@@ -153,6 +167,11 @@ time is a defect in this document.
 
 ## Outcome
 
-<!-- Filled at the last stage, immediately before archiving. -->
+<!--
+Filled at the last stage, immediately before archiving -- together with the
+final status moves, the ticks, and the disposition of every finding. A recorded
+commit with the Stage still reading build is the contradiction that says this
+section was filled and the rest of the file was not.
+-->
 
 **Landed**: <merge commit sha, or "not landed: reason">

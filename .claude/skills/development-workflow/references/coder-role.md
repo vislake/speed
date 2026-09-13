@@ -148,6 +148,19 @@ from them, and says why when it does.
 ### Last Stage — Merge and Clean
 
 - Rebase onto the target branch, merge fast-forward.
+- **Bring the plan document to its final state, then archive it.** Four things
+  hold before it goes, and `scripts/check_plan.py --final` is what proves they
+  do: the Stage reads `done`, every work item reads `done`, every acceptance
+  criterion is ticked, and no finding is left `open` or `disputed` (section 5).
+  Anything short of that archives a record of where the work stopped rather than
+  of what it delivered, and an archived plan is untracked, unversioned and read
+  by nobody — there is no later pass that fixes it.
+  - **`review` is the status this fails at**, not `planned`. The item that is
+    coded, reviewed and merged is the one nobody goes back to mark, because the
+    work it describes is over; and until something says `done`, the unticked
+    acceptance criteria underneath it are never even looked at. The last stage
+    owns that final move for every item, the same way every earlier move was
+    owned by the agent that made it.
 - **Archive the plan document** into `archive/` under the plans path.
 - **Clean up what the workflow created**: working trees, temporary branches,
   scratch files. A workflow that lands its change and leaves its scaffolding
@@ -184,7 +197,15 @@ It carries, in this order:
   checker matches on — its acceptance criteria, its dependencies, and the
   **reviewer** who checked it, never its author.
 - **Progress record** — appended as items move, with what actually happened.
-- **Open findings** — review findings not yet resolved, including disputed ones.
+- **Open findings** — review findings not yet resolved, including disputed
+  ones. A finding leaves this table in exactly one of three ways, and archiving
+  requires one of them: `fixed`, `accepted-as-is`, or `moved: <task-slug>`,
+  naming the task that will settle it. `moved` is the state for a finding that
+  is real but belongs to a decision this task does not own — a design question,
+  a defect outside the scope, a rule only the user can rule on. Without it the
+  only honest state is `open`, and an `open` finding in an archived plan is a
+  finding discarded: the file it sits in is untracked, outside the documentation
+  tree, and never read again.
 - **Verification** — each command as it was actually run and what it actually
   returned, plus **every warning and its disposition** (fixed, or why it stands
   and what the follow-up is). A command that was not run is recorded as not run,
@@ -225,7 +246,11 @@ Rules:
   headings, the table header, the Stage and Status vocabularies and the item ids
   are the keys readers and tooling match on.
 - **Its shape is checked by `scripts/check_plan.py`** — run it when the plan is
-  first written to disk, and again before archiving. It checks shape only:
+  first written to disk, and again with `--final` before archiving, where it
+  also applies the archiving gate above. **Both runs have to come back clean.**
+  A run whose findings are read and left standing is worth exactly as much as no
+  run at all, and a checker that is routinely red is one nobody reads. It checks
+  shape only:
   sections and their order, the closed vocabularies, the ownership partition,
   acceptance criteria, the slug filename. Whether a criterion is meaningful or a
   status honest is review's business, not the script's.
@@ -278,6 +303,11 @@ answer.
 
 **A queued task is reported every tick it stays queued.** A queue nobody can see
 is how a task gets forgotten, and the coder is the only one holding it.
+
+**A completed task reports where its findings went**, next to what it left out.
+Both are read off the plan document on the tick that archives it, and that tick
+is the last one to mention either. A finding moved to another task is the whole
+reason that task exists; one settled in place needs no more than the word.
 
 **It is written in the language the user is using, and it fits on one screen.** A
 report arrives every interval; one that has to be scrolled stops being read, and

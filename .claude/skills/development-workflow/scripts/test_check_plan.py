@@ -84,6 +84,18 @@ Add a second step to the runner.
 **Landed**: not landed: still building
 """
 
+# The same plan at the end of its life: everything done, everything ticked, the
+# finding settled and the landing recorded. This is what --final asks for.
+ARCHIVED = (PLAN
+            .replace("**Stage**: build", "**Stage**: done")
+            .replace("| W1 | coding | 2026-09-13 14:30 |",
+                     "| W1 | done | 2026-09-13 14:30 |")
+            .replace("- [ ] README names the second step",
+                     "- [x] README names the second step")
+            .replace("| reviewer-b | open |", "| reviewer-b | fixed |")
+            .replace("**Landed**: not landed: still building",
+                     "**Landed**: `4d1bea6f` on main, fast-forward"))
+
 
 class PlanCheckerTest(unittest.TestCase):
     def setUp(self) -> None:
@@ -100,16 +112,17 @@ class PlanCheckerTest(unittest.TestCase):
         path.write_text(content, encoding="utf-8")
         return path
 
-    def findings(self) -> list[str]:
+    def findings(self, final: bool = False) -> list[str]:
         return [str(f) for path in sorted(self.plans.glob("*.md"))
-                for f in m.check_plan(path, path.relative_to(self.repo).as_posix())]
+                for f in m.check_plan(path, path.relative_to(self.repo).as_posix(),
+                                      final=final)]
 
-    def assert_green(self) -> None:
-        found = self.findings()
+    def assert_green(self, final: bool = False) -> None:
+        found = self.findings(final)
         self.assertEqual(found, [], f"expected no findings, got: {found}")
 
-    def assert_red(self, fragment: str) -> None:
-        found = self.findings()
+    def assert_red(self, fragment: str, final: bool = False) -> None:
+        found = self.findings(final)
         self.assertTrue(any(fragment in f for f in found),
                         f"expected a finding containing {fragment!r}, got: {found}")
 
@@ -239,11 +252,103 @@ class PlanCheckerTest(unittest.TestCase):
         self.write(PLAN.replace("- [x] run() returns 2", "- [ ] run() returns 2"))
         self.assert_red("is done with 1 acceptance criterion(s) unticked")
 
+    def test_a_heading_outside_work_items_is_not_a_detail_block(self):
+        """A '###' under Verification heads a round of work, not an item.
+
+        It reads exactly like a detail block -- one token, a dash, a title --
+        which is how a re-verification round gets reported as an item missing
+        from the table.
+        """
+        self.write(PLAN.replace(
+            "| make test | pass | 2026-09-13 14:40 |",
+            "| make test | pass | 2026-09-13 14:40 |\n\n"
+            "### re-verification — 2026-09-13 15:10, independent, clean tree\n\n"
+            "Ran the suite again from a clean tree."))
+        self.assert_green()
+
     # -- open findings ---------------------------------------------------
 
     def test_unknown_finding_state(self):
         self.write(PLAN.replace("| reviewer-b | open |", "| reviewer-b | pondering |"))
         self.assert_red("unknown finding state 'pondering'")
+
+    def test_a_finding_moved_to_another_task(self):
+        self.write(PLAN.replace("| reviewer-b | open |",
+                                "| reviewer-b | moved: settle-the-wording |"))
+        self.assert_green()
+
+    def test_a_finding_moved_to_something_that_is_not_a_slug(self):
+        self.write(PLAN.replace("| reviewer-b | open |",
+                                "| reviewer-b | moved: the design session |"))
+        self.assert_red("is not a task slug")
+
+    # -- the archiving gate ----------------------------------------------
+
+    def test_an_archive_ready_plan_passes_the_gate(self):
+        self.write(ARCHIVED)
+        self.assert_green(final=True)
+
+    def test_the_gate_is_off_unless_asked_for(self):
+        """The baseline is mid-flight: green normally, red at the gate."""
+        self.write(PLAN)
+        self.assert_green()
+        self.assert_red("reaches 'done' before the plan is archived", final=True)
+
+    def test_gate_rejects_a_stage_short_of_done(self):
+        self.write(ARCHIVED.replace("**Stage**: done", "**Stage**: land"))
+        self.assert_red("stage is 'land'", final=True)
+
+    def test_gate_rejects_an_item_short_of_done(self):
+        self.write(ARCHIVED.replace("| W1 | done | 2026-09-13 14:30 |",
+                                    "| W1 | review | 2026-09-13 14:30 |"))
+        self.assert_red("W2 is 'review'", final=True)
+
+    def test_gate_rejects_an_unticked_criterion_whatever_the_status(self):
+        """The unticked check must not hinge on the status reaching done."""
+        planted = ARCHIVED.replace("- [x] README names the second step",
+                                   "- [ ] README names the second step") \
+                          .replace("| W1 | done | 2026-09-13 14:30 |",
+                                   "| W1 | review | 2026-09-13 14:30 |")
+        self.write(planted)
+        self.assert_red("W2 is review with 1 acceptance criterion(s) unticked",
+                        final=True)
+
+    def test_gate_rejects_an_open_finding(self):
+        self.write(ARCHIVED.replace("| reviewer-b | fixed |", "| reviewer-b | open |"))
+        self.assert_red("F1 is still 'open'", final=True)
+
+    def test_gate_rejects_a_disputed_finding(self):
+        self.write(ARCHIVED.replace("| reviewer-b | fixed |",
+                                    "| reviewer-b | disputed |"))
+        self.assert_red("F1 is still 'disputed'", final=True)
+
+    def test_gate_accepts_a_finding_moved_to_its_own_task(self):
+        self.write(ARCHIVED.replace("| reviewer-b | fixed |",
+                                    "| reviewer-b | moved: settle-the-wording |"))
+        self.assert_green(final=True)
+
+    def test_gate_rejects_an_unfilled_landing(self):
+        self.write(ARCHIVED.replace("**Landed**: `4d1bea6f` on main, fast-forward",
+                                    "**Landed**: <merge commit sha>"))
+        self.assert_red("'**Landed**:' is empty", final=True)
+
+    def test_gate_accepts_a_task_that_did_not_land(self):
+        self.write(ARCHIVED.replace("**Landed**: `4d1bea6f` on main, fast-forward",
+                                    "**Landed**: not landed: superseded by the rewrite"))
+        self.assert_green(final=True)
+
+    # -- a landing the stage never caught up with -------------------------
+
+    def test_a_recorded_commit_with_the_stage_left_behind(self):
+        """The contradiction that survives archiving: landed, still at build."""
+        self.write(PLAN.replace("**Landed**: not landed: still building",
+                                "**Landed**: `4d1bea6f95b6a7fdc85ca9d685a4c675`"))
+        self.assert_red("names a commit while the stage is 'build'")
+
+    def test_prose_about_landing_is_not_read_as_a_commit(self):
+        self.write(PLAN.replace("**Landed**: not landed: still building",
+                                "**Landed**: not landed: the decdeed case is unclear"))
+        self.assert_green()
 
     # -- the filename is the slug ----------------------------------------
 
@@ -307,6 +412,10 @@ class PlanCheckerTest(unittest.TestCase):
             self.assertIn(stage, template)
         for status in sorted(m.STATUSES):
             self.assertIn(status, template)
+        for state in sorted(m.FINDING_STATES):
+            self.assertIn(state, template)
+        self.assertIn("moved: <task-slug>", template,
+                      "the template must show how a finding names the task it moved to")
 
 
 if __name__ == "__main__":

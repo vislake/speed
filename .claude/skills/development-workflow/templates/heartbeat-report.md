@@ -85,13 +85,15 @@ the reader will catch before you do -- fill the slot instead (coder-role.md, sec
 
 <!--
 Landed is read from git, never from the workflow's account of itself. Left out
-carries the deliberate omissions from the plan document -- this is the last tick
-that mentions them before the plan is archived.
+carries the deliberate omissions from the plan document, and Findings carries
+where its findings went -- settled in place, or moved to the task that will
+settle them. This is the last tick that mentions either: the plan document is
+archived on it, and nothing reads it afterwards.
 -->
 
-| Task | Landed | Verified | Left out |
-|---|---|---|---|
-| <task-slug> | <merge commit> | <what was run> | <omission> or -- |
+| Task | Landed | Verified | Left out | Findings |
+|---|---|---|---|---|
+| <task-slug> | <merge commit> | <what was run> | <omission> or -- | <settled / moved to <task-slug>> |
 
 ## Needs you
 

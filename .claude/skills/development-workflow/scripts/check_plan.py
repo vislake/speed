@@ -6,6 +6,11 @@ section presence and order, the closed Stage and Status vocabularies, the Work
 Items table and its detail blocks, acceptance criteria, the file-ownership
 partition, and the slug-shaped filename.
 
+--final adds the archiving gate on top: the stage reached done, every work item
+reached done, every acceptance criterion is ticked, no finding is still open or
+disputed, and the Outcome records a landing. A plan archived below that bar
+keeps no usable record of what was actually delivered.
+
 It reads no git state and judges no content. Whether an acceptance criterion is
 meaningful, whether a status is honest and whether a slug actually says what the
 work is are review's business, not this script's.
@@ -19,6 +24,7 @@ Usage:
     python3 check_plan.py                 # every plan under the configured path
     python3 check_plan.py <file> [...]    # only these files
     python3 check_plan.py --repo <path>   # resolve the configured path from here
+    python3 check_plan.py --final <file>  # also apply the archiving gate
 """
 
 from __future__ import annotations
@@ -39,15 +45,21 @@ SECTIONS = (
 STAGES = frozenset({"plan", "build", "land", "done"})
 STATUSES = frozenset({"planned", "coding", "review", "fixing", "blocked", "done"})
 FINDING_STATES = frozenset({"open", "fixed", "disputed", "accepted-as-is"})
+# What a finding may still say when the plan is archived. `open` and `disputed`
+# are not among them: an unresolved finding is either settled here or becomes a
+# task of its own, and `moved: <task-slug>` names the task it became.
+SETTLED_STATES = frozenset({"fixed", "accepted-as-is"})
 COLUMNS = ("ID", "Item", "Owns", "Depends on", "Status", "Updated")
 
 SECTION_RE = re.compile(r"^##\s+(?P<name>.+?)\s*$")
 ITEM_BLOCK_RE = re.compile(r"^###\s+(?P<id>\S+)\s*(?:[—–-]\s*(?P<title>.*))?$")
 STAGE_RE = re.compile(r"^\*\*Stage\*\*:\s*(?P<stage>.+?)\s*$", re.M)
 WARNINGS_RE = re.compile(r"^\*\*Warnings\*\*:", re.M)
-LANDED_RE = re.compile(r"^\*\*Landed\*\*:", re.M)
+LANDED_RE = re.compile(r"^\*\*Landed\*\*:\s*(?P<landed>.*?)\s*$", re.M)
 ACCEPTANCE_RE = re.compile(r"^\s*-\s*\[(?P<mark>[ xX])\]")
 SLUG_RE = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)+$")
+MOVED_RE = re.compile(r"^moved:\s*(?P<slug>.+?)\s*$")
+PLACEHOLDER_RE = re.compile(r"^<.*>$")
 NOT_SET = {"--", "-", "", "n/a", "none", "tbd"}
 
 
@@ -116,6 +128,14 @@ def overlap(left: str, right: str) -> bool:
     return a == b or a.startswith(b + "/") or b.startswith(a + "/")
 
 
+def names_a_commit(text: str) -> bool:
+    """True when the text carries something shaped like a commit sha."""
+    return any(7 <= len(token) <= 40
+               and all(char in "0123456789abcdef" for char in token)
+               and any(char.isdigit() for char in token)
+               for token in re.findall(r"[0-9a-zA-Z]+", text))
+
+
 def check_filename(path: Path, rel: str) -> list[Finding]:
     stem = path.stem
     if not SLUG_RE.match(stem):
@@ -131,7 +151,7 @@ def check_filename(path: Path, rel: str) -> list[Finding]:
     return []
 
 
-def check_plan(path: Path, rel: str) -> list[Finding]:
+def check_plan(path: Path, rel: str, final: bool = False) -> list[Finding]:
     findings = check_filename(path, rel)
     text = path.read_text(encoding="utf-8", errors="replace")
     lines = text.splitlines()
@@ -164,20 +184,38 @@ def check_plan(path: Path, rel: str) -> list[Finding]:
         )))
 
     stage = STAGE_RE.search(text)
+    stage_value = stage.group("stage") if stage else None
     if not stage:
         findings.append(Finding(rel, "no '**Stage**:' line"))
-    elif stage.group("stage") not in STAGES:
+    elif stage_value not in STAGES:
         findings.append(Finding(rel, (
-            f"unknown stage {stage.group('stage')!r}; the stages are "
+            f"unknown stage {stage_value!r}; the stages are "
             f"{', '.join(sorted(STAGES))}"
+        )))
+    elif final and stage_value != "done":
+        findings.append(Finding(rel, (
+            f"stage is {stage_value!r}; a plan reaches 'done' before it is archived"
         )))
     if "Verification" in names and not WARNINGS_RE.search(text):
         findings.append(Finding(rel, (
             "the Verification section has no '**Warnings**:' line; warnings are "
             "recorded even when there were none"
         )))
-    if "Outcome" in names and not LANDED_RE.search(text):
+    landed = LANDED_RE.search(text)
+    if "Outcome" in names and not landed:
         findings.append(Finding(rel, "the Outcome section has no '**Landed**:' line"))
+    elif landed:
+        value = landed.group("landed")
+        if final and (not value or PLACEHOLDER_RE.match(value)):
+            findings.append(Finding(rel, (
+                "'**Landed**:' is empty; record the merge commit, or why the task "
+                "did not land"
+            )))
+        elif names_a_commit(value) and stage_value in STAGES and stage_value != "done":
+            findings.append(Finding(rel, (
+                f"'**Landed**:' names a commit while the stage is {stage_value!r}; a "
+                "change that has landed leaves the plan at 'done'"
+            )))
 
     bounds = dict(found)
     if "Work Items" not in bounds:
@@ -223,6 +261,11 @@ def check_plan(path: Path, rel: str) -> list[Finding]:
                 f"unknown status {row['Status']!r} for {item_id}; the statuses "
                 f"are {', '.join(sorted(STATUSES))}"
             )))
+        elif final and row["Status"] != "done":
+            findings.append(Finding(f"{rel}:{lineno}", (
+                f"{item_id} is {row['Status']!r}; every work item reaches 'done' "
+                "before the plan is archived"
+            )))
         for one in owned(row["Owns"]):
             owners.append((item_id, one, lineno))
 
@@ -236,15 +279,16 @@ def check_plan(path: Path, rel: str) -> list[Finding]:
                     "the other through Depends on"
                 )))
 
+    # Detail blocks are the Work Items section's own. A '###' under Verification
+    # or Progress Log heads a round of work, not an item, and reading those as
+    # orphaned detail blocks is noise that teaches everyone to ignore the exit
+    # code.
     starts = [(match.group("id"), index)
-              for index, line in enumerate(lines)
+              for index, line in enumerate(lines[start:end], start=start)
               if (match := ITEM_BLOCK_RE.match(line))]
     blocks: dict[str, tuple[int, int]] = {}
     for position, (item_id, index) in enumerate(starts):
-        stop = starts[position + 1][1] if position + 1 < len(starts) else len(lines)
-        for _, section_index in found:
-            if index < section_index < stop:
-                stop = section_index
+        stop = starts[position + 1][1] if position + 1 < len(starts) else end
         blocks[item_id] = (index, stop)
 
     for item_id, row in items.items():
@@ -261,9 +305,9 @@ def check_plan(path: Path, rel: str) -> list[Finding]:
                 f"{item_id} has no acceptance criteria; an item with nothing to "
                 "satisfy cannot be reviewed"
             )))
-        elif row["Status"] == "done" and " " in marks:
+        elif (final or row["Status"] == "done") and " " in marks:
             findings.append(Finding(f"{rel}:{row['line']}", (
-                f"{item_id} is done with {marks.count(' ')} acceptance "
+                f"{item_id} is {row['Status']} with {marks.count(' ')} acceptance "
                 "criterion(s) unticked"
             )))
     for item_id, (block_start, _) in blocks.items():
@@ -278,10 +322,28 @@ def check_plan(path: Path, rel: str) -> list[Finding]:
             if is_separator(line):
                 continue
             row_cells = cells(line)
-            if len(row_cells) == 5 and row_cells[4] not in FINDING_STATES:
+            if len(row_cells) != 5:
+                continue
+            finding_id, state = row_cells[0], row_cells[4]
+            moved = MOVED_RE.match(state)
+            if moved:
+                if not SLUG_RE.match(moved.group("slug")):
+                    findings.append(Finding(f"{rel}:{lineno}", (
+                        f"{finding_id} moved to {moved.group('slug')!r}, which is "
+                        "not a task slug; a moved finding names the task that "
+                        "will settle it, so it can be found from either end"
+                    )))
+            elif state not in FINDING_STATES:
                 findings.append(Finding(f"{rel}:{lineno}", (
-                    f"unknown finding state {row_cells[4]!r}; the states are "
-                    f"{', '.join(sorted(FINDING_STATES))}"
+                    f"unknown finding state {state!r}; the states are "
+                    f"{', '.join(sorted(FINDING_STATES))}, or 'moved: <task-slug>'"
+                )))
+            elif final and state not in SETTLED_STATES:
+                findings.append(Finding(f"{rel}:{lineno}", (
+                    f"{finding_id} is still {state!r}; before archiving, a finding "
+                    "is fixed, accepted-as-is, or moved to the task that will "
+                    "settle it — an archived plan is untracked and nobody reads "
+                    "it again"
                 )))
     return findings
 
@@ -299,6 +361,9 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("files", nargs="*", help="plan documents to check")
     parser.add_argument("--repo", default=".", help="repository root")
+    parser.add_argument("--final", action="store_true", help=(
+        "apply the archiving gate as well: stage done, every item done, every "
+        "acceptance criterion ticked, no finding left open or disputed"))
     args = parser.parse_args(argv)
 
     repo = Path(args.repo).resolve()
@@ -316,7 +381,7 @@ def main(argv: list[str] | None = None) -> int:
             rel = path.relative_to(repo).as_posix()
         except ValueError:
             rel = str(path)
-        findings += check_plan(path, rel)
+        findings += check_plan(path, rel, final=args.final)
 
     for finding in findings:
         print(finding)
@@ -324,7 +389,8 @@ def main(argv: list[str] | None = None) -> int:
         print(f"\n{len(findings)} finding(s) in {len(paths)} plan document(s).",
               file=sys.stderr)
         return 1
-    print(f"{len(paths)} plan document(s) OK")
+    print(f"{len(paths)} plan document(s) OK"
+          + (", ready to archive" if args.final else ""))
     return 0
 
 
