@@ -7,4 +7,7 @@ go 1.26.0
 // consumers, so it affects this module's own standalone builds only.
 replace github.com/vislake/speed/pkg/core => ../core
 
-require github.com/vislake/speed/pkg/core v0.0.0
+require (
+	github.com/vislake/speed/pkg/core v0.0.0
+	go.yaml.in/yaml/v3 v3.0.5
+)
