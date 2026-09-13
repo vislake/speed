@@ -1,0 +1,30 @@
+# Continuous integration.
+#
+# This file installs the toolchain and calls the repository's own entry
+# point. It deliberately carries no command list of its own: every check
+# lives in the Makefile, which derives the module set from go.work, so a
+# check added there runs here without this file changing, and CI never needs
+# to know a module name or a tool version.
+#
+# The toolchain comes from .mise.toml through mise-action. Should that action
+# ever be unavailable, the replacement is still toolchain installation and
+# not a command list: actions/setup-go with `go-version-file: go.work`, plus
+# an install step that reads the golangci-lint and python pins out of
+# .mise.toml.
+
+name: check
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: jdx/mise-action@v2
+      - run: make check

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """check_markdown_examples.py -- compile/parse-check fenced ```go blocks in
-markdown prose (AGENTS.md, package READMEs, ADRs).
+markdown prose (AGENTS.md, package READMEs).
 
 Godoc Example functions compile inside each module's own unit suite;
 examples embedded in markdown prose have no compile harness of their own,
@@ -63,23 +63,18 @@ clause:
 Survey: run with --survey to re-print the corpus census. The census
 answers the honest-check question above: the corpus's fenced ```go
 blocks are overwhelmingly partial illustrative fragments, which is why
-the package-clause distinction exists. docs/internal/** also contains
-```go blocks but is out of scope by design: that directory is
-Chinese-language internal design discussion, its own audience and its
-own rules, and its code blocks are illustrative API sketches for
-still-being-designed shapes -- not the "AGENTS.md, READMEs, ADRs" gap
-this script closes. Confirmed by inspection, not assumed: several of its
-blocks mix Chinese prose comments into the Go and sketch signatures of
-mechanisms whose real implementation does not exist, which is a
-different, and legitimately unchecked, kind of example than a shipped
-module's own AGENTS.md makes.
+the package-clause distinction exists. The documentation trees under
+docs/ also contain ```go blocks but are out of scope by design: they are
+design discussion and decision records, whose code blocks sketch shapes
+under design rather than document a shipped API -- not the gap this
+script closes. A design sketch that does not parse is normal there and
+must not fail this check.
 
 CORPUS -- exactly:
   * every **/AGENTS.md
   * every go/*/README.md and web/packages/*/README.md package README, plus
     the root README.md
-  * every docs/adr/*.md
-  * NOT docs/internal/** (see above)
+  * NOT docs/** (see above)
   * NOT any path under .git/, node_modules/ or vendor/
 
 ESCAPE HATCH: a fragment that is genuinely, unavoidably unwrappable (a
@@ -92,16 +87,13 @@ HTML comment on the line immediately before the opening fence:
     ```
 
 This is a hard, git-diff-visible, per-block opt-out a reviewer sees in the
-same pull request that adds it -- the same shape as this repository's
-other adjudication escapes (dependency-licenses.json's "adr" field for a
-weak-copyleft exception, semgrep's planted-fixture allowlist): recorded
-and reviewed, never silent.
+same pull request that adds it: recorded and reviewed, never silent.
 
-Exit codes (matching tools/check_docs_site.py's convention): 0 clean;
-1 a block failed its check (a complete block did not build/vet clean, or
-a fragment parsed under no wrapping); 2 infrastructure error (go or gofmt
-missing, a referenced go/<module> import has no such directory, --root is
-not a repository, or a build harness step could not even run).
+Exit codes: 0 clean; 1 a block failed its check (a complete block did not
+build/vet clean, or a fragment parsed under no wrapping); 2 infrastructure
+error (go or gofmt missing, an imported module has no such directory under
+--root, --root is not a repository, or a build harness step could not even
+run).
 
 Usage:
   python3 tools/check_markdown_examples.py             # check the repo
@@ -158,11 +150,10 @@ def _in_scope(rel: str) -> bool:
     """Whether rel (posix-style, relative to --root) is part of the corpus.
 
     Exactly: any AGENTS.md, any go/*/README.md or web/packages/*/README.md
-    or the root README.md, any docs/adr/*.md. Explicitly NOT
-    docs/internal/** -- see this module's docstring "Survey" section for
-    why.
+    or the root README.md. Explicitly NOT the documentation trees -- see
+    this module's docstring "Survey" section for why.
     """
-    if rel.startswith("docs/internal/"):
+    if rel.startswith("docs/"):
         return False
     base = os.path.basename(rel)
     if base == "AGENTS.md":
@@ -170,8 +161,6 @@ def _in_scope(rel: str) -> bool:
     if base == "README.md" and (
         rel.startswith("go/") or rel.startswith("web/packages/") or rel == "README.md"
     ):
-        return True
-    if rel.startswith("docs/adr/") and rel.endswith(".md"):
         return True
     return False
 
@@ -196,15 +185,15 @@ def discover_markdown_files(root: Path) -> list[str]:
     return sorted(found)
 
 
-def discover_docs_internal_go_blocks(root: Path) -> dict[str, int]:
-    """Census only: which docs/internal/**.md files carry ```go blocks, and
-    how many -- reported by --survey so the out-of-scope decision stays
-    checkable rather than assumed. Never fed into the pass/fail check."""
+def discover_docs_go_blocks(root: Path) -> dict[str, int]:
+    """Census only: which docs/**.md files carry ```go blocks, and how many
+    -- reported by --survey so the out-of-scope decision stays checkable
+    rather than assumed. Never fed into the pass/fail check."""
     counts: dict[str, int] = {}
-    internal_root = root / "docs" / "internal"
-    if not internal_root.is_dir():
+    docs_root = root / "docs"
+    if not docs_root.is_dir():
         return counts
-    for dirpath, dirnames, filenames in os.walk(internal_root):
+    for dirpath, dirnames, filenames in os.walk(docs_root):
         dirnames[:] = [d for d in dirnames if d not in _EXCLUDED_DIR_NAMES]
         for fn in filenames:
             if not fn.endswith(".md"):
@@ -283,23 +272,68 @@ def classify(body: str) -> str:
 
 _SPEED_IMPORT_RE = re.compile(r'"github\.com/vislake/speed/([^"]+)"')
 
+# Top-level directories under which this repository keeps Go modules. The
+# module itself is the next segment down; its go.mod is what proves it.
+_MODULE_TREES = ("pkg", "go", "examples")
+
+# A replace directive pointing at a path inside this repository.
+_LOCAL_REPLACE_RE = re.compile(
+    r'^replace\s+(github\.com/vislake/speed/\S+)\s+=>\s+(\.\.?/\S+)', re.MULTILINE
+)
+
 
 def _module_dirs_for_block(body: str) -> set[str]:
     """Infer which github.com/vislake/speed/<module_dir> this block's own
     import list needs, from the import paths alone -- e.g. an import of
-    ".../go/pkgcore/i18n" needs the go/pkgcore module (i18n is a
-    subpackage, not a separate module); ".../examples/reference-app/..."
-    needs the examples/reference-app module."""
+    ".../pkg/config/source/file" needs the pkg/config module (source/file
+    is a subpackage, not a separate module); ".../examples/minimal-host"
+    needs the examples/minimal-host module.
+
+    A module directory is the first two path segments under the repository
+    import prefix, for every tree that holds modules. Whether such a
+    directory really is a module is decided by its go.mod, by the caller,
+    so no list of module names lives here."""
     dirs: set[str] = set()
     for m in _SPEED_IMPORT_RE.finditer(body):
         segments = m.group(1).split("/")
-        if not segments:
-            continue
-        if segments[0] == "go" and len(segments) >= 2:
-            dirs.add(f"go/{segments[1]}")
-        elif segments[0] == "examples" and len(segments) >= 2 and segments[1] == "reference-app":
-            dirs.add("examples/reference-app")
+        if len(segments) >= 2 and segments[0] in _MODULE_TREES:
+            dirs.add(f"{segments[0]}/{segments[1]}")
     return dirs
+
+
+def _local_replacements(root: Path, dirs: set[str]) -> dict[str, Path]:
+    """Map every repository module the given modules resolve locally onto
+    its directory, following each module's own replace directives
+    transitively.
+
+    A replace directive in a dependency is ignored by consumers, so a
+    throwaway module that requires pkg/config alone would try to resolve
+    pkg/config's own unreleased dependencies from the proxy -- and either
+    fail, or silently validate the example against a published snapshot
+    instead of this checkout. Re-stating those replacements here is what
+    makes the example's compile an assertion about the working tree."""
+    found: dict[str, Path] = {}
+    pending = list(dirs)
+    while pending:
+        d = pending.pop()
+        if d in found:
+            continue
+        modfile = root / d / "go.mod"
+        if not modfile.is_file():
+            continue
+        found[d] = (root / d).resolve()
+        try:
+            text = modfile.read_text(encoding="utf-8")
+        except OSError:
+            continue
+        for m in _LOCAL_REPLACE_RE.finditer(text):
+            target = (root / d / m.group(2)).resolve()
+            try:
+                rel = target.relative_to(root.resolve()).as_posix()
+            except ValueError:
+                continue
+            pending.append(rel)
+    return found
 
 
 def _repo_go_directive(root: Path) -> str:
@@ -339,7 +373,8 @@ def check_complete_block(
         for d in sorted(module_dirs):
             import_path = f"github.com/vislake/speed/{d}"
             require_lines.append(f"\t{import_path} v0.0.0-00010101000000-000000000000")
-            replace_lines.append(f"replace {import_path} => {(root / d).resolve()}")
+        for d, path in sorted(_local_replacements(root, module_dirs).items()):
+            replace_lines.append(f"replace github.com/vislake/speed/{d} => {path}")
         go_mod = ["module speedmdcheck.local/example", "", f"go {go_directive}", ""]
         if require_lines:
             go_mod += ["require (", *require_lines, ")", ""]
@@ -443,7 +478,7 @@ def main(argv: list[str] | None = None) -> int:
         "--survey",
         action="store_true",
         help="print the corpus census (files, block counts, complete/fragment split, "
-        "the docs/internal/** out-of-scope count) and exit 0 without compiling or "
+        "the docs/** out-of-scope count) and exit 0 without compiling or "
         "parsing anything",
     )
     parser.add_argument(
@@ -462,7 +497,7 @@ def main(argv: list[str] | None = None) -> int:
     files = discover_markdown_files(root)
 
     if args.survey:
-        internal = discover_docs_internal_go_blocks(root)
+        out_of_scope = discover_docs_go_blocks(root)
         total_blocks = 0
         total_complete = 0
         total_fragment = 0
@@ -482,8 +517,8 @@ def main(argv: list[str] | None = None) -> int:
         print(f"in-scope markdown files: {len(files)}")
         print(f"in-scope files with >=1 go block: {files_with_blocks}")
         print(f"total go blocks: {total_blocks}  complete: {total_complete}  fragment: {total_fragment}")
-        print(f"docs/internal/** files with go blocks (out of scope): {len(internal)}")
-        for rel, n in sorted(internal.items()):
+        print(f"docs/** files with go blocks (out of scope): {len(out_of_scope)}")
+        for rel, n in sorted(out_of_scope.items()):
             print(f"  {rel}: {n} blocks")
         return 0
 

@@ -61,13 +61,18 @@ class InScopeTests(unittest.TestCase):
         # compile-harness obligation here.
         self.assertFalse(m._in_scope("examples/reference-app/README.md"))
 
-    def test_adr_is_in_scope(self):
-        self.assertTrue(m._in_scope("docs/adr/0001-something.md"))
+    def test_decision_record_is_out_of_scope(self):
+        # The documentation trees sketch shapes under design; a sketch that
+        # does not parse is normal there and must not fail this check.
+        self.assertFalse(m._in_scope("docs/adr/0001-something.md"))
 
-    def test_docs_internal_is_out_of_scope_even_as_agents_md(self):
+    def test_design_doc_is_out_of_scope(self):
+        self.assertFalse(m._in_scope("docs/design/modules/design-core.md"))
+
+    def test_docs_tree_is_out_of_scope_even_as_agents_md(self):
         self.assertFalse(m._in_scope("docs/internal/AGENTS.md"))
 
-    def test_docs_internal_prose_is_out_of_scope(self):
+    def test_docs_prose_is_out_of_scope(self):
         self.assertFalse(m._in_scope("docs/internal/07-platform-services.md"))
 
     def test_unrelated_markdown_is_out_of_scope(self):
@@ -193,6 +198,18 @@ class ModuleDirsForBlockTests(unittest.TestCase):
         )
         self.assertEqual(m._module_dirs_for_block(body), {"go/dbkit", "go/pkgcore"})
 
+    def test_pkg_module_import(self):
+        body = 'import "github.com/vislake/speed/pkg/core"\n'
+        self.assertEqual(m._module_dirs_for_block(body), {"pkg/core"})
+
+    def test_pkg_subpackage_import_maps_to_owning_module(self):
+        body = 'import "github.com/vislake/speed/pkg/config/source/file"\n'
+        self.assertEqual(m._module_dirs_for_block(body), {"pkg/config"})
+
+    def test_example_host_import(self):
+        body = 'import "github.com/vislake/speed/examples/minimal-host"\n'
+        self.assertEqual(m._module_dirs_for_block(body), {"examples/minimal-host"})
+
     def test_reference_app_import(self):
         body = 'import "github.com/vislake/speed/examples/reference-app/internal/notes"\n'
         self.assertEqual(m._module_dirs_for_block(body), {"examples/reference-app"})
@@ -200,6 +217,41 @@ class ModuleDirsForBlockTests(unittest.TestCase):
     def test_no_speed_imports_yields_empty_set(self):
         body = 'import "context"\n'
         self.assertEqual(m._module_dirs_for_block(body), set())
+
+
+class LocalReplacementsTests(unittest.TestCase):
+    """A replace directive in a dependency is ignored by consumers, so the
+    throwaway module must re-state every in-repository replacement the
+    imported modules rely on -- otherwise the example is validated against
+    whatever the proxy serves instead of against this checkout."""
+
+    def _tree(self, root: pathlib.Path) -> None:
+        (root / "pkg" / "core").mkdir(parents=True)
+        (root / "pkg" / "core" / "go.mod").write_text(
+            "module github.com/vislake/speed/pkg/core\n\ngo 1.26.0\n",
+            encoding="utf-8",
+        )
+        (root / "pkg" / "leaf").mkdir(parents=True)
+        (root / "pkg" / "leaf" / "go.mod").write_text(
+            "module github.com/vislake/speed/pkg/leaf\n\ngo 1.26.0\n\n"
+            "replace github.com/vislake/speed/pkg/core => ../core\n\n"
+            "require github.com/vislake/speed/pkg/core v0.0.0\n",
+            encoding="utf-8",
+        )
+
+    def test_replacement_is_followed_transitively(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = pathlib.Path(td)
+            self._tree(root)
+            found = m._local_replacements(root, {"pkg/leaf"})
+        self.assertEqual(set(found), {"pkg/leaf", "pkg/core"})
+
+    def test_module_without_go_mod_is_skipped(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = pathlib.Path(td)
+            self._tree(root)
+            found = m._local_replacements(root, {"pkg/absent"})
+        self.assertEqual(found, {})
 
 
 class CheckFragmentTests(unittest.TestCase):
