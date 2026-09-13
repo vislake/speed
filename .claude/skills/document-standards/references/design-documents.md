@@ -46,7 +46,7 @@ The high-level view of the whole system.
 - **Overview** — the system's shape and its decomposition into modules.
 - **Module dependency graph** — mandatory diagram.
 - **Logical deployment architecture** — mandatory diagram.
-- **Cross-cutting design** — the concerns no single module owns: error model, authentication and authorization boundaries, data consistency and transaction boundaries, concurrency model, failure and degradation behaviour, observability, performance and capacity targets, security boundaries. Omit a heading only when the concern genuinely does not exist in the system.
+- **Cross-cutting design** — the concerns no single module owns: error model, authentication and authorization boundaries, data consistency and transaction boundaries, concurrency model, failure and degradation behaviour, observability, performance and capacity targets, security boundaries. **The criterion is the phrase before the list, not the list.** A concern no single module owns earns a heading whether or not it is named above; a named one that genuinely does not exist in the system is omitted. These are the concerns most systems have, not a set to be satisfied.
 - **Architecture invariants** — the rules the system must not violate, for example a strictly bottom-up dependency direction. These are what a review can actually adjudicate against, so each is stated so that a violation is recognizable.
 - **Implementation status** — one line per module, linking to that module's document. Roll-up only; detail lives in the module document.
 
