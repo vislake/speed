@@ -37,14 +37,15 @@ func ResolveAll[T any](r *Registry) []T {
 	return out
 }
 
-// Resources returns every declared resource assignable to T, in module-name
-// order. T designates a resource type, so any type is legal here.
+// Resources returns every declared resource matching T, in module-name order.
+// T designates a resource type, so any type is legal here.
 func Resources[T any](r *Registry) []Resource[T] {
 	found := r.Resources(token[T]())
 	out := make([]Resource[T], 0, len(found))
 	for _, res := range found {
-		//nolint:errcheck // Resources selected these values by assignability to
-		// T, so the assertion holds for the reason Resolve's does above.
+		//nolint:errcheck // the assertion cannot fail: an interface T selects
+		// only implementations of it and a concrete T only values of T itself,
+		// so the assertion holds for the reason Resolve's does above.
 		out = append(out, Resource[T]{Module: res.Module, Value: res.Value.(T)})
 	}
 	return out

@@ -192,6 +192,55 @@ func TestResourcesKeepsMultipleFromOneModule(t *testing.T) {
 	}
 }
 
+// TestResourcesConcreteTargetRequiresTypeIdentity pins the concrete half of
+// the match rule. A []string is assignable to a named type over []string but
+// not assertable to it, so selecting by assignability hands the generic
+// wrapper a value its assertion cannot take.
+func TestResourcesConcreteTargetRequiresTypeIdentity(t *testing.T) {
+	reg := New()
+	seed(t, reg, Module{Name: "underlying", Resources: []any{[]string{"a", "b"}}}, nil)
+
+	if got := reg.Resources((*resNames)(nil)); len(got) != 0 {
+		t.Fatalf("Resources collected %v for a target the values are not, want none", got)
+	}
+	if got := Resources[resNames](reg); len(got) != 0 {
+		t.Fatalf("Resources[resNames] collected %v, want none", got)
+	}
+}
+
+// TestResourcesConcreteTargetRejectsChannelDirection covers the second shape
+// of the same gap: a bidirectional channel is assignable to a receive-only
+// channel type, and again not assertable to it.
+func TestResourcesConcreteTargetRejectsChannelDirection(t *testing.T) {
+	reg := New()
+	seed(t, reg, Module{Name: "signals", Resources: []any{make(chan int)}}, nil)
+
+	if got := reg.Resources((*<-chan int)(nil)); len(got) != 0 {
+		t.Fatalf("Resources collected %v for a direction the values do not have, want none", got)
+	}
+	if got := Resources[<-chan int](reg); len(got) != 0 {
+		t.Fatalf("Resources[<-chan int] collected %v, want none", got)
+	}
+}
+
+// TestResourcesInterfaceTargetKeepsAssignability pins that tightening the
+// concrete half leaves the interface half alone: implementations of the target
+// still match, whatever their own type, and a non-implementor still does not.
+func TestResourcesInterfaceTargetKeepsAssignability(t *testing.T) {
+	reg := New()
+	seed(t, reg, Module{Name: "a", Resources: []any{schemaRes{Namespace: "cache"}}}, nil)
+	seed(t, reg, Module{Name: "b", Resources: []any{specRes{Path: "/v1"}}}, nil)
+	seed(t, reg, Module{Name: "c", Resources: []any{[]string{"not a namedRes"}}}, nil)
+
+	got := Resources[namedRes](reg)
+	if len(got) != 2 {
+		t.Fatalf("Resources[namedRes] collected %v, want both implementations", got)
+	}
+	if got[0].Value.resourceName() != "schema:cache" || got[1].Value.resourceName() != "spec:/v1" {
+		t.Fatalf("Resources[namedRes] returned %v, want the schema and the spec", got)
+	}
+}
+
 func TestGenericResolveAllPanicsOnNonInterface(t *testing.T) {
 	reg := New()
 	assertPanics(t, "must point to an interface", func() {

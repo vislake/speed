@@ -30,6 +30,10 @@ type namedRes interface{ resourceName() string }
 func (s schemaRes) resourceName() string { return "schema:" + s.Namespace }
 func (s specRes) resourceName() string   { return "spec:" + s.Path }
 
+// resNames is a named type over []string. A bare []string is assignable to it
+// yet not assertable to it, which is the gap the two match rules turn on.
+type resNames []string
+
 type otherRes struct{ Label string }
 
 func (o otherRes) resourceName() string { return "other:" + o.Label }

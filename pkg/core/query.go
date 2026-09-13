@@ -65,10 +65,10 @@ func (r *Registry) ResolveAll(t Token) []any {
 	return out
 }
 
-// Resources returns every declared resource assignable to the type the token
+// Resources returns every declared resource matching the type the token
 // designates, in module-name order, keeping the declaration order within a
 // module. An interface target collects every implementation; a concrete target
-// collects only that type.
+// collects only values of that very type.
 //
 // The token designates a resource type, not a capability: the notation is the
 // same but any element type is legal here.
@@ -82,7 +82,7 @@ func (r *Registry) Resources(t Token) []Resource[any] {
 	for _, name := range r.sortedNamesLocked() {
 		for _, value := range r.mods[name].module.Resources {
 			vt := reflect.TypeOf(value)
-			if vt == nil || !vt.AssignableTo(rt) {
+			if vt == nil || !matchesResourceType(vt, rt) {
 				continue
 			}
 			out = append(out, Resource[any]{Module: name, Value: value})
@@ -108,6 +108,22 @@ func (r *Registry) Enablement(name string) (Enablement, bool) {
 	}
 	e, ok := r.enablement[name]
 	return e, ok
+}
+
+// matchesResourceType decides whether a declared resource satisfies the queried
+// target. An interface target matches by assignability, so every implementation
+// counts; a concrete target matches by type identity.
+//
+// Assignability alone would be wider than the assertion the typed wrapper then
+// performs on what was selected: a []string is assignable to a named type over
+// []string, and a bidirectional channel to a receive-only one, while neither is
+// assertable to it. Selecting those would turn a legal declaration into a panic
+// inside the library.
+func matchesResourceType(vt, rt reflect.Type) bool {
+	if rt.Kind() == reflect.Interface {
+		return vt.AssignableTo(rt)
+	}
+	return vt == rt
 }
 
 // declarersLocked lists the modules that declared a capability, in name order.
