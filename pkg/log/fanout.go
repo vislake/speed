@@ -18,9 +18,10 @@ func newFanoutHandler(branches []slog.Handler) *fanoutHandler {
 	return &fanoutHandler{branches: branches}
 }
 
-// Enabled reports whether any branch would take the record. With no branches
-// it is false, so an empty output list stops records at the head of the chain
-// rather than building them for nobody.
+// Enabled reports whether any branch would take the record. Nothing in the
+// chain asks it: the head judges the level once, and an empty output list is
+// stopped there by a decision taken when the chain was assembled. It is here
+// because the Handler contract asks for it.
 func (h *fanoutHandler) Enabled(ctx context.Context, level slog.Level) bool {
 	for _, b := range h.branches {
 		if b.Enabled(ctx, level) {

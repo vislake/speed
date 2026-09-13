@@ -298,3 +298,76 @@ func TestEmptyOutputListAssemblesAnEmptyFanout(t *testing.T) {
 		t.Errorf("a chain with no outputs wrote to standard output: %q", out)
 	}
 }
+
+// TestEmptyOutputListDisablesTheChainHead pins the short circuit an explicitly
+// empty output list gets: the head reports the chain disabled, so a record is
+// neither built nor judged.
+//
+// Whether there is anywhere to write is settled when the chain is assembled, so
+// the head does not ask the fan-out at run time — that would add a call per
+// record to every ordinary configuration to serve a configuration that writes
+// nothing.
+//
+// Seeing no output does not distinguish a short circuit from a chain that
+// simply has no destination, which is why the second assertion reaches the
+// redaction layer: without a short circuit the record is built, judged against
+// every registered matcher, and only then handed to nobody.
+func TestEmptyOutputListDisablesTheChainHead(t *testing.T) {
+	isolateRules(t)
+	var calls atomic.Int64
+	processRedaction.AddPattern("counting", func(string) []Span {
+		calls.Add(1)
+		return nil
+	})
+
+	assembled, err := newChain(resolvedConfig{level: slog.LevelDebug})
+	if err != nil {
+		t.Fatalf("assembling a chain with no outputs failed: %v", err)
+	}
+	t.Cleanup(assembled.release)
+
+	head, ok := assembled.handler.(*levelHandler)
+	if !ok {
+		t.Fatalf("the head of the chain is %T, want the level layer", assembled.handler)
+	}
+	if head.Enabled(context.Background(), slog.LevelError) {
+		t.Error("the head of a chain with no outputs reports the chain enabled")
+	}
+
+	slog.New(assembled.handler).Info("nowhere", "value", "a string to judge")
+
+	if got := calls.Load(); got != 0 {
+		t.Errorf("the redaction layer ran %d times for a chain with nowhere to write, want 0", got)
+	}
+}
+
+// TestEmptyOutputListKeepsDerivedLoggersDisabled pins that the short circuit
+// survives derivation, which is the only way the product takes a logger:
+// Named binds the module name, and slog.Logger.With calls WithAttrs without
+// consulting Enabled at all.
+//
+// It registers no matcher and builds its own chain: WithAttrs judges the
+// attributes it binds as it binds them, so a counting matcher here would be
+// called by the derivation itself and say nothing about the short circuit.
+func TestEmptyOutputListKeepsDerivedLoggersDisabled(t *testing.T) {
+	assembled, err := newChain(resolvedConfig{level: slog.LevelDebug})
+	if err != nil {
+		t.Fatalf("assembling a chain with no outputs failed: %v", err)
+	}
+	t.Cleanup(assembled.release)
+
+	logger := slog.New(assembled.handler)
+	for _, tc := range []struct {
+		name    string
+		derived *slog.Logger
+	}{
+		{name: "With", derived: logger.With("k", "v")},
+		{name: "WithGroup", derived: logger.WithGroup("g")},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if tc.derived.Enabled(context.Background(), slog.LevelError) {
+				t.Error("a logger derived from a chain with no outputs reports the chain enabled")
+			}
+		})
+	}
+}

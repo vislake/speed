@@ -25,6 +25,11 @@ type levelHandler struct {
 	// a later Prepare cannot move the level of a chain already built.
 	level slog.Leveler
 	next  slog.Handler
+	// nowhereToWrite says this chain has no branches at all, which an
+	// explicitly empty output list settles at assembly time. It is a fact
+	// about the assembly, not a state, so it travels unchanged into every
+	// derived layer.
+	nowhereToWrite bool
 }
 
 // newLevelHandler puts a level layer in front of a downstream handler.
@@ -32,10 +37,26 @@ func newLevelHandler(level slog.Leveler, next slog.Handler) *levelHandler {
 	return &levelHandler{level: level, next: next}
 }
 
+// newSilentLevelHandler puts a level layer that reports nothing enabled in
+// front of a downstream handler. It is what a chain over an empty output list
+// gets: no record it would build has anywhere to go.
+func newSilentLevelHandler(level slog.Leveler, next slog.Handler) *levelHandler {
+	return &levelHandler{level: level, next: next, nowhereToWrite: true}
+}
+
 // Enabled judges the record against this chain's own level. The downstream is
 // not consulted: the branch handlers deliberately filter nothing, so asking
 // them would only repeat the same comparison once per output.
+//
+// A chain with no branches answers false without reading the level, so an
+// empty output list costs neither the record nor the redaction pass. Whether
+// there are branches was settled when the chain was assembled, which is why
+// this is a field and not a question put to the fan-out: an ordinary
+// configuration pays one comparison, the same as before.
 func (h *levelHandler) Enabled(_ context.Context, level slog.Level) bool {
+	if h.nowhereToWrite {
+		return false
+	}
 	return level >= h.level.Level()
 }
 
@@ -52,7 +73,7 @@ func (h *levelHandler) WithAttrs(attrs []slog.Attr) slog.Handler {
 	if len(attrs) == 0 {
 		return h
 	}
-	return &levelHandler{level: h.level, next: h.next.WithAttrs(attrs)}
+	return &levelHandler{level: h.level, next: h.next.WithAttrs(attrs), nowhereToWrite: h.nowhereToWrite}
 }
 
 // WithGroup opens the group downstream, where the redaction layer and the
@@ -62,5 +83,5 @@ func (h *levelHandler) WithGroup(name string) slog.Handler {
 	if name == "" {
 		return h
 	}
-	return &levelHandler{level: h.level, next: h.next.WithGroup(name)}
+	return &levelHandler{level: h.level, next: h.next.WithGroup(name), nowhereToWrite: h.nowhereToWrite}
 }

@@ -65,7 +65,14 @@ func newChain(cfg resolvedConfig) (*chain, error) {
 	// the bootstrap chain's LevelVar belongs to the bootstrap chain, and a
 	// second module's Prepare must not be able to re-filter a chain that is
 	// already assembled.
-	handler := newLevelHandler(cfg.level, newRedactHandler(newFanoutHandler(branches)))
+	// A chain with no branches short circuits at its head: an explicitly
+	// empty output list is known here, so nothing downstream has to be asked
+	// per record.
+	newHead := newLevelHandler
+	if len(branches) == 0 {
+		newHead = newSilentLevelHandler
+	}
+	handler := newHead(cfg.level, newRedactHandler(newFanoutHandler(branches)))
 	return &chain{handler: handler, writers: writers, release: release}, nil
 }
 
