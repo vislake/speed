@@ -98,7 +98,11 @@ func TestDefaultLevelIsInfoBeforeAnyPrepare(t *testing.T) {
 // fallback of FromContext is compared against it by identity, and a Default
 // that built a logger per call would make that comparison meaningless.
 func TestDefaultIsOneSingleton(t *testing.T) {
-	if Default() != Default() {
+	// The two calls are held in variables rather than compared in place: the
+	// comparison is the subject of the test, and an in-place one reads as the
+	// identical-operands mistake that it is the point of this test not to be.
+	first, second := Default(), Default()
+	if first != second {
 		t.Error("two calls to Default returned different loggers")
 	}
 }

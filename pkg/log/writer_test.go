@@ -3,6 +3,7 @@ package log
 import (
 	"errors"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -264,6 +265,13 @@ func TestOpenFailureIsUnavailableAndLeavesNoEntry(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), missing) {
 		t.Errorf("the error %q does not name the path that could not be opened", err)
+	}
+	// The cause travels with the class. ErrOutputUnavailable covers a missing
+	// directory, a mode that forbids the write and a path already taken, and
+	// the host's remedy differs for each; flattening the error underneath into
+	// text would leave it reading the message to tell them apart.
+	if !errors.Is(err, fs.ErrNotExist) {
+		t.Errorf("the error %q does not carry fs.ErrNotExist, so the host cannot tell a missing directory from a permission denial", err)
 	}
 	if got := refsFor(stdoutID); got != before {
 		t.Errorf("standard output has %d references after the failed assembly, want the %d it had before it",

@@ -103,12 +103,19 @@ func newRotatingFile(path string, maxSize int64, maxFiles, maxAgeDays int,
 		now:           now,
 		pruneInterval: pruneInterval,
 	}
+	//nolint:gosec // G304: a path taken from the configuration is what this
+	// destination is for. The path comes from the host's own log configuration
+	// and resolveOutput has already refused an empty one, so there is no wider
+	// input to narrow: the process writes where it was told to write.
 	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, fileMode)
 	if err != nil {
 		return nil, err
 	}
 	info, err := f.Stat()
 	if err != nil {
+		//nolint:errcheck // the file is being abandoned because Stat failed,
+		// and that failure is what the caller is told about. A close error on
+		// the way out names a handle the caller never received.
 		f.Close()
 		return nil, err
 	}

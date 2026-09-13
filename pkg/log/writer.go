@@ -334,7 +334,11 @@ func openWriter(id string, o resolvedOutput, params fileParams) (*destWriter, er
 	case destFile:
 		f, err := openRotatingFile(o.path, params)
 		if err != nil {
-			return nil, fmt.Errorf("%w: %s: %v", ErrOutputUnavailable, o.path, err)
+			// Both errors are wrapped: ErrOutputUnavailable is the class the
+			// host branches on, and the error underneath carries why the open
+			// failed -- fs.ErrNotExist, fs.ErrPermission -- which is what
+			// tells the host whether to create a directory or fix a mode.
+			return nil, fmt.Errorf("%w: %s: %w", ErrOutputUnavailable, o.path, err)
 		}
 		return &destWriter{id: id, sink: f}, nil
 	}
