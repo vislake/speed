@@ -2,10 +2,13 @@ package log
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
+	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/vislake/speed/pkg/config"
@@ -176,5 +179,158 @@ func TestModuleRegistersItselfWithTheProcessRegistry(t *testing.T) {
 	if len(registered.Provides) != 1 || !registered.Provides[0].Exclusive {
 		t.Errorf("the registered descriptor declares %+v, want the one exclusive capability",
 			registered.Provides)
+	}
+}
+
+// fileConfig is a configuration with one JSON file output, which is what the
+// product tests read their assertions back from.
+func fileConfig(path string) Config {
+	return Config{Level: "info", Outputs: []Output{{To: destFile, Format: formatJSON, Path: path}}}
+}
+
+// newTestLogger builds the product from a stubbed reader and releases its
+// references when the test ends.
+func newTestLogger(t *testing.T, cfg Config) *logger {
+	t.Helper()
+	product, err := newLogger(&stubReader{cfg: cfg})
+	if err != nil {
+		t.Fatalf("constructing the product from %+v failed: %v", cfg, err)
+	}
+	t.Cleanup(func() { product.release() })
+	return product
+}
+
+// TestNamedLoggerCarriesTheModuleAttribute pins that a logger taken by name
+// says which module wrote the record. Without it a destination holds records
+// from every module with nothing to tell them apart by.
+func TestNamedLoggerCarriesTheModuleAttribute(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "named.log")
+	product := newTestLogger(t, fileConfig(path))
+
+	product.Named("http").Info("served")
+
+	var record map[string]any
+	line := strings.TrimSpace(read(t, path))
+	if err := json.Unmarshal([]byte(line), &record); err != nil {
+		t.Fatalf("the record is not one JSON object: %q: %v", line, err)
+	}
+	if record[moduleAttrKey] != "http" {
+		t.Errorf("the record carries %s=%v, want the module name it was taken under",
+			moduleAttrKey, record[moduleAttrKey])
+	}
+}
+
+// TestProductWritesThroughTheConfiguredChain pins that the product's loggers
+// reach the configured destination and are filtered by the configured level —
+// the positive control the fallback tests are read against.
+func TestProductWritesThroughTheConfiguredChain(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "chain.log")
+	product := newTestLogger(t, fileConfig(path))
+
+	lg := product.Named("http")
+	lg.Debug("below the configured level")
+	lg.Info("above the configured level")
+
+	out := read(t, path)
+	if strings.Contains(out, "below the configured level") {
+		t.Errorf("a debug record reached a destination configured at info: %q", out)
+	}
+	if !strings.Contains(out, "above the configured level") {
+		t.Errorf("the configured destination took nothing: %q", out)
+	}
+}
+
+// TestRedactionHandsOutTheProcessRegistry pins that the registration interface
+// is the process-wide one: a sensitive key name is a fact about the process,
+// and the bootstrap chain has to be covered by it as well.
+func TestRedactionHandsOutTheProcessRegistry(t *testing.T) {
+	product := newTestLogger(t, fileConfig(filepath.Join(t.TempDir(), "rules.log")))
+	if product.Redaction() != processRedaction {
+		t.Error("the product hands out a redaction registry of its own")
+	}
+}
+
+// TestEmptyOutputsWritesOneNoticeToStderr pins the notice an explicitly empty
+// output list gets. It is legal and means nothing is written anywhere, which
+// from outside is indistinguishable from a broken logging module — so it is
+// said once, at construction, and not once per record.
+func TestEmptyOutputsWritesOneNoticeToStderr(t *testing.T) {
+	var product *logger
+	var stdout string
+	text := captureStderr(t, func() {
+		product = newTestLogger(t, Config{Level: "info", Outputs: []Output{}})
+		stdout = captureBootstrapStdout(t, func() {
+			product.Named("http").Error("nowhere to go")
+			product.Named("http").Error("nowhere either")
+		})
+	})
+
+	notice := strings.TrimSpace(text)
+	if notice == "" {
+		t.Fatal("an empty output list produced no notice at all")
+	}
+	if lines := strings.Count(notice, "\n") + 1; lines != 1 {
+		t.Errorf("an empty output list produced %d lines, want one notice: %q", lines, text)
+	}
+	if !strings.Contains(notice, "outputs") {
+		t.Errorf("the notice does not name the key to remove: %q", notice)
+	}
+	if stdout != "" {
+		t.Errorf("a chain with no outputs still wrote to standard output: %q", stdout)
+	}
+}
+
+// TestCloseReleasesThisAssemblysReferences pins that Close gives up what New
+// took, and no more: standard output keeps the bootstrap reference.
+func TestCloseReleasesThisAssemblysReferences(t *testing.T) {
+	product, err := newLogger(&stubReader{cfg: Config{
+		Level:   "info",
+		Outputs: []Output{{To: destStdout, Format: formatText}},
+	}})
+	if err != nil {
+		t.Fatalf("constructing the product failed: %v", err)
+	}
+	if got := refsFor("stdout"); got != 2 {
+		t.Fatalf("standard output has %d references while the assembly is up, want 2", got)
+	}
+
+	if err := closeLogger(product); err != nil {
+		t.Fatalf("Close failed: %v", err)
+	}
+	if got := refsFor("stdout"); got != 1 {
+		t.Errorf("standard output has %d references after Close, want the bootstrap one", got)
+	}
+}
+
+// TestCloseToleratesNilInstance pins the rollback path: a startup that fails
+// part-way closes every module whatever stage it reached, so Close runs on
+// modules whose New never returned a product.
+func TestCloseToleratesNilInstance(t *testing.T) {
+	for _, instance := range []any{nil, (*logger)(nil), "not this module's product"} {
+		if err := closeLogger(instance); err != nil {
+			t.Errorf("Close on the instance %#v failed: %v", instance, err)
+		}
+	}
+}
+
+// TestNewRejectsAConfigurationDefect pins that a defect in the output list
+// aborts the startup naming its sentinel, rather than assembling a chain that
+// silently drops the offending output.
+func TestNewRejectsAConfigurationDefect(t *testing.T) {
+	_, err := newLogger(&stubReader{cfg: Config{
+		Level:   "info",
+		Outputs: []Output{{To: destFile, Format: "yaml", Path: filepath.Join(t.TempDir(), "x.log")}},
+	}})
+	if !errors.Is(err, ErrUnknownFormat) {
+		t.Errorf("constructing over an unknown format returned %v, want %v", err, ErrUnknownFormat)
+	}
+}
+
+// TestMissingConfigReaderFailsNew pins the same stance New's sibling takes: no
+// configuration module means no configuration, and this module says so rather
+// than assembling something the host did not ask for.
+func TestMissingConfigReaderFailsNew(t *testing.T) {
+	if _, err := Module().New(context.Background(), core.New()); !errors.Is(err, core.ErrMissingProvider) {
+		t.Fatalf("New on a registry without config gave %v, want core.ErrMissingProvider", err)
 	}
 }
