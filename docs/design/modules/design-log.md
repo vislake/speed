@@ -73,6 +73,8 @@ lg.Redaction().AddKeys("stripe-customer-secret", "webhook-signing-key")
 
 **只能追加，没有移除或关闭的途径。** 登记可以发生在任意时刻，包括运行期。
 
+`AddPattern` 的 `name` 只用于诊断——登记失败时的 panic 文本、以及将来任何指认规则来源的场合都靠它；它不参与判定，因而同名的两条规则各自照跑，与只可追加一致。
+
 **登记不上的规则当场 panic，不静默忽略。** 空键名会与键路径里的空段比对上，等于把那一段下的一切判为命中；`nil` 判定函数会在第一条到达的记录上崩在热路径里。这类登记都是调用点的编程错误，与数据无关，首次执行即确定地暴露，和 `core` 对非法功能标识的处理同类（见 [core](design-core.md)）。
 
 静默忽略会让登记方以为自己拿到了保护而实际没有——而登记方拿不到返回值，无从察觉。这正是脱敏最不该有的失效形态：它在泄露发生之前不表现出任何差别。
@@ -573,13 +575,13 @@ log:
 | 功能 | 状态 | 代码 |
 |---|---|---|
 | 日志功能与按名取用 | 已实现 | `pkg/log/log.go` `Logger`、`pkg/log/module.go` `logger` |
-| 脱敏规则的登记 | 部分实现 — 缺登记不上的规则当场 panic，现为静默忽略 | `pkg/log/log.go` `Redaction`、`pkg/log/rules.go` `ruleSet` |
+| 脱敏规则的登记 | 已实现 | `pkg/log/log.go` `Redaction`、`pkg/log/rules.go` `ruleSet`、`AddKeys`、`AddPattern` |
 | 上下文存取 | 已实现 | `pkg/log/context.go` `FromContext`、`WithLogger`、`WithAttrs` |
 | 进程根 logger 与引导链 | 已实现 | `pkg/log/bootstrap.go` `Default`、`newBootstrapChain` |
 | 配置声明与解读 | 已实现 | `pkg/log/config.go` `Config`、`Output`、`schema` |
 | 模块描述符与阶段行为 | 已实现 | `pkg/log/module.go` `Module`、`prepare` |
 | 处理链装配 | 已实现 | `pkg/log/chain.go` `newChain`、`encoderFor` |
-| 级别过滤 | 部分实现 — 缺输出列表为空时链首恒判不启用 | `pkg/log/level.go` `levelHandler` |
+| 级别过滤 | 已实现 | `pkg/log/level.go` `levelHandler`、`newSilentLevelHandler` |
 | 脱敏的键名判定 | 已实现 | `pkg/log/redact.go` `redactHandler` |
 | 脱敏的值形状判定 | 已实现 | `pkg/log/redact.go` `redactHandler`、`pkg/log/rules.go` `pattern` |
 | 扇出 | 已实现 | `pkg/log/fanout.go` `fanoutHandler` |
