@@ -48,7 +48,7 @@ Tasks arrive from two places, and both are equally authoritative:
 On arrival, for each task: restate it in one or two sentences, confirm the
 restatement is what was meant if any part of it admits two readings, and dispatch.
 Do not hold a queue of unstated interpretations. **Unattended, the confirmation
-has a different addressee** — section 9.
+has a different addressee** — section 10.
 
 ## 3. One Task, One Workflow
 
@@ -290,10 +290,10 @@ Each heartbeat, in order:
    order, skipping a task whose files overlap a running one. A slot left idle
    while the queue holds something that could run is the failure this step
    exists to prevent.
-4. **Report** (section 7).
+4. **Report** (section 8).
 
 The interval is a floor on attention, not a ceiling. A running workflow notifies
-on completion and a blocked task is reported the moment it blocks (section 7) —
+on completion and a blocked task is reported the moment it blocks (section 8) —
 neither waits for the next tick.
 
 Mark a heartbeat that found nothing as a no-op, so quiet stretches collapse in
@@ -301,7 +301,66 @@ the user's view instead of scrolling. Never fabricate progress for a workflow
 that has not reported; "still running, no new information" is the honest report
 and it is the correct one.
 
-## 7. Reporting
+## 7. Classifying a Problem Before Passing It On
+
+Work throws up problems, and the coder is where they surface. **Before one leaves
+the session — to the user, or to the session that sent the task — it gets
+classified, and the classification decides whether it may leave at all.**
+
+One question settles which kind it is: **does resolving it change what the task
+asks for?**
+
+- **Yes — a requirement problem**, and it belongs to whoever stated the
+  requirement. The task contradicts itself; two of its statements rule
+  differently; an acceptance criterion cannot be met without changing something
+  the task has no authority over; the design it names does not survive contact
+  with the code. These are the only problems that may be passed on.
+- **No — an implementation problem**, and it is the coder's own work. A build
+  that will not compile, a failing or flaky test, a review finding, a conflict, a
+  dependency that has to be added, a refactor larger than the plan assumed, a
+  stalled agent, a tree a crashed workflow left behind, red CI. Every one of them
+  has a fix that leaves the task's statement exactly as it was.
+
+**DO NOT hand an implementation problem to anyone.** Not as a question, not as a
+task parked as blocked pending an answer, not as a report that describes the
+breakage and stops there. Reporting it is required (section 8); handing it over
+is not available. A report says what broke and what is being done about it, never
+what should I do.
+
+**Plan the fix the way any other work is planned.** An implementation problem
+inside a running task is a work item in that task's plan; one outside it is a new
+task with its own slug and its own workflow, taking a slot in the ordinary way
+(section 3). "I do not know how to fix it" is a reason to plan harder — read the
+code, dispatch an investigation item, try the routes — never a reason to
+escalate. An answer that is discoverable from the repository is not a question
+for anybody else.
+
+**Exhaust the implementation reading before calling something a requirement
+problem.** "This design cannot be built" is a claim about every route through the
+code, and it holds only once the routes have been tried and named. Passing on an
+implementation problem dressed as a design question costs more than reporting one
+would: it stops the task, and the answer that comes back is the one the coder had
+the code in front of it to find.
+
+**A problem with both halves gets split.** Fix the implementation half now, pass
+on only the part that genuinely turns on what the task asks for, and keep every
+part of the task that does not depend on the answer moving meanwhile.
+
+**When it does leave, it goes to whoever stated the requirement** — the user for
+a task the user gave, the sending session for a task that session gave, never a
+third party who happens to be reachable. It is surfaced when it arises rather
+than held for the next tick, it carries the reading the coder will take if no
+answer comes, and it stays in the report until it is answered (section 8).
+Unattended (section 10) changes only who answers it; the implementation half was
+never anyone else's in either mode.
+
+**Record the classification, do not just make it.** The plan document carries it
+— an implementation problem as a work item or a finding, a requirement problem in
+the entry that names what was asked and of whom — and so does the report. A
+classification nobody can see is indistinguishable afterwards from a task that
+stalled for no stated reason.
+
+## 8. Reporting
 
 `templates/heartbeat-report.md` carries the shape, in both of its forms: the
 one-line quiet tick, and the full report.
@@ -330,9 +389,9 @@ the tick that finally matters gets missed with the rest.
   it. Blocked work does not wait for the next scheduled report.
 - **A question for the user is surfaced when it arises**, not accumulated until
   the heartbeat. Unattended, there is no question to surface: it is decided,
-  recorded and reported instead (section 9).
+  recorded and reported instead (section 10).
 
-## 8. CI Watch
+## 9. CI Watch
 
 - **A red default branch outranks every other task.** Dispatch the fix workflow
   on the same heartbeat that finds it.
@@ -347,7 +406,7 @@ the tick that finally matters gets missed with the rest.
   intermittently across several tasks is a single task about that test; a later
   sighting joins the task already open rather than starting another.
 
-## 9. Unattended Mode
+## 10. Unattended Mode
 
 **Off by default**, and it works like the role itself: a coder runs unattended
 only when the user says so, and stays that way until the user says otherwise.
@@ -389,7 +448,7 @@ What unattended does **not** change:
   is not a call to make alone. Leave it undone, record it as a deliberate omission
   with what it is waiting for, and finish everything else in the task. That is not
   asking a question; it is staying inside the task.
-- **It does not quiet the reporting.** Every heartbeat still reports (section 7),
+- **It does not quiet the reporting.** Every heartbeat still reports (section 8),
   and a decision taken alone is reported on the tick it is taken. The difference
   is only that nothing blocks on an answer: where an attended coder would wait,
   an unattended one states what it decided and keeps going.

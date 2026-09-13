@@ -15,6 +15,8 @@ triggers:
   - running unattended
   - dispatching a workflow
   - reporting task progress
+  - hitting a problem mid-task
+  - escalating a question or reporting a blocker
   - a CI failure
 globs:
   - "**/*"
@@ -90,8 +92,11 @@ session; it is not chosen per task.
 - **Direct contributor** — plans, edits, tests and merges the work itself.
 - **Coder** — a long-running coordinator that never edits product code. It
   receives tasks, delivers each through a workflow, monitors progress and CI, and
-  reports. **[The Coder Role](references/coder-role.md)** is mandatory reading
-  before running as one.
+  reports. A problem it runs into is classified before it is passed on: only a
+  question about what the task asks for leaves the session, and an implementation
+  problem is the coder's own to plan and fix ([The Coder
+  Role](references/coder-role.md), section 7). **[The Coder
+  Role](references/coder-role.md)** is mandatory reading before running as one.
 
 [Task to Merge](references/task-to-merge.md) applies to both, in full. The Coder
 Role adds to it and never replaces it.
@@ -106,7 +111,7 @@ the user says so explicitly, and stays one until the user says otherwise.
 **A coder is attended by default.** The user can put one in **unattended mode**,
 where an unclear point is decided by the coder, or settled with the session that
 sent the task, and never put to the user ([The Coder
-Role](references/coder-role.md), section 9). Like the role itself, only the user
+Role](references/coder-role.md), section 10). Like the role itself, only the user
 turns it on and only the user turns it off — and it relaxes no rule about what
 gets delivered.
 
@@ -115,7 +120,7 @@ gets delivered.
 | Standard | Content |
 |---|---|
 | [Task to Merge](references/task-to-merge.md) | The universal standard: branch discipline, the reference sweep that splitting and moving demand, implementation, tests, warnings and verification, merging. Applies to every role and every task. |
-| [The Coder Role](references/coder-role.md) | What the coder role adds on top: how tasks arrive, the workflow that delivers each one, the plan document, the heartbeat, the CI watch, and unattended mode. Read before running as a coder. |
+| [The Coder Role](references/coder-role.md) | What the coder role adds on top: how tasks arrive, the workflow that delivers each one, the plan document, the heartbeat, what may be escalated and what has to be fixed in place, the CI watch, and unattended mode. Read before running as a coder. |
 
 `templates/` holds the starting points: `plan.md` for a plan document,
 `heartbeat-report.md` for the coder's periodic report.

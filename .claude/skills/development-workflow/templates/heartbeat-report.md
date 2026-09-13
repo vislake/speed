@@ -98,9 +98,15 @@ archived on it, and nothing reads it afterwards.
 ## Needs you
 
 <!--
-Only when the user has to act. A question does not wait for the next tick just
-because it arrived between two of them (coder-role.md, section 7) -- it is asked when it
-arises, and this table is where it stays visible until it is answered.
+Only when the user has to act, and only about what the task asks for. An
+implementation problem -- a broken build, a failing test, a conflict, red CI --
+is never a row here however badly it is stuck: it is classified out before it
+reaches the report and fixed through a workflow (coder-role.md, section 7), and
+it shows up in Running or Completed like any other work.
+
+A question does not wait for the next tick just because it arrived between two
+of them (coder-role.md, section 8) -- it is asked when it arises, and this table
+is where it stays visible until it is answered.
 
 Blocks says what stops until the answer comes; "nothing yet" is a real answer
 and worth writing, because it tells the user the question can wait. Waiting
