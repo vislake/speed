@@ -91,10 +91,17 @@ func (t *transports) read(ctx context.Context, locator string) (map[string]any, 
 	}
 	source, known := t.sources[parsed.Scheme]
 	if !known {
+		// The path is the scheme appended to the transport subpackage prefix,
+		// taken exactly as url.Parse produced it: the standard library has
+		// already lowercased the scheme and held it to ALPHA followed by
+		// [a-z0-9+.-], so normalising it again would only make the name in the
+		// message disagree with the key the lookup just failed on.
 		return nil, fmt.Errorf("%w: %q names the scheme %q, which no imported Source answers for. "+
-			"Import the transport that serves it, such as "+
-			"github.com/vislake/speed/pkg/config/source/file for file://",
-			ErrUnknownScheme, locator, parsed.Scheme)
+			"Import a transport that answers for it: by convention that is "+
+			"github.com/vislake/speed/pkg/config/source/%s. The convention is a lead, not a "+
+			"guarantee: an implementation is free to live elsewhere, and this module cannot "+
+			"enumerate the ones that exist",
+			ErrUnknownScheme, locator, parsed.Scheme, parsed.Scheme)
 	}
 
 	raw, formatName, err := source.Fetch(ctx, parsed)
@@ -109,9 +116,18 @@ func (t *transports) read(ctx context.Context, locator string) (map[string]any, 
 	}
 	format, known := t.formats[formatName]
 	if !known {
-		return nil, fmt.Errorf("%w: %q is in the %s format, which no imported Format parses. "+
-			"Import the parser for it, such as github.com/vislake/speed/pkg/config/format/yaml "+
-			"for yaml", ErrUnknownFormat, locator, formatName)
+		// The name is quoted because a transport reports whatever it was told:
+		// on the remote leg that is the operator's own format query parameter,
+		// which may carry spaces, slashes or upper case. The path is built
+		// from that same string unconditionally, with no test of whether it
+		// looks like a path segment, and the lead below covers the odd path a
+		// degenerate name produces.
+		return nil, fmt.Errorf("%w: %q is in the %q format, which no imported Format parses. "+
+			"Import a parser for it: by convention that is "+
+			"github.com/vislake/speed/pkg/config/format/%s. The convention is a lead, not a "+
+			"guarantee: an implementation is free to live elsewhere, and this module cannot "+
+			"enumerate the ones that exist",
+			ErrUnknownFormat, locator, formatName, formatName)
 	}
 
 	content, err := format.Unmarshal(raw)

@@ -172,9 +172,41 @@ func TestUnknownSchemeNamesMissingImport(t *testing.T) {
 	if !errors.Is(err, ErrUnknownScheme) {
 		t.Fatalf("a scheme no transport answers for returned %v, want ErrUnknownScheme", err)
 	}
-	if !strings.Contains(err.Error(), "Import") {
+	if !strings.Contains(err.Error(), "github.com/vislake/speed/pkg/config/source/etcd") {
 		t.Fatalf("the rejection reads %q, and a missing transport is fixed by an import the "+
 			"message has to name", err)
+	}
+	if strings.Contains(err.Error(), "source/file") {
+		t.Fatalf("the rejection reads %q, which points at a transport that happens to be "+
+			"imported instead of at the one that was asked for", err)
+	}
+}
+
+// TestUnknownSchemeDerivesPathFromRequestedScheme pins that the path in the
+// hint follows the scheme that was asked for, and that the scheme keeps a
+// place of its own in the sentence beside the path it implies.
+func TestUnknownSchemeDerivesPathFromRequestedScheme(t *testing.T) {
+	_, tr := locatorSetup(t, HostIdentity{}, defaultSource(), defaultFormat())
+	err := readLocator(t, tr, "consul://c/app")
+	if !strings.Contains(err.Error(), "github.com/vislake/speed/pkg/config/source/consul") {
+		t.Fatalf("the rejection reads %q, which does not name the subpackage the requested "+
+			"scheme is carried by", err)
+	}
+	err = readLocator(t, tr, "etcd://10.0.0.1:2379/app/config")
+	if !strings.Contains(err.Error(), `the scheme "etcd"`) {
+		t.Fatalf("the rejection reads %q, which drops the scheme itself: the name and the path "+
+			"it implies are both owed to the reader", err)
+	}
+	// url.Parse lowercases the scheme, so the path follows the key the lookup
+	// failed on rather than the spelling the locator used.
+	err = readLocator(t, tr, "ETCD://h/p")
+	if !strings.Contains(err.Error(), "source/etcd") {
+		t.Fatalf("the rejection for an upper-cased scheme reads %q, want the lowercased path "+
+			"the lookup went by", err)
+	}
+	if strings.Contains(err.Error(), "source/ETCD") {
+		t.Fatalf("the rejection reads %q, which spells the path the way the locator was "+
+			"written rather than the way the scheme was parsed", err)
 	}
 }
 
@@ -195,10 +227,76 @@ func TestUnknownFormatNamesMissingImport(t *testing.T) {
 	if !errors.Is(err, ErrUnknownFormat) {
 		t.Fatalf("a format no parser answers for returned %v, want ErrUnknownFormat", err)
 	}
-	if !strings.Contains(err.Error(), "Import") {
+	if !strings.Contains(err.Error(), "github.com/vislake/speed/pkg/config/format/toml") {
 		t.Fatalf("the rejection reads %q, and a missing parser is fixed by an import the message "+
 			"has to name", err)
 	}
+	if strings.Contains(err.Error(), "format/yaml") {
+		t.Fatalf("the rejection reads %q, which points at a parser that happens to be imported "+
+			"instead of at the one the transport reported", err)
+	}
+}
+
+// TestUnknownFormatDerivesPathFromReportedName pins that the path follows the
+// name the transport reported, and that the name is quoted: it is the
+// operator's own string on the remote leg, not a token this module chose.
+func TestUnknownFormatDerivesPathFromReportedName(t *testing.T) {
+	source := defaultSource()
+	source.format = "hcl"
+	_, tr := locatorSetup(t, HostIdentity{}, source, defaultFormat())
+	err := readLocator(t, tr, "file:///app.hcl")
+	if !strings.Contains(err.Error(), "github.com/vislake/speed/pkg/config/format/hcl") {
+		t.Fatalf("the rejection reads %q, which does not name the subpackage the reported "+
+			"format is carried by", err)
+	}
+
+	source.format = "weird format"
+	_, tr = locatorSetup(t, HostIdentity{}, source, defaultFormat())
+	err = readLocator(t, tr, "file:///app.conf")
+	if !strings.Contains(err.Error(), `"weird format"`) {
+		t.Fatalf("the rejection reads %q, and a name carrying a space has to be quoted or it "+
+			"swallows the sentence around it", err)
+	}
+}
+
+// TestMissingTransportHintsNameTheConvention pins that both messages say the
+// path they offer comes from a convention, rather than reading as a lookup of
+// where the implementation actually is.
+func TestMissingTransportHintsNameTheConvention(t *testing.T) {
+	for _, err := range missingTransportHints(t) {
+		if !strings.Contains(err.Error(), "by convention") {
+			t.Fatalf("the rejection reads %q, which offers a path without saying it was "+
+				"derived from a convention", err)
+		}
+	}
+}
+
+// TestMissingTransportHintsAreNotGuarantees pins the other half of the same
+// disclaimer: an implementation may live somewhere else entirely, and this
+// module has no way to enumerate the ones that exist.
+func TestMissingTransportHintsAreNotGuarantees(t *testing.T) {
+	for _, err := range missingTransportHints(t) {
+		if !strings.Contains(err.Error(), "free to live elsewhere") {
+			t.Fatalf("the rejection reads %q, which presents a convention as the only place "+
+				"an implementation can be", err)
+		}
+		if !strings.Contains(err.Error(), "cannot enumerate") {
+			t.Fatalf("the rejection reads %q, which does not admit that this module cannot "+
+				"tell which implementations exist", err)
+		}
+	}
+}
+
+// missingTransportHints returns the two rejections that offer a subpackage
+// path: the missing transport and the missing parser.
+func missingTransportHints(t *testing.T) []error {
+	t.Helper()
+	_, tr := locatorSetup(t, HostIdentity{}, defaultSource(), defaultFormat())
+	schemeErr := readLocator(t, tr, "etcd://10.0.0.1:2379/app/config")
+	source := defaultSource()
+	source.format = "toml"
+	_, tr = locatorSetup(t, HostIdentity{}, source, defaultFormat())
+	return []error{schemeErr, readLocator(t, tr, "file:///app.toml")}
 }
 
 func TestFetchFailureMapsToSourceUnavailable(t *testing.T) {
