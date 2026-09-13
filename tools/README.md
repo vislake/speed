@@ -11,7 +11,13 @@ Python 3.11 or newer is required: `check_toolchain.py` parses TOML with
 
 ## Running them
 
-Each script runs on its own:
+A script named `check_*.py` is a gate: it takes no arguments, it reports
+against the current directory, and `make repo-check` runs every one of
+them, so a gate added here is wired by its name alone. `scan_cjk.py`
+carries another prefix because it is run on demand rather than by
+`make check`.
+
+Each script also runs on its own:
 
 ```
 python3 tools/check_toolchain.py
@@ -46,8 +52,10 @@ forced into a padded full program. The script's own docstring carries the
 scope rules and the escape hatch for a fragment that genuinely cannot
 parse.
 
-`scan_cjk.py` — enforces the language rule stated in the root
-`CLAUDE.md`: Chinese belongs to the trees named there, every other file
-is English. Go files are checked in their comments only, through a lexer
-that honours string and rune context; other text files are checked whole.
-The script's docstring carries the carve-outs.
+`scan_cjk.py` — reports CJK characters outside the subtrees it carves
+out, which is how the language rule stated in the root `CLAUDE.md` gets
+checked. The two lists are read together: a tree `CLAUDE.md` declares
+Chinese is only exempt once it is carved out here. Go files are checked
+in their comments only, through a lexer that honours string and rune
+context; other text files are checked whole. The script's docstring
+carries the carve-outs.

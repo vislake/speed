@@ -1,12 +1,11 @@
 #!/usr/bin/env python3
-"""Repo-wide CJK scanner enforcing the repository Language Rule.
+"""Repo-wide CJK scanner for the repository Language Rule.
 
-The rule: docs/internal/** is written in Chinese; every other file in the
-repository is English, and CI fails on CJK characters found outside
-docs/internal/ (i18n resources under locale directories, and the
-docs/site/ public documentation site -- English-first, with zh-CN
-localization directories added by need -- are the exceptions). This
-script is the local-run discipline check; CI runs the same check.
+The root CLAUDE.md is the authority for which trees are written in
+Chinese. This script reports CJK characters found anywhere outside the
+subtrees it carves out below, so the two have to be read together: a
+tree CLAUDE.md declares Chinese is only exempt here once it is in the
+carve-out list.
 
 Scan semantics, mirroring go/ratelimit/unittest/no_cjk_characters_test.go (the module-level
 precedent):
@@ -475,9 +474,9 @@ def scan_root(root: str) -> int:
     if hits:
         print(
             f"{len(hits)} CJK violation(s) across {len(hit_files)} file(s); "
-            f"root CLAUDE.md's Language Rule requires English outside "
-            f"docs/internal/ -- paraphrase in English, or cite the "
-            f"docs/internal/ file path instead of quoting Chinese"
+            f"outside the carved subtrees this repository is English (the "
+            f"root CLAUDE.md states the rule) -- paraphrase in English, or "
+            f"cite the Chinese document's path instead of quoting it"
         )
         return 1
     print(
@@ -494,8 +493,8 @@ def main(argv: list[str] | None = None) -> int:
             "Scan a repository tree for CJK characters outside the carved-out "
             "docs/internal/, docs/site/ and locale resource directories "
             "(a directory holding a zh-CN.* or en-US.* file -- judged by "
-            "content, never by directory name), enforcing root CLAUDE.md's "
-            "Language Rule (English outside docs/internal/). Go files are "
+            "content, never by directory name), which the root CLAUDE.md's "
+            "Language Rule requires to be English. Go files are "
             "checked comment-only -- except godoc Example Output: blocks, "
             "which carry expected-output fixture text in comment syntax --; "
             "every other UTF-8 text file is checked in full."

@@ -9,10 +9,14 @@ SHELL := /bin/bash
 
 MODULES := $(shell awk '$$1 ~ /^\.\//{print $$1}' go.work)
 
-# The toolchain gate parses TOML with tomllib, which arrived in Python 3.11.
+# Every tools/check_*.py is a gate over this tree: it takes no arguments, it
+# reports against the current directory, and it is run by `make repo-check`.
+# A script under tools/ that is not a gate carries another prefix.
+GATES := $(wildcard tools/check_*.py)
+
 PYTHON ?= python3
 
-.PHONY: help modules build test test-race fmt lint tidy tidy-check tools-test check
+.PHONY: help modules build test test-race fmt lint tidy tidy-check repo-check tools-test check python-version
 
 help: ## List the entry points
 	@awk 'BEGIN{FS=":.*## "} /^[a-z][a-z-]*:.*## /{printf "  %-11s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
@@ -58,17 +62,25 @@ tidy-check: ## Verify the dependency files are tidy, leaving the tree unchanged
 	done; \
 	rm -rf $$backup; exit $$status
 
-tools-test: ## Run the test suites of the scripts in tools/
+repo-check: python-version ## Run the gates in tools/ over this tree
+	@for g in $(GATES); do echo "==> $$g"; $(PYTHON) $$g || exit 1; done
+
+tools-test: python-version ## Run the test suites of the scripts in tools/
+	@$(PYTHON) -m unittest discover -s tools -t tools -p 'test_*.py'
+
+# The scripts parse TOML with tomllib, which arrived in Python 3.11.
+python-version:
 	@$(PYTHON) -c 'import sys; sys.exit(0 if sys.version_info >= (3, 11) else 1)' || { \
-	  echo "tools-test needs Python 3.11 or newer (tomllib); $(PYTHON) is $$($(PYTHON) -V 2>&1)." >&2; \
+	  echo "tools/ needs Python 3.11 or newer (tomllib); $(PYTHON) is $$($(PYTHON) -V 2>&1)." >&2; \
 	  echo "Install the version .mise.toml pins, or pass PYTHON=<interpreter>." >&2; \
 	  exit 1; \
 	}
-	@$(PYTHON) -m unittest discover -s tools -t tools -p 'test_*.py'
 
 check: ## Run everything CI runs
 	@$(MAKE) build
 	@$(MAKE) test
+	@$(MAKE) test-race
 	@$(MAKE) lint
 	@$(MAKE) tidy-check
+	@$(MAKE) repo-check
 	@$(MAKE) tools-test
