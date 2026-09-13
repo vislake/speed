@@ -33,9 +33,13 @@ The reason is the whole point of keeping the tree: a record that can be rewritte
 
 **Acceptance is a project event, not a field in the file.** The status field carries the decision's force in the project, not the document's editing state — which is why `Proposed` does not exist (section 4). Writing `Accepted` into a draft does not accept it.
 
-A decision is accepted when the project starts acting on it: the record lands in the documentation tree as the decision in force, and other documents may reference it. **In this repository the boundary is the commit that merges the record.** Before that commit, revise freely; after it, supersede.
+A decision is accepted when the project starts acting on it: the record lands in the documentation tree as the decision in force, and other documents may reference it.
 
-Terminology unification across a batch of records under review, a rewrite of an options section that turned out to be imprecise, or renaming a topic slug are therefore ordinary drafting work while the batch is still under review — and become supersession work the moment it is merged. Finish that work before merging.
+**The boundary is the release that ships the record, not the commit that merges it.** A record that has never shipped in a release is still a draft, however long it has been on the main branch and however much code already follows it. Revise it in place; once it ships, supersede instead. What counts as a release is the project's own event — its versioning scheme answers it, and this standard does not restate the answer.
+
+Merging is deliberately not the boundary. A record is most often found to be wrong by implementing it, and implementation starts after the merge; freezing at the merge would mean that the first thing anyone learns by building the system can only ever be recorded as a supersession of a record nobody has yet had the chance to act on. Terminology unification across a batch, a rewrite of an options section that turned out to be imprecise, or renaming a topic slug therefore stay ordinary drafting work right up to the release.
+
+**What replaces the merge boundary is a reference check, not nothing.** Once a record is merged, other documents may already cite it and code may already follow it. Revising an unreleased record means confirming that those citations still say something true — that the design document referencing `ADR-<slug>-<date>` has not been left asserting the option the record no longer takes. The freedom is to fix the record; it is not freedom to leave the tree inconsistent.
 
 ## 3. Layout and Naming
 
@@ -47,11 +51,11 @@ docs/adr/                       # relocatable via CLAUDE.md
 
 **Required:**
 - **The slug names the topic, not the individual decision, and is deliberately not unique.** Every decision about the same topic carries the same slug, so a topic's decisions group together in the directory listing and in the index. This is what makes the accumulated history of one topic readable.
-- **`<date>` is the date the decision was accepted, in ISO `YYYY-MM-DD`.** It never changes, because the record never changes.
+- **`<date>` is the date the decision was made, in ISO `YYYY-MM-DD`.** It is fixed at the release that ships the record; while the record is still unreleased and the decision itself changes, the date moves with it, because renaming a draft is ordinary drafting work.
 - The reference form is `ADR-<slug>-<date>`.
 - ISO dates sort lexicographically, so plain filename order puts a topic's records in chronological order. **No sequence number is needed, and none is used** — here as everywhere else in this standard.
 - **One topic, one date, one record.** Two decisions on the same topic on the same day are either one decision, or evidence the topic is drawn too coarsely. Resolve that; do not disambiguate with a suffix.
-- **The date is content, not metadata.** `SKILL.md` bans dates in documents, and that ban covers authorship and change tracking. A decision date is when the decision took effect and is what distinguishes one record from the next on the same topic.
+- **The date is content, not metadata.** `SKILL.md` bans dates in documents, and that ban covers authorship and change tracking. A decision date is when the decision was reached and is what distinguishes one record from the next on the same topic.
 
 Template: `templates/adr-record.md`.
 
@@ -126,7 +130,7 @@ Template: `templates/adr-readme.md`.
 - The design detail that follows from the decision (that is the design document's)
 - Proposals that have not been decided
 - TODO lists, schedules, owners
-- Edits to an accepted record's context, options, decision or consequences (a draft under review is not yet accepted — see section 2)
+- Edits to a released record's context, options, decision or consequences (an unreleased record is not yet accepted — see section 2)
 
 ## 8. Checklist
 
@@ -141,6 +145,6 @@ The common checklist in `SKILL.md` applies as well.
 - [ ] The decision is stated impersonally: `Adopt X`
 - [ ] Consequences include the costs accepted, not only the benefits
 - [ ] No design detail that belongs to the design document
-- [ ] No edit to an accepted record beyond its status, typos and broken links; drafting edits were finished before the merge that accepted it
+- [ ] No edit to a released record beyond its status, typos and broken links; a still-unreleased record was revised in place, and every document citing it was rechecked
 - [ ] The record appears in the README index exactly once, under its topic
 - [ ] `scripts/check_documents.py` was run and exits 0
