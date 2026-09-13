@@ -226,7 +226,9 @@ type Token = any
 
 代价是 `Token` 的静态类型退化为 `any`，写成 `Cache(nil)` 或误传一个实例，编译器都不会拦。注册表因此在 `Register` 中校验每个 `Token` 确为类型化空指针，不合法的当场 panic，与重名冲突同样暴露在登记的那一刻。
 
-**功能标识的元素类型必须是接口**，`Provides` 与 `Requires` 中出现 `(*bytes.Buffer)(nil)` 这类指向具体类型的空指针即 panic，取用时传入则是 `ErrInvalidToken`。功能是模块之间相互取用的单位，取用方拿到的是一组方法而非一份内存布局；要求接口也让交付校验始终有意义，否则无从判断产物是否实现了所声明的功能。资源标识不受此限：资源是被动数据，其类型可以是任意类型。
+**功能标识的元素类型必须是接口**，`Provides` 与 `Requires` 中出现 `(*bytes.Buffer)(nil)` 这类指向具体类型的空指针即 panic。功能是模块之间相互取用的单位，取用方拿到的是一组方法而非一份内存布局；要求接口也让交付校验始终有意义，否则无从判断产物是否实现了所声明的功能。资源标识不受此限：资源是被动数据，其类型可以是任意类型。
+
+**取用时传入非法的功能标识同样 panic，不返回错误。** 非法标识是调用点的编程错误，与数据无关，首次执行即确定地暴露；把它表达成错误，要么迫使 `ResolveAll` 与 `Resources` 为一个只可能因 bug 触发的情形添上错误返回值，要么让文档承诺一种这两个方法的签名给不出的行为。泛型封装自行构造标识，形状不会出错，但元素类型仍可能不是接口，`core.ResolveAll[int]` 因此也是 panic。
 
 交付声明可以标注排他：
 
@@ -409,7 +411,6 @@ http.Spec{...}
 | `ErrAmbiguousProvider` | `Resolve` 要求唯一，而该功能有多个已构造的提供者 |
 | `ErrExclusiveViolated` | 消解之后同一功能仍有多于一个启用的提供者，其中至少一个声明排他 |
 | `ErrMissingReason` | 表态禁用却未给出原因 |
-| `ErrInvalidToken` | 取用时传入的 `Token` 不是类型化空指针 |
 | `ErrDependencyCycle` | `Requires` 构成的依赖图有环 |
 | `ErrUndeliveredCapability` | 构造完成，但声明的 `Provides` 功能未交付 |
 
