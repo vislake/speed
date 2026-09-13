@@ -17,6 +17,14 @@ import (
 // connections and goroutines nobody releases. That is also why Stop and Close
 // have to tolerate an instance that was never initialised or started.
 //
+// Stop and Close run on a context stripped of cancellation. On the normal
+// path shutdown is reached because the host's context was cancelled, and a
+// drain that honours its context ends the moment it is handed one that is
+// already done: a module whose Stop is an http.Server.Shutdown(ctx) would
+// report ctx.Err() without draining anything, and an ordinary stop would come
+// back as a failure. Values carry over, so a module still reaches whatever the
+// host attached to the context it passed to Run.
+//
 // A Stop failure does not abort the stage: a failed drain notice must not hold
 // back the Close that follows. Cleanup failures are aggregated behind the
 // primary error rather than replacing it, because what terminated the startup
@@ -25,6 +33,8 @@ import (
 // to stop, and reporting it as an error would make every host special-case a
 // move it just made itself.
 func (r *Registry) shutdown(ctx context.Context, primary error) error {
+	ctx = context.WithoutCancel(ctx)
+
 	r.mu.RLock()
 	order := slices.Clone(r.lifecycle)
 	r.mu.RUnlock()

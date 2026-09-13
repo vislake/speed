@@ -111,6 +111,37 @@ func TestCleanCancelReturnsNil(t *testing.T) {
 	}
 }
 
+// TestShutdownKeepsContextValues pins the other half of detaching the
+// cancellation: what the host attached to the context still reaches Stop and
+// Close, so only the cancellation is dropped.
+func TestShutdownKeepsContextValues(t *testing.T) {
+	type key struct{}
+	var seen []any
+	reg := New()
+	m := Module{
+		Name: "only",
+		New:  func(context.Context, *Registry) (any, error) { return &product{id: "only"}, nil },
+		Stop: func(ctx context.Context, _ *Registry, _ any) error {
+			seen = append(seen, ctx.Value(key{}))
+			return ctx.Err()
+		},
+		Close: func(ctx context.Context, _ *Registry, _ any) error {
+			seen = append(seen, ctx.Value(key{}))
+			return ctx.Err()
+		},
+	}
+	constructAll(t, reg, m)
+
+	ctx, cancel := context.WithCancel(context.WithValue(t.Context(), key{}, "host"))
+	cancel()
+	if err := reg.shutdown(ctx, nil); err != nil {
+		t.Fatalf("a shutdown whose callbacks honour the context returned %v, want nil", err)
+	}
+	if !slices.Equal(seen, []any{"host", "host"}) {
+		t.Fatalf("Stop and Close saw %v, want the value the host attached in both", seen)
+	}
+}
+
 // TestRollbackCallsNeverInitializedInstances pins the contract: a startup
 // failure rolls back everything constructed, so Stop and Close reach instances
 // that were never initialised or started.

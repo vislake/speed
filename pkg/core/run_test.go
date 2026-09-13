@@ -290,6 +290,31 @@ func TestCancelReturnsNil(t *testing.T) {
 	}
 }
 
+// TestDrainingStopSeesALiveContext pins that a module whose Stop drains
+// against its context is not cut short by the cancellation that started the
+// shutdown. Cancellation is the normal way to stop, so a Stop shaped like
+// http.Server.Shutdown(ctx) has to get a context it can still drain on, and
+// Run has to come back nil.
+func TestDrainingStopSeesALiveContext(t *testing.T) {
+	p := &probe{}
+	reg := core.New()
+	m := p.module("only")
+	m.Stop = func(ctx context.Context, _ *core.Registry, _ any) error {
+		p.record("stop only")
+		return ctx.Err()
+	}
+	m.Close = func(ctx context.Context, _ *core.Registry, _ any) error {
+		p.record("close only")
+		return ctx.Err()
+	}
+	register(reg, m)
+
+	if err := runUntilServed(t, reg, p, "serve only"); err != nil {
+		t.Fatalf("cancellation returned %v, want nil: a drain that honours its context "+
+			"must not be handed one that is already done", err)
+	}
+}
+
 func TestCloseFailureReturned(t *testing.T) {
 	p := &probe{}
 	reg := core.New()
