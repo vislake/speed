@@ -1,12 +1,15 @@
 package config
 
 import (
+	"encoding"
 	"fmt"
 	"io"
 	"maps"
 	"reflect"
 	"slices"
+	"strconv"
 	"strings"
+	"time"
 )
 
 // ungroupedHeading is the section items that named no group are listed under.
@@ -115,6 +118,10 @@ func headingKey(heading string) string {
 // requiredMarker stands where the default of a required item would be.
 const requiredMarker = "(required)"
 
+// noDefaultMarker stands where the default of an optional item that has none
+// would be.
+const noDefaultMarker = "(no default)"
+
 // itemLine renders one input item.
 //
 // A required item carries the marker instead of a default. It has no default
@@ -131,10 +138,31 @@ func itemLine(item *manifestItem) helpLine {
 	if item.item.Required {
 		return withNote(line, requiredMarker)
 	}
+	if meansUnset(reflect.ValueOf(item.def)) {
+		return withNote(line, noDefaultMarker)
+	}
 	if item.item.Sensitive {
 		return line
 	}
 	return withNote(line, "(default: "+formatDefault(item)+")")
+}
+
+// meansUnset reports whether a field's current value stands for "nobody
+// supplied one" rather than for a value of its own. It is a question put to
+// the value, not a list of types: the next type that expresses being unset
+// gains a branch here and nothing else changes.
+//
+// A nil scalar pointer is the one shape that answers yes today. It is how a
+// module tells "nobody gave it" from "it was given the zero value", so neither
+// the zero nor Go's <nil> is the truth about it.
+func meansUnset(v reflect.Value) bool {
+	for v.Kind() == reflect.Pointer {
+		if v.IsNil() {
+			return true
+		}
+		v = v.Elem()
+	}
+	return false
 }
 
 // withNote puts the trailing note beside the description, or in its place when
@@ -175,22 +203,112 @@ func placeholder(item *manifestItem) string {
 	return "VALUE"
 }
 
-// formatDefault renders the declared default in the form the command line
-// would take it back.
+// formatDefault renders the declared default in the form a reader can type
+// back. The help output is a human interface, so the criterion is that a
+// reader copying this value into the command line gets exactly this default
+// again: 5m rather than a count of nanoseconds, a,b rather than [a b].
+//
+// The shapes are decided in the order the conversion on the way in decides
+// them, or the two ends would disagree about what a value is. A list is
+// settled first, because a list of strings takes the comma-separated form
+// without ever reaching the text path; a duration is settled by its type
+// rather than by its kind, or every other int64 would be printed as a span of
+// time. An item whose value means being unset never gets here: itemLine
+// prints the marker for it instead of asking for a default.
 func formatDefault(item *manifestItem) string {
+	v := reflect.ValueOf(item.def)
 	if item.kind == kindStringList {
-		v := reflect.ValueOf(item.def)
-		if !v.IsValid() {
-			return `""`
-		}
-		parts := make([]string, v.Len())
-		for i := range v.Len() {
-			parts[i] = v.Index(i).String()
-		}
-		return fmt.Sprintf("%q", strings.Join(parts, listSeparator))
+		return formatStringList(v)
 	}
-	if s, ok := item.def.(string); ok {
-		return fmt.Sprintf("%q", s)
+	return formatScalarDefault(v)
+}
+
+// formatStringList renders a list in the flat form the command line and the
+// environment give it, quoted as one word so the separator survives the shell.
+func formatStringList(v reflect.Value) string {
+	if !v.IsValid() {
+		return `""`
 	}
-	return fmt.Sprintf("%v", item.def)
+	parts := make([]string, v.Len())
+	for i := range v.Len() {
+		parts[i] = v.Index(i).String()
+	}
+	return strconv.Quote(strings.Join(parts, listSeparator))
+}
+
+// formatScalarDefault renders a single value in the form a source would give
+// it.
+func formatScalarDefault(v reflect.Value) string {
+	// A scalar pointer is a leaf of its own, and what a source gives it is
+	// the value behind it, never the address.
+	for v.Kind() == reflect.Pointer && !meansUnset(v) {
+		v = v.Elem()
+	}
+	t := v.Type()
+	if t == durationType {
+		return time.Duration(v.Int()).String()
+	}
+	if decodesFromText(t) {
+		// A leaf that reads itself from a string is rendered by that same
+		// type's output form, which is the one text its own parser is meant
+		// to take back. Nothing else here knows how to write it.
+		if text, ok := textForm(v); ok {
+			return text
+		}
+		return residualDefault(v)
+	}
+	switch t.Kind() {
+	case reflect.Bool:
+		return strconv.FormatBool(v.Bool())
+	case reflect.String:
+		// Quoted, so the reader copies the whole word: the shell takes one
+		// layer of quotes off and the parser receives the value as it stands.
+		return strconv.Quote(v.String())
+	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
+		return strconv.FormatInt(v.Int(), 10)
+	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
+		return strconv.FormatUint(v.Uint(), 10)
+	case reflect.Float32, reflect.Float64:
+		// The width is the field's own: read as 64 bits, a declared 0.1 in a
+		// 32-bit field grows a tail of digits the module never wrote.
+		return strconv.FormatFloat(v.Float(), 'g', -1, t.Bits())
+	}
+	return residualDefault(v)
+}
+
+// textForm renders a value through its own text output form.
+//
+// The value is copied into an addressable one first: a default is held in an
+// interface and cannot be addressed, so asking it directly for the interface
+// would miss every implementation carried on the pointer receiver - which is
+// where math/big.Int carries both of its text methods. This is the mirror of
+// how the conversion on the way in reaches the decoding half.
+func textForm(v reflect.Value) (string, bool) {
+	held := reflect.New(v.Type())
+	held.Elem().Set(v)
+	m, ok := held.Interface().(encoding.TextMarshaler)
+	if !ok {
+		return "", false
+	}
+	text, err := m.MarshalText()
+	if err != nil {
+		return "", false
+	}
+	return string(text), true
+}
+
+// residualDefault renders a value that has no form a reader could type back.
+// Go's own printed form is what it gets, because a spelling invented here
+// would be a word the help output offers and no source accepts. Two kinds of
+// value arrive:
+//
+//   - a leaf that reads itself from text but writes none. Its stored value is
+//     not the text its own parser takes back - a percentage holding 50 reads
+//     itself from "50%" - so neither the number nor the printed form is a
+//     value this column can promise.
+//   - a value no source can give at all: a complex number, a uintptr, a
+//     pointer to a list. These reach the help output because collection lists
+//     them, and what they print is fixed here rather than left to chance.
+func residualDefault(v reflect.Value) string {
+	return fmt.Sprintf("%v", v)
 }
