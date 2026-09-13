@@ -317,6 +317,22 @@ class DesignTreeTests(CheckerCase):
                          MODULE + "\n## Roadmap\n\nLater.\n"},
                         "not part of this document type's fixed section set")
 
+    def test_local_glossary_section_in_its_seat(self):
+        glossary = """## Glossary
+
+| Term | Scope | Definition |
+|---|---|---|
+| seat | this module | a declared position in the fixed section order |
+
+"""
+        self.assert_green({"docs/design/modules/design-core.md":
+                           MODULE.replace("## External Interface Contract",
+                                          glossary + "## External Interface Contract")})
+        self.assert_red({"docs/design/modules/design-core.md":
+                         MODULE.replace("## Implementation Status",
+                                        glossary + "## Implementation Status")},
+                        "the section order is fixed")
+
     def test_missing_mandatory_architecture_section(self):
         broken = ARCHITECTURE.replace("## Architecture Invariants\n\n"
                                       "- A module never imports a module above it.\n\n", "")
@@ -723,6 +739,20 @@ The signed document is downloadable.
 class RequirementsTreeTests(CheckerCase):
     def test_conforming_requirements_tree_passes(self):
         self.assert_green(base=PRD_FILES)
+
+    def test_local_glossary_section_in_its_seat(self):
+        glossary = """## Glossary
+
+| Term | Scope | Definition |
+|---|---|---|
+| signature | this capability | the detached bytes the verifier checks |
+
+"""
+        self.assert_green({"docs/prd/features/prd-signing.md":
+                           PRD_FILES["docs/prd/features/prd-signing.md"].replace(
+                               "## Functional Requirements",
+                               glossary + "## Functional Requirements")},
+                          base=PRD_FILES)
 
     def test_requirement_id_slug_mismatch(self):
         self.assert_red({"docs/prd/features/prd-signing.md":

@@ -17,7 +17,7 @@ docs/design/                        # relocatable via CLAUDE.md
     └── design-<slug>-<aspect>.md   # only when a module document grows unwieldy
 ```
 
-The glossary is **not** part of this tree. The project has one glossary, shared by every document type, at the configured `glossary` path.
+The glossary is **not** part of this tree. The project has one glossary, shared by every document type, at the configured `glossary` path, and it holds only terms that hold project-wide. A term bounded by one module is registered in that module's own document, not there.
 
 **Required:**
 - `README.md` and `architecture.md` are fixed names — the explicit exceptions to the `design-<slug>` pattern, which applies inside `modules/`.
@@ -62,15 +62,16 @@ Template: `templates/design-architecture.md`.
 Fixed section order, so modules can be read against each other and checked mechanically:
 
 1. **Responsibilities** — and, explicitly, **non-responsibilities**. Writing down what the module does not own is the cheapest available defence against scope creep.
-2. **External interface contract** — what other modules may call, and what stability is promised. This is the most valuable part of a module document.
-3. **Dependencies** — what it depends on, and whether the direction satisfies the architecture invariants.
-4. **UML diagrams** — structure and call relationships, selected per section 5.
-5. **Core data structures**.
-6. **Core algorithms and flows** — with complexity analysis for performance-sensitive algorithms. Procedural flows need no complexity analysis.
-7. **Error and failure semantics** — failure modes, retry, idempotency, degradation behaviour.
-8. **Concurrency and transaction boundaries** — when applicable.
-9. **Extension points** — when applicable.
-10. **Implementation status**.
+2. **Glossary** — optional, and rare. The terms this document gives a meaning of its own, each stated with the scope it applies to. A term that holds project-wide belongs to the project glossary instead, never to both.
+3. **External interface contract** — what other modules may call, and what stability is promised. This is the most valuable part of a module document.
+4. **Dependencies** — what it depends on, and whether the direction satisfies the architecture invariants.
+5. **UML diagrams** — structure and call relationships, selected per section 5.
+6. **Core data structures**.
+7. **Core algorithms and flows** — with complexity analysis for performance-sensitive algorithms. Procedural flows need no complexity analysis.
+8. **Error and failure semantics** — failure modes, retry, idempotency, degradation behaviour.
+9. **Concurrency and transaction boundaries** — when applicable.
+10. **Extension points** — when applicable.
+11. **Implementation status**.
 
 Template: `templates/design-module.md`.
 

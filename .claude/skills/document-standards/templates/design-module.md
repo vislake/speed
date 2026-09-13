@@ -20,6 +20,18 @@ name in the code, and never changes.
 
 <What the module explicitly does not own, and which module owns it instead.>
 
+<!--
+Optional, and rare. Delete unless this document gives a word a meaning of
+its own that the reader would not arrive at unaided. A term that holds
+project-wide belongs to the project glossary, never to both; a term
+registered here states the scope it applies to.
+-->
+## Glossary
+
+| Term | Scope | Definition |
+|---|---|---|
+| <term> | <where this meaning applies> | <what it means there> |
+
 ## External Interface Contract
 
 <What other modules may call, and what stability is promised. Signatures or

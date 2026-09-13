@@ -144,6 +144,7 @@ ARCHITECTURE_SECTIONS = [
 ]
 MODULE_SECTIONS = [
     ("responsibilities", names("Responsibilities", "职责"), True),
+    ("glossary", names("Glossary", "术语表"), False),
     ("external-interface", names("External Interface Contract", "外部接口契约"), True),
     ("dependencies", names("Dependencies", "依赖"), True),
     ("diagrams", names("UML Diagrams", "UML 图"), False),
@@ -167,6 +168,7 @@ FEATURE_SECTIONS = [
     ("problem", names("Problem Statement", "问题陈述"), False),
     ("scope", names("Scope", "范围"), False),
     ("actors", names("Actors", "参与者"), False),
+    ("glossary", names("Glossary", "术语表"), False),
     ("functional", names("Functional Requirements", "功能需求"), True),
     ("non-functional", names("Non-Functional Requirements", "非功能需求"), False),
     ("data", names("Data Requirements", "数据需求"), False),

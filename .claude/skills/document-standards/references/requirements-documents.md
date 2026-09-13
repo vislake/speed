@@ -80,12 +80,13 @@ The order below is fixed. It is an ordering rule, not a completeness rule: which
 1. **Problem statement** — what has to be solved, and for whom.
 2. **Scope** — and, explicitly, what is out of scope.
 3. **Actors** — who interacts with the system, and with what authority. These are system participants, **not marketing personas**.
-4. **Functional requirements** — mandatory.
-5. **Non-functional requirements** — quantified, and sourced (section 7).
-6. **Data requirements** — what data exists conceptually, its retention, its privacy classification. **Not a schema.**
-7. **External interface requirements** — which external systems and actors the system interacts with. **Not an interface design.**
-8. **Constraints** — regulatory, business and external technical constraints imposed from outside.
-9. **Assumptions and dependencies**.
+4. **Glossary** — optional, and rare. The terms this document gives a meaning of its own, each stated with the scope it applies to. A term that holds project-wide belongs to the project glossary instead, never to both.
+5. **Functional requirements** — mandatory.
+6. **Non-functional requirements** — quantified, and sourced (section 7).
+7. **Data requirements** — what data exists conceptually, its retention, its privacy classification. **Not a schema.**
+8. **External interface requirements** — which external systems and actors the system interacts with. **Not an interface design.**
+9. **Constraints** — regulatory, business and external technical constraints imposed from outside.
+10. **Assumptions and dependencies**.
 
 Flows do not appear here. They belong to `journeys/`.
 
