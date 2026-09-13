@@ -31,7 +31,7 @@ are not required to compile.>
 <What this module depends on, and how that satisfies the architecture
 invariants.>
 
-## Diagrams
+## UML Diagrams
 
 <!--
 Select diagram types by fact, never to fill this template:
@@ -40,8 +40,11 @@ Select diagram types by fact, never to fill this template:
   state diagram    entities with a lifecycle
   activity diagram branch-heavy flows
 When the module holds no corresponding fact, draw nothing.
-Every diagram carries prose.
 -->
+
+<What the diagram below fixes: the constraints and the invariants its
+structure cannot show. Every diagram carries prose; a section holding a
+diagram and nothing else is incomplete.>
 
 ```mermaid
 classDiagram

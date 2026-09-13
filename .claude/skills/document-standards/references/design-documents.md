@@ -64,7 +64,7 @@ Fixed section order, so modules can be read against each other and checked mecha
 1. **Responsibilities** — and, explicitly, **non-responsibilities**. Writing down what the module does not own is the cheapest available defence against scope creep.
 2. **External interface contract** — what other modules may call, and what stability is promised. This is the most valuable part of a module document.
 3. **Dependencies** — what it depends on, and whether the direction satisfies the architecture invariants.
-4. **Diagrams** — UML and call relationships, selected per section 5.
+4. **UML diagrams** — structure and call relationships, selected per section 5.
 5. **Core data structures**.
 6. **Core algorithms and flows** — with complexity analysis for performance-sensitive algorithms. Procedural flows need no complexity analysis.
 7. **Error and failure semantics** — failure modes, retry, idempotency, degradation behaviour.
