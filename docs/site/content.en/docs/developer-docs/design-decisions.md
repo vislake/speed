@@ -50,7 +50,7 @@ boundary. Consequences: `pkgcore` keeps zero import-path dependency on
 `dbkit`; dialect logic stays out of the module contract; the design
 documents were corrected in the same change.
 
-[Read ADR 0001](https://github.com/vislake/speed/blob/main/docs/adr/0001-module-migrations-return-embed-fs.md)
+[Read ADR 0001](https://github.com/vislake/speed/blob/main/docs/internal/adr/0001-module-migrations-return-embed-fs.md)
 
 ## ADR 0002: tenant-context primitives live in `pkgcore`
 
@@ -71,7 +71,7 @@ repositories without importing `tenancy`; `tenancy` stays free to
 depend on `dbkit`; business code written before `tenancy` existed
 calls the `pkgcore` primitives directly.
 
-[Read ADR 0002](https://github.com/vislake/speed/blob/main/docs/adr/0002-tenant-context-primitives-live-in-pkgcore.md)
+[Read ADR 0002](https://github.com/vislake/speed/blob/main/docs/internal/adr/0002-tenant-context-primitives-live-in-pkgcore.md)
 
 ## ADR 0003: accept MPL-2.0 for `vault/api` in `go/pki/signer/vault`
 
@@ -94,7 +94,7 @@ needs its own adjudication. Consequences: the manifest entry carries
 the ADR reference the scanner requires; importers of the subpackage
 inherit the reasoning, everyone else is unaffected.
 
-[Read ADR 0003](https://github.com/vislake/speed/blob/main/docs/adr/0003-accept-mpl2-for-pki-signer-vault.md)
+[Read ADR 0003](https://github.com/vislake/speed/blob/main/docs/internal/adr/0003-accept-mpl2-for-pki-signer-vault.md)
 
 ## The shape of a new ADR
 
@@ -106,6 +106,6 @@ the same change as the code that embodies it.
 
 ## Source
 
-- [docs/adr/0001-module-migrations-return-embed-fs.md](https://github.com/vislake/speed/blob/main/docs/adr/0001-module-migrations-return-embed-fs.md)
-- [docs/adr/0002-tenant-context-primitives-live-in-pkgcore.md](https://github.com/vislake/speed/blob/main/docs/adr/0002-tenant-context-primitives-live-in-pkgcore.md)
-- [docs/adr/0003-accept-mpl2-for-pki-signer-vault.md](https://github.com/vislake/speed/blob/main/docs/adr/0003-accept-mpl2-for-pki-signer-vault.md)
+- [docs/internal/adr/0001-module-migrations-return-embed-fs.md](https://github.com/vislake/speed/blob/main/docs/internal/adr/0001-module-migrations-return-embed-fs.md)
+- [docs/internal/adr/0002-tenant-context-primitives-live-in-pkgcore.md](https://github.com/vislake/speed/blob/main/docs/internal/adr/0002-tenant-context-primitives-live-in-pkgcore.md)
+- [docs/internal/adr/0003-accept-mpl2-for-pki-signer-vault.md](https://github.com/vislake/speed/blob/main/docs/internal/adr/0003-accept-mpl2-for-pki-signer-vault.md)

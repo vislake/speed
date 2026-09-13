@@ -121,7 +121,7 @@ directory is no longer a hand-written HTML skeleton: it is a real
   it documents). The generated configuration reference
   (`docs/user-guide/configuration/`, produced by `tools/configrefgen`
   and `--check`-gated in the docs-check pipeline) and the ADRs surfaced
-  as the `docs/developer-docs/design-decisions/` page (`docs/adr/0001`–`0003`)
+  as the `docs/developer-docs/design-decisions/` page (`docs/internal/adr/0001`–`0003`)
   have since landed.
 
 ## Language
@@ -166,7 +166,7 @@ docs/site/
         _index.md
         architecture.md
         design-principles.md
-        design-decisions.md    The ADR record, surfaced (docs/adr/0001-0003)
+        design-decisions.md    The ADR record, surfaced (docs/internal/adr/0001-0003)
         api-contract.md
         repo-and-release.md
         frontend-architecture.md

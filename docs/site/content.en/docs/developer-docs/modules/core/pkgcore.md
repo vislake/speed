@@ -223,7 +223,7 @@ of these are breaking changes under lockstep.
 
 ## Source
 
-- Design: [ADR 0002](https://github.com/vislake/speed/blob/main/docs/adr/0002-tenant-context-primitives-live-in-pkgcore.md)
+- Design: [ADR 0002](https://github.com/vislake/speed/blob/main/docs/internal/adr/0002-tenant-context-primitives-live-in-pkgcore.md)
 - Module discipline: [go/pkgcore/AGENTS.md](https://github.com/vislake/speed/blob/main/go/pkgcore/AGENTS.md)
 
 ## Related pages

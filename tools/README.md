@@ -824,7 +824,7 @@ copyleft (GPL family, AGPL) fails outright; weak copyleft (MPL, LGPL)
 fails unless the entry carries an `adr` field naming an existing `docs/`
 file that records the adjudication (`github.com/hashicorp/vault/api`'s
 entry is the one case today, adjudicated by
-`docs/adr/0003-accept-mpl2-for-pki-signer-vault.md`); any unrecognized
+`docs/internal/adr/0003-accept-mpl2-for-pki-signer-vault.md`); any unrecognized
 license string fails closed with an adjudication message; the permissive
 set (0BSD, Apache-2.0, BSD-2/3-Clause, CC0-1.0, ISC, MIT, Unlicense)
 passes.

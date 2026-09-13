@@ -30,7 +30,7 @@ This acceptance is scoped to `github.com/hashicorp/vault/api` inside `go/pki/sig
 
 ## Consequences
 
-- `tools/dependency-licenses.json`'s `github.com/hashicorp/vault/api` entry carries `"adr": "docs/adr/0003-accept-mpl2-for-pki-signer-vault.md"`, and `tools/license_scan.py` now passes against the live tree.
+- `tools/dependency-licenses.json`'s `github.com/hashicorp/vault/api` entry carries `"adr": "docs/internal/adr/0003-accept-mpl2-for-pki-signer-vault.md"`, and `tools/license_scan.py` now passes against the live tree.
 - Any consumer who imports `go/pki/signer/vault` inherits this ADR's reasoning along with the dependency; a consumer who does not import it is unaffected, per point 2 above.
 - If a future round adds a lint rule fencing infrastructure-backend imports generally (there is none today), `go/pki/signer/vault`'s import of `vault/api` should be added to its allowlist rather than treated as a new violation — the isolation this ADR relies on is structural today, and a lint rule would only be restating it mechanically.
 - Should HashiCorp relicense `vault/api`, or should the module ship code that modifies one of its files rather than merely calling it, this ADR's grounds (points 1 and 2) would need re-evaluation.

@@ -41,7 +41,7 @@ ADR 与修复本身同一次改动落地,原始设计文档也在同一次改动
 对 `dbkit` 保持零 import 依赖;方言逻辑不进模块契约;设计
 文档在同一次改动中被改正。
 
-[读 ADR 0001 全文](https://github.com/vislake/speed/blob/main/docs/adr/0001-module-migrations-return-embed-fs.md)
+[读 ADR 0001 全文](https://github.com/vislake/speed/blob/main/docs/internal/adr/0001-module-migrations-return-embed-fs.md)
 
 ## ADR 0002:租户上下文原语活在 `pkgcore`
 
@@ -58,7 +58,7 @@ import 环:`dbkit -> tenancy -> dbkit`。
 `tenancy` 保持依赖 `dbkit` 的自由;在 `tenancy` 存在之前写下的
 业务代码直接调用 `pkgcore` 原语。
 
-[读 ADR 0002 全文](https://github.com/vislake/speed/blob/main/docs/adr/0002-tenant-context-primitives-live-in-pkgcore.md)
+[读 ADR 0002 全文](https://github.com/vislake/speed/blob/main/docs/internal/adr/0002-tenant-context-primitives-live-in-pkgcore.md)
 
 ## ADR 0003:为 `go/pki/signer/vault` 接受 MPL-2.0
 
@@ -76,7 +76,7 @@ import 环:`dbkit -> tenancy -> dbkit`。
 的裁定。后果:依赖清单条目带上扫描器要求的 ADR 引用;import 该
 子包的消费者连带继承这份推理,其余人不受影响。
 
-[读 ADR 0003 全文](https://github.com/vislake/speed/blob/main/docs/adr/0003-accept-mpl2-for-pki-signer-vault.md)
+[读 ADR 0003 全文](https://github.com/vislake/speed/blob/main/docs/internal/adr/0003-accept-mpl2-for-pki-signer-vault.md)
 
 ## 一条新 ADR 长什么样
 
@@ -87,6 +87,6 @@ ADR 写明背景、陈述决策、列出后果——并与体现该决策的代�
 
 ## Source
 
-- [docs/adr/0001-module-migrations-return-embed-fs.md](https://github.com/vislake/speed/blob/main/docs/adr/0001-module-migrations-return-embed-fs.md)
-- [docs/adr/0002-tenant-context-primitives-live-in-pkgcore.md](https://github.com/vislake/speed/blob/main/docs/adr/0002-tenant-context-primitives-live-in-pkgcore.md)
-- [docs/adr/0003-accept-mpl2-for-pki-signer-vault.md](https://github.com/vislake/speed/blob/main/docs/adr/0003-accept-mpl2-for-pki-signer-vault.md)
+- [docs/internal/adr/0001-module-migrations-return-embed-fs.md](https://github.com/vislake/speed/blob/main/docs/internal/adr/0001-module-migrations-return-embed-fs.md)
+- [docs/internal/adr/0002-tenant-context-primitives-live-in-pkgcore.md](https://github.com/vislake/speed/blob/main/docs/internal/adr/0002-tenant-context-primitives-live-in-pkgcore.md)
+- [docs/internal/adr/0003-accept-mpl2-for-pki-signer-vault.md](https://github.com/vislake/speed/blob/main/docs/internal/adr/0003-accept-mpl2-for-pki-signer-vault.md)
