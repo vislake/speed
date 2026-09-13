@@ -13,13 +13,5 @@ specific to that module.
 
 ## Commands
 
-Everything runs from the repository root. `make help` prints this list
-from the Makefile itself:
-
-```
-make help        make build       make test        make test-race
-make modules     make fmt         make lint        make tidy
-make check       make tidy-check  make tools-test
-```
-
-`make check` is the one CI runs.
+Everything runs from the repository root through `make`. `make help`
+lists the entry points; `make check` is the one CI runs.

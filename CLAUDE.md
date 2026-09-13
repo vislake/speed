@@ -32,25 +32,10 @@ Requirements documents are not used. Load the `document-standards` skill before 
 
 ## Commands
 
-Everything runs from the repository root through `make`. `make help` is
-the authority for this list; the module set comes from `go.work`.
-
-| Command | What it does |
-|---|---|
-| `make help` | List the entry points |
-| `make modules` | Print the module directories derived from `go.work` |
-| `make build` | Build every module, in the workspace and standalone |
-| `make test` | Test every module |
-| `make test-race` | Test every module under the race detector |
-| `make fmt` | Format every module in place |
-| `make lint` | Report formatting drift and static-analysis findings |
-| `make tidy` | Tidy every module's dependency files in place |
-| `make tidy-check` | Verify they are tidy, leaving the tree unchanged |
-| `make tools-test` | Run the test suites of the scripts in `tools/` |
-| `make check` | Run everything CI runs |
-
-`mise install` provides the toolchain the checks need; the versions are
-pinned in `.mise.toml`.
+Everything runs from the repository root through `make`, and the Makefile
+is the only place those commands are written down. `make help` lists the
+entry points, one line each; `make check` is the one CI calls. The
+toolchain they need comes from `mise install`, which reads `.mise.toml`.
 
 ## Where things are
 
@@ -62,7 +47,7 @@ pinned in `.mise.toml`.
 | `docs/design`, `docs/adr`, `docs/glossary.md` | The design authority. Chinese, per the language rule above. |
 | `tools/` | Repository self-checks. `tools/README.md` says what each one does. |
 | `Makefile`, `.mise.toml`, `.golangci.yml`, `.github/workflows/` | The engineering machinery: entry points, toolchain pins, lint configuration, CI. |
-| `.claude/skills/` | How the work is done — the handbooks listed at the bottom of this file. |
+| `.claude/skills/` | How the work is done. Each handbook's own description says what it covers; the ones that apply here are at the bottom of this file. |
 | `go/`, `web/`, `examples/reference-app`, `docs/internal/`, `docs/site/` | An earlier implementation and its documentation. No command in this repository builds or checks them. |
 
 ## Boundaries
@@ -94,4 +79,4 @@ pinned in `.mise.toml`.
 | `docs/adr` | Why it is that way: one decision per file, alternatives included. |
 | `docs/glossary.md` | The shared vocabulary. A term used in a design document means what this file says it means. |
 | `<module>/AGENTS.md` | The module's own contract: its boundaries and how to run it. |
-| `.claude/skills/` | `document-standards` before writing under the documentation paths, `development-workflow` for how a task travels from statement to merge, `commit-convention` for the commit message. |
+| `.claude/skills/` | For work under `pkg/` and `examples/`: `document-standards` before writing under the documentation paths, `development-workflow` for how a task travels from statement to merge, `commit-convention` for the commit message. |
