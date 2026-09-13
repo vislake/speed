@@ -170,3 +170,4 @@ The common checklist in `SKILL.md` applies as well.
 - [ ] No dimension filled with a default the user never raised
 - [ ] Sections with no content are deleted, not left empty; the sections present follow the fixed order
 - [ ] Every file appears in the README index exactly once
+- [ ] `scripts/check_documents.py` was run and exits 0

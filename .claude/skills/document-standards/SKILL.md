@@ -20,7 +20,7 @@ globs:
 
 The authoritative standard for project documentation. **This document tells you how to write the documents**; each document tells its reader how the system is built.
 
-This file carries what is common to every document type, and points at each type's own standard. Load the type's standard as well before writing.
+This file carries what is common to every document type, and points at each type's own standard. Load the type's standard as well before writing, and run the structural checker (section 5) before calling the work finished.
 
 **The premise that overrides everything else**: a document states the current conclusion, not the process that produced it. It says what the system is, not how the team arrived at it, not who decided it, and not when. Every rule below follows from that premise, and the premise outranks any stylistic preference.
 
@@ -107,7 +107,37 @@ Documentation paths and language are declared in `CLAUDE.md` under a fixed headi
 
 `templates/` holds the starting point for each document type. They carry the mandatory section order; delete the sections that do not apply rather than leaving them empty.
 
-## 5. Common Checklist
+## 5. Mechanical Check
+
+`scripts/check_documents.py` checks the structural half of this standard: section
+presence and order, file naming, index coverage, status vocabulary, ADR
+supersession pairing, diagram bodies and the process metadata a document never
+carries. It reads the paths and the language from the `## Documentation` block of
+section 1, and skips a declared tree that does not exist.
+
+**Running it is mandatory, not advisory.** After creating or editing any document
+under the configured paths, run it from the repository root and leave it at exit 0:
+
+```bash
+python3 .claude/skills/document-standards/scripts/check_documents.py
+```
+
+Every finding is printed as `path:line: what is wrong`. Fix the documents; do not
+silence the checker.
+
+**What it does not check** — and therefore what review still owns: subjective
+language, first and second person, restating transitions, valueless counts,
+whether a non-functional number is sourced, whether a rejected option's reason is
+real, whether a requirement is testable, and whether a document still matches the
+code it asserts things about. It also does not render diagrams: it checks that a
+mermaid block has a type and a body, while the rendering rule in section 2 stays a
+step performed during the edit.
+
+`scripts/test_check_documents.py` is the checker's own planted-violation suite
+(`python3 .claude/skills/document-standards/scripts/test_check_documents.py`). A
+new rule in this standard earns a check there, or it is not enforced.
+
+## 6. Common Checklist
 
 Each document type's standard adds its own checklist on top of this one.
 
@@ -120,3 +150,4 @@ Each document type's standard adds its own checklist on top of this one.
 - [ ] Every diagram in the edited document was rendered and confirmed to succeed
 - [ ] Code references carry no line numbers
 - [ ] The document changed in the same commit as the code that changed what it asserts
+- [ ] `scripts/check_documents.py` was run and exits 0

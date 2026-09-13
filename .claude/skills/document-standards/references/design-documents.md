@@ -119,3 +119,4 @@ The common checklist in `SKILL.md` applies as well.
 - [ ] Every implementation-status entry has a code anchor and, if partial, names what is missing
 - [ ] Status detail appears only in the module document; `architecture.md` carries one line per module
 - [ ] Every file appears in the README index exactly once
+- [ ] `scripts/check_documents.py` was run and exits 0

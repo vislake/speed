@@ -143,3 +143,4 @@ The common checklist in `SKILL.md` applies as well.
 - [ ] No design detail that belongs to the design document
 - [ ] No edit to an accepted record beyond its status, typos and broken links; drafting edits were finished before the merge that accepted it
 - [ ] The record appears in the README index exactly once, under its topic
+- [ ] `scripts/check_documents.py` was run and exits 0
