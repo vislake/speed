@@ -125,6 +125,14 @@ of them is a default a plan may depart from:
   of it, tasked with finding defects. Findings go back to the author to fix; a
   disputed finding is recorded in the plan document with both positions rather
   than silently dropped.
+  - **A review round covers a diff, not an item.** Recording it is therefore two
+    writes, not one: the round itself goes under Verification — what it read,
+    what it found, how it ruled — and each item it covered names it on the
+    item's Reviewer line. Several items carrying the same name is the normal
+    shape of one round having read all of them, not a corner cut. The name has
+    to be accounted for somewhere outside the Work Items table by the time the
+    plan is archived: a reviewer who raised no finding, ran no round and appears
+    in no log entry did not review anything.
 - **Verification passes before the last stage begins**, under the universal
   standard ([Task to Merge](task-to-merge.md), section 5). No exceptions are
   available here that are not available anywhere else.
@@ -195,7 +203,9 @@ It carries, in this order:
   `coding`, `review`, `fixing`, `blocked` or `done`, a closed vocabulary rather
   than free text, because these are the words the coder scans for and the
   checker matches on — its acceptance criteria, its dependencies, and the
-  **reviewer** who checked it, never its author.
+  **reviewer** who checked it, never its author — a real name by the time the
+  plan is archived, not the placeholder the planning stage wrote there before
+  anyone had been assigned.
 - **Progress record** — appended as items move, with what actually happened.
 - **Open findings** — review findings not yet resolved, including disputed
   ones. A finding leaves this table in exactly one of three ways, and archiving

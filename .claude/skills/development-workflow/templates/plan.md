@@ -91,7 +91,9 @@ has been written for that item yet, and someone is acting on that claim now.
       negative amount with ErrInvalidAmount" can.>
 - [ ] <The test that proves it, named by file and case.>
 
-**Reviewer**: <agent that reviewed this item -- never the one that wrote it.>
+**Reviewer**: <who checked this item -- never who wrote it. One review round
+that covered several items is named identically in each of them; that is the
+normal shape, not a shortcut.>
 
 ### W2 — <short title>
 
@@ -145,12 +147,22 @@ Run over the whole result once everything is coded and reviewed, before the last
 stage begins. Record the command as it was actually run and what it actually
 returned. A command that was not run is recorded as not run -- never as assumed
 to pass.
+
+The review rounds go here too, one block each, below the table. A round reads a
+diff rather than an item, so this is where it fits; what it read, what it found
+and how it ruled belong to it, and an item's Reviewer line names it. A name no
+round and no log entry accounts for is a name, not a review -- check_plan.py
+--final says so.
 -->
 
 | Command | Result | When |
 |---|---|---|
 | <the project's test command> | <pass / fail: what failed> | <YYYY-MM-DD HH:MM> |
 | <the project's lint command> | <pass / fail: what failed> | <YYYY-MM-DD HH:MM> |
+
+### <review round> — <reviewer>, <verdict>
+
+<What this round read, what it found, and where the findings went.>
 
 **Warnings**: <every warning surfaced, and for each: fixed, or why it stands and
 what the follow-up is. "None" only when the output genuinely had none.>

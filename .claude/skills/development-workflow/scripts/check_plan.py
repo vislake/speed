@@ -7,9 +7,10 @@ Items table and its detail blocks, acceptance criteria, the file-ownership
 partition, and the slug-shaped filename.
 
 --final adds the archiving gate on top: the stage reached done, every work item
-reached done, every acceptance criterion is ticked, no finding is still open or
-disputed, and the Outcome records a landing. A plan archived below that bar
-keeps no usable record of what was actually delivered.
+reached done, every acceptance criterion is ticked, every item names a reviewer
+the rest of the file can account for, no finding is still open or disputed, and
+the Outcome records a landing. A plan archived below that bar keeps no usable
+record of what was actually delivered.
 
 It reads no git state and judges no content. Whether an acceptance criterion is
 meaningful, whether a status is honest and whether a slug actually says what the
@@ -57,6 +58,7 @@ STAGE_RE = re.compile(r"^\*\*Stage\*\*:\s*(?P<stage>.+?)\s*$", re.M)
 WARNINGS_RE = re.compile(r"^\*\*Warnings\*\*:", re.M)
 LANDED_RE = re.compile(r"^\*\*Landed\*\*:\s*(?P<landed>.*?)\s*$", re.M)
 ACCEPTANCE_RE = re.compile(r"^\s*-\s*\[(?P<mark>[ xX])\]")
+REVIEWER_RE = re.compile(r"^\*\*Reviewer\*\*:\s*(?P<who>.*?)\s*$")
 SLUG_RE = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)+$")
 MOVED_RE = re.compile(r"^moved:\s*(?P<slug>.+?)\s*$")
 PLACEHOLDER_RE = re.compile(r"^<.*>$")
@@ -291,6 +293,15 @@ def check_plan(path: Path, rel: str, final: bool = False) -> list[Finding]:
         stop = starts[position + 1][1] if position + 1 < len(starts) else end
         blocks[item_id] = (index, stop)
 
+    # A reviewer is accounted for by the rest of the file: the log of what
+    # happened, the findings they raised, or the verification round they ran.
+    # The Work Items section is excluded on purpose -- the Reviewer line cannot
+    # be its own evidence.
+    elsewhere = "\n".join(
+        "\n".join(lines[slice(*section_span(name))])
+        for name in ("Progress Log", "Open Findings", "Verification")
+        if name in bounds)
+
     for item_id, row in items.items():
         if item_id not in blocks:
             findings.append(Finding(
@@ -309,6 +320,27 @@ def check_plan(path: Path, rel: str, final: bool = False) -> list[Finding]:
             findings.append(Finding(f"{rel}:{row['line']}", (
                 f"{item_id} is {row['Status']} with {marks.count(' ')} acceptance "
                 "criterion(s) unticked"
+            )))
+
+        reviewer = next((match.group("who")
+                         for line in lines[block_start:block_end]
+                         if (match := REVIEWER_RE.match(line))), None)
+        if reviewer is None:
+            findings.append(Finding(f"{rel}:{block_start + 1}", (
+                f"{item_id} has no '**Reviewer**:' line; an item records who "
+                "checked it, never who wrote it"
+            )))
+        elif final and (not reviewer or PLACEHOLDER_RE.match(reviewer)):
+            findings.append(Finding(f"{rel}:{block_start + 1}", (
+                f"{item_id} names no reviewer; the review happened by the time "
+                "the plan is archived, so the name is known by then"
+            )))
+        elif final and reviewer not in elsewhere:
+            findings.append(Finding(f"{rel}:{block_start + 1}", (
+                f"{item_id} names {reviewer!r} as its reviewer, and nothing else "
+                "in the file mentions them; name the reviewer or the review round "
+                "that actually ran, so the Progress Log, the findings or the "
+                "Verification record accounts for it"
             )))
     for item_id, (block_start, _) in blocks.items():
         if item_id not in items:

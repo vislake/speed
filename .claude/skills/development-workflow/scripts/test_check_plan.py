@@ -59,7 +59,7 @@ Add a second step to the runner.
 
 ## Progress Log
 
-- `2026-09-13 14:20` `W1` coded, reviewed, no findings
+- `2026-09-13 14:20` `W1` coded; reviewer-a read the diff, no findings
 
 ## Open Findings
 
@@ -167,7 +167,7 @@ class PlanCheckerTest(unittest.TestCase):
 
     def test_sections_out_of_order(self):
         moved = PLAN.replace(
-            "## Progress Log\n\n- `2026-09-13 14:20` `W1` coded, reviewed, no findings\n\n",
+            "## Progress Log\n\n- `2026-09-13 14:20` `W1` coded; reviewer-a read the diff, no findings\n\n",
             "").replace(
             "## Verification",
             "## Progress Log\n\n- `2026-09-13 14:20` `W1` coded\n\n## Verification")
@@ -281,6 +281,40 @@ class PlanCheckerTest(unittest.TestCase):
         self.write(PLAN.replace("| reviewer-b | open |",
                                 "| reviewer-b | moved: the design session |"))
         self.assert_red("is not a task slug")
+
+    # -- the reviewer --------------------------------------------------
+
+    def test_item_without_a_reviewer_line(self):
+        self.write(PLAN.replace("**Reviewer**: reviewer-b\n", ""))
+        self.assert_red("W2 has no '**Reviewer**:' line")
+
+    def test_an_unassigned_reviewer_is_fine_before_the_end(self):
+        """Planning writes a placeholder there; only archiving refuses it."""
+        self.write(PLAN.replace("**Reviewer**: reviewer-a", "**Reviewer**: <unassigned>"))
+        self.assert_green()
+
+    def test_gate_rejects_a_placeholder_reviewer(self):
+        self.write(ARCHIVED.replace("**Reviewer**: reviewer-a",
+                                    "**Reviewer**: <unassigned>"))
+        self.assert_red("W1 names no reviewer", final=True)
+
+    def test_gate_rejects_a_reviewer_nothing_else_accounts_for(self):
+        """The state every plan archived so far was in: a standing placeholder."""
+        self.write(ARCHIVED.replace("**Reviewer**: reviewer-a",
+                                    "**Reviewer**: to be assigned"))
+        self.assert_red("nothing else in the file mentions them", final=True)
+
+    def test_gate_accepts_one_round_covering_several_items(self):
+        """One round reads the whole diff; every item it covered names it."""
+        planted = (ARCHIVED
+                   .replace("**Reviewer**: reviewer-a", "**Reviewer**: round two")
+                   .replace("**Reviewer**: reviewer-b", "**Reviewer**: round two")
+                   .replace("| make test | pass | 2026-09-13 14:40 |",
+                            "| make test | pass | 2026-09-13 14:40 |\n\n"
+                            "### round two — an agent that wrote none of it, PASS\n\n"
+                            "Read the whole diff; the one finding is fixed."))
+        self.write(planted)
+        self.assert_green(final=True)
 
     # -- the archiving gate ----------------------------------------------
 
