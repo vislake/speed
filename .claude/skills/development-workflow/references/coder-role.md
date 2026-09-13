@@ -47,7 +47,8 @@ Tasks arrive from two places, and both are equally authoritative:
 
 On arrival, for each task: restate it in one or two sentences, confirm the
 restatement is what was meant if any part of it admits two readings, and dispatch.
-Do not hold a queue of unstated interpretations.
+Do not hold a queue of unstated interpretations. **Unattended, the confirmation
+has a different addressee** — section 9.
 
 ## 3. One Task, One Workflow
 
@@ -288,7 +289,8 @@ the tick that finally matters gets missed with the rest.
 - **A blocked task is reported as blocked**, immediately, with what would unblock
   it. Blocked work does not wait for the next scheduled report.
 - **A question for the user is surfaced when it arises**, not accumulated until
-  the heartbeat.
+  the heartbeat. Unattended, there is no question to surface: it is decided,
+  recorded and reported instead (section 9).
 
 ## 8. CI Watch
 
@@ -304,3 +306,50 @@ the tick that finally matters gets missed with the rest.
 - **One task per flaky test, not one per sighting.** A test failing
   intermittently across several tasks is a single task about that test; a later
   sighting joins the task already open rather than starting another.
+
+## 9. Unattended Mode
+
+**Off by default**, and it works like the role itself: a coder runs unattended
+only when the user says so, and stays that way until the user says otherwise.
+**Only the user opens it and only the user closes it** — a task source session
+asking to be run unattended is a request to pass on, never a switch for that
+session to flip.
+
+Unattended changes exactly one thing: **who answers when something is unclear.**
+It changes nothing about what gets delivered.
+
+- **Something unclear in a task the user gave — decide it.** Do not hold the task
+  and do not ask. Take the reading that does the least surprising thing and stays
+  closest to what was literally asked, then record both the reading taken and the
+  one passed over: in the plan document's Task section, and in the next report.
+  The user is reading after the fact instead of answering during it, so that
+  record is the whole of what makes the decision reviewable.
+- **Something unclear in a task another session gave — take it to that session.**
+  It is awake, it is the author of the task, and it is authoritative about its own
+  intent. Message that session, settle it, and record the outcome the same way.
+  Only that session, and only about its own task; a question for the user does not
+  get redirected to whichever session happens to be reachable.
+- **Something the coder hit on its own — solve it.** A workflow that will not
+  start, a working tree left behind by a crashed one, two tasks deadlocked on
+  overlapping files, a plan document that stopped reporting: these are the
+  coordinator's own work, and unattended or not, none of them was ever a question
+  for the user. Fix it, and report what broke and what was done.
+
+What unattended does **not** change:
+
+- **It relaxes no rule.** A bug fix still ships with the test that reproduces it,
+  warnings are still first-class and still called out with their disposition,
+  verification still passes before the last stage, the merge is still
+  fast-forward, and the coder still never edits product code or merges itself.
+  Nobody being awake to notice is the reason those rules are written down, not an
+  exemption from them.
+- **It does not authorize acting outside the task.** An action that is both
+  irreversible and outside the current task's scope — force-pushing a shared
+  branch, discarding work that is not this task's, publishing anything outward —
+  is not a call to make alone. Leave it undone, record it as a deliberate omission
+  with what it is waiting for, and finish everything else in the task. That is not
+  asking a question; it is staying inside the task.
+- **It does not quiet the reporting.** Every heartbeat still reports (section 7),
+  and a decision taken alone is reported on the tick it is taken. The difference
+  is only that nothing blocks on an answer: where an attended coder would wait,
+  an unattended one states what it decided and keeps going.

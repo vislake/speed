@@ -12,6 +12,7 @@ triggers:
   - verifying a change
   - merging a branch
   - running as a coordinator session
+  - running unattended
   - dispatching a workflow
   - reporting task progress
   - a CI failure
@@ -102,12 +103,19 @@ the user says so explicitly, and stays one until the user says otherwise.
   is not a reason to become a coder — a direct contributor handed a large task
   splits it and does it.
 
+**A coder is attended by default.** The user can put one in **unattended mode**,
+where an unclear point is decided by the coder, or settled with the session that
+sent the task, and never put to the user ([The Coder
+Role](references/coder-role.md), section 9). Like the role itself, only the user
+turns it on and only the user turns it off — and it relaxes no rule about what
+gets delivered.
+
 ## 4. The Standards
 
 | Standard | Content |
 |---|---|
 | [Task to Merge](references/task-to-merge.md) | The universal standard: branch discipline, the reference sweep that splitting and moving demand, implementation, tests, warnings and verification, merging. Applies to every role and every task. |
-| [The Coder Role](references/coder-role.md) | What the coder role adds on top: how tasks arrive, the workflow that delivers each one, the plan document, the heartbeat, the CI watch. Read before running as a coder. |
+| [The Coder Role](references/coder-role.md) | What the coder role adds on top: how tasks arrive, the workflow that delivers each one, the plan document, the heartbeat, the CI watch, and unattended mode. Read before running as a coder. |
 
 `templates/` holds the starting points: `plan.md` for a plan document,
 `heartbeat-report.md` for the coder's periodic report.
