@@ -1,21 +1,19 @@
 # CLAUDE.md
 
-This file guides AI coding agents working in this repository: the
-conventions, the architecture, the discipline list and the traps that
-most often burn first-time contributors. It is not a record of
-development status. Implementation facts live in the code and are
-verified from it:
+This file orients an agent working in this repository: where things are,
+which language to write in, how to run the checks, and which boundaries a
+change must not cross. It is not a record of development status, and it
+restates nothing another file already carries:
 
-- The module and package universe is whatever `go.work` and
-  `web/pnpm-workspace.yaml` list — those files are the membership
-  authority, not any prose census.
-- Whether a module genuinely has a tested implementation, and how its
-  tests run, is answered by the module's own `AGENTS.md` (its Testing
-  section), which travels with the code and stays current;
-  this file does not restate it.
-- Design rationale and progress narrative (milestones, round
-  records, deferrals) live in the internal design documents under
-  `docs/internal/`; they are not part of this guide.
+- The module roster is whatever `go.work` lists. That file is the
+  membership authority, and the Makefile derives every module loop from
+  it — no prose census here or anywhere else.
+- What the architecture is, and why: `docs/design` and `docs/adr`. A
+  design question is answered there, never from this file.
+- What a module's own contract is: that module's `AGENTS.md`, which
+  travels with the code.
+- What the checks are: the root `Makefile`. `make help` lists the entry
+  points; CI calls one of them.
 
 ## Language Rule (read this first)
 
@@ -32,189 +30,68 @@ verified from it:
 
 Requirements documents are not used. Load the `document-standards` skill before creating or editing anything under these paths.
 
-## Planned Commands
+## Commands
 
-Defined in `docs/internal/19-dev-workflow.md`. Task runner is Taskfile; toolchain versions are pinned in the root `.mise.toml`, mirrored from each tool's authoritative source (`go.work`, `web/.nvmrc`, `web/package.json`, the Taskfile header) with a drift gate (`tools/check_toolchain.py`) proving the mirrors cannot drift.
+Everything runs from the repository root through `make`. `make help` is
+the authority for this list; the module set comes from `go.work`.
 
-```
-task setup        # install toolchain, fetch deps, initialize the database
-task dev          # run backend + frontend in standalone deployment mode with hot reload
-task test         # test the affected modules
-task test:full    # full matrix (dual deployment mode x dual dialect)
-task lint         # lint everything
-task api:gen      # merge specs, generate backend interfaces and frontend sdk
-task docs:serve   # preview the docs site locally
-task new:module   # scaffold a new module (prints the registration checklist: go.work use entry, coverage baseline, roadmap rows)
-task release:plan # verify the lockstep release plan for one version, offline
-```
+| Command | What it does |
+|---|---|
+| `make help` | List the entry points |
+| `make modules` | Print the module directories derived from `go.work` |
+| `make build` | Build every module, in the workspace and standalone |
+| `make test` | Test every module |
+| `make test-race` | Test every module under the race detector |
+| `make fmt` | Format every module in place |
+| `make lint` | Report formatting drift and static-analysis findings |
+| `make tidy` | Tidy every module's dependency files in place |
+| `make tidy-check` | Verify they are tidy, leaving the tree unchanged |
+| `make tools-test` | Run the test suites of the scripts in `tools/` |
+| `make check` | Run everything CI runs |
 
-`task dev` must work in **standalone deployment mode** — single process, SQLite, zero external dependencies. Local development does not require `docker compose`.
+`mise install` provides the toolchain the checks need; the versions are
+pinned in `.mise.toml`.
 
-## Architecture
+## Where things are
 
-### Shape
+| Path | What it is |
+|---|---|
+| `go.work` | The module roster. Adding a module here registers it everywhere. |
+| `pkg/` | The implementation. One directory per module, each with its own `go.mod` and `AGENTS.md`. |
+| `examples/` | Hosts that assemble the modules into a running program. |
+| `docs/design`, `docs/adr`, `docs/glossary.md` | The design authority. Chinese, per the language rule above. |
+| `tools/` | Repository self-checks. `tools/README.md` says what each one does. |
+| `Makefile`, `.mise.toml`, `.golangci.yml`, `.github/workflows/` | The engineering machinery: entry points, toolchain pins, lint configuration, CI. |
+| `.claude/skills/` | How the work is done — the handbooks listed at the bottom of this file. |
+| `go/`, `web/`, `examples/reference-app`, `docs/internal/`, `docs/site/` | An earlier implementation and its documentation. No command in this repository builds or checks them. |
 
-A **modular monolith distributed as libraries**. This is the single most important thing to internalize: speed is not an application, it is independently released Go modules and npm packages that business projects pull in via `go get` / `npm install`. They compile into one binary and call each other in-process — no service discovery, no Kubernetes-shaped infrastructure. Only a minimal starter skeleton is generated by CLI and freely editable by consumers.
+## Boundaries
 
-Consequences that drive most design decisions:
+- **New code goes under `pkg/`; a program that assembles modules goes
+  under `examples/`.** A module directory owns its `go.mod`, its
+  `AGENTS.md` and its tests.
+- **Read the design before changing a public signature.** The design
+  document is where a shape is decided; code that contradicts it is the
+  thing to fix, in one direction or the other, before the change lands.
+- **A module's own `AGENTS.md` carries boundaries this file does not.**
+  Read it before editing inside that module.
+- **Every bug fix ships with a test that reproduces the bug** — failing
+  before the fix, passing after. If one genuinely cannot be written, say
+  so explicitly and say what the follow-up is.
+- **Warnings are first-class issues.** Compiler, lint, deprecation and
+  race-detector warnings are fixed, not silenced; anything deferred is
+  called out rather than left to be discovered.
+- **Commit messages are English, in Conventional Commits form, scoped by
+  module** — `fix(config): reject a manifest with two mounts on one path`.
+- **Rebase onto the target branch and fast-forward.** History stays
+  linear.
 
-- Every exported signature change propagates to every delivered project. Treat public API as frozen unless you are intentionally shipping a breaking change.
-- Every dependency added here lands in someone else's `go.sum` or bundle. Adding one needs justification in the pull request.
-- Implementation details belong under `internal/` so consumers cannot import them.
-
-### Module dependency direction
-
-Dependencies flow strictly bottom-up (full graph in `docs/internal/01-architecture.md`):
-
-```
-pkgcore -> dbkit / observability / ratelimit -> tenancy -> config / jobs -> storage / notification / pki
-        -> authn / rbac / org / metering -> billing / ai-gateway / sharing / integration
-        -> compliance -> admin
-```
-
-This is a coarse topological ordering, not the full edge list — `docs/internal/01-architecture.md`'s own mermaid graph is the authority for exactly which module imports which. In particular `admin`, sitting at the very top, is not a plain one-hop dependent of `compliance` alone: it is explicitly permitted to import the concrete packages of every module below it directly, so it fans in on `rbac`, `authn`, `tenancy`, `org`, `config`, `notification`, `billing`, `metering` and `compliance` all at once — the shape `docs/internal/01-architecture.md`'s own diagram draws. `pki` sits beside `storage`/`notification` above because it depends only on `tenancy`/`jobs`/`config`, never on `authn` — `authn` reaches it only at assembly time, through the structurally-typed `KeySource` module interface, never an import edge (the no-import rule applied one level up: the missing `authn -> pki` edge is deliberate, per `docs/internal/01-architecture.md`'s discipline list).
-
-### Module wiring
-
-Every module carries the module contract — `Name`/`DependsOn`/`Migrations`/`Locales`/`OpenAPISpec` plus a `Register(*pkgcore.ComponentRegistry)` declaration body — and registers everything through that single call: routes, config schema, feature flags, permissions, job handlers, notification types, events, audit actions. The declaration seats exist so that adding a new cross-cutting mechanism does not change the contract, which under lockstep versioning would break every module at once.
-
-`go/app` is the **application assembly layer** sitting above the whole graph (the one recorded exception to the module-discipline rule): it owns the structure every host's boot shares — the assembly order, the configuration load orchestration and the eight-stage component drive — while the host keeps the policy (which components compose, which values configure them, its routes, its listener and its rules). Hosts assemble through it — registering their own components on a `pkgcore.ComponentRegistry` and driving `app.Assemble`/`app.Shutdown`, or the `RunAssembly` sugar — and the rationale and the charter live in `docs/internal/01-architecture.md` and `go/app/AGENTS.md`.
-
-### Deployment mode and implementation composition
-
-These are **two orthogonal axes**, and conflating them is a design error (`docs/internal/03-deployment-modes.md` is the authority):
-
-- **Deployment mode** — how many replicas this runs as, and therefore which implementations are *permissible*.
-- **Implementation composition** — which implementation each infrastructure module actually uses.
-
-Every infrastructure dependency is an interface in `pkgcore` with **N implementations** (N ≥ 1, not fixed at two): `EventBus` has an in-process channel plus Redis Streams, PostgreSQL `LISTEN`/`NOTIFY` and NATS JetStream implementations in their own subpackages; `Mailer` has console and SMTP; `KVStore` has in-memory plus Redis, PostgreSQL, Memcached and NATS JetStream; and so on. **The deployment mode does not select an implementation — it only constrains one.** Each implementation declares its capabilities (`MultiReplicaSafe`, `SurvivesRestart`, `Stateless` — `Stateless` exempting a stateless implementation such as the console mailer from a `SurvivesRestart` warning banner that has nothing to warn about for it), each deployment mode declares what it requires, and assembly fails at startup when the composition cannot run in the declared mode, naming the component and the implementation.
-
-The constraint is one-directional: a multi-replica deployment excludes in-process implementations, while a single-process deployment excludes nothing — a single binary talking to real PostgreSQL, real Stripe and real SMTP is the ordinary shape of a small-customer production install, not a misuse. Whether an implementation is a fake or the real thing is an environment-and-credentials question the *application assembler* answers; the framework ships no "production" or "test" preset and enforces no such policy.
-
-**Assembly validation is a wiring-time contract**: the host registers the components it wants on a `pkgcore.ComponentRegistry` (or lets `go/app`'s loader select them from a composition configuration), and the engine drives the eight stages. The deployment mode declares the topology; each component's descriptor declares the capability bits of the implementation it provides; the assembly fails a composition that cannot run in the declared mode with `ErrCapabilityUnsatisfied`, naming the component, missing capability and mode (a startup banner covers the `SurvivesRestart`-only miss). The machinery lives in `go/pkgcore`: the component registry (`component_registry.go`) and its assembly validation (`component_assembly.go`), the capability bits (`capability.go`), the flat scalar `Config` and `ErrMissingSeamConfig` the built-in construction paths take (`flat_config.go`) and the seam built-ins (`eventbus_memory.go`, `kv_memory.go`, `mailer_console.go`, `mailer_smtp.go`, `objectstore_local.go`, self-registered through `pkgcore.MustRegister`). `observability.Init(ctx, opts...)` likewise takes no mode — the `WithOTLPEndpoint` option alone decides the exporter. Mode values and chosen implementations stay out of business code — the discipline table's semgrep rule enforces that as a residual-risk detector.
-
-A side benefit worth knowing: the in-process implementations double as test doubles, so most unit tests need no testcontainers.
-
-### Multi-tenancy
-
-Shared database with `tenant_id` isolation, guarded three ways: a GORM plugin that auto-injects the filter, a mandatory generic `dbkit.Repository[T]` base, and PostgreSQL RLS in distributed deployment mode. Tables fall into four data domains (tenant / identity / platform / link) — `users` is deliberately **not** tenant-scoped, since a person can belong to several tenants; `memberships` bridges them.
-
-### API contract
-
-**Spec-first, non-negotiable order**: edit `api/openapi.yaml` → `task api:gen` → compilation failures reveal every handler to fix → implement → update frontend → commit together. The generated Go server interface participates in compilation, so drift between spec and implementation cannot compile. `task api:gen` is the platform leg: pinned oapi-codegen regenerates the eleven platform fragments' backend interfaces, and pinned orval regenerates the frontend `@speed/api-sdk` package from the merged platform document (`contracts/speed.yaml`); the generated hooks call the `@speed/api-client` runtime through a single hand-written binding (`src/runtime.ts`'s `bindRequestFn`, bound by the host at bootstrap), never HTTP of their own. The reference app's own notes, cases and smilesim fragments are the app's API, not platform API: they regenerate through the app-owned leg `task api:gen:app`, the same generator pair run over the app's own merged document (`examples/reference-app/web/app-openapi.yaml`) into the app-owned SDK (`examples/reference-app/web/src/app-api`) the app web host imports for its own surfaces — platform operations keep riding `@speed/api-sdk`, both over the one `bindRequestFn` binding — and notes' handler implements its fragment's generated `api.ServerInterface` (compile-time assertion at the bottom of `internal/notes/handler.go`) as the loop's end-to-end proof. Artifact consistency, plus handler compilation, is enforced by code review over both legs: regenerate, and a committed artifact that differs from the generator's output is the finding.
-
-### Versioning
-
-**Lockstep**: all Go modules and npm packages share one version number and release together; only same-version combinations are supported. This removes the compatibility matrix entirely, at the cost of consumers upgrading everything at once (`saasctl upgrade` handles the rewrite).
-
-## Architecture Discipline
-
-Every rule below is enforced by code review, and by the checkers under `tools/` where the tooling for it exists — **these are not style suggestions**. Code that violates any of them should not be merged. The reasoning behind each lives in `docs/internal/`; the detailed how-to lives in `.claude/skills/`.
-
-### Dependencies and module boundaries
-
-- **Do not let `rbac` depend on `authn`.** Authorization only knows `Subject{TenantID, UserID}`; the authenticating side assembles the Subject and calls authorization.
-- **Do not import another business module's structs for database relations.** Use ID references plus domain events — `authn` publishes `UserCreated`, `org` subscribes to create the default workspace; `org` never imports `authn.User`.
-- **Do not import concrete infrastructure implementations in business code.** Depend on the `pkgcore` interfaces (`KVStore`, `EventBus`, `ObjectStore`, `Mailer`), never on `go-redis`, an S3 SDK, and so on.
-- **Do not expose a capability on an interface that only one implementation can satisfy.** Interfaces are designed against the weakest of that module's registered implementations — an anchor that moves as implementations are added, not a fixed "the standalone one".
-- **Do not put a backend implementation in the same package as the interface it implements.** The rule above governs source code; this one governs packaging, and neither substitutes for the other — Go resolves dependencies per *package*, not per symbol, so a module can obey "business code depends only on interfaces" and still hand every consumer the backend SDK, purely because the implementation sits in the package they import. Which backends a binary contains is the assembling application's decision: an application certain it only wants SQLite imports one dialect package and carries one dialect's dependencies; an application that wants to switch at run time imports both and carries both. Bundling everything is not a trade-off in exchange for "one binary runs any composition" — that property survives splitting, since whoever wants it imports every implementation and pays exactly the same. `database/sql` is the model: import two drivers and switch by DSN, import one and support one. Rationale, the measurement method, and the accepted cost (a missing registration becomes a startup error rather than a compile error, so the message must name the import that fixes it) are in `docs/internal/03-deployment-modes.md`.
-- **Prefer a subpackage over a new module when splitting an implementation out.** A subpackage already isolates completely — the effect reaches `go.mod`, `go.sum` and minimal version selection, not just the import graph (measured: a consumer importing only the `pkgcore` root package has no `koanf` entry anywhere, `koanf` being used solely by `pkgcore/config`). Modules are release units, divided by domain cohesion, and must not be bent to serve a packaging need: under lockstep versioning each one costs a `go.work` entry, a CI matrix row, an `AGENTS.md`, a changesets fixed-group entry and a version tag, none of which a subpackage requires. A module is warranted only for an implementation needing its own release cadence, or one consumers would use without the parent — lockstep rules out both.
-- **Adding a built-in implementation requires measuring what it costs consumers.** Create a throwaway module, `require` the target, `go mod tidy` under `GOWORK=off`, count `// indirect` entries, and put the number in the PR. The cost accumulates upward through the dependency graph, so the bar rises the closer a module sits to `pkgcore`. Existing violations are tracked in issue #1; `go/ratelimit` is the illustration — zero third-party imports in its own non-test code, and four `// indirect` entries for a bare consumer under a `GOWORK=off` tidy (`BurntSushi/toml`, `nicksnyder/go-i18n/v2`, `golang.org/x/text`, pkgcore itself).
-
-### API contract
-
-- **Do not hand-write backend API calls.** The frontend may only use the generated hooks from `@speed/api-sdk`; `fetch` / `axios` are permitted only inside `@speed/api-client`.
-- **Do not change the implementation before the spec.** Spec first, always.
-- **Do not edit any file in `@speed/api-sdk`.** It is generated and overwritten wholesale on the next release.
-
-### Multi-tenant isolation
-
-- **Do not hold a `*gorm.DB` and write queries yourself.** Business repositories for tenant-owned data must embed `dbkit.Repository[T]`. Identity and platform data (see the data-domain table in `docs/internal/04-data-and-tenancy.md`) can't use it — the generic constraint requires `TenantScoped`, which those domains must *not* implement — so they use `dbkit.Open()`'s plain `*gorm.DB` directly; see `go/dbkit/AGENTS.md`'s "Known limitations" for why that's safe rather than a loophole.
-- **Do not use `db.Table` / `db.Model` / `db.Raw` to work around the Repository.** The three bypass entry points are checked by the semgrep rule `tools/semgrep_rules/raw-gorm-bypass.yml`, whose header names the allowlisted sites (dbkit's own internals, `go/jobs/store.go`'s platform-data queries) and the residual gap it deliberately leaves (a workaround through another `*gorm.DB` method, e.g. `Exec` with hand-written SQL) — code review owns the residue.
-- **Do not hand-write `WHERE tenant_id = ?`.** Tenant filtering is injected by the GORM plugin and the Repository; writing it by hand means you are bypassing the guard.
-- **Do not accept a caller-supplied `tenant_id` at the API layer.** The tenant comes from the access token claims, never from request parameters, headers or bodies.
-- Every new repository **must** run `tenancytest.AssertIsolated` (tenant data) or `AssertNotTenantScoped` (identity and platform data).
-- **Do not reach for raw SQL to escape tenant filtering.** The only legitimate cross-tenant path is `pkgcore.WithSystemContext`, and the escape hatch's uses split in two — the widening allowlist tracks the split. Cross-tenant **widening** (seeing or acting beyond a single tenant's own rows) stays restricted to `admin`, `compliance`, `jobs` and `authn` — each of them above `tenancy` in the graph, so the audited wrapper is importable — and every grant of it goes through `tenancy`'s audited `WithSystemContext` wrapper, which publishes an audit record and fails closed if the publish fails. Platform-scope write **gates** are a different use, not a widening: a system-context-of-presence refusal gate on a platform-row write that operates strictly within its own scope. Such a gate belongs to the module that owns the write path — `go/config`'s `ScopeSystem` tier, `ai-gateway`'s platform-credential write (which is why `ai-gateway`'s request-time platform-credential handler sits on this side of the split) — and still goes through the audited wrapper wherever `tenancy` is importable. `dbkit.HardDelete` is the mechanism-level instance of the same gate: dbkit, below `tenancy`, checks presence only, and its grant holders remain the four-module whitelist above, entering through the audited wrapper. The bare primitive remains right only where its precondition is stated in place: code at or below `tenancy` in the module graph, which cannot import it (`dbkit` first among them); boot-time writes, whose fixed-actor, restart-reaffirmed declarations have no operator session or ticket to attribute (see the reference app's boot-time comments in `examples/reference-app/internal/app/attach.go`); and test-support code, where an audit event per call is noise, not accountability (ruled in place at each call site).
-- **Do not create cross-module foreign keys.** Store IDs only — cross-module FKs make independently released migrations and cascading deletes unmanageable.
-
-### Asynchronous work
-
-- **Do not assume a worker has tenant context.** Rebuild `tenantctx` explicitly inside the job, or the Repository will fail closed.
-- **Do not put business compensation in the queue layer.** The queue offers an `OnFailure` hook; refunding credits and similar compensation belongs to the business module.
-- Long-running operations **must** go through the `jobs` queue and report progress; never run them synchronously inside an HTTP request.
-
-### Deployment modes
-
-- **Do not branch on `if mode == "standalone"` in business logic.** Deployment-mode differences belong exclusively to kernel wiring.
-- Any new infrastructure dependency **must** ship at least one implementation with zero external dependencies (so it stays usable in a single-process composition and as a test double), and every implementation **must** declare its capabilities and pass that module's contract test suite.
-
-### Logging
-
-- **Use structured logging only.** Take the logger from the context (`obs.FromContext(ctx)`) so trace and tenant correlation survives.
-- **Do not build log messages by concatenation or `fmt.Sprintf`.** The message is a constant string; everything variable goes into key-value attributes.
-- **Do not use `fmt.Println`, `log.Printf`, or `console.log`.** Frontend diagnostics go through the reporter in `@speed/api-client`.
-- Attribute keys are `snake_case` and shared across the stack: `tenant_id`, `user_id`, `job_id`, `trace_id`, `duration_ms`.
-
-### Internationalization
-
-- **Do not hardcode user-facing text**, in any language. UI packages must contain no bare text nodes; Go returns structured error codes.
-- New text **must** ship with both `zh-CN` and `en-US` resources. The backend half of that rule is enforced in code rather than CI: `pkgcore/i18n`'s `Builder.AddModule` fails a module whose language files' id sets differ (`ErrParityMismatch`) while the host's catalog merge runs it over every component's locale assets. `tools/check_i18n_keys.py` checks the same key-set parity over the raw files; run it whenever documentation or i18n resources change.
-- Backend-generated content (emails, invoices, notifications) renders in the **recipient's** locale, not the operator's UI language.
-- **Do not hand-write frontend copy for a backend error code.** The client half of a module's catalog is generated: `tools/gen_platform_error_bundle.py` derives `web/packages/i18n/src/platform-errors/locales/{zh-CN,en-US}.json` from the Go modules' `locales/*.toml` catalogs intersected with the apperr census, and its `--check` mode reports a stale bundle. Run the generator whenever a catalog or an apperr code changes. Backend-only content ids (invitation emails, notification templates, SMS bodies, seed copy) are excluded by that filter and stay out of the client bundle, which is what `@speed/i18n/platform-errors`' tests pin.
-
-### Database and migrations
-
-- **Do not use `AutoMigrate`.** Migrations are versioned SQL generated by Atlas from the GORM models, one set per dialect.
-- **Do not use PostgreSQL-only features**: `gen_random_uuid()`, native arrays, JSONB operator filtering, `NOW()`. Generate IDs in the application and use `datatypes.JSON`.
-
-### Security
-
-- **Do not merge social login accounts on matching email alone.** Auto-link only when the provider reports a verified email and is on the trusted list; otherwise require sign-in first, then binding.
-- **Do not use `tenant_id` as a Prometheus metric label.** High cardinality will take Prometheus down; tenant dimensions belong in span attributes and log fields.
-- **Do not let outbound webhooks reach internal addresses.** SSRF protection is mandatory, including DNS-rebinding protection.
-- **Do not write plaintext PII, secrets or tokens into logs, traces or API responses.** Redaction is on by default.
-- **Do not send messages to unverified phone numbers or email addresses.** External contacts must complete consent verification first; the verification message itself is the only exception and is rate limited.
-- **Do not forward internal domain events straight to outbound webhooks.** Map them to a versioned public event schema.
-- Audit records produced during impersonation **must** carry both the impersonated user (`Actor`) and the real administrator (`OnBehalfOf`).
-
-### Testing
-
-- **Unit tests are defined by tier, not by a 1:1 file mapping**: a unit test is the same-package, no-external-dependency test a plain unit run executes. A unit test with a target sits next to its target — one file per target (`registry_test.go` beside `registry.go`; `PlanCard.test.tsx` beside `PlanCard.tsx`); a suite that maps to one dominant source lives in that source's own test file, and a mechanical size split keeps the target's name as a prefix, never a generic word like `misc` or `extra`. A unit-tier test with **no single target** — a behaviour suite with no dominant source, a repo- or module-shape check, a module-contract driver of the module's own built-ins — lives in the module's dedicated unit-test directory `go/<module>/unittest/` (package `unittest`), black-box against its package, never scattered in the source package. What Go's own package rules keep in the source package is explicit and recorded (the per-file inventory lives in `docs/internal/25`): white-box suites that must reach unexported symbols, godoc `Example*` functions (`example_test.go`), white-box benchmarks (`<target>_bench_test.go`), migration suites beside their `go:embed`ed migration set, and a test whose pin depends on what its own test binary does not import. The TS side has no package-boundary analogue to force any of this — frontend behaviour suites stay co-located (frontend §12).
-- **Every non-unit test class lives in a purpose-named dedicated directory, never a source directory**: real-backend integration in `integration_test/` per Go package; browser end-to-end in `e2e/` (Playwright); an application's composed HTTP/assembly flows in a dedicated app-level test directory; cross-implementation contract suites in their own support package (the `queuetest`/`eventbustest` model); migration suites beside the migration set they exercise. A non-unit test that fits no existing directory gets a new purpose-named one. The in-package exceptions Go's own package rules force are explicit and named (see the unit-tier bullet): godoc `Example*` functions (`example_test.go`), white-box benchmarks reaching unexported symbols (`<target>_bench_test.go`), and the recorded white-box unit suites the no-target rule cannot move.
-- **Do not scatter shared test helpers across test files.** Put them in a dedicated `internal/testutil` package (Go) or `test-utils/` directory (frontend) — never duplicated, never inline in a file another package's tests need to import.
-- Full detail and examples: `.claude/skills/backend-coding-standards/SKILL.md` §13, `.claude/skills/frontend-coding-standards/SKILL.md` §12.
-
-### Documentation
-
-- A new public API **must** ship, in the same pull request, with usage docs, a compilable example, and an entry in the module's `AGENTS.md`.
-- Godoc `Example` functions are compiled and run inside each module's unit suite, so a failing example fails the build — every implemented module ships at least one. Examples embedded in markdown prose (`AGENTS.md`, READMEs, ADRs) have **no** compile harness beyond `tools/check_markdown_examples.py`.
-- The configuration reference is generated from the config schema — **do not hand-write it**.
-
-### Commits and merging
-
-- **Rebase onto the target branch before merging; fast-forward merges only.** History stays linear.
-- Commit messages are English, in Conventional Commits form, scoped by module: `fix(billing): prevent credit over-deduction under concurrent debits`.
-- **Every bug fix ships with a test that reproduces the bug** (failing before the fix, passing after). If one genuinely cannot be added, explain why and what the follow-up is.
-- **Do not ignore warnings.** Compiler, lint, deprecation, console, a11y and race-detector warnings are all first-class issues; anything deferred must be called out explicitly.
-
-## Traps Specific to This Codebase
-
-Each of these has bitten real SaaS products:
-
-- **Workers do not inherit tenant context.** Rebuild it explicitly (`pkgcore.WithTenant(ctx, job.TenantID)`) or the Repository fails closed.
-- **Encrypted fields cannot be queried.** Phone numbers are encrypted at rest yet used as a login identifier; the blind-index column such a lookup needs is a `go/dbkit` facility (`NewBlindIndexer`: HMAC-SHA256 over the canonical form, with `NormalizePhoneE164` / `NormalizeEmail` supplying the E.164 / lowercased-email forms), so a module storing such an identifier must use that facility rather than reimplementing it.
-- **Billing-grade metering cannot fail open.** It uses the outbox pattern in the same transaction as the business write; only analytics-grade metering may drop events.
-- **Notifications are event-driven.** Business modules publish domain events; `notification` subscribes. The sole exception is synchronous verification codes. External recipients who are not users require consent verification before anything is sent.
-
-## Where the Rest Lives
+## Where the rest lives
 
 | Location | Content |
 |---|---|
-| `.claude/skills/**` | Standards handbooks — how the work is done, with templates and checklists. Load the relevant skill before starting: `development-workflow` (how a task travels from statement to merge, plus the coder coordinator role), `backend-coding-standards`, `frontend-coding-standards`, `commit-convention`, `document-standards`. |
-| `docs/internal/**` | Design decisions and *why* they were made, including rejected alternatives. Start at `00-overview.md`, which carries the full navigation table. |
-| per-module `AGENTS.md` | Module-level discipline that ships with the module to consuming projects, whatever AI tooling they use. |
-
-## Reference App
-
-`examples/reference-app` is an AI smile simulation platform (dental SaaS) and is the **mandatory first consumer** of every module — a module API that it does not actually use is not considered done. It exercises every edge of a general SaaS: multi-level organizations, pay-per-use credits, long-running AI jobs, media handling, external sharing, sensitive-data compliance, third-party integration.
-
+| `docs/design` | What the architecture is: the whole picture in `architecture.md`, one document per module under `modules/`. |
+| `docs/adr` | Why it is that way: one decision per file, alternatives included. |
+| `docs/glossary.md` | The shared vocabulary. A term used in a design document means what this file says it means. |
+| `<module>/AGENTS.md` | The module's own contract: its boundaries and how to run it. |
+| `.claude/skills/` | `document-standards` before writing under the documentation paths, `development-workflow` for how a task travels from statement to merge, `commit-convention` for the commit message. |

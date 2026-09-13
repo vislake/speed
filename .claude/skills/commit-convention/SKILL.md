@@ -64,7 +64,7 @@ Same rule: the scope is the package directory name under `web/packages/`, and `w
 
 Repository-level:
 - `internal` — design documents under `docs/internal/`
-- `repo` — repository-level configuration, guidance and standards (`CLAUDE.md`, `.claude/skills/`, `.gitignore`, Taskfile)
+- `repo` — repository-level configuration, guidance and standards (`CLAUDE.md`, `.claude/skills/`, `.gitignore`, the Makefile)
 - `site` — the public documentation site under `docs/site/`
 
 ## Examples
