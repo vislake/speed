@@ -47,24 +47,13 @@ lint: modules-present ## Report formatting drift and static-analysis findings
 tidy: modules-present ## Tidy every module's go.mod and go.sum in place
 	@for m in $(MODULES); do echo "==> tidy $$m"; GOWORK=off go -C $$m mod tidy || exit 1; done
 
+# `go mod tidy -diff` reports what tidying would change without writing
+# anything, so the judgement is the dependency files themselves. Judging
+# them by the working tree's git status instead both misses an uncommitted
+# untidy file (tidying restores the committed bytes, leaving the tree
+# clean) and fails on any unrelated edit to a go.mod.
 tidy-check: modules-present ## Verify the dependency files are tidy, leaving the tree unchanged
-	@backup=$$(mktemp -d); status=0; \
-	for m in $(MODULES); do \
-	  mkdir -p $$backup/$$m; cp $$m/go.mod $$backup/$$m/go.mod; \
-	  if [ -f $$m/go.sum ]; then cp $$m/go.sum $$backup/$$m/go.sum; fi; \
-	done; \
-	for m in $(MODULES); do \
-	  echo "==> tidy-check $$m"; GOWORK=off go -C $$m mod tidy || status=1; \
-	done; \
-	if [ $$status -eq 0 ]; then \
-	  dirty=$$(git status --porcelain -- '*go.mod' '*go.sum' go.work go.work.sum); \
-	  if [ -n "$$dirty" ]; then echo "dependency files are not tidy:"; echo "$$dirty"; status=1; fi; \
-	fi; \
-	for m in $(MODULES); do \
-	  cp $$backup/$$m/go.mod $$m/go.mod; \
-	  if [ -f $$backup/$$m/go.sum ]; then cp $$backup/$$m/go.sum $$m/go.sum; else rm -f $$m/go.sum; fi; \
-	done; \
-	rm -rf $$backup; exit $$status
+	@for m in $(MODULES); do echo "==> tidy-check $$m"; GOWORK=off go -C $$m mod tidy -diff || exit 1; done
 
 repo-check: python-version ## Run the gates in tools/ over this tree
 	@for g in $(GATES); do echo "==> $$g"; $(PYTHON) $$g || exit 1; done
