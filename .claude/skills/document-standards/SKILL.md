@@ -59,10 +59,20 @@ Documentation paths and language are declared in `CLAUDE.md` under a fixed headi
 - **DO NOT** use restating transitions: `in other words`, `that is to say`, `in summary`, `to sum up`. Needing to say it in other words means the previous sentence should be rewritten instead.
 - **Replace every subjective judgement with a measurable quantity or an explicit constraint.** `Performance is good` becomes `P99 latency target 50ms`. `X was chosen because Y` becomes `Adopt X (ADR-tenant-isolation-2026-03-14)`.
 
+**A rule names what it binds.**
+- **A normative sentence states the subject it constrains, not only the constraint.** `every`, `all`, `always` and `never` are the visible signal, but **a bare plural noun is the common one**: `Package-level functions and variables are limited to ...` contains no quantifier at all, and its subject is nonetheless every package-level function, including the unexported helpers no implementation can do without. `Exported package-level functions and variables ...` is the sentence that was meant.
+- **The test: take an ordinary member of the subject and apply the rule to it literally.** Ordinary members come from two places — something this document already describes and plainly endorses, **or something any implementation of it must contain**. The second source is not optional: unexported helpers appear nowhere in an architecture document, and only "every Go implementation has them" catches the sentence above. If the literal reading forbids that member, the scope is missing. **A rule that outlaws the system's own accepted practice is not strict, it is unfinished.**
+- **A layer's rule binds that layer.** A rule about what a component must produce does not reach what merely passes through it. `The table must cover every startup failure` reached failures the component only relays, which would have obliged it to name every failure mode of every module — in a component whose whole point is that it knows none of them.
+
 **No valueless counts.**
 - **DO NOT** state the cardinality of a structure the document already lists: `the project contains 21 modules`, `divided into five stages`, `there are 3 extension points`. The only source of that number is the table right below it, the reader can count it, and every addition or removal requires editing it. **Write the list, never the size of the list.**
 - **DO NOT** refer to enumerated items by position or count: `the former`, `the three above`, `the first two`. Inserting an item invalidates all of them. Name the item instead.
 - Numbers that *are* the design stay: complexity bounds, performance and capacity targets, protocol-fixed widths, timeouts, retry counts, thresholds, and closed value sets that are themselves a constraint. The test: **when this number changes, has the design changed, or has a list merely grown?** Delete the second kind.
+
+**Criteria, not catalogues.**
+- **When a list is what a rule means, write the criterion and let the list illustrate it.** A list used as the definition must be amended every time a case appears that the criterion already covered, and that amendment is exactly the edit nobody comes back to make.
+- **The test is the one above**: add a member — has the design changed, or has a list merely grown? A closed value set that is itself the constraint stays exhaustive (the lifecycle's stages, the permitted status values). A list of instances that all satisfy one stated test is illustrative.
+- **Say which kind it is.** An exhaustive list a reader may rely on and an open list of examples look identical on the page, so the difference belongs in the sentence that introduces the list. Leaving it unsaid is how a list written as examples comes to be cited elsewhere as the complete definition.
 
 **One language per document.**
 - Mixed-language text is allowed only for universally recognized terms, and for agreed terms **registered in the glossary that covers them** — the project glossary, or the local one of the context the document sits in. Nothing else.
@@ -131,7 +141,9 @@ silence the checker.
 language, first and second person, restating transitions, valueless counts,
 whether a non-functional number is sourced, whether a rejected option's reason is
 real, whether a requirement is testable, whether a word deserves a glossary entry
-at all and whether it belongs to the project glossary or to a local one, and
+at all and whether it belongs to the project glossary or to a local one, whether a
+normative sentence's literal scope is the one intended, whether a list is meant as
+a criterion or as an exhaustive set, and
 whether a document still matches the code it asserts things about. It also does not render diagrams: it checks that a
 mermaid block has a type and a body, while the rendering rule in section 2 stays a
 step performed during the edit.
@@ -148,6 +160,8 @@ Each document type's standard adds its own checklist on top of this one.
 - [ ] One language throughout; every mixed-in term is universally recognized or registered in the glossary covering its scope
 - [ ] No first person, no second person, no subjective modifiers, no restating transitions
 - [ ] No counts of structures, no positional references to enumerated items
+- [ ] Every normative sentence names what it binds, and its literal reading was applied to an ordinary member of that subject
+- [ ] A list that defines gives the criterion with examples; a list meant to be exhaustive says so
 - [ ] No history, no version, no author, no date, no TODO, no schedule
 - [ ] Content owned by another document is referenced by id, not restated
 - [ ] Every diagram in the edited document was rendered and confirmed to succeed
