@@ -7,7 +7,11 @@
 SHELL := /bin/bash
 .DEFAULT_GOAL := help
 
-MODULES := $(shell awk '$$1 ~ /^\.\//{print $$1}' go.work)
+# A use directive has two legal spellings -- a parenthesised block and a
+# bare `use ./dir` line -- so the roster is parsed by the go toolchain
+# itself rather than by a matcher here that would know only one of them
+# and silently come up empty on the other.
+MODULES := $(shell go work edit -json go.work | sed -n 's/^[[:space:]]*"DiskPath": "\(.*\)".*/\1/p')
 
 # Every tools/check_*.py is a gate over this tree: it takes no arguments, it
 # reports against the current directory, and it is run by `make repo-check`.
@@ -16,34 +20,34 @@ GATES := $(wildcard tools/check_*.py)
 
 PYTHON ?= python3
 
-.PHONY: help modules build test test-race fmt lint tidy tidy-check repo-check tools-test check python-version
+.PHONY: help modules build test test-race fmt lint tidy tidy-check repo-check tools-test check python-version modules-present
 
 help: ## List the entry points
 	@awk 'BEGIN{FS=":.*## "} /^[a-z][a-z-]*:.*## /{printf "  %-11s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
 
-modules: ## Print the module directories derived from go.work
+modules: modules-present ## Print the module directories derived from go.work
 	@for m in $(MODULES); do echo $$m; done
 
-build: ## Build every module, both in the workspace and standalone
+build: modules-present ## Build every module, both in the workspace and standalone
 	@for m in $(MODULES); do echo "==> build $$m"; go -C $$m build ./... || exit 1; done
 	@for m in $(MODULES); do echo "==> build standalone $$m"; GOWORK=off go -C $$m build ./... || exit 1; done
 
-test: ## Test every module
+test: modules-present ## Test every module
 	@for m in $(MODULES); do echo "==> test $$m"; go -C $$m test ./... || exit 1; done
 
-test-race: ## Test every module under the race detector
+test-race: modules-present ## Test every module under the race detector
 	@for m in $(MODULES); do echo "==> test -race $$m"; go -C $$m test -race ./... || exit 1; done
 
-fmt: ## Format every module in place
+fmt: modules-present ## Format every module in place
 	@for m in $(MODULES); do echo "==> fmt $$m"; env -C $$m golangci-lint fmt ./... || exit 1; done
 
-lint: ## Report formatting drift and static-analysis findings
+lint: modules-present ## Report formatting drift and static-analysis findings
 	@for m in $(MODULES); do echo "==> lint $$m"; env -C $$m golangci-lint fmt --diff ./... || exit 1; env -C $$m golangci-lint run ./... || exit 1; done
 
-tidy: ## Tidy every module's go.mod and go.sum in place
+tidy: modules-present ## Tidy every module's go.mod and go.sum in place
 	@for m in $(MODULES); do echo "==> tidy $$m"; GOWORK=off go -C $$m mod tidy || exit 1; done
 
-tidy-check: ## Verify the dependency files are tidy, leaving the tree unchanged
+tidy-check: modules-present ## Verify the dependency files are tidy, leaving the tree unchanged
 	@backup=$$(mktemp -d); status=0; \
 	for m in $(MODULES); do \
 	  mkdir -p $$backup/$$m; cp $$m/go.mod $$backup/$$m/go.mod; \
@@ -67,6 +71,17 @@ repo-check: python-version ## Run the gates in tools/ over this tree
 
 tools-test: python-version ## Run the test suites of the scripts in tools/
 	@$(PYTHON) -m unittest discover -s tools -t tools -p 'test_*.py'
+
+# Every leg above loops over $(MODULES), and a loop over an empty list is
+# a no-op that exits 0 -- an empty roster would take the whole of `make
+# check` through to success without running a single check. No leg runs
+# before this says the roster is non-empty.
+modules-present:
+	@if [ -z "$(strip $(MODULES))" ]; then \
+	  echo "no modules: go.work lists nothing this build can read." >&2; \
+	  echo "Every check loops over that roster, so an empty one would pass without checking anything." >&2; \
+	  exit 1; \
+	fi
 
 # The scripts parse TOML with tomllib, which arrived in Python 3.11.
 python-version:
