@@ -112,21 +112,39 @@ func headingKey(heading string) string {
 	return heading
 }
 
+// requiredMarker stands where the default of a required item would be.
+const requiredMarker = "(required)"
+
 // itemLine renders one input item.
+//
+// A required item carries the marker instead of a default. It has no default
+// worth the name, and (default: "") would have the reader conclude that
+// leaving it out means the empty string, while leaving it out really means the
+// module never comes up. The marker is decided before the sensitive rule
+// returns, or an item that is both would show neither a default nor a marker,
+// which is the very state this rule exists to remove.
 func itemLine(item *manifestItem) helpLine {
 	line := helpLine{
 		names: names(item.item.FlagShort, item.item.FlagName, placeholder(item)),
 		doc:   item.item.Description,
 	}
+	if item.item.Required {
+		return withNote(line, requiredMarker)
+	}
 	if item.item.Sensitive {
 		return line
 	}
-	shown := formatDefault(item)
+	return withNote(line, "(default: "+formatDefault(item)+")")
+}
+
+// withNote puts the trailing note beside the description, or in its place when
+// the item has none.
+func withNote(line helpLine, note string) helpLine {
 	if line.doc == "" {
-		line.doc = "(default: " + shown + ")"
+		line.doc = note
 		return line
 	}
-	line.doc += " (default: " + shown + ")"
+	line.doc += " " + note
 	return line
 }
 

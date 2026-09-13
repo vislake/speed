@@ -154,3 +154,29 @@ func TestEnvTypeMismatch(t *testing.T) {
 		t.Fatalf("the rejection reads %q, which does not name the path", err)
 	}
 }
+
+// TestUndeclaredContainerIgnoresTheEnvironment pins the run-time consequence of
+// resolving a container leaf to the primary source alone: a map field nobody
+// declared does not read MYAPP_LABELS, and a variable of that name is reported
+// as unclaimed rather than taken and failed on.
+func TestUndeclaredContainerIgnoresTheEnvironment(t *testing.T) {
+	type carrier struct {
+		Labels map[string]string
+	}
+	defaults := carrier{}
+	m := collect(t,
+		identifying("host", HostIdentity{Prefix: "MYAPP"}),
+		declaring("server", Schema{Namespace: "server", Mounts: []Mount{{Value: &defaults}}}),
+	)
+	d := newData(m)
+	unclaimed, err := d.applyEnv(m, []string{"MYAPP_SERVER__LABELS=a=b"})
+	if err != nil {
+		t.Fatalf("the environment layer failed: %v", err)
+	}
+	if !slices.Contains(unclaimed, "MYAPP_SERVER__LABELS") {
+		t.Fatalf("the unclaimed names are %v, want the map's derived name among them", unclaimed)
+	}
+	if d.given("server.labels") {
+		t.Fatal("the map took a value from the environment, which has no form to give it one")
+	}
+}

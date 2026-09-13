@@ -90,9 +90,9 @@ func TestBoolFlagWithoutValue(t *testing.T) {
 func TestBoolFlagDoesNotTakeTheNextWord(t *testing.T) {
 	m := flagManifest(t)
 	err := parseRejects(t, m, "--verbose", "false")
-	if !errors.Is(err, ErrUnknownKey) {
-		t.Fatalf("--verbose false returned %v, want ErrUnknownKey: the word after a boolean is "+
-			"a positional argument, not its value", err)
+	if !errors.Is(err, ErrMalformedCommandLine) {
+		t.Fatalf("--verbose false returned %v, want ErrMalformedCommandLine: the word after a "+
+			"boolean is a positional argument, not its value", err)
 	}
 }
 
@@ -181,38 +181,43 @@ func TestNoShortHelpFlag(t *testing.T) {
 	}
 }
 
-// TestDoubleDashTerminator pins that nothing after the terminator is parsed,
-// so an argument that would otherwise be refused passes by untouched.
-func TestDoubleDashTerminator(t *testing.T) {
+// TestNoDoubleDashTerminator pins that there is no argument terminator: its
+// only use in the common convention is to let a positional argument through,
+// and those are refused here, so what it would really do is swallow everything
+// after it without a word.
+func TestNoDoubleDashTerminator(t *testing.T) {
 	m := flagManifest(t)
-	p := parse(t, m, "--addr=:9090", "--", "--nope", "whatever")
-	if got := p.values["server.addr"]; got != ":9090" {
-		t.Fatalf("the arguments before the terminator gave server.addr %q, want :9090", got)
+	err := parseRejects(t, m, "--addr=:9090", "--", "--nope", "whatever")
+	if !errors.Is(err, ErrMalformedCommandLine) {
+		t.Fatalf("a terminator returned %v, want ErrMalformedCommandLine", err)
 	}
-	if len(p.values) != 1 {
-		t.Fatalf("the arguments after the terminator produced %#v, want nothing", p.values)
+	if !strings.Contains(err.Error(), "terminator") {
+		t.Fatalf("the rejection reads %q, which does not say what was wrong", err)
 	}
 }
 
 func TestPositionalArgumentRejected(t *testing.T) {
 	m := flagManifest(t)
 	err := parseRejects(t, m, "serve")
-	if !errors.Is(err, ErrUnknownKey) {
-		t.Fatalf("a positional argument returned %v, want ErrUnknownKey", err)
+	if !errors.Is(err, ErrMalformedCommandLine) {
+		t.Fatalf("a positional argument returned %v, want ErrMalformedCommandLine", err)
 	}
 	if !strings.Contains(err.Error(), "positional") {
 		t.Fatalf("the rejection reads %q, which does not say what was wrong", err)
 	}
 }
 
-// TestShortFlagClusteringUnsupported pins that -av is one name rather than
-// two: clustering pays off in a tool whose short names are dense, and these
-// are declared piecemeal by separate modules.
-func TestShortFlagClusteringUnsupported(t *testing.T) {
+// TestShortFlagClusteringRejected pins that -av is the syntax being wrong
+// rather than a name nobody declared: clustering pays off in a tool whose
+// short names are dense, and these are declared piecemeal by separate modules.
+func TestShortFlagClusteringRejected(t *testing.T) {
 	m := flagManifest(t)
 	err := parseRejects(t, m, "-av")
-	if !errors.Is(err, ErrUnknownKey) {
-		t.Fatalf("-av returned %v, want ErrUnknownKey", err)
+	if !errors.Is(err, ErrMalformedCommandLine) {
+		t.Fatalf("-av returned %v, want ErrMalformedCommandLine", err)
+	}
+	if err := parseRejects(t, m, "-av=1"); !errors.Is(err, ErrMalformedCommandLine) {
+		t.Fatalf("-av=1 returned %v, want ErrMalformedCommandLine", err)
 	}
 }
 
@@ -220,9 +225,43 @@ func TestArgumentEndsWithoutItsValue(t *testing.T) {
 	m := flagManifest(t)
 	for _, args := range [][]string{{"--addr"}, {"-a"}, {"--config"}} {
 		err := parseRejects(t, m, args...)
+		if !errors.Is(err, ErrMalformedCommandLine) {
+			t.Fatalf("%v returned %v, want ErrMalformedCommandLine", args, err)
+		}
 		if !strings.Contains(err.Error(), "takes a value") {
 			t.Fatalf("%v returned %q, which does not say the argument needs a value", args, err)
 		}
+	}
+}
+
+// TestHelpFlagRejectsANonBooleanValue pins the reserved name to the same rule
+// as any other boolean: a value it cannot read is the syntax being wrong, not
+// a request for help.
+func TestHelpFlagRejectsANonBooleanValue(t *testing.T) {
+	m := flagManifest(t)
+	err := parseRejects(t, m, "--help=maybe")
+	if !errors.Is(err, ErrMalformedCommandLine) {
+		t.Fatalf("--help=maybe returned %v, want ErrMalformedCommandLine", err)
+	}
+}
+
+// TestUndeclaredLongNameStaysUnknownKey guards the narrowing from taking over
+// the ground ErrUnknownKey holds: --nope is a name the syntax admits and no
+// item declares.
+func TestUndeclaredLongNameStaysUnknownKey(t *testing.T) {
+	m := flagManifest(t)
+	if err := parseRejects(t, m, "--nope"); !errors.Is(err, ErrUnknownKey) {
+		t.Fatalf("--nope returned %v, want ErrUnknownKey", err)
+	}
+}
+
+// TestUndeclaredSingleCharShortNameStaysUnknownKey is the short-name half of
+// the same guard: -z is one character, so the syntax is fine and the name is
+// simply not declared.
+func TestUndeclaredSingleCharShortNameStaysUnknownKey(t *testing.T) {
+	m := flagManifest(t)
+	if err := parseRejects(t, m, "-z"); !errors.Is(err, ErrUnknownKey) {
+		t.Fatalf("-z returned %v, want ErrUnknownKey", err)
 	}
 }
 

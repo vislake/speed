@@ -5,6 +5,7 @@ import (
 	"reflect"
 	"strconv"
 	"strings"
+	"unicode/utf8"
 )
 
 // parsedFlags is what one command line gave. The two reserved names are kept
@@ -30,16 +31,25 @@ type parsedFlags struct {
 //
 // The syntax is fixed and the implementation does not deviate from it:
 // --name=value and --name value, -s value and -s=value, a boolean that may
-// omit its value, no clustering of short names, nothing parsed after --, and
-// no positional arguments.
+// omit its value and is given one with an equals sign alone, no clustering of
+// short names, no positional arguments, and no -- terminator. A failure of the
+// syntax itself is ErrMalformedCommandLine; a name the syntax admits and no
+// item declares is ErrUnknownKey.
 func parseFlags(m *manifest, args []string) (*parsedFlags, error) {
 	p := &parsedFlags{values: make(map[string]string)}
 	for i := 0; i < len(args); i++ {
 		arg := args[i]
 		switch {
 		case arg == "--":
-			// Everything after the terminator is left unparsed.
-			return p, nil
+			// The only thing a terminator does in the common convention is
+			// let a positional argument that looks like an option through,
+			// and positional arguments are refused here, so keeping it would
+			// leave one piece of syntax able to swallow everything after it
+			// without a word.
+			return nil, fmt.Errorf("%w: the command line gives %q, and this program has no "+
+				"argument terminator: every argument is parsed, and what follows a %q would "+
+				"otherwise be swallowed silently. Drop it",
+				ErrMalformedCommandLine, arg, arg)
 		case strings.HasPrefix(arg, "--"):
 			name, value, hasValue := strings.Cut(arg[2:], "=")
 			if err := p.long(m, args, &i, name, value, hasValue); err != nil {
@@ -53,7 +63,7 @@ func parseFlags(m *manifest, args []string) (*parsedFlags, error) {
 		default:
 			return nil, fmt.Errorf("%w: the command line gives %q, and this program takes no "+
 				"positional arguments: every value is named by the argument it belongs to",
-				ErrUnknownKey, arg)
+				ErrMalformedCommandLine, arg)
 		}
 	}
 	return p, nil
@@ -66,8 +76,8 @@ func (p *parsedFlags) long(m *manifest, args []string, i *int, name, value strin
 		if hasValue {
 			parsed, err := strconv.ParseBool(value)
 			if err != nil {
-				return fmt.Errorf("config: --%s takes true or false, and the command line gave %q",
-					helpFlag, value)
+				return fmt.Errorf("%w: --%s takes true or false, and the command line gave %q",
+					ErrMalformedCommandLine, helpFlag, value)
 			}
 			given = parsed
 		}
@@ -95,10 +105,20 @@ func (p *parsedFlags) long(m *manifest, args []string, i *int, name, value strin
 }
 
 func (p *parsedFlags) short(m *manifest, args []string, i *int, name, value string, hasValue bool) error {
+	// The length decides before the lookup does: a short name is a single
+	// character, which collection enforces on the declaring end, so a longer
+	// one is the syntax being wrong rather than a name nobody declared.
+	if utf8.RuneCountInString(name) > 1 {
+		return fmt.Errorf("%w: the command line gives -%s, and a short name is a single "+
+			"character. Short names do not cluster, so -%s is read as one name rather than as "+
+			"several: write them apart, as -a -b",
+			ErrMalformedCommandLine, name, name)
+	}
 	item, declared := m.byShort[name]
 	if !declared {
-		return fmt.Errorf("%w: the command line gives -%s, which no input item declares. Short "+
-			"names do not cluster, so -abc is one name rather than three",
+		return fmt.Errorf("%w: the command line gives -%s, which no input item declares. An "+
+			"item reaches the command line only by declaring OriginFlag, and its short name "+
+			"comes from FlagShort",
 			ErrUnknownKey, name)
 	}
 	if err := acceptsFlag(item, "-"+name); err != nil {
@@ -147,8 +167,8 @@ func takeValue(args []string, i *int, written, value string, hasValue bool) (str
 		return value, nil
 	}
 	if *i+1 >= len(args) {
-		return "", fmt.Errorf("config: the command line ends with %s, which takes a value. "+
-			"Write %s=VALUE or %s VALUE", written, written, written)
+		return "", fmt.Errorf("%w: the command line ends with %s, which takes a value. "+
+			"Write %s=VALUE or %s VALUE", ErrMalformedCommandLine, written, written, written)
 	}
 	*i++
 	return args[*i], nil

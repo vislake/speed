@@ -369,19 +369,57 @@ func TestTextUnmarshalerStructIsALeaf(t *testing.T) {
 	}
 }
 
-// TestEmbeddedStructContributesASegment pins an embedded field to the same rule
-// as a named one: its field name, which is its type name, becomes a path
-// segment. An embedded unexported type is skipped like any unexported field.
-func TestEmbeddedStructContributesASegment(t *testing.T) {
+// TestEmbeddedStructInlinesWithoutASegment pins the embedding semantics the
+// path rules borrow along with the json tag convention: the fields of an
+// embedded struct join the enclosing path, and the embedded type names
+// nothing. An embedded unexported type is skipped like any unexported field,
+// its exported fields included: skipping an unexported field is a rule of its
+// own and takes precedence over the promotion encoding/json would do.
+func TestEmbeddedStructInlinesWithoutASegment(t *testing.T) {
 	byPath := expandOne(t, Schema{Mounts: mount(&embedder{})}, "")
-	want := []string{"embedded-options.addr", "name"}
+	want := []string{"addr", "name"}
 	if got := pathsOf(byPath); !slices.Equal(got, want) {
 		t.Fatalf("expansion produced paths %v, want %v", got, want)
 	}
 }
 
-// EmbeddedOptions is embedded by the case above, and has to be exported for the
-// embedded field itself to be.
+// TestTaggedEmbeddedFieldContributesItsTagName pins the other half of the
+// rule: a name written by hand was written to be used, so an embedded field
+// carrying an explicit tag names a segment as any other field does.
+func TestTaggedEmbeddedFieldContributesItsTagName(t *testing.T) {
+	byPath := expandOne(t, Schema{Mounts: mount(&taggedEmbedder{})}, "")
+	want := []string{"base.addr", "name"}
+	if got := pathsOf(byPath); !slices.Equal(got, want) {
+		t.Fatalf("expansion produced paths %v, want %v", got, want)
+	}
+}
+
+// TestEmbeddedPointerInlinesWhenNonNil pins that a non-nil embedded struct
+// pointer is inlined like an embedded value, defaults and all.
+func TestEmbeddedPointerInlinesWhenNonNil(t *testing.T) {
+	byPath := expandOne(t, Schema{Mounts: mount(&pointerEmbedder{EmbeddedOptions: &EmbeddedOptions{Addr: ":9000"}})}, "")
+	want := []string{"addr", "name"}
+	if got := pathsOf(byPath); !slices.Equal(got, want) {
+		t.Fatalf("expansion produced paths %v, want %v", got, want)
+	}
+	if got := byPath["addr"].def; got != ":9000" {
+		t.Fatalf("the inlined item defaults to %v, want the value the prototype held", got)
+	}
+}
+
+// TestEmbeddedNilPointerIsSkipped pins the nil half: there are no defaults to
+// read out of it, which is the same reason a named nil struct pointer is
+// skipped.
+func TestEmbeddedNilPointerIsSkipped(t *testing.T) {
+	byPath := expandOne(t, Schema{Mounts: mount(&pointerEmbedder{})}, "")
+	want := []string{"name"}
+	if got := pathsOf(byPath); !slices.Equal(got, want) {
+		t.Fatalf("expansion produced paths %v, want %v", got, want)
+	}
+}
+
+// EmbeddedOptions is embedded by the cases above, and has to be exported for
+// the embedded field itself to be.
 type EmbeddedOptions struct {
 	Addr string
 }
@@ -394,6 +432,101 @@ type embedder struct {
 	EmbeddedOptions
 	hiddenOptions
 	Name string
+}
+
+type taggedEmbedder struct {
+	EmbeddedOptions `config:"base"`
+	Name            string
+}
+
+type pointerEmbedder struct {
+	*EmbeddedOptions
+	Name string
+}
+
+// TestUndeclaredContainerTakesThePrimarySourceAlone pins the origins a
+// container leaf resolves to when its module declared none: the primary config
+// source alone. The ordinary zero value carries the environment, and a map
+// resolving to it would read a variable whose flat text it could never convert.
+func TestUndeclaredContainerTakesThePrimarySourceAlone(t *testing.T) {
+	type carrier struct {
+		Labels map[string]string
+	}
+	byPath := expandOne(t, Schema{Mounts: mount(&carrier{})}, "MYAPP")
+	item := byPath["labels"]
+	if item.origins != OriginPrimary {
+		t.Fatalf("an undeclared map resolves to origins %v, want the primary source alone", item.origins)
+	}
+	if item.envName != "" {
+		t.Fatalf("an undeclared map reads the environment variable %s, want none", item.envName)
+	}
+}
+
+// TestContainerDeclaringEnvOriginRejected pins the defect at collection: the
+// declaration itself is wrong, and waiting for the value would only surface it
+// on the runs where that one variable happens to be set.
+func TestContainerDeclaringEnvOriginRejected(t *testing.T) {
+	type carrier struct {
+		Labels map[string]string
+	}
+	err := expandFails(t, Schema{
+		Mounts: mount(&carrier{}),
+		Items:  map[string]Item{"labels": {Origins: OriginPrimary | OriginEnv}},
+	}, "MYAPP")
+	if !strings.Contains(err.Error(), "primary config source") {
+		t.Fatalf("the rejection reads %q, which does not say where such an item takes its value", err)
+	}
+}
+
+// TestContainerDeclaringFlagOriginRejected is the command-line half of the
+// same defect, on the other container shape.
+func TestContainerDeclaringFlagOriginRejected(t *testing.T) {
+	type endpoint struct {
+		Addr string
+	}
+	type carrier struct {
+		Endpoints []endpoint
+	}
+	err := expandFails(t, Schema{
+		Mounts: mount(&carrier{}),
+		Items:  map[string]Item{"endpoints": {Origins: OriginFlag, FlagName: "endpoints"}},
+	}, "")
+	if !strings.Contains(err.Error(), "primary config source") {
+		t.Fatalf("the rejection reads %q, which does not say where such an item takes its value", err)
+	}
+}
+
+// TestStringListMayDeclareEnvAndFlag guards the narrowing from going too far:
+// a list of strings has the conventional comma-separated form and keeps both
+// flat layers.
+func TestStringListMayDeclareEnvAndFlag(t *testing.T) {
+	type carrier struct {
+		Hosts []string
+	}
+	byPath := expandOne(t, Schema{
+		Mounts: mount(&carrier{}),
+		Items:  map[string]Item{"hosts": {Origins: OriginPrimary | OriginEnv | OriginFlag, FlagName: "hosts"}},
+	}, "MYAPP")
+	if got := byPath["hosts"].envName; got != "MYAPP_HOSTS" {
+		t.Fatalf("the list reads the environment variable %q, want MYAPP_HOSTS", got)
+	}
+}
+
+// TestMultiCharShortNameIsASchemaDefect pins the declaration half of the short
+// name rule. The parser reads -ab as one name because short names do not
+// cluster, so a two-character short name is an argument the help output would
+// advertise and the parser would always refuse.
+func TestMultiCharShortNameIsASchemaDefect(t *testing.T) {
+	type carrier struct {
+		Addr string
+	}
+	err := expandFails(t, Schema{
+		Mounts: mount(&carrier{}),
+		Items:  map[string]Item{"addr": {Origins: OriginFlag, FlagName: "addr", FlagShort: "ab"}},
+	}, "")
+	if !strings.Contains(err.Error(), "single character") {
+		t.Fatalf("the rejection reads %q, which does not say a short name is one character", err)
+	}
 }
 
 // TestNilScalarPointerIsALeaf pins a nil pointer to a non-struct as an item: a

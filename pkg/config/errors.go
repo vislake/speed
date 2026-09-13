@@ -37,6 +37,12 @@ var (
 	// ErrInvalidSchema reports a single declaration that is defective in
 	// itself, with no second party involved.
 	ErrInvalidSchema = errors.New("config: input item declaration is invalid")
+	// ErrMalformedCommandLine reports a command line this program's syntax
+	// does not admit: an argument that ends without the value it takes, a
+	// positional argument, or a clustered short name. It is the syntax of
+	// the command line that is wrong, which is what separates it from a name
+	// the syntax admits and no item declares.
+	ErrMalformedCommandLine = errors.New("config: command line is malformed")
 	// ErrUnknownKey reports a key the primary source or the command line is
 	// not allowed to give: the manifest does not have it, or it has it and
 	// the item does not accept that origin. The environment layer does not

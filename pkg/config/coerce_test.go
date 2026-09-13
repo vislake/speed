@@ -166,17 +166,19 @@ func TestCommaInsideElementIsNotEscapable(t *testing.T) {
 	}
 }
 
-// TestContainerFromTextRejected pins the other half of the container rule: a
-// map and a list of structs have no flat form and take their value from the
-// primary config source alone.
-func TestContainerFromTextRejected(t *testing.T) {
-	item := &manifestItem{path: "labels", typ: reflect.TypeFor[map[string]string](), kind: kindContainer}
-	_, err := coerceText("labels", "a=b", item)
-	if !errors.Is(err, ErrTypeMismatch) {
-		t.Fatalf("giving a map on the command line returned %v, want ErrTypeMismatch", err)
+// TestEmbeddedFieldInsideContainerElement pins that the keys of a container
+// element address an embedded field directly, the way the manifest expansion
+// and Decode address it. A config file would otherwise read differently inside
+// a container than outside one.
+func TestEmbeddedFieldInsideContainerElement(t *testing.T) {
+	type element struct {
+		EmbeddedOptions
+		Port int
 	}
-	if !strings.Contains(err.Error(), "primary config source") {
-		t.Fatalf("the rejection reads %q, which does not say where the value belongs", err)
+	list := coerceTo[[]element](t, []any{map[string]any{"addr": "a:1", "port": float64(1)}})
+	want := []element{{EmbeddedOptions: EmbeddedOptions{Addr: "a:1"}, Port: 1}}
+	if !reflect.DeepEqual(list, want) {
+		t.Fatalf("the list of structs converted to %#v, want %#v", list, want)
 	}
 }
 

@@ -10,21 +10,22 @@ import (
 // another breaks this case at compile time or on the distinctness check.
 func TestSentinelSetMatchesDesignTable(t *testing.T) {
 	sentinels := map[string]error{
-		"ErrHelpRequested":      ErrHelpRequested,
-		"ErrMalformedLocator":   ErrMalformedLocator,
-		"ErrUnknownScheme":      ErrUnknownScheme,
-		"ErrUndeterminedFormat": ErrUndeterminedFormat,
-		"ErrUnknownFormat":      ErrUnknownFormat,
-		"ErrSourceUnavailable":  ErrSourceUnavailable,
-		"ErrMalformedConfig":    ErrMalformedConfig,
-		"ErrConfigConflict":     ErrConfigConflict,
-		"ErrInvalidSchema":      ErrInvalidSchema,
-		"ErrUnknownKey":         ErrUnknownKey,
-		"ErrTypeMismatch":       ErrTypeMismatch,
-		"ErrMissingRequired":    ErrMissingRequired,
+		"ErrHelpRequested":        ErrHelpRequested,
+		"ErrMalformedLocator":     ErrMalformedLocator,
+		"ErrUnknownScheme":        ErrUnknownScheme,
+		"ErrUndeterminedFormat":   ErrUndeterminedFormat,
+		"ErrUnknownFormat":        ErrUnknownFormat,
+		"ErrSourceUnavailable":    ErrSourceUnavailable,
+		"ErrMalformedConfig":      ErrMalformedConfig,
+		"ErrConfigConflict":       ErrConfigConflict,
+		"ErrInvalidSchema":        ErrInvalidSchema,
+		"ErrMalformedCommandLine": ErrMalformedCommandLine,
+		"ErrUnknownKey":           ErrUnknownKey,
+		"ErrTypeMismatch":         ErrTypeMismatch,
+		"ErrMissingRequired":      ErrMissingRequired,
 	}
-	if len(sentinels) != 12 {
-		t.Fatalf("the case lists %d sentinels, want the 12 the design states", len(sentinels))
+	if len(sentinels) != 13 {
+		t.Fatalf("the case lists %d sentinels, want the 13 the design states", len(sentinels))
 	}
 	texts := make(map[string]string, len(sentinels))
 	for name, err := range sentinels {

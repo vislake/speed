@@ -182,13 +182,18 @@ func (m *manifest) checkFlagNames(item *manifestItem) error {
 // checkEnvName refuses an environment variable name that is taken, or reserved.
 // A derived name and a pinned one meet in the same namespace, so either pair of
 // them can collide.
+//
+// The reserved name is the name itself, however the item arrived at it: a
+// pinned <PREFIX>_CONFIG hijacks the config locator exactly as a derived one
+// does. The prefix has to be there for the rule to apply at all, since
+// <PREFIX>_CONFIG is derived from it and there is no such name without one.
 func (m *manifest) checkEnvName(item *manifestItem) error {
 	if item.envName == "" {
 		return nil
 	}
-	if !item.envPinned && m.host.Prefix != "" && item.envName == locatorEnvName(m.host.Prefix) {
-		return fmt.Errorf("%w: module %q declares %q, whose environment variable name derives to "+
-			"%s, which this module reserves for the config locator. Rename the input item or pin "+
+	if m.host.Prefix != "" && item.envName == locatorEnvName(m.host.Prefix) {
+		return fmt.Errorf("%w: module %q declares %q, which reads the environment variable %s, "+
+			"the name this module reserves for the config locator. Rename the input item or read "+
 			"another name with EnvName",
 			ErrConfigConflict, item.module, item.path, item.envName)
 	}

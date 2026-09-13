@@ -1,5 +1,7 @@
 // Package file delivers the file:// transport: it reads the primary config
 // source off the local filesystem and names its format by the file extension.
+// An absolute path is written file:///etc/app.yaml, a path relative to the
+// process working directory file:app.yaml.
 //
 // Importing the package is all a host does with it, because the transport
 // travels as a resource of a module registered in init:
@@ -84,8 +86,8 @@ func (source) Fetch(_ context.Context, locator *url.URL) (data []byte, format st
 	//nolint:gosec // G304: a path taken from the locator is what this
 	// transport is for. The locator comes from the host's own configuration
 	// -- its declared default, its environment prefix or its command line --
-	// and localPath above has already refused every shape but an absolute
-	// local path, so there is no wider input to narrow.
+	// and localPath above has already refused every shape but a path on this
+	// machine, so there is no wider input to narrow.
 	data, err = os.ReadFile(name)
 	if err != nil {
 		return nil, "", fmt.Errorf("%w: %s could not be read: %w", config.ErrSourceUnavailable, name, err)
@@ -97,23 +99,44 @@ func (source) Fetch(_ context.Context, locator *url.URL) (data []byte, format st
 // shapes this transport does not serve. A refused shape is a malformed
 // locator rather than an unavailable source: the host has to fix what it
 // wrote, and no amount of retrying changes the outcome.
+//
+// Two shapes name a file here. file:///etc/app.yaml is the absolute one, whose
+// host is empty or localhost, the latter standing for this machine (RFC 8089).
+// file:config.yaml is the relative one: a locator is something a person types
+// on a command line, a relative path is an ordinary thing to want while
+// developing, and the three-slash form cannot express one. The opaque part of
+// a URI is where that shape already lives, so nothing has to be invented for
+// it.
 func localPath(locator *url.URL) (string, error) {
 	if locator.Opaque != "" {
-		return "", fmt.Errorf("%w: %q has no path of its own. A file locator is written with "+
-			"three slashes and an absolute path, as in file:///etc/app.yaml",
-			config.ErrMalformedLocator, locator.String())
+		// url.Parse leaves the opaque part encoded while it decodes Path, so
+		// the escapes are undone here and the two shapes name the same file.
+		name, err := url.PathUnescape(locator.Opaque)
+		if err != nil {
+			return "", fmt.Errorf("%w: %q carries a percent escape that does not decode: %w",
+				config.ErrMalformedLocator, locator.String(), err)
+		}
+		return name, nil
 	}
-	if locator.Host != "" {
+	if !isLocalHost(locator.Host) {
 		return "", fmt.Errorf("%w: %q names the host %q, and this transport reads the local "+
-			"filesystem alone. An absolute local path is written file:///etc/app.yaml; a config "+
-			"source on another machine needs the transport that serves it",
+			"filesystem alone. A local path is written file:///etc/app.yaml, file://localhost/"+
+			"etc/app.yaml or file:app.yaml; a config source on another machine needs the "+
+			"transport that serves it",
 			config.ErrMalformedLocator, locator.String(), locator.Host)
 	}
 	if locator.Path == "" {
-		return "", fmt.Errorf("%w: %q names no path, as in file:///etc/app.yaml",
+		return "", fmt.Errorf("%w: %q names no path, as in file:///etc/app.yaml or file:app.yaml",
 			config.ErrMalformedLocator, locator.String())
 	}
 	return locator.Path, nil
+}
+
+// isLocalHost reports whether the host component of a locator stands for this
+// machine. RFC 8089 makes localhost mean the same as an empty host; anything
+// else names a machine this transport cannot reach.
+func isLocalHost(host string) bool {
+	return host == "" || strings.EqualFold(host, "localhost")
 }
 
 // formatOf names the format a file's extension stands for. An extension this

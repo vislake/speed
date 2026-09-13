@@ -132,3 +132,77 @@ func TestHelpOrderIsStableAcrossRegistrationOrders(t *testing.T) {
 		t.Fatalf("the help output changed with the registration order:\n%s\n---\n%s", first, again)
 	}
 }
+
+// requiredHelpManifest declares the two shapes the required rule has to
+// render: a plain required item, and one that is required and sensitive at
+// once. No item in the rest of the code base is both, so this case brings its
+// own fixture.
+func requiredHelpManifest(t *testing.T) *manifest {
+	t.Helper()
+	type requiredOptions struct {
+		Addr  string
+		Token string
+	}
+	defaults := requiredOptions{Token: "s3cr3t"}
+	return collect(t, declaring("greeter", Schema{
+		Namespace: "greeter",
+		Mounts:    []Mount{{Value: &defaults}},
+		Items: map[string]Item{
+			"addr": {
+				Origins:     OriginFlag,
+				FlagName:    "addr",
+				Placeholder: "HOST:PORT",
+				Description: "the address of the greeting service",
+				Required:    true,
+			},
+			"token": {
+				Origins:     OriginFlag,
+				FlagName:    "token",
+				Placeholder: "TOKEN",
+				Description: "the credential of the remote greeter",
+				Required:    true,
+				Sensitive:   true,
+			},
+		},
+	}))
+}
+
+// TestHelpMarksRequiredItemsInsteadOfDefaults pins that a required item shows
+// what it asks of the reader. (default: "") would read as "leave it out and
+// get the empty string", while leaving it out really means the module never
+// comes up.
+func TestHelpMarksRequiredItemsInsteadOfDefaults(t *testing.T) {
+	line := helpLineFor(t, renderedHelp(t, requiredHelpManifest(t)), "--addr")
+	if !strings.Contains(line, "(required)") {
+		t.Fatalf("the required item renders as %q, which does not mark it required", line)
+	}
+	if strings.Contains(line, "(default:") {
+		t.Fatalf("the required item renders as %q, which still offers a default", line)
+	}
+}
+
+// TestHelpMarksARequiredSensitiveItem pins the order the two rules are applied
+// in: an item that is both would otherwise show neither a default nor a
+// marker, leaving the reader with nothing to go on at all.
+func TestHelpMarksARequiredSensitiveItem(t *testing.T) {
+	out := renderedHelp(t, requiredHelpManifest(t))
+	line := helpLineFor(t, out, "--token")
+	if !strings.Contains(line, "(required)") {
+		t.Fatalf("the required sensitive item renders as %q, which does not mark it required", line)
+	}
+	if strings.Contains(out, "s3cr3t") {
+		t.Fatalf("the help output echoes the default of a sensitive item:\n%s", out)
+	}
+}
+
+// helpLineFor picks the rendered line of one argument out of the help output.
+func helpLineFor(t *testing.T, out, argument string) string {
+	t.Helper()
+	for _, line := range strings.Split(out, "\n") {
+		if strings.Contains(line, argument+" ") || strings.HasSuffix(line, argument) {
+			return line
+		}
+	}
+	t.Fatalf("the help output has no line for %s:\n%s", argument, out)
+	return ""
+}

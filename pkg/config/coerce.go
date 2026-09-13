@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"math"
 	"reflect"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -31,18 +32,13 @@ func coerce(path string, raw any, t reflect.Type) (any, error) {
 }
 
 // coerceText converts the string form the environment and the command line
-// give. They carry text and nothing else, so the container rule applies here
-// rather than in coerce: a map or a list of structs has no flat form, while a
-// list of strings has the conventional comma-separated one.
+// give. A list of strings has the conventional comma-separated form; every
+// other shape they can give is a scalar. A container never reaches here: it
+// takes the primary config source alone, which collection settles when the
+// declaration is expanded rather than when a value happens to arrive.
 func coerceText(path, text string, item *manifestItem) (any, error) {
-	switch item.kind {
-	case kindStringList:
+	if item.kind == kindStringList {
 		return coerceList(path, text, item.typ)
-	case kindContainer:
-		return nil, fmt.Errorf("%w: %q is %s, and a map or a list of structs takes its value "+
-			"from the primary config source alone. A flat form for them would be a syntax only "+
-			"this project knows; change the value where it is written",
-			ErrTypeMismatch, path, typeName(item.typ))
 	}
 	return coerce(path, text, item.typ)
 }
@@ -376,21 +372,48 @@ func assignStruct(dst reflect.Value, raw any) error {
 	if !ok {
 		return fmt.Errorf("the source gave %s", describe(raw))
 	}
+	return assignSection(dst, section, []reflect.Type{dst.Type()})
+}
+
+// assignSection writes one section into a struct, inlining embedded fields the
+// way the manifest expansion and Decode inline them: the keys of the section
+// address the embedded fields directly, so a configuration file reads the same
+// inside a container as it does outside one.
+//
+// chain holds the struct types on the way in. A carrier struct cannot hold a
+// cycle, collection refuses those, but the element type of a container is never
+// expanded and can: an embedded pointer to a type that reaches itself would
+// otherwise recurse without end on one and the same section.
+func assignSection(dst reflect.Value, section map[string]any, chain []reflect.Type) error {
 	t := dst.Type()
 	for i := range t.NumField() {
 		f := t.Field(i)
 		if f.PkgPath != "" {
 			continue
 		}
-		name, skip := fieldName(f)
+		name, tagged, skip := fieldName(f)
 		if skip {
+			continue
+		}
+		fv := dst.Field(i)
+		inner, inline, hollow := inlineEmbedded(f, fv, tagged)
+		if hollow {
+			continue
+		}
+		if inline {
+			if slices.Contains(chain, inner.Type()) {
+				continue
+			}
+			if err := assignSection(inner, section, append(chain, inner.Type())); err != nil {
+				return err
+			}
 			continue
 		}
 		value, given := section[name]
 		if !given {
 			continue
 		}
-		if err := assign(dst.Field(i), value); err != nil {
+		if err := assign(fv, value); err != nil {
 			return fmt.Errorf("key %q: %w", name, err)
 		}
 	}

@@ -196,6 +196,9 @@ func TestHelpExitsZeroAndListsFlags(t *testing.T) {
 	requireContains(t, got.stdout, greeterGroup+":", "the help output")
 	requireContains(t, got.stdout, "--salutation WORD", "the help output")
 	requireContains(t, got.stdout, "--remote-addr HOST:PORT", "the help output")
+	// The remote address is required, so the help output asks for it instead
+	// of offering a default nobody can rely on.
+	requireContains(t, got.stdout, "(required)", "the help output")
 	requireContains(t, got.stdout, "the word the built-in greeter opens with", "the help output")
 	requireContains(t, got.stdout, `(default: "`+localDefaults.Salutation+`")`, "the help output")
 	requireContains(t, got.stdout, "--config LOCATOR", "the help output")

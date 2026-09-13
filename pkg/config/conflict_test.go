@@ -210,6 +210,32 @@ func TestReservedEnvConfig(t *testing.T) {
 	)
 }
 
+// TestReservedEnvConfigAppliesToPinnedNames pins the reserved name to the name
+// itself rather than to how the item arrived at it: pinning <PREFIX>_CONFIG
+// hijacks the config locator exactly as deriving it does.
+func TestReservedEnvConfigAppliesToPinnedNames(t *testing.T) {
+	collectRejects(t, []string{"alpha", "MYAPP_CONFIG"},
+		identifying("host", HostIdentity{Prefix: "MYAPP"}),
+		declaring("alpha", Schema{
+			Mounts: []Mount{{Value: &addrCarrier{}}},
+			Items:  map[string]Item{"addr": {Origins: OriginEnv, EnvName: "MYAPP_CONFIG"}},
+		}),
+	)
+}
+
+// TestPinnedLocatorNameWithoutPrefixIsAllowed guards the rule from reaching
+// past its own premise: with no prefix there is no <PREFIX>_CONFIG to collide
+// with, and the whole environment path of the locator is off.
+func TestPinnedLocatorNameWithoutPrefixIsAllowed(t *testing.T) {
+	m := collect(t, declaring("alpha", Schema{
+		Mounts: []Mount{{Value: &addrCarrier{}}},
+		Items:  map[string]Item{"addr": {Origins: OriginEnv, EnvName: "MYAPP_CONFIG"}},
+	}))
+	if _, read := m.byEnv["MYAPP_CONFIG"]; !read {
+		t.Fatal("with no prefix declared, a pinned MYAPP_CONFIG is an ordinary name and stays readable")
+	}
+}
+
 func TestDuplicateHostIdentityConflict(t *testing.T) {
 	collectRejects(t, []string{"host", "second-host"},
 		identifying("host", HostIdentity{Prefix: "MYAPP"}),

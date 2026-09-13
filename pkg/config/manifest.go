@@ -8,6 +8,7 @@ import (
 	"slices"
 	"strings"
 	"unicode"
+	"unicode/utf8"
 )
 
 // leafKind is how a leaf takes a value, which decides which origins can give
@@ -42,9 +43,6 @@ type manifestItem struct {
 	origins Origin
 	// envName is the variable this item reads, empty when it reads none.
 	envName string
-	// envPinned records that envName came from Item.EnvName rather than from
-	// the derivation.
-	envPinned bool
 	// typ is the type of the field the value lands in.
 	typ reflect.Type
 	// kind classifies typ for the layers that cannot give every shape.
@@ -107,15 +105,36 @@ func (e *expander) mount(index int, m Mount) error {
 // walk expands one struct. rel is the path reached so far, relative to the
 // namespace; chain is the struct types on the way in, which is what turns a
 // self-referencing declaration into an error instead of a hang.
+//
+// An embedded field is inlined at rel rather than given a segment of its own,
+// which is the embedding semantics of encoding/json. The path rules are
+// borrowed from the json tag convention, and borrowing the embedding semantics
+// along with them is what keeps a third-party struct from carrying two sets of
+// expectations at once.
 func (e *expander) walk(v reflect.Value, rel string, chain []reflect.Type) error {
 	t := v.Type()
 	for i := range t.NumField() {
 		f := t.Field(i)
 		if f.PkgPath != "" {
-			continue // unexported: no source can reach it
+			// Unexported: no source can reach it. This holds for an embedded
+			// unexported type too, whose exported fields encoding/json would
+			// promote: skipping an unexported field is a rule of its own here
+			// and takes precedence over the embedding semantics.
+			continue
 		}
-		name, skip := fieldName(f)
+		name, tagged, skip := fieldName(f)
 		if skip {
+			continue
+		}
+		fv := v.Field(i)
+		inner, inline, hollow := inlineEmbedded(f, fv, tagged)
+		if hollow {
+			continue // an embedded nil struct pointer has no defaults to read
+		}
+		if inline {
+			if err := e.descend(inner, rel, chain, f); err != nil {
+				return err
+			}
 			continue
 		}
 		if d := segmentDefect(name); d != "" {
@@ -123,7 +142,6 @@ func (e *expander) walk(v reflect.Value, rel string, chain []reflect.Type) error
 				ErrInvalidSchema, e.module, name, f.Name, typeName(t), d)
 		}
 		key := joinPath(rel, name)
-		fv := v.Field(i)
 		switch f.Type.Kind() {
 		case reflect.Func, reflect.Chan, reflect.Interface:
 			continue // no source can give these
@@ -160,10 +178,10 @@ func (e *expander) walk(v reflect.Value, rel string, chain []reflect.Type) error
 func (e *expander) descend(v reflect.Value, key string, chain []reflect.Type, f reflect.StructField) error {
 	st := v.Type()
 	if slices.Contains(chain, st) {
-		return fmt.Errorf("%w: module %q reaches %s again through field %s at %q, so expanding "+
+		return fmt.Errorf("%w: module %q reaches %s again through field %s at %s, so expanding "+
 			"the declaration does not terminate. A configuration tree has no back edges: "+
 			"drop the field, or mirror the part of it that is meant to be configurable",
-			ErrInvalidSchema, e.module, typeName(st), f.Name, key)
+			ErrInvalidSchema, e.module, typeName(st), f.Name, pathLabel(key))
 	}
 	return e.walk(v, key, append(chain, st))
 }
@@ -172,7 +190,24 @@ func (e *expander) descend(v reflect.Value, key string, chain []reflect.Type, f 
 func (e *expander) leaf(key string, fv reflect.Value, ft reflect.Type) error {
 	e.keys[key] = true
 	item := e.schema.Items[key]
-	origins := item.Origins.resolved()
+	kind := classify(ft)
+	origins := resolveOrigins(item.Origins, kind)
+	// The declared set, not the resolved one, decides this: an item that
+	// declared nothing resolves to a set it never asked for, and killing it
+	// here would take down every undeclared map field.
+	if kind == kindContainer && item.Origins&(OriginEnv|OriginFlag) != 0 {
+		return fmt.Errorf("%w: module %q gives %q the environment or the command line as an "+
+			"origin, and it is %s. A map or a list of structs has no flat form for those layers "+
+			"to give, so the declaration could never produce a value; such an item takes the "+
+			"primary config source alone",
+			ErrInvalidSchema, e.module, key, typeName(ft))
+	}
+	if utf8.RuneCountInString(item.FlagShort) > 1 {
+		return fmt.Errorf("%w: module %q gives %q the command-line short name %q, and a short "+
+			"name is a single character. Short names do not cluster, so the parser reads -%s as "+
+			"one name rather than as several, and no declaration would ever match it",
+			ErrInvalidSchema, e.module, key, item.FlagShort, item.FlagShort)
+	}
 	if origins.has(OriginFlag) && item.FlagName == "" {
 		return fmt.Errorf("%w: module %q gives %q the command line as an origin but no FlagName. "+
 			"Long names are never derived from the path, because the command line is a human "+
@@ -192,13 +227,13 @@ func (e *expander) leaf(key string, fv reflect.Value, ft reflect.Type) error {
 		item:    item,
 		origins: origins,
 		typ:     ft,
-		kind:    classify(ft),
+		kind:    kind,
 		def:     defaultValue(fv),
 	}
 	if origins.has(OriginEnv) {
 		switch {
 		case item.EnvName != "":
-			mi.envName, mi.envPinned = item.EnvName, true
+			mi.envName = item.EnvName
 		case e.prefix != "":
 			mi.envName = deriveEnvName(e.prefix, mi.path)
 		}
@@ -226,7 +261,11 @@ func (e *expander) checkItemKeys() error {
 // fieldName derives the path segment of a field: the config tag first, the
 // json tag next, the field name in lower kebab case otherwise. A tag of "-"
 // keeps the field out, which is what it means on the structs that carry one.
-func fieldName(f reflect.StructField) (name string, skip bool) {
+//
+// tagged reports that the name came from a tag rather than from the field
+// name, which is what tells an embedded field that is inlined from one that
+// names a segment of its own.
+func fieldName(f reflect.StructField) (name string, tagged, skip bool) {
 	for _, key := range [...]string{"config", "json"} {
 		tag, ok := f.Tag.Lookup(key)
 		if !ok {
@@ -234,13 +273,61 @@ func fieldName(f reflect.StructField) (name string, skip bool) {
 		}
 		value, _, _ := strings.Cut(tag, ",")
 		if value == "-" {
-			return "", true
+			return "", false, true
 		}
 		if value != "" {
-			return value, false
+			return value, true, false
 		}
 	}
-	return camelToKebab(f.Name), false
+	return camelToKebab(f.Name), false, false
+}
+
+// inlineEmbedded reports how an anonymous field takes part in a walk. An
+// embedded struct without an explicit tag is inlined: its fields join the
+// enclosing path without a segment of their own. An explicit config or json
+// tag names a segment as it does on any other field, since a name written by
+// hand was written to be used.
+//
+// inner is the struct to walk when inline is set; hollow marks an embedded nil
+// struct pointer, which is skipped for the same reason a named one is: there
+// are no defaults to read out of it. An embedded non-struct such as a defined
+// integer type is neither, and keeps contributing a segment named after its
+// type, which is what encoding/json does with it as well.
+func inlineEmbedded(f reflect.StructField, fv reflect.Value, tagged bool) (inner reflect.Value, inline, hollow bool) {
+	if !f.Anonymous || tagged || decodesFromText(f.Type) {
+		return reflect.Value{}, false, false
+	}
+	switch {
+	case f.Type.Kind() == reflect.Struct:
+		return fv, true, false
+	case f.Type.Kind() == reflect.Pointer && f.Type.Elem().Kind() == reflect.Struct:
+		if fv.IsNil() {
+			return reflect.Value{}, false, true
+		}
+		return fv.Elem(), true, false
+	}
+	return reflect.Value{}, false, false
+}
+
+// pathLabel renders a path for an error message, naming the root when the path
+// is empty, which is where the fields of an inlined embedded struct sit.
+func pathLabel(key string) string {
+	if key == "" {
+		return "the mount root"
+	}
+	return fmt.Sprintf("%q", key)
+}
+
+// resolveOrigins settles the origins of one leaf. The zero value stands for
+// the ordinary combination, except on a container leaf: a map or a list of
+// structs takes the primary config source alone, so resolving its zero value
+// to include the environment would have it read a variable whose flat text it
+// could never convert.
+func resolveOrigins(declared Origin, kind leafKind) Origin {
+	if declared == 0 && kind == kindContainer {
+		return OriginPrimary
+	}
+	return declared.resolved()
 }
 
 // camelToKebab turns a Go field name into a config key: PoolSize becomes

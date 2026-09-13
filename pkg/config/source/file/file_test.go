@@ -103,20 +103,80 @@ func TestUnknownExtension(t *testing.T) {
 // a malformed locator rather than an unavailable source: retrying never helps
 // and the host has to fix what it wrote.
 func TestRemoteHostRejected(t *testing.T) {
-	_, _, err := fetch(t, "file://host/path/app.yaml")
-	if !errors.Is(err, config.ErrMalformedLocator) {
-		t.Fatalf("err = %v, want ErrMalformedLocator", err)
-	}
-	if !strings.Contains(err.Error(), "host") {
-		t.Errorf("err = %v, want the text to name the host it refused", err)
+	// file://./app.yaml is the shape that would slip through if accepting
+	// localhost were read as accepting a host at all: "." is a host here, and
+	// the path it leaves behind is not the one the writer meant.
+	for _, locator := range []string{"file://host/path/app.yaml", "file://./app.yaml"} {
+		_, _, err := fetch(t, locator)
+		if !errors.Is(err, config.ErrMalformedLocator) {
+			t.Fatalf("%s gave err = %v, want ErrMalformedLocator", locator, err)
+		}
+		if !strings.Contains(err.Error(), "host") {
+			t.Errorf("%s gave err = %v, want the text to name the host it refused", locator, err)
+		}
 	}
 }
 
-// TestOpaqueLocatorRejected covers file:app.yaml, which names no path at all.
-func TestOpaqueLocatorRejected(t *testing.T) {
-	_, _, err := fetch(t, "file:app.yaml")
-	if !errors.Is(err, config.ErrMalformedLocator) {
-		t.Fatalf("err = %v, want ErrMalformedLocator", err)
+// TestLocalhostHostAccepted covers the host RFC 8089 makes equal to an empty
+// one: it names this machine, which is the machine this transport reads.
+func TestLocalhostHostAccepted(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "app.yaml")
+	if err := os.WriteFile(path, []byte("addr: :8080\n"), 0o600); err != nil {
+		t.Fatalf("writing the fixture failed: %v", err)
+	}
+	data, format, err := fetch(t, "file://localhost"+path)
+	if err != nil {
+		t.Fatalf("reading a localhost locator failed: %v", err)
+	}
+	if format != "yaml" || string(data) != "addr: :8080\n" {
+		t.Fatalf("the locator gave format %q and %q, want the file's own", format, string(data))
+	}
+}
+
+// TestOpaqueLocatorIsARelativePath covers file:app.yaml, the one shape a URI
+// has for a path relative to the process working directory.
+func TestOpaqueLocatorIsARelativePath(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "app.yaml"), []byte("addr: :8080\n"), 0o600); err != nil {
+		t.Fatalf("writing the fixture failed: %v", err)
+	}
+	t.Chdir(dir)
+	data, format, err := fetch(t, "file:app.yaml")
+	if err != nil {
+		t.Fatalf("reading a relative locator failed: %v", err)
+	}
+	if format != "yaml" || string(data) != "addr: :8080\n" {
+		t.Fatalf("the locator gave format %q and %q, want the file's own", format, string(data))
+	}
+}
+
+// TestOpaqueLocatorDecodesPercentEscapes pins the two shapes to one reading of
+// the same name: url.Parse decodes Path and leaves Opaque as written, so the
+// transport has to undo the escapes itself or a space would reach the
+// filesystem as three characters.
+func TestOpaqueLocatorDecodesPercentEscapes(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "my app.yaml"), []byte("addr: :8080\n"), 0o600); err != nil {
+		t.Fatalf("writing the fixture failed: %v", err)
+	}
+	t.Chdir(dir)
+	if _, _, err := fetch(t, "file:my%20app.yaml"); err != nil {
+		t.Fatalf("reading an escaped relative locator failed: %v", err)
+	}
+}
+
+// TestOpaqueLocatorKeepsExtensionRules pins that the relative shape changes
+// where the path comes from and nothing else: the extension still names the
+// format, and an unrecognised one is still undetermined.
+func TestOpaqueLocatorKeepsExtensionRules(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "app.conf"), []byte("addr: :8080\n"), 0o600); err != nil {
+		t.Fatalf("writing the fixture failed: %v", err)
+	}
+	t.Chdir(dir)
+	_, _, err := fetch(t, "file:app.conf")
+	if !errors.Is(err, config.ErrUndeterminedFormat) {
+		t.Fatalf("err = %v, want ErrUndeterminedFormat", err)
 	}
 }
 

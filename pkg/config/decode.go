@@ -46,7 +46,10 @@ func (r *reader) Decode(path string, target any) error {
 // decodeStruct walks one struct down to its leaves, deriving the same paths
 // the declaration did: what the manifest expanded and what Decode looks up
 // have to be the same names, or a module would declare one key and read
-// another.
+// another. Embedded fields are therefore inlined here exactly as the expansion
+// inlines them; the two walks are separate implementations of one rule, and a
+// change made to only one of them declares one key and reads another without
+// saying so.
 func (r *reader) decodeStruct(v reflect.Value, prefix string, chain []reflect.Type) error {
 	t := v.Type()
 	for i := range t.NumField() {
@@ -54,12 +57,22 @@ func (r *reader) decodeStruct(v reflect.Value, prefix string, chain []reflect.Ty
 		if f.PkgPath != "" {
 			continue
 		}
-		name, skip := fieldName(f)
+		name, tagged, skip := fieldName(f)
 		if skip {
 			continue
 		}
-		key := joinPath(prefix, name)
 		fv := v.Field(i)
+		inner, inline, hollow := inlineEmbedded(f, fv, tagged)
+		if hollow {
+			continue
+		}
+		if inline {
+			if err := r.descend(inner, prefix, chain, f); err != nil {
+				return err
+			}
+			continue
+		}
+		key := joinPath(prefix, name)
 		switch f.Type.Kind() {
 		case reflect.Func, reflect.Chan, reflect.Interface:
 			continue
@@ -94,8 +107,8 @@ func (r *reader) decodeStruct(v reflect.Value, prefix string, chain []reflect.Ty
 func (r *reader) descend(v reflect.Value, key string, chain []reflect.Type, f reflect.StructField) error {
 	st := v.Type()
 	if slices.Contains(chain, st) {
-		return fmt.Errorf("config: decoding %q reaches %s again through field %s, so walking the "+
-			"target does not terminate", key, typeName(st), f.Name)
+		return fmt.Errorf("config: decoding %s reaches %s again through field %s, so walking the "+
+			"target does not terminate", pathLabel(key), typeName(st), f.Name)
 	}
 	return r.decodeStruct(v, key, append(chain, st))
 }

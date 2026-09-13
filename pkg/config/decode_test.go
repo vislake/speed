@@ -298,3 +298,29 @@ func TestDecodeNeedsAPointerToStruct(t *testing.T) {
 		})
 	}
 }
+
+// TestDecodeReadsAnInlinedEmbeddedField pins that the expansion and the decode
+// walk derive one and the same path for an embedded field. They are separate
+// implementations of one rule, and a module that declared cache.addr while
+// reading cache.embedded-options.addr would fail at neither end: the key would
+// simply never arrive.
+func TestDecodeReadsAnInlinedEmbeddedField(t *testing.T) {
+	type inlineTarget struct {
+		EmbeddedOptions
+		Name string
+	}
+	defaults := inlineTarget{}
+	m := collect(t, declaring("cache", Schema{Namespace: "cache", Mounts: []Mount{{Value: &defaults}}}))
+	r, d := newReader(t, m)
+	if err := d.applyPrimary(m, map[string]any{"cache": map[string]any{"addr": "given:1"}}); err != nil {
+		t.Fatalf("applying the primary source failed: %v", err)
+	}
+
+	var opts inlineTarget
+	if err := r.Decode("cache", &opts); err != nil {
+		t.Fatalf("decoding failed: %v", err)
+	}
+	if opts.Addr != "given:1" {
+		t.Fatalf("the inlined field decoded to %q, want the value the primary source gave", opts.Addr)
+	}
+}
