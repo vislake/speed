@@ -20,11 +20,18 @@ verified from it:
 
 ## Language Rule (read this first)
 
-- **`docs/internal/**` is written in Chinese.** It holds internal design discussion and decision rationale.
+- **`docs/internal/**`, `docs/design/**`, `docs/adr/**` and `docs/glossary.md` are written in Chinese.** They hold design documents, decision records and the shared glossary.
 - **Everything else is English**: code comments, godoc/TSDoc, module docs, per-module `AGENTS.md` files, package READMEs, the root `README.md`, `.claude/skills/**`, and commit messages.
 - User-facing product text is bilingual (zh-CN + en-US) and lives in i18n resources, never in code.
 
-CI fails on CJK characters found outside `docs/internal/` (i18n resources and `docs/site/` localization directories excepted).
+## Documentation
+
+- design: docs/design
+- adr: docs/adr
+- glossary: docs/glossary.md
+- language: zh-CN
+
+Requirements documents are not used. Load the `document-standards` skill before creating or editing anything under these paths.
 
 ## Planned Commands
 
