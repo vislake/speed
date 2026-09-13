@@ -21,8 +21,7 @@ theme = 'hugo-book'
 
 # docs/site/README.md's Publishing section names the deploy flow this
 # feeds: `hugo --minify` from this directory, output uploaded from
-# public/ (gitignored, never committed) by
-# .github/workflows/docs-site-deploy.yml.
+# public/ (gitignored, never committed).
 enableGitInfo = false
 disablePathToLower = true
 

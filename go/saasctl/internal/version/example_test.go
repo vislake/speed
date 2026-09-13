@@ -9,8 +9,8 @@ import (
 // ExampleValidate walks the two ways to check a release-version string:
 // the boolean IsValid for a quick gate and Validate when the reason a
 // version is refused matters. The accepted grammar mirrors the one the
-// lockstep release pipeline applies to its workflow_dispatch version
-// input (release.yml / tools/release/lockstep-release.py): a leading v,
+// lockstep release coordinator applies to its version
+// input (tools/release/lockstep-release.py): a leading v,
 // three dot-separated numeric parts, and an optional prerelease suffix.
 func ExampleValidate() {
 	fmt.Println(version.IsValid("v0.1.0"))

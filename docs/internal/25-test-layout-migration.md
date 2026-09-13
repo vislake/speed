@@ -20,7 +20,7 @@
 
 ### 现状
 
-`examples/reference-app/cmd/server` 共 55 个 `_test.go` 文件(编译通过、`-race` 下全绿,由 full-check 的 reference-app job 执行)。装配入口是 `server.go` 的 `buildServer(ctx, serverConfig)`(返回 `http.Handler`、cleanup、`*compliance.Module`),`main.go` 薄壳调用它;测试基座在 `server_test.go`(`testConfig`/`buildTestServer`/`registerAndAuthenticate`/`testPassword`),各域 `build*TestServer`(buildOrgTestServer、buildSmileSimTestServer、buildAdminTestServer、buildNotifTestServer、buildConsultTestServer、buildPeriodicTestServer、buildSeededTestServer、buildWebhookFlowTestServer、buildAttestationTestServer、buildUsageSummaryTestServer 等)定义在各自流测试文件内,再被其他流文件跨文件引用——辅助函数呈网状耦合(图片夹具 `jpegWithExif`、上传 `uploadAndComplete`、假 AI 服务器、邮件/短信捕获 `capturingMailer`/`lockedBuffer` 等被 5–15 个文件共享)。任何把流套件外移成黑盒包的动作,都必须先把这整张辅助网一并迁走或导出。
+`examples/reference-app/cmd/server` 共 55 个 `_test.go` 文件(编译通过、`-race` 下全绿)。装配入口是 `server.go` 的 `buildServer(ctx, serverConfig)`(返回 `http.Handler`、cleanup、`*compliance.Module`),`main.go` 薄壳调用它;测试基座在 `server_test.go`(`testConfig`/`buildTestServer`/`registerAndAuthenticate`/`testPassword`),各域 `build*TestServer`(buildOrgTestServer、buildSmileSimTestServer、buildAdminTestServer、buildNotifTestServer、buildConsultTestServer、buildPeriodicTestServer、buildSeededTestServer、buildWebhookFlowTestServer、buildAttestationTestServer、buildUsageSummaryTestServer 等)定义在各自流测试文件内,再被其他流文件跨文件引用——辅助函数呈网状耦合(图片夹具 `jpegWithExif`、上传 `uploadAndComplete`、假 AI 服务器、邮件/短信捕获 `capturingMailer`/`lockedBuffer` 等被 5–15 个文件共享)。任何把流套件外移成黑盒包的动作,都必须先把这整张辅助网一并迁走或导出。
 
 ### 未导出符号清单(黑盒外部测试包所需)
 
@@ -142,7 +142,7 @@ Go 不允许外部目录的测试访问 package main 的未导出符号,也不�
 ## 批次 2 执行建议
 
 1. 先做一次"导出面干跑":按方案 A 清单在分支上试导出最小装配入口与常量,确认 (i) 类 21 文件可编译为外部黑盒包;(ii) 类逐文件设计入口点形态(句柄聚合体/捕获注入选项/DB 连接选项);(iii) 与留包文件保持原样并在此文档登记例外理由。
-2. 迁移目录形态建议:同模块内专有目录(如 `examples/reference-app/cmd/servertest/` 或参考模块 `integration_test/` 命名惯例),随迁文件仅保留 `package …_test`;CI 矩阵(reference-app job 的 `go test` 路径)同步;若采纳"测试装配入口"文件,确认 fast-check/full-check 的 lint/vet 对新导出面无告警。
+2. 迁移目录形态建议:同模块内专有目录(如 `examples/reference-app/cmd/servertest/` 或参考模块 `integration_test/` 命名惯例),随迁文件仅保留 `package …_test`;若采纳"测试装配入口"文件,确认 lint/vet 对新导出面无告警。
 3. 前端侧组合流当前都在单元层(脚本化 fetch,无真服务器),不属本迁移;Playwright e2e 已在 `e2e/`。
 4. 验收:迁移后 reference-app 全套件在普通单元运行与 `-race` 下绿;除 (iii) 登记外,`cmd/server/` 源码目录不再出现组合 HTTP/装配流测试;本文档表格与实际情况收敛后,把类别样板(conformance 驱动留根目录、流套件入应用级测试目录)回填后端技能 §13 的示例清单。
 

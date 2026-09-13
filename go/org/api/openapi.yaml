@@ -7,8 +7,7 @@ info:
     (org_<action><Resource>) and schema-name (Org<Type>) naming
     conventions. task api:gen
     regenerates org-server.gen.go (in this directory) from this file, with
-    oapi-codegen pinned at v2.8.0 -- see oapi-codegen.yaml and
-    .github/workflows/api-contract.yml.
+    oapi-codegen pinned at v2.8.0 -- see oapi-codegen.yaml.
 
     There is deliberately no tenant_id anywhere on this surface, in any
     path, query, header or request/response body: the tenant is always the

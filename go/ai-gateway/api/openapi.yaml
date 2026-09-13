@@ -12,8 +12,7 @@ info:
     name instead, exactly as every other module fragment's
     "/api/v1/<module>" prefix does. task api:gen regenerates
     ai-gateway-server.gen.go (in this directory) from this file, with
-    oapi-codegen pinned at v2.8.0 -- see oapi-codegen.yaml and
-    .github/workflows/api-contract.yml.
+    oapi-codegen pinned at v2.8.0 -- see oapi-codegen.yaml.
 
     The credential's own API key is NEVER read back over this surface, on
     either write operation's response or the read operation below: a raw

@@ -56,7 +56,7 @@ curated 目录给每键注 kind(`string` 24 / `hexkey` 7 / `bool` 2 / `int` 2)�
 ### 1.4 configrefgen 与文档链现状
 
 - configrefgen(tools/configrefgen;原位于 examples/reference-app/cmd/configrefgen,后归位为独立 Go 工具模块——go.work use 条目在 go/ 之外,锁步发布不产 tag,见 §5.2 迁移注记)是唯一同时接触两层的工具:动态层由它自组的 schema host(host.go)经 Describe 枚举;bootstrap 层用两个机制(文件头注自述):(1) AST 扫描 `internal/app` 与 `cmd/server`,提取全部 `"APP_…"`/`"PORT"` 字面量成总账——总账派生自代码,绝不手列;(2) curated 事实表(键的 kind/回退/secret/summary/group/example)配**双向覆盖门**:总账键必须恰好各出现一次,表行必须都是真实读键,否则生成器失败。
-- 输出与字节幂等(main.go 的 `renderOutputs`):仓库根 `docs/config-reference.md`、`docs/config-reference.json`、根 `.env.example`、`config.example.json` 与站点页 `docs/site/content.en/docs/user-guide/configuration.md`(根 `.env.example` 头注明为 configrefgen 所生成、键缺漏会触发 drift 门;步骤二落地后该产物随宿主面一起移除,产物集为四件,§9)。`--check` 接 docs-check.yml 的 Config reference drift check 步(归位后为工作目录 `tools/configrefgen` 下 `go run . --check`;configrefgen 自身测试由 fast-check 与 full-check 的 `tools/configrefgen` 矩阵行跑)。
+- 输出与字节幂等(main.go 的 `renderOutputs`):仓库根 `docs/config-reference.md`、`docs/config-reference.json`、根 `.env.example`、`config.example.json` 与站点页 `docs/site/content.en/docs/user-guide/configuration.md`(根 `.env.example` 头注明为 configrefgen 所生成、键缺漏会触发 drift 门;步骤二落地后该产物随宿主面一起移除,产物集为四件,§9)。`--check` 即漂移门(归位后为工作目录 `tools/configrefgen` 下 `go run . --check`;configrefgen 自带单测)。
 - `docs/config-reference.md` 导言目前自述 "The generalized loader mechanism behind this surface is `go/pkgcore/config`: …… This app's own bootstrap does not drive the loader (its values carry app-specific resolution rules, key derivation among them)……"。这句话在迁移后必须翻转。
 - `config.example.yaml`(仓库根,手写)配 `config_example.go`(configrefgen 内的 loader 形状结构体,子集:deploymentmode/port/dbpath/redis.addr/smtp.*)与一个单测——用真实 loader 加载真实文件,验证格式与四源优先序。该示例维持 `SPEED_` 拼写族。
 
@@ -66,7 +66,7 @@ curated 目录给每键注 kind(`string` 24 / `hexkey` 7 / `bool` 2 / `int` 2)�
   - **需核对(五页,均 user-guide 域,入 §5.3 清单与 §7 评审第 4 路):**`operating.md`、`walkthrough-reference-app.md`、`domains/frontend-building.md`、`modules/tools/saasctl.md`(原清单四页,部署/启动/引导的 env 叙述),以及本轮补入的 `modules/core/pkgcore.md`——其宿主引导示例直读 `os.Getenv("APP_DEPLOYMENT_MODE")`,步骤二迁移后将成为站点里把 APP_ 键教成直读的唯一示例,必须改口;
   - **可存活(三页,不进清单):**`quickstart.md`、`modules/web/_index.md` 仅引 env 名(名不改即真);developer-docs 域 `modules/tools/saasctl.md` 是生成骨架 twin 的模块文档,骨架按 §1.5/Q1 维持直读。
 
-  站点外的按名消费载体:`examples/reference-app/README.md`、`DEPLOY.md` 是操作文案载体;`docker-compose.yml`、`docker-compose.distributed.yml`、根 `fly.toml` 与 CI(full-check 双副本用 `APP_DEPLOYMENT_MODE=distributed`、`APP_DISABLE_QUEUE_WORKER=true`;scaffold-verify 以 distributed 模式起生成骨架)按名消费 env。
+  站点外的按名消费载体:`examples/reference-app/README.md`、`DEPLOY.md` 是操作文案载体;`docker-compose.yml`、`docker-compose.distributed.yml`、根 `fly.toml` 与双副本集成测试(用 `APP_DEPLOYMENT_MODE=distributed`、`APP_DISABLE_QUEUE_WORKER=true`;脚手架验证以 distributed 模式起生成骨架)按名消费 env。
 - 双重遗留:`examples/reference-app/.env.example`(191 行,手写,最后实质内容提交 9e3efa28)与根生成 `.env.example`(100 行)并存、主题相同,是迁移文档链时要清理的重复载体(§5.2)。
 
 ### 1.5 saasctl 一侧
@@ -248,7 +248,7 @@ env 与旗标产出的一律是字符串;loader 现 `decode`(config.go)用默认
 
 > **实施注记(2026-09-10,用户裁定 A):** 本节原案的"宿主 29 键进平台产物、根 `.env.example` 重生成、旧 `examples/reference-app/.env.example` 删除"三点已由裁定 A 取代——平台参考面不含宿主变量节,curated 表与宿主渲染整体删除而非推迟,根 `.env.example` 产物移除,`examples/reference-app/.env.example` 保留为宿主键的文档载体之一。落地形态与替代门见 §9。
 
-> **迁移注记(归位):** 生成器已从 `examples/reference-app/cmd/configrefgen` 归位为独立 Go 工具模块 `tools/configrefgen`(go.work use 条目在 go/ 之外,consumer-module 形态,锁步发布不产 tag、不进 changesets)。产物路径集不变(仍为 md/json/`config.example.json`/站点页四件);生成器内与产物内的宿主指涉同轮清除——产物与生成器内不再出现任何宿主变量名或 reference-app 指涉,`config.example.yaml` 的演示值中性化为 `app.db`。命令契约:在 `tools/configrefgen` 下 `go run .` / `go run . --check`;漂移门(docs-check.yml)与单测矩阵(fast-check/full-check 的 `tools/configrefgen` 行)按新路径接线。本节与 §7 描述的"表退役与换源"工作即在该新路径发生。
+> **迁移注记(归位):** 生成器已从 `examples/reference-app/cmd/configrefgen` 归位为独立 Go 工具模块 `tools/configrefgen`(go.work use 条目在 go/ 之外,consumer-module 形态,锁步发布不产 tag、不进 changesets)。产物路径集不变(仍为 md/json/`config.example.json`/站点页四件);生成器内与产物内的宿主指涉同轮清除——产物与生成器内不再出现任何宿主变量名或 reference-app 指涉,`config.example.yaml` 的演示值中性化为 `app.db`。命令契约:在 `tools/configrefgen` 下 `go run .` / `go run . --check`;漂移门与单测按新路径接线。本节与 §7 描述的"表退役与换源"工作即在该新路径发生。
 
 - curated 表退役:35 行事实的宿主侧 29 枚迁入 loader 形状结构体字段注释,六枚平台键迁入模块声明;`bootstrap.go` 的 AST 扫描器与 `bootstrapTable` 删除。
 - 覆盖门重定义:结构体字段集 ≡ 模块声明集 ∪ 宿主键清单(双向,零差零漏),维持生成器"键缺漏即红"的既有承诺;另加"残留直读即失败"扫描:`internal/app` 与 `cmd/server` 出现 `os.Getenv` 即红(白名单空,healthcheck 迁移后无豁免)。
@@ -265,7 +265,7 @@ env 与旗标产出的一律是字符串;loader 现 `decode`(config.go)用默认
 | `examples/reference-app/.env.example`(旧载体) | 裁定 A:保留,与 DEPLOY.md 一起作为宿主键的文档载体之一 |
 | `README.md` / `DEPLOY.md`(reference-app) | 操作文案与叙述更新 |
 | `docker-compose.yml` / `.distributed.yml` / 根 `fly.toml` | env 名不变 → 只需值语义核对(空串/存在式用法) |
-| CI(full-check、scaffold-verify、docs-check) | env 名不变 → 值语义核对 |
+| 集成测试与脚手架验证 | env 名不变 → 值语义核对 |
 | docs/site en/zh 四页(operating、walkthrough-reference-app、frontend-building、user-guide 的 modules/tools/saasctl) | 叙述核对:凡写"应用直读 os.Getenv/loader 无人驱动"处翻转;键表若有引用与生成件对齐 |
 | docs/site en/zh pkgcore 页(user-guide/modules/core/pkgcore.md,本轮补入) | 宿主引导示例改写:页内 `os.Getenv("APP_DEPLOYMENT_MODE")` 直读在步骤二后陈旧——平台文档不再把 APP_ 键教成直读,示例改 loader 驱动叙述或换非 APP_ 键的通用写法 |
 | `go/pkgcore/config` 包注释 | §2 边界句、钉与前缀说明、示例 |
@@ -284,12 +284,12 @@ env 与旗标产出的一律是字符串;loader 现 `decode`(config.go)用默认
 - `go/pkgcore/config`:`WithEnvPrefix`、`env=` 钉、`Verify`、文本弱类型补强、readEnv 语义改写、包注释(边界句 + 新机制说明),配 §4.6 测试面与 godoc 示例;
 - `go/pkgcore`:Registry.Bootstrap 席位、`BootstrapKey`、`BootstrapRegistrar`、memory 实现、Add 校验、`ErrDuplicateBootstrapKey`、`NewRegistry` 接线,配席位级测试;Kernel.Bootstrap 双席键冲突检查(§2);
 - 平台模块声明:authn(2)、org(1)、notification(1)、pki(1)、config(1)六键声明(文案源 = 参考应用现有常量深注释);metering、compliance、sharing 记录零声明(§6 条款适用);声明模块的 AGENTS.md 行按文档纪律补齐;
-- configrefgen(现于 `tools/configrefgen`,见 §5.2 迁移注记):渲染改造(模块声明 → per-module 键清单;宿主 29 键过渡期仍走 curated 表,两源对账门:键/名/分组不重不漏,表头注明过渡态;同时实现 §2 防线 2——运行时项键与 bootstrap 键交叠即红)、`.env.example`/JSON 对齐、站点页与 `config.example.json` 同入产物集(步骤一即已渲染)、docs-check 配置不动(--check 即门);
+- configrefgen(现于 `tools/configrefgen`,见 §5.2 迁移注记):渲染改造(模块声明 → per-module 键清单;宿主 29 键过渡期仍走 curated 表,两源对账门:键/名/分组不重不漏,表头注明过渡态;同时实现 §2 防线 2——运行时项键与 bootstrap 键交叠即红)、`.env.example`/JSON 对齐、站点页与 `config.example.json` 同入产物集(步骤一即已渲染)、漂移门不动(--check 即门);
 - 明确不做:reference-app 任何运行面改动、env 名、站点页文案(§2 的机器防线 1 在 kernel 落、防线 2 在 configrefgen 落,都不依赖参考应用迁移)。
 
 排序理由:声明面先行,六平台键在过渡态有"模块声明 + curated 行"双源对账,任何漂移在步骤一就被门抓住;渲染底座先行,步骤二只换源不换管线。步骤一不触碰参考应用运行语义,因此独立可绿。
 
-验证期望:受影响模块 `task test` 全绿;`configrefgen --check` 通过且输出重生成提交;repo-checks/docs-check/lint 绿;golangci 零新告警。
+验证期望:受影响模块 `task test` 全绿;`configrefgen --check` 通过且输出重生成提交;各仓库检查脚本与 lint 绿;golangci 零新告警。
 
 ### 步骤二:reference-app 迁移 + 全链同步
 
@@ -298,7 +298,7 @@ env 与旗标产出的一律是字符串;loader 现 `decode`(config.go)用默认
 - 文档链同步清单整表执行(§5.3),按裁定 A 执行(旧 `examples/reference-app/.env.example` 保留,根生成件删除);
 - 两向 Verify 接入(宿主键清单并册,严格全等)。
 
-验证期望:步骤一全部项 + flowtests 全绿;`go run ./cmd/server` 零 env 手动冒烟(standalone/SQLite 照常起);双副本 flowtests(CI full-check 同款)过;站点构建零告警。
+验证期望:步骤一全部项 + flowtests 全绿;`go run ./cmd/server` 零 env 手动冒烟(standalone/SQLite 照常起);双副本 flowtests 过;站点构建零告警。
 
 ### 评审四路一致检查(两步骤共同的验收定义)
 
@@ -329,7 +329,7 @@ env 与旗标产出的一律是字符串;loader 现 `decode`(config.go)用默认
 - Q1 步骤二之后,`saasctl` 生成骨架(模板 `cmd/server/config.go`,20 键)与 `appconfig` twin 是否另起一轮跟进 loader?骨架是"可自由编辑"的生成产物,维持直读 env 有可辩护性;但消费者骨架若永远直读,loader 机制在参考应用之外的第二个证明面就缺失。建议:独立后续轮评估,本两阶段不动。**已由 §9.7 落地:骨架跟进 loader(行为等价的加载层迁移),不采用根密钥派生;闭:`21a656c5`、`31d0c1e3`(2026-09-10)。**
 - Q2 六平台键的点键拼写与声明文案(Default/Description/Example 逐字)以模块声明落盘为准,本设计不定死逐字文本;落盘时若发现键名与运行时项同层撞名等新问题,按 §2 规则处理并回写本文件。
 - Q3 `config.example.yaml` 是否值得在步骤二后补一份 `APP_` 拼写族示例(现只有 `SPEED_` 族):现状已能表达格式,补一份是文档体验增强,不阻塞迁移,随站点文案轮评估。
-- Q4 **步骤一落地时的版本钉子**:普通语义下"模块同轮消费新 pkgcore API"需要该 API 已发布——`Registry.Bootstrap`/`BootstrapKey` 在两阶段设计写就时尚未进入任何已发布版本,而 v0.0.1 之后的模块 `go.mod` 已按发布后的形态钉真实 tag(`go-module-ci` 第 5 腿的 `GOWORK=off go build` 因此会红)。伪版本不是出路:v0.0.1 已在代理上,v0.0.1 之后的提交在 MVS 里排在 `v0.0.1` 之下,`go mod tidy` 会把钉子升回已发布版本,模块拿不到新 API。因此本轮对五个声明模块(authn、org、notification、pki、config)采用仓库此前的过渡形态——`replace github.com/vislake/speed/go/pkgcore => ../pkgcore`(依赖方的 replace 对消费者无效,只影响模块自身的独立构建)。**第六个 replace 随 §9.6 的 L2 轮加入:`go/dbkit`**(`DeriveBootstrapKey` 组合席位 API `pkgcore.BootstrapKeyPurpose`,理由与形态同上)。下一次 lockstep 发布需执行同类清理:删除这六行 replace,把 require 提升到与新平台同版发布的 tag(与 `first_release_replace_cleanup` 同一清点方式);漏做则该模块的新代码在本仓库之外不可用,因为消费者会按 require 里的旧 tag 解析 pkgcore。这个清理随**下一个版本号的发布**执行,不能寄望 v0.0.1 重发:v0.0.1 的 21 个模块 tag 已从远端与本地删除,而 Go module proxy 对已服务过的版本不可撤回——缓存仍在且内容不可改写,删 tag 只让 v0.0.1 在仓库里不可再生,代理上那份依旧按原样解析,因此该版本号已经作废,既不能再发布也不能被新内容复用;下一次发布必须换一个新版本号,replace 的删除与 require 的同版抬升随之落在该版本上。此后按同一形态追加:因消费未发布的 `apperr.HasCode`、pkgcore 事件载荷助手与 `dbkit.IsRecordNotFound`,十一个模块新增 19 行模块级 replace(10 行指向 dbkit、9 行指向 pkgcore;逐模块理由见各 go.mod 的注释)。发布清理动作不变:清空全部仓库内 replace、require 随新版本抬升。
+- Q4 **步骤一落地时的版本钉子**:普通语义下"模块同轮消费新 pkgcore API"需要该 API 已发布——`Registry.Bootstrap`/`BootstrapKey` 在两阶段设计写就时尚未进入任何已发布版本,而 v0.0.1 之后的模块 `go.mod` 已按发布后的形态钉真实 tag(`GOWORK=off go build` 因此会红)。伪版本不是出路:v0.0.1 已在代理上,v0.0.1 之后的提交在 MVS 里排在 `v0.0.1` 之下,`go mod tidy` 会把钉子升回已发布版本,模块拿不到新 API。因此本轮对五个声明模块(authn、org、notification、pki、config)采用仓库此前的过渡形态——`replace github.com/vislake/speed/go/pkgcore => ../pkgcore`(依赖方的 replace 对消费者无效,只影响模块自身的独立构建)。**第六个 replace 随 §9.6 的 L2 轮加入:`go/dbkit`**(`DeriveBootstrapKey` 组合席位 API `pkgcore.BootstrapKeyPurpose`,理由与形态同上)。下一次 lockstep 发布需执行同类清理:删除这六行 replace,把 require 提升到与新平台同版发布的 tag(与 `first_release_replace_cleanup` 同一清点方式);漏做则该模块的新代码在本仓库之外不可用,因为消费者会按 require 里的旧 tag 解析 pkgcore。这个清理随**下一个版本号的发布**执行,不能寄望 v0.0.1 重发:v0.0.1 的 21 个模块 tag 已从远端与本地删除,而 Go module proxy 对已服务过的版本不可撤回——缓存仍在且内容不可改写,删 tag 只让 v0.0.1 在仓库里不可再生,代理上那份依旧按原样解析,因此该版本号已经作废,既不能再发布也不能被新内容复用;下一次发布必须换一个新版本号,replace 的删除与 require 的同版抬升随之落在该版本上。此后按同一形态追加:因消费未发布的 `apperr.HasCode`、pkgcore 事件载荷助手与 `dbkit.IsRecordNotFound`,十一个模块新增 19 行模块级 replace(10 行指向 dbkit、9 行指向 pkgcore;逐模块理由见各 go.mod 的注释)。发布清理动作不变:清空全部仓库内 replace、require 随新版本抬升。
 
 ## 9 步骤二落地记录(2026-09-10)
 
@@ -351,13 +351,13 @@ env 与旗标产出的一律是字符串;loader 现 `decode`(config.go)用默认
 - **healthcheck**:`cmd/server` 的 healthcheck 分支与主进程共用同一份 loader 结果(`app.ConfigFromEnv` 的 `cfg.Port`),`cmd/server` 直读清零。
 - **等价性 pin**:`flowtests/server_config_equivalence_test.go` 以"迁移前的直读实现"为 oracle,对同一份 env 注入集逐一断言新旧两条路径产出同一 `ServerConfig`(dev default、root 派生、individual 覆盖、空串、各类拒绝);有意的行为差异(见 §9.3)单独 pin,不进等价表。
 - **值语义核对**:`APP_S3_USE_SSL`、`APP_READ_FLY_CLIENT_IP`、`APP_SMTP_PORT`、`APP_FAIL_SELF_SERVICE_PROVISION` 四枚 int/bool 键的空串注入点(测试/CI/compose)改为"显式值或不设";测试面用 `internal/testutil.ClearBootstrapEnv` 统一清理。附带一条同族语义:SMTP 端口现在以 0 为"未设"(`0` 本就不是可用 SMTP 端口)。
-- **生成器换源**:`bootstrap.go` 只保留两层互斥规则(`overlappingKeys`);`document.go` 的 bootstrap 节渲染"机制陈述 + per-module 声明表 + 零声明条款";`--check` 产物四件;新增渲染键集 ↔ 声明集双向测试。`docs-check.yml` 的覆盖说明随参考面改写(配置参考只看平台面),而引用应用源码的触发条目保留并加宽为 `examples/reference-app/internal/**`(错误码索引扫描面需要,同时补上 `internal/cases`、`internal/notes`、`internal/smilesim` 的既有缺口),`docs/site/static/llms.txt` 的配置参考描述同步。
+- **生成器换源**:`bootstrap.go` 只保留两层互斥规则(`overlappingKeys`);`document.go` 的 bootstrap 节渲染"机制陈述 + per-module 声明表 + 零声明条款";`--check` 产物四件;新增渲染键集 ↔ 声明集双向测试。覆盖说明随参考面改写(配置参考只看平台面),而错误码索引的扫描面加宽为 `examples/reference-app/internal/**`(同时补上 `internal/cases`、`internal/notes`、`internal/smilesim` 的既有缺口),`docs/site/static/llms.txt` 的配置参考描述同步。
 - **设计文档维护**:§1、§4、§5 内凡"文件:行号"式引用一律改为符号名优先(行号随步骤一/二落地已失效)。
 
 ### 9.3 有意行为差异与本轮未做
 
 - 四枚 int/bool 键的空串收紧(§9.2)是设计裁定的有意行为;此外无行为差异。
-- 未做(与本设计无关或按既定排期):saasctl 生成骨架与 `appconfig` twin 维持直读(Q1);五个声明模块的过渡 `replace` 随下一个版本号的发布清理(Q4)。`examples/reference-app/.env.example` 已覆盖全部 35 键,并由 env-example 一致性检查器(`tools/check_env_example_consistency.py`,planted-drift 套件 + 门接在 fast-check 的 repo-checks 作业)与 loader 形状结构体的 `config:"env=NAME"` 钉及 `APP_ROOT_KEY` 读点持续对齐。
+- 未做(与本设计无关或按既定排期):saasctl 生成骨架与 `appconfig` twin 维持直读(Q1);五个声明模块的过渡 `replace` 随下一个版本号的发布清理(Q4)。`examples/reference-app/.env.example` 已覆盖全部 35 键,并由 env-example 一致性检查器(`tools/check_env_example_consistency.py`,自带 planted-drift 套件)与 loader 形状结构体的 `config:"env=NAME"` 钉及 `APP_ROOT_KEY` 读点持续对齐。
 
 ### 9.4 根密钥派生上收为平台能力(pkgcore 席位 + dbkit 原语)
 
@@ -376,7 +376,7 @@ env 与旗标产出的一律是字符串;loader 现 `decode`(config.go)用默认
 
 用户裁定(2026-09-10)与 §9.4 末条同工落地;本节的迁位与删除两项即该项裁定的配套裁定:
 
-- **示例迁位**:手写源 `config.example.yaml` 与其派生产物 `config.example.json` 从仓库根迁入 `docs/`(`docs/config.example.yaml` / `docs/config.example.json`,成对相邻)。随迁面:生成器的产物路径(`tools/configrefgen/outputs.go`)与手写源/加载路径常量、全部测试加载路径、`.gitleaks.toml` 的路径作用域、`docs-check.yml` 的触发路径集与注释、三处指路句(md 导言、站点 EN 生成页、站点 zh 手写页);四产物重生成,`--check` 绿。
+- **示例迁位**:手写源 `config.example.yaml` 与其派生产物 `config.example.json` 从仓库根迁入 `docs/`(`docs/config.example.yaml` / `docs/config.example.json`,成对相邻)。随迁面:生成器的产物路径(`tools/configrefgen/outputs.go`)与手写源/加载路径常量、全部测试加载路径、`.gitleaks.toml` 的路径作用域、三处指路句(md 导言、站点 EN 生成页、站点 zh 手写页);四产物重生成,`--check` 绿。
 - **宿主演示块删除**:平台示例中的宿主自有键演示小节(deploymentmode / port / dbpath / redis.addr / smtp.*)与指涉它的头段一并删除——平台示例零宿主键影;余下机制散文(四源优先序、env 双下划线拼写与单下划线不构成嵌套的规则)的示例改用平台键自身(如 `authn.blind_index_key`)。四源 pin 测试改以平台六键为载荷运行(旗标 > env > 文件 > 结构体默认全序、双层嵌套、单下划线不解析、文件缺席时结构体默认成立),生成器侧的演示宿主结构体(DeploymentMode/Port/DBPath/Redis/SMTP 字段)退役——生成器内与示例内不再有任何宿主名 fixture;`docs/config-reference.md` 导言句去掉演示半句。
 
 ### 9.6 loader 集成根密钥派生(L2,2026-09-10 用户立项)

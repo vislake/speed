@@ -61,7 +61,7 @@ Usage:
     python3 tools/gen_platform_error_bundle.py [--roots go examples] [--out-dir web/packages/i18n/src/platform-errors/locales] [--check]
 
 --check exits nonzero (printing which files are stale) instead of
-writing, for the CI wiring in docs-check.yml. Exit 2 is a refused run
+writing, so a caller can gate the committed bundle. Exit 2 is a refused run
 (an unsupported interpolation shape, a catalog id the zh-CN side lacks, a
 duplicate id across catalogs, an unreadable catalog), never a rendered
 guess.

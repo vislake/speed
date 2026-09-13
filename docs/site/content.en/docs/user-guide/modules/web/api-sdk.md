@@ -74,7 +74,7 @@ one `bindRequestFn` call serves both generated surfaces.
 
 Regeneration runs `pnpm dlx orval@8.17.0 --config orval.config.ts`
 followed by `node scripts/orval-nodenext-fixup.mjs` from `web/`; the
-Taskfile `api:gen` task and the `api-contract.yml` workflow run exactly
+Taskfile `api:gen` task runs exactly
 that pair, and every regeneration is followed by a porcelain
 consistency gate. Never hand-edit `src/index.ts`, and never add another
 hand-written file inside `src/` to bridge a generation gap: tooling

@@ -133,18 +133,16 @@ replace 在构建期胜出;exclude 目标版本等于宣告它不可用),否则�
 是生成项目——放进参考应用,这个工具就是在操作自己的产物。因此它
 的端到端证明是真实生命周期:材料化每个合法选择,真实联网 `go mod
 tidy` 与 `go build`,迁移一个全新数据库,启动并对组装好的 HTTP 链
-做冒烟。CI 化的形态是 scaffold-verify 流水线:每天对一个选择、在
-两种部署模式下、对着真实 Redis、RustFS 与 Mailpit 容器跑完整周期。
+做冒烟。机械化的形态是:对一个选择、在两种部署模式下、对着真实
+Redis、RustFS 与 Mailpit 容器跑完整周期。
 证明无法展示的,被记录而非伪造——正确密码登录也在其列——范围限
 制同样如此:`go.mod` golden 需要真实 tidy 流程(每当某个模块的依赖
-集变化时),五个选择里有四个没有自己的 CI 双模式启动证明。两者都
+集变化时),五个选择里有四个没有自己的机械双模式启动证明。两者都
 是刻意、成文的裁剪,不是沉默的缺口。
 
 ## Source
 
 - [saasctl AGENTS.md](https://github.com/vislake/speed/blob/main/go/saasctl/AGENTS.md) —
   四个命令的权威契约;本页的主要来源。
-- [scaffold-verify.yml](https://github.com/vislake/speed/blob/main/.github/workflows/scaffold-verify.yml) —
-  针对真实生成项目的每日端到端证明。
 - [saasctl 用户指南](/zh-cn/docs/user-guide/modules/tools/saasctl/) — 四
   个命令的用法,从操作者一侧。

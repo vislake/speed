@@ -170,7 +170,7 @@ const billingEnabled = useFeature('billing');        // api-client
 - The single source of truth for backend-related types is `@speed/api-sdk`. **DO NOT** hand-write response types.
 - Strict mode is on. **DO NOT** use `any` (`@typescript-eslint/no-explicit-any` is an error).
 - Use `type` rather than `interface` for component props, avoiding accidental declaration merging.
-- Public packages export complete type declarations; each package's own `tsc`/build scripts (the ones the npm-package-ci legs run) validate the published artifact.
+- Public packages export complete type declarations; each package's own `tsc`/build scripts validate the published artifact.
 
 ## 10. Forms
 

@@ -190,10 +190,8 @@ import sys
 import tempfile
 
 # The gated set's source: go.work's use block, read with the release
-# coordinator's own parser (tools/release/lockstep-release.py) -- the
-# same reader the reusable module-set derivation
-# (.github/workflows/reusable-go-module-set.yml) loads -- so there is one
-# copy of the parse logic. The set is derived, never hand-copied: a
+# coordinator's own parser (tools/release/lockstep-release.py), so there
+# is one copy of the parse logic. The set is derived, never hand-copied: a
 # module becomes gated, and its missing baseline row goes red, the moment
 # its go.work use entry lands.
 GOWORK_PARSER_REL = os.path.join("tools", "release", "lockstep-release.py")

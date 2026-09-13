@@ -6,9 +6,8 @@ the same skeleton (go.mod, directory skeleton, AGENTS.md, design doc,
 migration directory, test skeleton). In this repository the go.work use
 entry is the registration: the release coordinator
 (tools/release/lockstep-release.py) derives the per-module tag list from
-go.work at runtime, and the CI module sets (the fast-check/full-check/
-security matrices and the coverage gate's gated set) derive from it too,
-so a module registered there is released and checked together. This
+go.work at runtime, and the coverage gate's gated set derives from it
+too, so a module registered there is released and checked together. This
 script is the generator behind that task: the root Taskfile.yml's
 new:module task invokes it, and --help documents the wiring contract
 (see the epilog).
@@ -73,7 +72,7 @@ Refusals and guardrails:
     tsconfig.json, tsconfig.build.json, src/index.ts, src/index.test.ts,
     README.md, AGENTS.md} for --category npm. The npm skeleton is the
     common core the twelve shipped @speed packages share, distilled to
-    the files a package needs to pass the four npm-package-ci legs
+    the files a package needs to pass the four package checks
     (pnpm lint/typecheck/test/build from the package directory) while
     it carries no API yet: the index.ts is a doc comment only --
     nothing is exported, so no placeholder symbol can
@@ -284,11 +283,10 @@ def build_plan(
 # from the twelve shipped @speed packages' common core (package.json /
 # the tsconfig pair / src + a test named after its source file /
 # README + AGENTS.md per package). A stub ships no API -- its index.ts
-# is a doc comment only -- but its WIRING is real: the four
-# npm-package-ci legs (pnpm lint / typecheck / test / build from the
-# package directory, reusable-npm-package-ci.yml) all pass on the
-# skeleton, so the package's CI row can be registered while it is still
-# a stub, exactly as a Go stub's go.mod/doc.go/AGENTS.md
+# is a doc comment only -- but its WIRING is real: the four package
+# checks (pnpm lint / typecheck / test / build from the package
+# directory) all pass on the skeleton, so the package can be registered
+# while it is still a stub, exactly as a Go stub's go.mod/doc.go/AGENTS.md
 # make a not-yet-implemented module a real go.work member.
 NPM_SCRIPTS = ('lint', 'typecheck', 'test', 'build')
 
@@ -368,7 +366,7 @@ def build_npm_plan(
         "// Stub-wiring test of the canonical @speed/package skeleton.\n"
         "// Named after its source file (index.ts -> index.test.ts, the\n"
         "// frontend naming rule). It pins the skeleton itself -- the\n"
-        "// package identity and the four npm-package-ci legs' scripts --\n"
+        "// package identity and the four package-check scripts --\n"
         "// so a scaffolded package is proven green before any API\n"
         "// exists; delete the whole file when the real tests land.\n"
         "import { readFileSync } from 'node:fs'\n"
@@ -1270,21 +1268,16 @@ def registration_checklist(module_name: str, design_doc: str) -> list[str]:
         "use ( ... ) block -- the workspace is what makes go build / go test "
         "resolve the new module locally, and the entry is the module's "
         "whole registration (steps 2 and 3).",
-        "  2. CI: the go-module sets derive from go.work at run time -- "
-        "the fast-check/full-check/security matrices "
-        "(reusable-go-module-set.yml) and the coverage gate's gated set "
-        "(tools/check_coverage_baseline.py) -- so the use entry is the "
-        "module's CI registration and there is no matrix row to add. Two "
-        "follow-ups it triggers: record the module's coverage baseline "
-        "once its unit suite is green (python3 "
+        "  2. Checks: the gated coverage set derives from go.work at run "
+        "time (tools/check_coverage_baseline.py), so the use entry is the "
+        "module's check registration and there is no list to add it to. "
+        "Two follow-ups it triggers: record the module's coverage "
+        "baseline once its unit suite is green (python3 "
         "tools/check_coverage_baseline.py --update --module "
-        f"\"{GO_DIR_NAME}/{module_name}\"; the go-module-ci coverage leg "
-        "goes red with 'has no baseline row' until the row lands), and if "
-        "the module ships a Docker-backed integration tier (a "
-        "//go:build integration test file), add it to full-check.yml's "
-        "integration-tiers matrix and Taskfile.yml's INTEGRATION_DIRS -- "
-        "tools/check_integration_tiers.py gates that pair against the "
-        "tree.",
+        f"\"{GO_DIR_NAME}/{module_name}\"; the coverage gate reports 'has "
+        "no baseline row' until the row lands), and if the module ships a "
+        "Docker-backed integration tier (a //go:build integration test "
+        "file), add it to Taskfile.yml's INTEGRATION_DIRS.",
         "  3. Lockstep release: the same go.work use entry is this "
         "module's release registration -- the release coordinator "
         "(tools/release/lockstep-release.py) derives the per-module tag "
@@ -1319,13 +1312,7 @@ def npm_registration_checklist(module_name: str, design_doc: str) -> list[str]:
         "of a Go module's go.work use entry: the release coordinator "
         "(tools/release/lockstep-release.py) fails a release plan whose "
         "fixed-group coverage does not match web/packages/*.",
-        "  3. CI matrix: register the package in the npm-packages matrix "
-        "of .github/workflows/fast-check.yml (reusable-npm-package-ci rows, "
-        "one per web package and for examples/reference-app/web) -- or it "
-        "is never linted, typechecked, tested or built in CI. Unlike the "
-        "go modules' derived CI sets, this npm matrix is hand-maintained: "
-        "keep it in step with web/pnpm-workspace.yaml's package list.",
-        "  4. Roadmap and design doc: register the package in the milestone "
+        "  3. Roadmap and design doc: register the package in the milestone "
         "that plans it (docs/internal/15-roadmap.md) and, once it ships a "
         "surface, in the web-package enumeration of web/README.md.",
     ]

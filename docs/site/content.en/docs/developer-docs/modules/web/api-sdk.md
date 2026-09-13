@@ -80,9 +80,9 @@ than re-entering the refresh path.
 
 orval is pinned to 8.17.0 and never enters the workspace lockfile: it
 is fetched on demand through `pnpm dlx`, with every runner — the
-Taskfile `api:gen` task and the `api-contract.yml` workflow — using the
-same command so the two cannot drift. A version bump must land in
-`orval.config.ts`'s comment, the Taskfile and the workflow together.
+Taskfile `api:gen` task above all — using the
+same command so no two callers can drift. A version bump must land in
+`orval.config.ts`'s comment and the Taskfile together.
 The fixup script exists for the one genuine gap: orval emits mutator
 imports without a file extension, which TypeScript accepts under
 bundler resolution but rejects under nodenext (TS2835), where this

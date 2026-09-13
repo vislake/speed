@@ -123,25 +123,6 @@ scope 指明被改动的单元:Go module 或 npm 包名(`pkgcore`、`billing`、
 面要带真实的 zh-CN 译文。本栏页面都带 Source 小节,指向相关材料,
 每个论断都能回到底层核验。
 
-## CI 何时跑什么
-
-| 流水线 | 触发 | 跑什么 |
-|---|---|---|
-| `fast-check.yml` | 每一个 pull request,每一次推送到 `main` | 逐模块 Go 矩阵(lint、vet、race 测试、构建)覆盖整个 `go.work`;逐包 web 矩阵(lint、typecheck、测试、构建);仓库级检查(CJK 扫描、漂移闸门、semgrep 规则) |
-| `full-check.yml` | 打了 `full-ci` 标签的 PR,每一次推送到 `main` | 同一份模块矩阵,加上基于 Docker 的真实 PostgreSQL/Redis/RustFS 集成层,以及 reference app 的组合式 HTTP 套件 |
-| `docs-check.yml` | 触碰文档或 i18n 资源的 PR | i18n key 集合一致性、markdown 示例编译、本站对照真实 Hugo 构建的结构检查 |
-| `api-contract.yml` | 触碰 API 契约工具链的 PR,及路径匹配的推送 | 从 spec 重新生成后端接口与前端 SDK,对提交产物做一致性闸门,并重建 reference app |
-| `security.yml` | 每一个 PR,加每日定时 | 依赖审计、gitleaks 密钥扫描、CodeQL、许可证扫描 |
-| `scaffold-verify.yml` | 每日定时 | 生成、构建、迁移并启动一个起始项目,两种部署模式各一遍 |
-| `e2e.yml` | 每日定时,手动触发,推送到 `main` | 在真实 runner 上跑参考应用的浏览器端到端套件:三个 Playwright 项目(chromium、webkit、iPad)共两个浏览器引擎——iPad 设备档跑在 webkit 上——各占一个矩阵行,对准刚启动的服务器 |
-| `docs-site-deploy.yml` | 触碰 `docs/site/**` 的推送,手动触发 | 构建并部署本站 |
-| `release.yml` | 手动触发 | 离线校验 lockstep 发布计划,随后对已验证版本执行真实发布:推送模块 tag 与仓库根 tag,并把 `web/packages` 下每个 `@speed` 包发布到 GitHub Packages registry |
-| `docker-image-ci.yml` | 触碰镜像构建输入路径的推送到 `main`,加手动触发 | 构建容器镜像 |
-
-`nightly.yml` 是刻意门控的 stub,不会在任何 pull request 上触发;
-`e2e.yml` 在每日定时与手动触发之外,推送到 `main` 时也会运行——
-推送触发器已在首次全绿的手动运行后开启(2026-09-11 第三次手动运行)。
-
 ```mermaid
 flowchart LR
     Start[Fork or branch] --> Commit[One logical change; module-scoped conventional commit]

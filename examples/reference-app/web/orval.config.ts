@@ -10,12 +10,12 @@
  *
  * orval version pinned: 8.17.0, the identical pin the platform SDK
  * uses. Every runner invokes the same command -- the Taskfile
- * `api:gen:app` task and full-check.yml's reference-app job both run
+ * `api:gen:app` task runs
  * `pnpm dlx orval@8.17.0 --config orval.config.ts` from this
- * directory -- so the two cannot drift. orval itself is never a
+ * directory -- so no two callers can drift. orval itself is never a
  * workspace dependency: pnpm dlx fetches it on demand and it stays out
- * of pnpm-lock.yaml. A version bump must land in this header, the
- * Taskfile api:gen:app task and full-check.yml together, and shows up
+ * of pnpm-lock.yaml. A version bump must land in this header and the
+ * Taskfile api:gen:app task together, and shows up
  * as a diff in the regenerated header (which stamps the version).
  *
  * Input is the app-owned merged document, app-openapi.yaml (this

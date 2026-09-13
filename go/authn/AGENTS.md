@@ -1085,12 +1085,10 @@ golangci-lint run ./...                             # from inside go/authn
 go -C go/authn test -tags=integration -race ./integration_test/...   # PostgreSQL, Docker required
 ```
 
-All three are wired into CI: the unit tier and lint run through the shared
-`go-module-ci` matrix in both `fast-check.yml` (every PR) and `full-check.yml`
-(`full-ci`-labeled PRs), and the PostgreSQL integration tier runs in
-`full-check.yml`'s `integration-tiers` matrix — `go/authn` is a row in both
-matrices, and `Taskfile.yml`'s `INTEGRATION_DIRS` carries the same entry for
-`task test:full`'s local loop.
+All three have a mechanical home: the unit tier and lint run through the
+shared per-module legs, and the PostgreSQL integration tier runs from
+`Taskfile.yml`'s `INTEGRATION_DIRS`, which carries the `go/authn` entry for
+`task test:full`'s loop.
 
 `examples/reference-app` is this module's mandatory first consumer:
 `internal/app/server.go` wires the real `Module` into the

@@ -76,17 +76,16 @@ wins——生成代码因此继承客户端的认证、重试与错误处理而�
 
 ## 一致性门:再生成再比对
 
-api-contract 流水线(`api-contract.yml`)在 spec 侧文件变动时触发
-——任一 fragment、生成器配置、合并工具——PR 与直接推送都跑。它重
-复 `api:gen` 任务的每一个生成步骤(后端 fragment、合并文档、前端
+spec 侧文件变动时——任一 fragment、生成器配置、合并工具——要重
+跑 `api:gen` 任务的每一个生成步骤(后端 fragment、合并文档、前端
 SDK,各自钉定生成器版本),每个步骤之后跑一次一致性门,实现为
 `git status --porcelain`,刻意不用 `git diff --exit-code`:一次
 *新建*文件的再生成会静默通过 diff 门,而 porcelain 连未跟踪文件一
-起报告。任何"不是 spec 生成出来的"已提交生成物都失败该任务。最后
-流水线构建 reference app——它 import 全部平台模块——所以任何平台
+起报告。任何"不是 spec 生成出来的"已提交生成物都判失败。最后
+构建 reference app——它 import 全部平台模块——所以任何平台
 fragment 的生成接口超出其 handler 都无法编译;authn fragment 另有
 自己的再生成加构建腿,编译答案不必等较慢的全量矩阵。spec、实现与
-再生成产物在同一 PR 提交,门随后验证三者一致。
+再生成产物在同一改动里提交,门随后验证三者一致。
 
 ## 契约刻意不携带什么
 
@@ -110,8 +109,6 @@ events 不是 OpenAPI 3.0 媒体类型,通知流端点因此手挂载、省略�
 
 - [Taskfile 的 api:gen/api:merge 任务](https://github.com/vislake/speed/blob/main/Taskfile.yml)——
   钉定的生成命令。
-- [api-contract.yml](https://github.com/vislake/speed/blob/main/.github/workflows/api-contract.yml)——
-  流水线及其 porcelain 门。
 - [contracts/speed.yaml](https://github.com/vislake/speed/blob/main/contracts/speed.yaml)——
   平台合并文档。
 - [redocly.yaml](https://github.com/vislake/speed/blob/main/redocly.yaml)——

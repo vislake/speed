@@ -43,17 +43,14 @@ speed/
     upgrade/                                  # 版本升级指南
     site/                                     # 面向业务方的公开文档站
   contracts/speed.yaml                        # 各模块 spec 的合并产物，发布物之一
-  .github/workflows/                          # CI/CD 流水线
   CLAUDE.md                                   # 仓库级架构纪律与上手指引
 ```
 
 **布局树与真实目录结构对照：**
 
 - **布局树的 `deploy/` 一节不存在于仓库中**：根目录没有 `docker-compose*.yml`，
-  `grafana/` 编排目录也不存在。镜像构建走 `.github/workflows/reusable-docker-build.yml`
-  （reusable workflow，由 `docker-image-ci.yml` 调用——后者在 push 到 main 且改动
-  命中其构建输入路径集时自动触发，另支持 `workflow_dispatch` 手动运行；路径集见
-  其文件头），构建 `examples/reference-app/Dockerfile`（见 [18 CI/CD](18-cicd.md)）。`task dev`
+  `grafana/` 编排目录也不存在。镜像由 `examples/reference-app/Dockerfile`
+  构建。`task dev`
   按根 `CLAUDE.md` 与 [19 开发工作流](19-dev-workflow.md) 的约定跑单进程
   standalone 模式、SQLite、零外部依赖，不依赖 `docker compose`；分布式模式和
   可观测性栈的编排材料未落地，布局树里的 `deploy/` 一行按"规划"读，不按
@@ -96,13 +93,13 @@ speed/
 
 > **破坏面登记**：自 2026-09 以来的全部破坏性变更（宿主装配契约翻转、内核/preset 机制退役、环境变量重命名等）逐条登记在 [31 发布对账清单](31-release-reconciliation.md)，每条附出处提交与替代路径；下一次发布的 release note 与升级指引以该清单为底稿。v0.0.1 已作废、无已发布消费者，该清单是预登记而非对已发布契约的追溯说明。
 
-- **发布协调器（离线验证）**：`tools/release/lockstep-release.py`（纯标准库，自带 unittest 套件）在运行时推导可发布集合——Go 侧为 go.work `use` 条目（`use` 条目本身就是模块的发布登记，见 [19 开发工作流](19-dev-workflow.md)），npm 侧为 `web/packages/*`——打印完整单版本计划（每个模块将获得的 `go/<module>/<version>` tag、仓库根 tag `<version>` 与每个包经 changesets fixed 组将 bump 到的版本），退出码 0 **仅当**计划一致：版本号符合 `^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$`（v 必需）、go.work 与 `go/` 目录树双向完备、npm 版本统一、`web/.changeset/config.json` 的 fixed 组恰好覆盖现存包；该版本已存在的 tag（模块 tag 或根 tag）只警告不失败——同一版本重发（部分完成态的恢复路径）是受支持场景。入口：`task release:plan VERSION=v1.2.0`；`.github/workflows/release.yml` 手动触发时先校验版本号格式，再跑协调器默认模式与 `--self-test`，随后由 publish job 执行真实发布。
+- **发布协调器（离线验证）**：`tools/release/lockstep-release.py`（纯标准库，自带 unittest 套件）在运行时推导可发布集合——Go 侧为 go.work `use` 条目（`use` 条目本身就是模块的发布登记，见 [19 开发工作流](19-dev-workflow.md)），npm 侧为 `web/packages/*`——打印完整单版本计划（每个模块将获得的 `go/<module>/<version>` tag、仓库根 tag `<version>` 与每个包经 changesets fixed 组将 bump 到的版本），退出码 0 **仅当**计划一致：版本号符合 `^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$`（v 必需）、go.work 与 `go/` 目录树双向完备、npm 版本统一、`web/.changeset/config.json` 的 fixed 组恰好覆盖现存包；该版本已存在的 tag（模块 tag 或根 tag）只警告不失败——同一版本重发（部分完成态的恢复路径）是受支持场景。入口：`task release:plan VERSION=v1.2.0`。
 - **同一版本的 tag 语义（模块 tag 与根 tag 并存、互不替代，同版本 sha 不同是设计）**：一次发布在仓库里留下两组同版本号 tag——
   - **模块 tag `go/<module>/<version>`**（如 `go/tenancy/v0.0.1`）：Go module proxy 的解析面，钉在模块的发布提交上；已发布的模块 tag 永不重打、永不移动（模块代理会缓存 tag，移动会让已解析的消费者拿到不同内容）。v0.0.1 的 21 个模块 tag 发布时全部指向 `fbaaaf98`，后随该版本作废从远端与本地删除（删 tag 不动模块代理已缓存的产物）。
   - **根 tag `<version>`**（如 `v0.0.1`，不带任何前缀）：版本里程碑参照——"该仓库处于 vX.Y.Z" 的单一仓库级 tag。它在发布运行的 checkout 上创建（即 dispatch 时的 main 尖端），因此对早期版本的补发运行而言，它可能指向发布之后的修复提交，与模块 tag 不在同一提交上。**同一版本根 tag 与模块 tag 的 sha 不同是设计使然，不是漂移或事故**——根 tag 标记"版本里程碑于何时记录"，模块 tag 承诺"发布的内容是什么"，角色不同所以两者共存，谁也不替代谁。
   发布流水线对两者一视同仁地执行"已存在即跳过"（部分完成态的补发运行跳过已推送者；见下）；协调器把根 tag 纳入与模块 tag 相同的碰撞检查与本地演练集合。
 - **可发布集合的判定**：由 go.work `use` 条目本身决定——漏登记模块会让发布验证直接失败（完备性 drift 检查），不会悄悄漏 tag。`examples/reference-app` 被显式排除在可发布集合之外：它是仓库的消费者模块（保持消费者 go.mod 与 `replace` 行），从不被打 tag 或发布。
-- **真实发布的执行腿（v0.0.1 落地）**：`release.yml` 由只读验证扩展为"验证 + 发布"两 job；写权限（contents: write 推 tag、packages: write 发 npm）只挂 publish job。tag 步用协调器自己的解析器从 go.work 推导模块集，把模块 tag 与根 tag 一并推送，已存在的任一 tag 一律跳过（同一版本的补发运行跳过已推送者、可走完 Go 半程，已发布 tag 永不重打或移动）。npm 步按依赖序逐包发布，发布前先以 `npm view @speed/<package>@<version>` 探测 GitHub Packages registry，已存在的版本跳过——任意"前 k 包已上"的部分发布态都能收敛，且任何版本不会被发布两次（双重发布防护由两侧的 skip 承担）。v0.0.1 首轮运行半成功：Go 21 个模块 tag 曾推送发布（后随该版本作废从远端与本地删除、版本号不再复用），npm 十二包因 `@speed` scope 未关联仓库 owner 的 GitHub Packages 安装而全部 403（仓库外 org 配置，非代码缺陷，十二包零上 registry）；org 侧关联后，由下一个版本号的发布完整收敛。协调器 `--apply` 模式保持硬闸在 `--allow-local-tag-creation`（仅创建本地、永不推送的 tag，只用于在 scratch checkout 上演练打 tag 半程）；上面 blockquote 要求的过渡态 replace 清理以纯函数 + `tools/release/testdata/` 夹具交付并**严禁对真实 go.mod 运行**——首次发布的清理由独立提交在 dispatch 前落地（见 release.yml 的 guard 注释）。
+- **真实发布的执行腿（v0.0.1 落地）**：真实发布是手工操作。tag 步用协调器自己的解析器从 go.work 推导模块集，把模块 tag 与根 tag 一并推送，已存在的任一 tag 一律跳过（同一版本的补发运行跳过已推送者、可走完 Go 半程，已发布 tag 永不重打或移动）。npm 步按依赖序逐包发布，发布前先以 `npm view @speed/<package>@<version>` 探测 GitHub Packages registry，已存在的版本跳过——任意"前 k 包已上"的部分发布态都能收敛，且任何版本不会被发布两次（双重发布防护由两侧的 skip 承担）。v0.0.1 首轮运行半成功：Go 21 个模块 tag 曾推送发布（后随该版本作废从远端与本地删除、版本号不再复用），npm 十二包因 `@speed` scope 未关联仓库 owner 的 GitHub Packages 安装而全部 403（仓库外 org 配置，非代码缺陷，十二包零上 registry）；org 侧关联后，由下一个版本号的发布完整收敛。协调器 `--apply` 模式保持硬闸在 `--allow-local-tag-creation`（仅创建本地、永不推送的 tag，只用于在 scratch checkout 上演练打 tag 半程）；上面 blockquote 要求的过渡态 replace 清理以纯函数 + `tools/release/testdata/` 夹具交付并**严禁对真实 go.mod 运行**——首次发布的清理由独立提交在发布前落地。
 
 **npm 发布**：changesets 配置为 fixed 版本组（所有包锁在一起同步升版），与 Go 侧共用同一版本号——`web/.changeset/config.json` 的 fixed 组覆盖现存全部 `@speed/*` 包；changesets 本体未安装，无条目、无 bump 运行，覆盖一致性由协调器校验而非 changesets 保证（见 `web/.changeset/README.md`）。`react`/`react-dom`/`@mui/material`/`@emotion/*` 一律声明为 peerDependencies，避免下游出现多份 React/MUI 实例。
 
@@ -115,5 +112,5 @@ speed/
 - **`saasctl upgrade` 的改写面**：`upgrade` 只改写 go.mod——`golang.org/x/mod/modfile` 仅重写每条 speed require 的版本 token，replace 块、`// indirect` 标记、注释与格式逐字节保留，幂等；package.json 侧的改写随 `create-saas-app` 一并实现。
 - **分发形态**：`saasctl` 以 goreleaser 多平台二进制发布（真实发布流水线的制品步骤），`create-saas-app` 以 npm 包发布——各自原生分发；`saasctl` 需要本地 speed checkout（见 `go/saasctl/AGENTS.md` 的 Speed-root resolution）。
 
-每个 `new` 出来的项目都经真实 tidy/build/boot/冒烟（`db migrate` 与 `upgrade` 跑真实文件），记录在 `go/saasctl/AGENTS.md` Testing 章节；该过程的 CI 化形态是 scaffold-verify 流水线（见 [18 CI/CD](18-cicd.md)）。
+每个 `new` 出来的项目都经真实 tidy/build/boot/冒烟（`db migrate` 与 `upgrade` 跑真实文件），记录在 `go/saasctl/AGENTS.md` Testing 章节。
 

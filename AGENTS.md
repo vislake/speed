@@ -118,9 +118,8 @@ the root) — a bare `./...` at the repo root does not resolve as expected.
    — module-specific discipline, file layout, known limitations, testing setup.
 3. **Root `CLAUDE.md`** — the architecture, the full discipline list and the
    repository's traps. It is a guide, not a status report: whether a module
-   is real and CI-enforced is answered from the code — the module's own
-   `AGENTS.md` (Testing section) and its row in the workflows under
-   `.github/workflows/`."
+   is real and enforced is answered from the code — the module's own
+   `AGENTS.md` (Testing section)."
 4. **`docs/internal/**`** — the design rationale behind the rules above,
    including alternatives that were tried and rejected. Chinese-language;
    start at `docs/internal/00-overview.md` for the navigation table.

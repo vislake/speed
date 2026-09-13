@@ -11,8 +11,8 @@ this file adds what is specific to the npm side.
   fixtures under directories named `locales/`, `locale/`, `i18n/` or
   `translations/` (the repo CI CJK scanner exempts those names).
 - Never add a second Node- or pnpm-version source. Node: `web/.nvmrc`;
-  pnpm: `web/package.json`'s `packageManager`. CI's setup-node-env action
-  consumes both; if you change either, the action needs no edit by design.
+  pnpm: `web/package.json`'s `packageManager`. Every Node toolchain
+  installer reads those two files directly.
 - Root `package.json` carries only shared dev tooling. A package's real
   dependencies, peers and `exports` map live in its own manifest.
 
@@ -21,8 +21,8 @@ this file adds what is specific to the npm side.
 1. Scaffold under `web/packages/<name>` following the shape in the root
    `web/README.md` (ESM-only exports map, tsconfig pair, scripts
    `lint`/`typecheck`/`test`/`build`).
-2. Add it to the CI matrix: `.github/workflows/fast-check.yml`'s `npm-packages`
-   job calls the reusable `npm-package-ci.yml` once per package path.
+2. Add it to `web/pnpm-workspace.yaml`'s package list, then run
+   `pnpm install` from `web/` so the lockfile records the new importer.
 3. Write README.md + AGENTS.md and run every gate from the package
    directory: `pnpm lint`, `pnpm typecheck`, `pnpm test`, `pnpm build`, all
    zero warnings.
@@ -77,10 +77,9 @@ The rules' unit tests run from the workspace root, not from a package
 directory (the rules live outside every package, so no per-package
 suite picks them up): locally via
 `pnpm exec vitest run eslint-rules/no-literal-text.test.mjs eslint-rules/no-direct-http.test.mjs`
-from `web/`, and in CI by fast-check's `repo-checks` job, which runs that
-same command once per PR.
+from `web/`.
 
-Still deferred, tracked in the CI workflow headers -- do not
+Still deferred -- do not
 half-enable: the `react-hooks` plugin is not adopted, keeping
 `eslint.config.mjs` free of plugin dependencies (see that file's own
 header).

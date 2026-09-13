@@ -356,8 +356,8 @@ three-step upload lifecycle (`storage_createObject`,
 and object deletion (`storage_deleteObject`). `api/oapi-codegen.yaml` pins
 the same generator version notes and org use (v2.8.0);
 `api/storage-server.gen.go` is generated and committed, never hand-edited —
-`task api:gen` regenerates it from the fragment and api-contract.yml's own
-diff gate re-checks it on every spec-touching PR. The fragment joins the merged `contracts/speed.yaml` document and
+`task api:gen` regenerates it from the fragment and that leg's own
+porcelain comparison re-checks it. The fragment joins the merged `contracts/speed.yaml` document and
 through it the generated `@speed/api-sdk` -- the module-driven inclusion
 policy: every platform module with an HTTP fragment is a merge member.
 The fragment is embedded
@@ -452,7 +452,7 @@ tier. A Docker-backed integration tier (`integration_test/`, built with
 `//go:build integration` so a plain unit run never touches it) re-proves on
 real infrastructure what a SQLite-only suite cannot, run as
 `go test -race -tags=integration ./...` from this directory — the exact
-invocation full-check.yml's integration-tiers job runs for this module:
+invocation `Taskfile.yml`'s `INTEGRATION_DIRS` entry runs for this module:
 
 - `postgres_leg_test.go` — the module's postgres/*.sql migration files
   apply from zero against a real PostgreSQL server (testutil.NewPostgres

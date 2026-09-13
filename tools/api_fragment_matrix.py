@@ -1,21 +1,15 @@
 #!/usr/bin/env python3
-"""Print the backend-fragment regeneration matrix for api-contract.yml.
+"""Print the backend-fragment regeneration matrix.
 
 Reads tools/api_fragments.json -- the single machine-readable source of
 truth for the platform fragment universe -- and prints, as one line of
-JSON, the array GitHub Actions' matrix consumes through fromJson:
+JSON, the array a caller iterates:
 [{"name": <fragment>, "dir": <repo-relative api/ directory>}, ...] in
 manifest order.
 
-api-contract.yml's contract-gate job publishes this array as its
-`fragments` output and the fragment-regeneration job's matrix is
-`fromJson(needs.contract-gate.outputs.fragments)` with
-`working-directory: ${{ matrix.fragment.dir }}`, so the workflow no
-longer enumerates fragments for regeneration at all: a fragment joins
-the matrix by joining the manifest (tools/check_api_fragments.py proves
-the derivation still matches the manifest, and the trigger path filters
-and the redocly join list remain gate-checked, since GitHub's `on.paths`
-cannot be derived).
+Taskfile.yml's api:gen task consumes this array, so no caller enumerates
+fragments for regeneration: a fragment joins the regeneration set by
+joining the manifest.
 
 Standard library only; --root defaults to the current directory and
 must be the repository root.

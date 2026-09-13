@@ -37,9 +37,9 @@ pnpm dlx orval@8.17.0 --config orval.config.ts
 node scripts/orval-nodenext-fixup.mjs
 ```
 
-The Taskfile `api:gen` task and the `api-contract.yml` workflow run
+The Taskfile `api:gen` task runs
 exactly this pair; a version bump must land in `orval.config.ts`'s
-comment, the Taskfile and the workflow together.
+comment and the Taskfile together.
 
 ### Why the fixup script
 
@@ -140,8 +140,8 @@ its real host: the consumer shell.
   `bindRequestFn` -- the same seam a host's real client binds.
   `@speed/account-ui` is the second in-workspace compile consumer and
   the first to render generated hooks into a component tree. The
-  merged document is covered by `api-contract.yml`'s
-  regeneration-and-diff gates.
+  merged document is covered by the same
+  regeneration-and-comparison step.
 - **Runtime-consumed by the reference app's consumer shell.** The shell
   (`examples/reference-app/web`, an external member of the web
   workspace and never versioned) is the mandatory first consumer: its

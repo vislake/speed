@@ -11,9 +11,8 @@ verified from it:
   authority, not any prose census.
 - Whether a module genuinely has a tested implementation, and how its
   tests run, is answered by the module's own `AGENTS.md` (its Testing
-  section) and by the module's row in the CI matrix under
-  `.github/workflows/`. Both travel with the code and stay current;
-  this file does not restate them.
+  section), which travels with the code and stays current;
+  this file does not restate it.
 - Design rationale and progress narrative (milestones, round
   records, deferrals) live in the internal design documents under
   `docs/internal/`; they are not part of this guide.
@@ -35,7 +34,7 @@ Requirements documents are not used. Load the `document-standards` skill before 
 
 ## Planned Commands
 
-Defined in `docs/internal/19-dev-workflow.md`. Task runner is Taskfile; toolchain versions are pinned in the root `.mise.toml`, mirrored from each tool's authoritative source (`go.work`, `web/.nvmrc`, `web/package.json`, the Taskfile header, setup-go-env's `GOLANGCI_VERSION`) with a CI drift gate (`tools/check_toolchain.py`) proving the mirrors cannot drift.
+Defined in `docs/internal/19-dev-workflow.md`. Task runner is Taskfile; toolchain versions are pinned in the root `.mise.toml`, mirrored from each tool's authoritative source (`go.work`, `web/.nvmrc`, `web/package.json`, the Taskfile header) with a drift gate (`tools/check_toolchain.py`) proving the mirrors cannot drift.
 
 ```
 task setup        # install toolchain, fetch deps, initialize the database
@@ -102,7 +101,7 @@ Shared database with `tenant_id` isolation, guarded three ways: a GORM plugin th
 
 ### API contract
 
-**Spec-first, non-negotiable order**: edit `api/openapi.yaml` → `task api:gen` → compilation failures reveal every handler to fix → implement → update frontend → commit together. The generated Go server interface participates in compilation, so drift between spec and implementation cannot compile. `task api:gen` is the platform leg: pinned oapi-codegen regenerates the eleven platform fragments' backend interfaces, and pinned orval regenerates the frontend `@speed/api-sdk` package from the merged platform document (`contracts/speed.yaml`); the generated hooks call the `@speed/api-client` runtime through a single hand-written binding (`src/runtime.ts`'s `bindRequestFn`, bound by the host at bootstrap), never HTTP of their own. The reference app's own notes, cases and smilesim fragments are the app's API, not platform API: they regenerate through the app-owned leg `task api:gen:app`, the same generator pair run over the app's own merged document (`examples/reference-app/web/app-openapi.yaml`) into the app-owned SDK (`examples/reference-app/web/src/app-api`) the app web host imports for its own surfaces — platform operations keep riding `@speed/api-sdk`, both over the one `bindRequestFn` binding — and notes' handler implements its fragment's generated `api.ServerInterface` (compile-time assertion at the bottom of `internal/notes/handler.go`) as the loop's end-to-end proof. Artifact consistency, plus handler compilation, is enforced by the `api-contract.yml` pipeline for the platform surface; the app-owned leg's committed artifacts are consistency-gated by a porcelain check in full-check.yml's reference-app job; the workflow file defines exactly what each gate runs.
+**Spec-first, non-negotiable order**: edit `api/openapi.yaml` → `task api:gen` → compilation failures reveal every handler to fix → implement → update frontend → commit together. The generated Go server interface participates in compilation, so drift between spec and implementation cannot compile. `task api:gen` is the platform leg: pinned oapi-codegen regenerates the eleven platform fragments' backend interfaces, and pinned orval regenerates the frontend `@speed/api-sdk` package from the merged platform document (`contracts/speed.yaml`); the generated hooks call the `@speed/api-client` runtime through a single hand-written binding (`src/runtime.ts`'s `bindRequestFn`, bound by the host at bootstrap), never HTTP of their own. The reference app's own notes, cases and smilesim fragments are the app's API, not platform API: they regenerate through the app-owned leg `task api:gen:app`, the same generator pair run over the app's own merged document (`examples/reference-app/web/app-openapi.yaml`) into the app-owned SDK (`examples/reference-app/web/src/app-api`) the app web host imports for its own surfaces — platform operations keep riding `@speed/api-sdk`, both over the one `bindRequestFn` binding — and notes' handler implements its fragment's generated `api.ServerInterface` (compile-time assertion at the bottom of `internal/notes/handler.go`) as the loop's end-to-end proof. Artifact consistency, plus handler compilation, is enforced by code review over both legs: regenerate, and a committed artifact that differs from the generator's output is the finding.
 
 ### Versioning
 
@@ -110,7 +109,7 @@ Shared database with `tenant_id` isolation, guarded three ways: a GORM plugin th
 
 ## Architecture Discipline
 
-Every rule below is enforced by code review, and by CI where the tooling for it exists (the workflow files under `.github/workflows/` define what CI genuinely runs) — **these are not style suggestions**. Code that violates any of them should not be merged. The reasoning behind each lives in `docs/internal/`; the detailed how-to lives in `.claude/skills/`.
+Every rule below is enforced by code review, and by the checkers under `tools/` where the tooling for it exists — **these are not style suggestions**. Code that violates any of them should not be merged. The reasoning behind each lives in `docs/internal/`; the detailed how-to lives in `.claude/skills/`.
 
 ### Dependencies and module boundaries
 
@@ -159,9 +158,9 @@ Every rule below is enforced by code review, and by CI where the tooling for it 
 ### Internationalization
 
 - **Do not hardcode user-facing text**, in any language. UI packages must contain no bare text nodes; Go returns structured error codes.
-- New text **must** ship with both `zh-CN` and `en-US` resources. The backend half of that rule is enforced in code rather than CI: `pkgcore/i18n`'s `Builder.AddModule` fails a module whose language files' id sets differ (`ErrParityMismatch`) while the host's catalog merge runs it over every component's locale assets. `tools/check_i18n_keys.py` checks the same key-set parity over the raw files; the docs-check pipeline runs it on every PR touching documentation or i18n resources.
+- New text **must** ship with both `zh-CN` and `en-US` resources. The backend half of that rule is enforced in code rather than CI: `pkgcore/i18n`'s `Builder.AddModule` fails a module whose language files' id sets differ (`ErrParityMismatch`) while the host's catalog merge runs it over every component's locale assets. `tools/check_i18n_keys.py` checks the same key-set parity over the raw files; run it whenever documentation or i18n resources change.
 - Backend-generated content (emails, invoices, notifications) renders in the **recipient's** locale, not the operator's UI language.
-- **Do not hand-write frontend copy for a backend error code.** The client half of a module's catalog is generated: `tools/gen_platform_error_bundle.py` derives `web/packages/i18n/src/platform-errors/locales/{zh-CN,en-US}.json` from the Go modules' `locales/*.toml` catalogs intersected with the apperr census, and the docs-check pipeline `--check`s it. Run the generator whenever a catalog or an apperr code changes. Backend-only content ids (invitation emails, notification templates, SMS bodies, seed copy) are excluded by that filter and stay out of the client bundle, which is what `@speed/i18n/platform-errors`' tests pin.
+- **Do not hand-write frontend copy for a backend error code.** The client half of a module's catalog is generated: `tools/gen_platform_error_bundle.py` derives `web/packages/i18n/src/platform-errors/locales/{zh-CN,en-US}.json` from the Go modules' `locales/*.toml` catalogs intersected with the apperr census, and its `--check` mode reports a stale bundle. Run the generator whenever a catalog or an apperr code changes. Backend-only content ids (invitation emails, notification templates, SMS bodies, seed copy) are excluded by that filter and stay out of the client bundle, which is what `@speed/i18n/platform-errors`' tests pin.
 
 ### Database and migrations
 
@@ -188,7 +187,7 @@ Every rule below is enforced by code review, and by CI where the tooling for it 
 ### Documentation
 
 - A new public API **must** ship, in the same pull request, with usage docs, a compilable example, and an entry in the module's `AGENTS.md`.
-- Godoc `Example` functions are compiled and run by CI inside each module's unit suite, so a failing example fails the build — every implemented module ships at least one. Examples embedded in markdown prose (`AGENTS.md`, READMEs, ADRs) have **no** compile harness; `docs-check.yml`'s DELIBERATELY NOT WIRED list records that gap.
+- Godoc `Example` functions are compiled and run inside each module's unit suite, so a failing example fails the build — every implemented module ships at least one. Examples embedded in markdown prose (`AGENTS.md`, READMEs, ADRs) have **no** compile harness beyond `tools/check_markdown_examples.py`.
 - The configuration reference is generated from the config schema — **do not hand-write it**.
 
 ### Commits and merging

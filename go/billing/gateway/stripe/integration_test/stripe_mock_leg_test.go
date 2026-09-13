@@ -10,9 +10,9 @@
 // "go test ./..." never compiles or runs anything in this directory; it
 // is invoked explicitly with "go test -tags=integration ./..." (the form
 // go/billing's own PostgreSQL integration tier already uses, and the form
-// full-check.yml's integration-tiers matrix runs for the go/billing module
-// row -- this directory sits under go/billing, so the existing billing
-// matrix row picks it up with no workflow change).
+// Taskfile.yml's INTEGRATION_DIRS runs for the go/billing entry -- this
+// directory sits under go/billing, so that entry picks it up with no
+// further registration).
 //
 // # Why this leg exists
 //

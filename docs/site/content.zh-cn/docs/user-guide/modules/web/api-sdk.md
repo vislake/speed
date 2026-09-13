@@ -66,7 +66,7 @@ import 的 mutator)与 `speedRequestCredentialless`——把 authn 会话
 
 再生成在 `web/` 下依次运行 `pnpm dlx orval@8.17.0 --config
 orval.config.ts` 与 `node scripts/orval-nodenext-fixup.mjs`;
-Taskfile 的 `api:gen` 任务与 `api-contract.yml` workflow 跑的正是这
+Taskfile 的 `api:gen` 任务跑的正是这
 一对,每次再生成后都跟一道 porcelain 一致性门。绝不手改
 `src/index.ts`,也绝不在 `src/` 里加另一个手写文件去补生成缺口:
 工具问题在工具里修(nodenext fixup 脚本把 orval 无扩展名的 mutator

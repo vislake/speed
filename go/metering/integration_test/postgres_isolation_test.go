@@ -14,9 +14,8 @@
 // dbkit.MigrationRegistry -- the same zero-to-head proof the unit tier's
 // NewSQLite runs on the SQLite set) and skips itself when no Docker
 // daemon is reachable, which is testutil.NewPostgres's own contract
-// (go/dbkit/dbtest.NewPostgres's t.Skip on an absent daemon). In CI the
-// full-check integration-tiers job runs this directory on ubuntu-latest
-// runners, where Docker is always present.
+// (go/dbkit/dbtest.NewPostgres's t.Skip on an absent daemon). Run this
+// directory where a Docker daemon is present.
 //
 // What this tier exists to prove -- three defect classes SQLite cannot
 // surface, each with its own regression test below, plus the

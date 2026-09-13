@@ -10,8 +10,8 @@
  * nodenext (TS2835), where this package's build (tsconfig.build.json)
  * runs. This script rewrites the specifier of every such import to the
  * explicit './runtime.js' form, keeping the committed generated file
- * identical to what CI regenerates: the api-contract.yml regen step
- * runs orval and then this script before `git diff --exit-code`, so a
+ * identical to what a fresh regeneration produces: run orval and then
+ * this script before comparing the working tree, so a
  * future orval version that changes the emission fails loudly instead
  * of shipping an unbuildable package.
  *

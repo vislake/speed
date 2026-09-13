@@ -6,9 +6,9 @@ directly:
 
     python3 tools/test_check_coverage_baseline.py
 
-The Go-measurement leg is exercised against the real repository by the
-go-module-ci coverage leg and by `python3 tools/check_coverage_baseline.py
---update` itself; this suite pins the pure parts:
+The Go-measurement leg is exercised against the real repository by
+`python3 tools/check_coverage_baseline.py --update` itself; this suite
+pins the pure parts:
 
   * coverage_from_profile -- the exact statement-coverage math, proven
     against a hand-built profile (all covered, none covered, partial),

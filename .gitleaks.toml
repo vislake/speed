@@ -15,12 +15,11 @@
 # exceptions being the regex-scoped blocks (the saasctl appconfig
 # identifier spellings and the pki wiring-test fixture key), each
 # matching an exact literal rather than a file -- and the scan keeps
-# firing on every other file in the tree and in the commit history (the
-# security pipeline's secrets job checks out the full history -- see
-# .github/workflows/security.yml). Real credentials must never enter
+# firing on every other file in the tree and in the commit history (a
+# secrets scan must check out the full history). Real credentials must never enter
 # these files either -- code review and the files' own fixture-only
 # comments guard that, and the repository holds no real credentials
-# anywhere (see the SECRETS note in .github/workflows/security.yml). Any
+# anywhere. Any
 # further allowlist need must arrive with its own justification in this
 # comment, naming the exact files it covers and why each one's match is
 # not a real credential.
@@ -31,8 +30,8 @@
 # different modules -- plus the user-facing documentation and example
 # files whose whole purpose is showing a placeholder in a shape gitleaks'
 # default `generic-api-key`/`curl-auth-header` rules key on. Each group
-# below was re-verified against gitleaks 8.30.1 (the pinned version
-# .github/workflows/security.yml downloads and checksum-verifies) run
+# below was re-verified against gitleaks 8.30.1 (the pinned version,
+# downloaded and checksum-verified) run
 # against the real, current tree and full commit history before being
 # added, per that section's own file-by-file reasoning.
 #

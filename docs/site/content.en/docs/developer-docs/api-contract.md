@@ -97,22 +97,21 @@ live where regeneration never reaches.
 
 ## Consistency gates: regenerate and compare
 
-The API-contract pipeline (`api-contract.yml`) runs whenever a
-spec-side file changes — a fragment, a generator config, the merge
-tooling — on pull requests and on direct pushes alike. It repeats
+Whenever a spec-side file changes — a fragment, a generator config,
+the merge tooling — repeat
 every generation step of the `api:gen` task (backend fragments,
 merged document, frontend SDK, each with pinned generator versions),
-and after each step runs a consistency gate implemented as
+and after each step run a consistency gate implemented as
 `git status --porcelain`, deliberately never `git diff --exit-code`:
 a regeneration that *creates* a file would pass a diff gate silently,
 while porcelain reports untracked files too. Any committed artifact
-that is not what its spec generates fails the job. Finally the
-pipeline builds the reference app, which imports every platform
+that is not what its spec generates fails the check. Finally build
+the reference app, which imports every platform
 module, so a spec whose generated interface outgrew its handlers —
 any platform fragment's — cannot compile; the authn fragment gets its
 own regeneration-and-build leg so that answer does not wait on the
 slower full matrix. Spec, implementation and regenerated artifacts are
-committed in the same PR; the gate then verifies they agree.
+committed in the same change; the check then verifies they agree.
 
 ## What the contract deliberately does not carry
 
@@ -144,8 +143,6 @@ server as an ordinary three-step protocol, fully expressible.
 
 - [Taskfile api:gen/api:merge tasks](https://github.com/vislake/speed/blob/main/Taskfile.yml) —
   the pinned generation commands.
-- [api-contract.yml](https://github.com/vislake/speed/blob/main/.github/workflows/api-contract.yml) —
-  the pipeline and its porcelain gates.
 - [contracts/speed.yaml](https://github.com/vislake/speed/blob/main/contracts/speed.yaml) —
   the merged platform document.
 - [redocly.yaml](https://github.com/vislake/speed/blob/main/redocly.yaml) —

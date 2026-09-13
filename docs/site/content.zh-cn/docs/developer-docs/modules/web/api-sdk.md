@@ -64,9 +64,9 @@ re-export 同一子路径,所以 bootstrap 的一次 `bindRequestFn` 调用同�
 ## 设计:为什么生成器是固定的,而不是被依赖的
 
 orval 固定在 8.17.0,从不进入工作区 lockfile:按需经 `pnpm dlx` 拉
-取,每个运行者——Taskfile 的 `api:gen` 任务与 `api-contract.yml` 工
-作流——用同一条命令,两者无法漂移。版本提升必须同落
-`orval.config.ts` 的注释、Taskfile 与工作流三处。fixup 脚本为一个真
+取,每个运行者——首先是 Taskfile 的 `api:gen` 任务——用同一条命
+令,调用方之间无法漂移。版本提升必须同落
+`orval.config.ts` 的注释与 Taskfile 两处。fixup 脚本为一个真
 实的缺口而存在:orval 发射不带文件扩展名的 mutator 导入,TypeScript
 在 bundler 解析下接受、在 nodenext 下拒绝(TS2835),而本包的构建正
 跑在 nodenext 上。`web/scripts/orval-nodenext-fixup.mjs` 在每次再生

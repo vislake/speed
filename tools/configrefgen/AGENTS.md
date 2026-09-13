@@ -75,17 +75,10 @@ the human reader — a rendering choice, not a second shape of the facts.
 
 ## Gates
 
-- `docs-check.yml` runs `go run . --check` from this directory and
-  fails when any committed artifact is stale. Its PATH SET names this
-  directory (self-trigger on change), `go/config/**`, the declaring
-  modules' `module.go` files, `docs/config.example.yaml`/`.json` and the
-  artifact consumers.
-- `fast-check.yml` and `full-check.yml` each carry a
-  `tools/configrefgen` matrix row (the reusable go-module-ci workflow:
-  golangci-lint, `go vet`, `-race` unit tests, the coverage leg — a
-  notice-and-pass for a module outside the gated set, this tool module
-  is not a released one — plus the workspace-context and `GOWORK=off`
-  standalone builds).
+- `go run . --check` from this directory fails when any committed
+  artifact is stale. What can make one stale: this directory itself,
+  `go/config/**`, the declaring modules' `module.go` files,
+  `docs/config.example.yaml`/`.json` and the artifact consumers.
 - Any change to the rendering, the composition or a source value must
   regenerate the artifacts in the same change: the byte-level `--check`
   is the gate, and hand-editing an artifact is a bug.

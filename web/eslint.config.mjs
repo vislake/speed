@@ -5,8 +5,8 @@
  * directory and ESLint discovers this file by walking up, so a new package
  * needs no config of its own -- and a rule change lands in one place.
  *
- * Deliberately minimal (see AGENTS.md and fast-check.yml's DELIBERATELY-NOT-
- * WIRED notes): typescript-eslint's recommended rules plus an explicit
+ * Deliberately minimal (see AGENTS.md's deferral notes):
+ * typescript-eslint's recommended rules plus an explicit
  * no-explicit-any error, and the no-literal-text rule (web/eslint-rules/
  * no-literal-text.js, tested in web/eslint-rules/no-literal-text.test.mjs)
  * enforcing that package UI text comes from the i18n namespace. It applies

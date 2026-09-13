@@ -82,7 +82,7 @@
 //     AddModule fails with ErrParityMismatch. Parity is enforced as each
 //     module is added, which makes every catalog that builds well-formed by
 //     construction; tools/check_i18n_keys.py checks the same rule over the
-//     raw zh-CN/en-US files, run by the docs-check pipeline.
+//     raw zh-CN/en-US files.
 //
 // # Plural categories
 //

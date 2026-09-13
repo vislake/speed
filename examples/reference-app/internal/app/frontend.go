@@ -14,8 +14,8 @@ package app
 // committed repository (web/dist is gitignored exactly like every other
 // build output in this workspace -- see the root .gitignore's "dist/"
 // pattern -- because the frontend and the backend move on independent
-// cadences, and every Go CI leg of this app -- full-check's reference-app
-// suite, api-contract.yml's regeneration build, a consumer's `go build`
+// cadences, and every Go build of this app -- its own test suite, the
+// regeneration build, a consumer's `go build`
 // -- would then depend on a committed snapshot of hashed bundle files
 // nobody regenerates before building). Reading the directory at runtime
 // instead keeps every Go build and test independent of the frontend

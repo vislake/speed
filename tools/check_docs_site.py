@@ -4,8 +4,7 @@
 docs/site/ is a real Hugo project (theme: hugo-book, pinned as a git
 submodule under docs/site/themes/hugo-book -- docs/site/README.md has
 the machinery-decision rationale). This
-script keeps the BUILT output honest in CI (the docs-check pipeline,
-.github/workflows/docs-check.yml, on every PR touching docs/) by:
+script keeps the BUILT output honest by:
 
 * running a real `hugo --minify` build from docs/site (unless
   --skip-build asks it to reuse an already-built docs/site/public/,
@@ -142,9 +141,8 @@ def _run_hugo_build(site_dir: Path) -> list[str]:
     if hugo_bin is None:
         _infra(
             "'hugo' is not on PATH -- install the pinned version "
-            "(.mise.toml's `hugo` entry / .github/actions/setup-hugo-env) "
-            "before running this check, or pass --skip-build to reuse an "
-            "existing docs/site/public/"
+            "(.mise.toml's `hugo` entry) before running this check, or "
+            "pass --skip-build to reuse an existing docs/site/public/"
         )
     proc = subprocess.run(
         [hugo_bin, "--minify", "--gc"],

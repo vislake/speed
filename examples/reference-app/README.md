@@ -76,7 +76,7 @@ Injecting some seams still isn't injecting all of them: `APP_REDIS_ADDR` alone c
 
 ### Running it in Docker
 
-`Dockerfile` is a multi-stage build — a `node:24-bookworm` frontend stage running this app's own `pnpm build` exactly as CI's npm-package-ci leg does (frozen-lockfile install from the `web/` workspace root, build from the app's web directory), a `golang:1.26.8-bookworm` builder (`CGO_ENABLED=0` since `go/dbkit`'s SQLite driver is pure Go), and a `gcr.io/distroless/static-debian12:nonroot` runtime carrying the static binary, the built frontend at `/app/web/dist` and `APP_WEB_DIST` naming it — so the deployed product URL serves its own page, not just the API (internal/app/frontend.go). Build context is the **repository root**, not this directory — see the Dockerfile's own header for why:
+`Dockerfile` is a multi-stage build — a `node:24-bookworm` frontend stage running this app's own `pnpm build` (frozen-lockfile install from the `web/` workspace root, build from the app's web directory), a `golang:1.26.8-bookworm` builder (`CGO_ENABLED=0` since `go/dbkit`'s SQLite driver is pure Go), and a `gcr.io/distroless/static-debian12:nonroot` runtime carrying the static binary, the built frontend at `/app/web/dist` and `APP_WEB_DIST` naming it — so the deployed product URL serves its own page, not just the API (internal/app/frontend.go). Build context is the **repository root**, not this directory — see the Dockerfile's own header for why:
 
 ```
 docker build -f examples/reference-app/Dockerfile -t speed-reference-app .

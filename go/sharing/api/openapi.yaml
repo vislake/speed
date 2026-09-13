@@ -11,8 +11,7 @@ info:
     (sharing_<verb><Resource>) and schema-name (Sharing<Type>) naming
     conventions of the repository's OpenAPI fragments. task api:gen
     regenerates sharing-server.gen.go (in this directory) from this file,
-    with oapi-codegen pinned at v2.8.0 -- see oapi-codegen.yaml and
-    .github/workflows/api-contract.yml.
+    with oapi-codegen pinned at v2.8.0 -- see oapi-codegen.yaml.
 
     /api/v1/sharing/access is deliberately NOT downstream of
     tenancy.Middleware's ordinary tenant resolution: the request that

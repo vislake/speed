@@ -15,8 +15,7 @@
  * otherwise read "notes" for the whole application surface.
  *
  * Run from anywhere in the repo, after every redocly join (the
- * Taskfile api:merge task and api-contract.yml's merge step both run
- * it between `join` and `lint`, keeping the two in lockstep):
+ * Taskfile api:merge task runs it between `join` and `lint`):
  *
  *   node web/scripts/redocly-join-fixup.mjs
  *

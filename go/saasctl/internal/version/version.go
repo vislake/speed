@@ -2,11 +2,10 @@
 //
 // The accepted form is the repository's single release-version form -- the
 // leading "v" plus three dot-separated numbers, with an optional prerelease
-// suffix. The pattern is kept in step with its two authoritative copies:
-// VERSION_PATTERN in tools/release/lockstep-release.py and the
-// version-input validation in .github/workflows/release.yml, both of which
-// cite the same expression ("release-version form required"). Changing the
-// accepted form means changing all three in one commit.
+// suffix. The pattern is kept in step with its authoritative copy,
+// VERSION_PATTERN in tools/release/lockstep-release.py, which cites the
+// same expression ("release-version form required"). Changing the
+// accepted form means changing both in one commit.
 package version
 
 import (

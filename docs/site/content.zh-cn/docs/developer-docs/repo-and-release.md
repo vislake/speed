@@ -1,7 +1,7 @@
 ---
 title: 仓库与发布
 weight: 5
-description: "仓库布局与发布模型——一个仓库两条不重叠的工作区根、模块与包作为独立发布单元、锁步版本与为什么所有交付物共用一个版本号、CI 矩阵,以及随代码分发的文档。"
+description: "仓库布局与发布模型——一个仓库两条不重叠的工作区根、模块与包作为独立发布单元、锁步版本与为什么所有交付物共用一个版本号、质量门,以及随代码分发的文档。"
 ---
 
 # 仓库与发布
@@ -61,35 +61,28 @@ upgrade` 一步把消费方 `go.mod` 里的 speed requires 改写到目标版
 模块表与目录树双向完备;npm 版本统一;changesets fixed 组恰好覆盖
 现存包。脚本化验证不可谈判,因为手工给多模块发布打 tag 正是人最容
 易出错的那一步;reference app 按设计排除在发布集之外——它是仓库
-的消费方模块、证明形态,从来不是交付物。发布工作流
-(`release.yml`)手动触发时,`verify` 作业跑这套验证与协调器自带测
-试;`publish` 作业随后对已验证版本执行真实发布——推送该版本的模
+的消费方模块、证明形态,从来不是交付物。一次真实发布先跑这套验证
+与协调器自带测试,随后对已验证版本执行发布——推送该版本的模
 块 tag 与仓库根 tag,并把 `web/packages` 下每个 `@speed` 包发布到
-GitHub Packages registry;写权限(`contents`、`packages`)只挂在该
-作业上,每一步对重跑幂等(既有 tag 跳过,已发布版本经 registry 探
-测跳过)。npmjs.org 发布仍延期。本地用
+GitHub Packages registry;每一步对重跑幂等(既有 tag 跳过,已发布
+版本经 registry 探测跳过)。npmjs.org 发布仍延期。本地用
 `task release:plan VERSION=vX.Y.Z` 跑同一检查。
 
-## CI 矩阵
+## 质量门
 
-守护仓库的 CI,简而言之的形状:
+守护仓库的检查,简而言之的形状:模块与包集合的逐项腿(lint、vet、
+race 下的单元测试、工作区与独立构建);仓库级检查——架构纪律
+semgrep 规则、租户隔离覆盖、i18n 键一致性、工具链漂移门与工作区
+ESLint 规则自己的测试;Docker 承载的集成层(经 testcontainers 的真
+实 PostgreSQL、Redis、RustFS)与 reference-app 套件,含双副本分布
+式启动证明;文档与 i18n 检查;spec 工具链的全量再生成并对已提交生
+成物跑 porcelain 比对;依赖、密钥与许可证扫描;以及脚手架证明——
+物化一个生成项目,在两种部署模式下 tidy、构建、迁移并启动。
 
-- **fast-check** 跑在每个 PR 与每次对 main 的直接推送上:模块与包
-  矩阵的逐项腿(lint、vet、race 下的单元测试、工作区与独立构建),
-  加 repo-checks——架构纪律 semgrep 规则、租户隔离覆盖、i18n 键
-  一致性、工具链漂移门与工作区 ESLint 规则自己的测试。
-- **full-check** 跑在 `full-ci` 标签 PR 与对 main 的推送上:
-  Docker 承载的集成层(经 testcontainers 的真实 PostgreSQL、
-  Redis、RustFS)与 reference-app 任务,含双副本分布式启动证明。
-- 更窄的流水线按所守之物触发:docs-check 守文档与 i18n 改动,
-  api-contract 守 spec 工具链改动(全量再生成并对已提交生成物跑
-  porcelain 门),安全扫描每个 PR 加每日计划,scaffold-verify 每
-  日物化一个生成项目,在两种部署模式下 tidy、构建、迁移并启动。
-
-两条规则给矩阵以牙齿:每个已实现模块与包都真实通过自己的腿;而
-mandatory-first-consumer 规则意味着没有真实使用者的模块 API 不算
-完成——reference app 端到端地行使每个模块,消费方形态的证明经
-scaffold-verify 流水线跑在真实生成项目上。
+两条规则给这套检查以牙齿:每个已实现模块与包都真实通过自己的腿;
+而 mandatory-first-consumer 规则意味着没有真实使用者的模块 API 不算
+完成——reference app 端到端地行使每个模块,消费方形态的证明跑在真
+实生成项目上。
 
 ## 文档随代码分发
 
@@ -107,7 +100,5 @@ scaffold-verify 流水线跑在真实生成项目上。
   离线单版本计划验证器。
 - [web/.changeset/config.json](https://github.com/vislake/speed/blob/main/web/.changeset/config.json)——
   npm 固定版本组。
-- [fast-check.yml](https://github.com/vislake/speed/blob/main/.github/workflows/fast-check.yml)——
-  每 PR 流水线的模块与包矩阵。
 - [saasctl AGENTS.md](https://github.com/vislake/speed/blob/main/go/saasctl/AGENTS.md)——
   消费方 CLI(`new`、`upgrade`、`db migrate`、`config print`)。

@@ -803,14 +803,10 @@ every spec free of the CJK characters CI refuses outside `docs/internal`.
 
 ## Not covered yet, and one thing to read every green result against
 
-**The suite runs on CI, and a push to main runs it among its other
-triggers.** `.github/workflows/e2e.yml` runs it on real runners in one
-matrix row per engine (chromium, webkit, ipad), each row running the
-default tier and then the `@budget` tier as separate invocations. It
-fires on `workflow_dispatch`, on a daily schedule, and on every push to
-main -- the push trigger opened once a dispatched run on that file had
-gone green, the first run on a cold runner being the failure-prone one.
-The daily run remains the standing coverage, and a report should still
+**A run covers one engine and one tier at a time.** The full shape is
+one run per engine (chromium, webkit, ipad), each running the
+default tier and then the `@budget` tier as separate invocations. A
+report should
 say which tier, which engines and which environment it ran in: "the
 suite is green" on its own does not distinguish a full three-engine pass
 from a default-tier run that never selected the gate in question.

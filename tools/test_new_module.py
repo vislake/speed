@@ -6,12 +6,12 @@ directly:
 
     python3 tools/test_new_module.py
 
-The Go plan's content is pinned by the script's own --dry-run and by
-the scaffold compile gate in fast-check's repo-checks job, which
-materializes both categories for real: the go-category stub builds in a
-throwaway directory, and the app-category skeleton is scaffolded into
-the reference app, code-generated with the pinned oapi-codegen, built
-and smoke-tested (the step reads the generator's own pinned command).
+The Go plan's content is pinned by the script's own --dry-run. Proving
+it end to end means materializing both categories for real -- building
+the go-category stub in a throwaway directory, and scaffolding the
+app-category skeleton into the reference app, code-generating it with
+the pinned oapi-codegen, building and smoke-testing it -- which is too
+expensive for this suite.
 This suite therefore pins the parts that are cheap to pin in-process:
 the Go plan's three-file shape and its go.work-derived go directive
 (the existing contract, regression-guarded here), the npm plan's

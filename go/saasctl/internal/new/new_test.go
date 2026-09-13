@@ -80,7 +80,7 @@ func assetPath(key, rel string) string {
 // require (a dependency a module gained since the goldens were last
 // tidied) passes this comparison unchanged. Nothing in the offline suite
 // detects that staleness, and nothing else automatic does either --
-// scaffold-verify's real tidy+build leg (one selection, on a schedule)
+// the dual-mode scaffold test's real tidy+build leg (one selection)
 // would silently repair a stale require set rather than fail on it.
 // Regenerating the five goldens through the real tidy procedure whenever
 // a speed module's dependency set changes is the only check that exists.

@@ -1,6 +1,6 @@
 //go:build integration
 
-// This file is the scaffold-verify pipeline's real dual-mode boot gate:
+// This file is the scaffold verification's real dual-mode boot gate:
 // it runs the module's own real end-to-end procedure (new -> tidy ->
 // build -> boot -> smoke) for the authn+org+rbac selection, extended with
 // a second boot under APP_DEPLOYMENT_MODE=distributed against real

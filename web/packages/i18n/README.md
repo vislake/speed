@@ -271,8 +271,7 @@ before reading a miss as a bug:
 
 Regenerate after any backend catalog or apperr code change:
 `python3 tools/gen_platform_error_bundle.py`; `--check` fails when the
-committed bundle is stale, and the docs-check pipeline runs both the
-generator's suite and that gate.
+committed bundle is stale. Run the generator's own suite next to it.
 
 ## Error-code text convention
 

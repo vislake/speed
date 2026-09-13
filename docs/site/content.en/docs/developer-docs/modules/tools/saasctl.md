@@ -163,13 +163,13 @@ generated projects — inside the reference app, the tool would operate
 on its own output. Its end-to-end proof is the real lifecycle:
 materialise each legal selection, genuine network `go mod tidy` and
 `go build`, migrate a fresh database, boot and smoke the composed
-HTTP chain. In CI form, scaffold-verify runs the full cycle daily for
+HTTP chain. The mechanical form of that proof runs the full cycle for
 one selection under both modes, against real Redis, RustFS and
 Mailpit containers. What the proof cannot show
 is recorded rather than faked — a correct-password login included —
 and so are the scope limits: the `go.mod` goldens need the real tidy
 procedure whenever a module's dependency set changes, and four of the
-five selections carry no CI-wired dual-mode boot proof. Both are
+five selections carry no mechanised dual-mode boot proof. Both are
 deliberate, documented reductions.
 
 ## Source
@@ -177,7 +177,5 @@ deliberate, documented reductions.
 - [saasctl AGENTS.md](https://github.com/vislake/speed/blob/main/go/saasctl/AGENTS.md) —
   the authoritative contract for all four commands; this page's
   primary source.
-- [scaffold-verify.yml](https://github.com/vislake/speed/blob/main/.github/workflows/scaffold-verify.yml) —
-  the daily end-to-end proof against real generated projects.
 - [saasctl user guide](/docs/user-guide/modules/tools/saasctl/) — the
   four commands' usage, from the operator's side.

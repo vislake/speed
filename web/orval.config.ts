@@ -4,12 +4,11 @@
  * package's src/ is orval output from each module's openapi fragment.
  *
  * orval version pinned: 8.17.0. Every runner invokes the same command
- * from this directory -- the Taskfile `api:gen` frontend leg and the
- * api-contract.yml regen step both run
- * `pnpm dlx orval@8.17.0 --config orval.config.ts` -- so the two cannot
- * drift. orval itself is never a workspace dependency: pnpm dlx fetches
+ * from this directory -- the Taskfile `api:gen` frontend leg runs
+ * `pnpm dlx orval@8.17.0 --config orval.config.ts` -- so no two callers
+ * can drift. orval itself is never a workspace dependency: pnpm dlx fetches
  * it on demand and it stays out of pnpm-lock.yaml. A version bump must
- * land in the Taskfile, this comment and api-contract.yml together, and
+ * land in the Taskfile and this comment together, and
  * shows up as a diff in the regenerated header (which stamps the
  * version).
  *

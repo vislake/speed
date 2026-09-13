@@ -24,8 +24,8 @@ Each test pins one scope rule:
     go/ (or examples/) that no registered module owns (a scaffolded
     module awaiting its go.work entry) must not silently drop out of
     scope.
-  * test_non_go_paths_map_to_nothing -- tools/, web/, docs/, .github/
-    and root files affect no module.
+  * test_non_go_paths_map_to_nothing -- tools/, web/, docs/ and root
+    files affect no module.
   * test_empty_changes_fall_back_to_all -- no changed paths (a clean
     tree on the base ref) still scopes to ALL, so a scoped run can
     never silently run nothing.
@@ -153,7 +153,6 @@ class ScopeRules(unittest.TestCase):
             "tools/scan_cjk.py",
             "web/packages/tokens/src/index.ts",
             "docs/internal/00-overview.md",
-            ".github/workflows/fast-check.yml",
             "Taskfile.yml",
             "README.md",
         ]:

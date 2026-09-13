@@ -3,27 +3,25 @@
 Plain, dependency-free Python scripts (standard library only, Python >= 3.11
 for `tomllib`) that back the repository's cross-cutting disciplines and its release machinery: three discipline checkers, a fourth Go-toolchain-requiring markdown-example checker, the dependency-license scanner with its committed manifest, one scaffold generator, the semgrep architecture-discipline ruleset under `tools/semgrep_rules/` with its planted-violation fixtures, and the lockstep release coordinator (a release tool, not a discipline checker — it follows the same convention, which is why it lives here).
 
-`tools/configrefgen/` is the directory's one Go tool module (its own `go.mod`/`go.sum`, a go.work `use` entry outside `go/` in the same consumer-module form as `examples/reference-app`, so the lockstep release coordinator never publishes it): it generates the repository's committed configuration reference from the live configuration schema and the modules' own declarations. It is Go rather than Python because generating that reference means composing a real schema host, and that host must import the platform modules whose declarations it renders — a Python script cannot. `tools/configrefgen/AGENTS.md` is that module's own contract. The checkers are the local-run counterparts of the CI discipline checks scheduled in `docs/internal/18-cicd.md` (the table rows for banning CJK outside `docs/internal/`, for requiring identical zh-CN/en-US message-key sets, and for making every tenant-scoped Repository run the tenancytest isolation suite, all marked there as self-written scripts); CI workflows mount all three under `tools/` — `scan_cjk.py` and `check_repo_isolation.py` in fast-check's repo-checks job, `check_i18n_keys.py` in the docs-check pipeline. Two further scripts are repo self-checks rather than 18-cicd discipline rows: `tools/check_toolchain.py` gates the tool versions the root `.mise.toml` pins — mirrors of the authoritative sources CI actually reads (Taskfile.yml header, `go.work`, `web/.nvmrc`, `web/package.json`, setup-go-env's `GOLANGCI_VERSION`) — proving the mirrors cannot drift, and fast-check's repo-checks job runs it; `tools/check_docs_site.py` validates the docs-site skeleton (required entry files, internal links, offline preview) and the docs-check pipeline runs it. `tools/check_api_fragments.py` is the same shape for `.github/workflows/api-contract.yml`'s backend-fragment enumeration, whose hand-written legs -- the trigger path filters and the redocly join input list (the eleven oapi-codegen regenerations are derived through `tools/api_fragment_matrix.py` and consumed as the regeneration job's matrix) -- were kept consistent only by comments in that file until the fragment set had grown to its current eleven with no gate going red; its manifest `tools/api_fragments.json` is now the single machine-readable source of truth, and the api-contract pipeline runs the gate (and its planted-drift suite `tools/test_check_api_fragments.py`) as its first steps on every trigger. `tools/check_migration_parity.py` extends the same manifest-plus-gate shape to the migration corpus: every shipped migration's `sqlite/` and `postgres/` copies must both exist and stay identical modulo comments, whitespace and the declared column-type synonyms, with the deliberate departures declared -- and kept live -- in `tools/migration_parity_exceptions.json`; its planted-drift suite is `tools/test_check_migration_parity.py`, and fast-check's repo-checks job runs both, next to the cross-module foreign-key lint. `tools/check_host_composition.py` guards the host composition code the reference app and the generated project skeleton share: that code lives once, in the platform module `go/app` (the application assembly engine included), imported by both hosts, so the gate's job is the no-fork half -- neither host tree may re-declare the kernel's symbols (authn's mount path, the serve timeouts, the pre-auth allowlist, the route-label seed, the serve lifecycle), re-grow its statements (the serve loop, the `/healthz`, `/metrics`, `/api/v1/authn` literals) or re-issue the engine-owned assembly calls (`dbkit.Open`, `dbkit.NewMigrationRegistry`, `http.NewServeMux`, `jobs.NewStandaloneQueue`, `jobs.Wire`, `signal.NotifyContext`, `chain.Chain`, `obs.Init`, or the component drive's `pkgcore.NewComponentRegistry` with its `Prepare`/`Construct`/`Verify`/`Init` stages) in its own code. Two scoping rules keep the call bans honest: the `http.NewServeMux` entry applies only under the host composition directories (an app's own business packages legitimately build their own routers), the `chain.Chain` pattern matches any selector ending in `chain` (both hosts import the chain package under an alias), and the two `jobs` entries carry no allowance: background execution is the `queue.standalone` component's own assembly, so any host file calling `jobs.NewStandaloneQueue` or `jobs.Wire` fires; its planted-drift suite is `tools/test_check_host_composition.py`. `tools/check_env_example_consistency.py` keeps the reference app's committed `examples/reference-app/.env.example` equal to the environment surface its host actually declares — the loader target's `config:"env=NAME"` pins in `examples/reference-app/internal/app/bootstrap.go` (the `,derive` option included), the `APP_ROOT_KEY` the loader reads through `WithRootKeyEnv`, its argument a string literal or a same-file constant, and the derived names of the declared key materials, read from the key paths `docs/config-reference.json`'s `bootstrap_keys` carry — against the example's own key spellings: active `KEY=` entries and commented-out examples alike, a prose mention never counting — so a variable added to either side alone fails, in either direction. Its planted-drift suite is `tools/test_check_env_example_consistency.py`, and fast-check's repo-checks job runs both. `tools/check_integration_tiers.py` is the same gate shape over the integration-tier enumeration: full-check.yml's integration-tiers matrix and Taskfile.yml's INTEGRATION_DIRS must both match the go/ modules the tree marks as carrying a `//go:build integration` test file (go/saasctl the one declared exclusion), and its planted-drift suite `tools/test_check_integration_tiers.py` runs in the same repo-checks job. `tools/check_markdown_examples.py` closes root CLAUDE.md's own recorded gap ("Examples embedded in markdown prose... have no compile harness"): every fenced ```go block in AGENTS.md/README/ADR prose is either really `go build`+`go vet`'d (a block with its own `package` clause) or `gofmt -e` syntax-checked under several throwaway wrappings (a bare fragment, the corpus majority) — the one script here that genuinely needs a Go toolchain, not just `python3` (see its own section below for why, and for the design tradeoff that keeps a partial snippet legitimate rather than forcing every example into a padded full program). The generator is the backend of the `task new:module` promised by `docs/internal/19-dev-workflow.md`. The release coordinator (`release/lockstep-release.py`) is the M0 deliverable for the roadmap's lockstep-release item (`docs/internal/02-repo-and-release.md`, `docs/internal/18-cicd.md`), an offline verification of the full one-version release plan, wrapped by the root Taskfile's `release:plan` task and mounted by `.github/workflows/release.yml`; its unittest suite and go.mod fixtures live beside it under `tools/release/`. Nothing here needs anything beyond `python3` except the semgrep ruleset (needs a semgrep binary) and `check_markdown_examples.py` (needs `go`/`gofmt` on PATH) — see their own sections for the pinned local versions and the CI shape — and the checkers print hit paths relative to their `--root`.
+`tools/configrefgen/` is the directory's one Go tool module (its own `go.mod`/`go.sum`, a go.work `use` entry outside `go/` in the same consumer-module form as `examples/reference-app`, so the lockstep release coordinator never publishes it): it generates the repository's committed configuration reference from the live configuration schema and the modules' own declarations. It is Go rather than Python because generating that reference means composing a real schema host, and that host must import the platform modules whose declarations it renders — a Python script cannot. `tools/configrefgen/AGENTS.md` is that module's own contract. The checkers are the local-run counterparts of the CI discipline checks scheduled in `docs/internal/18-cicd.md` (the table rows for banning CJK outside `docs/internal/`, for requiring identical zh-CN/en-US message-key sets, and for making every tenant-scoped Repository run the tenancytest isolation suite, all marked there as self-written scripts); all three live under `tools/`. Two further scripts are repo self-checks rather than 18-cicd discipline rows: `tools/check_toolchain.py` gates the tool versions the root `.mise.toml` pins — mirrors of the authoritative sources the consuming tools actually read (Taskfile.yml header, `go.work`, `web/.nvmrc`, `web/package.json`) — proving the mirrors cannot drift; `tools/check_docs_site.py` validates the docs-site skeleton (required entry files, internal links, offline preview). `tools/api_fragments.json` is the single machine-readable source of truth for the platform fragment universe, and `tools/api_fragment_matrix.py` derives the oapi-codegen regeneration set from it. `tools/check_migration_parity.py` extends the same manifest-plus-gate shape to the migration corpus: every shipped migration's `sqlite/` and `postgres/` copies must both exist and stay identical modulo comments, whitespace and the declared column-type synonyms, with the deliberate departures declared -- and kept live -- in `tools/migration_parity_exceptions.json`; its planted-drift suite is `tools/test_check_migration_parity.py`. `tools/check_host_composition.py` guards the host composition code the reference app and the generated project skeleton share: that code lives once, in the platform module `go/app` (the application assembly engine included), imported by both hosts, so the gate's job is the no-fork half -- neither host tree may re-declare the kernel's symbols (authn's mount path, the serve timeouts, the pre-auth allowlist, the route-label seed, the serve lifecycle), re-grow its statements (the serve loop, the `/healthz`, `/metrics`, `/api/v1/authn` literals) or re-issue the engine-owned assembly calls (`dbkit.Open`, `dbkit.NewMigrationRegistry`, `http.NewServeMux`, `jobs.NewStandaloneQueue`, `jobs.Wire`, `signal.NotifyContext`, `chain.Chain`, `obs.Init`, or the component drive's `pkgcore.NewComponentRegistry` with its `Prepare`/`Construct`/`Verify`/`Init` stages) in its own code. Two scoping rules keep the call bans honest: the `http.NewServeMux` entry applies only under the host composition directories (an app's own business packages legitimately build their own routers), the `chain.Chain` pattern matches any selector ending in `chain` (both hosts import the chain package under an alias), and the two `jobs` entries carry no allowance: background execution is the `queue.standalone` component's own assembly, so any host file calling `jobs.NewStandaloneQueue` or `jobs.Wire` fires; its planted-drift suite is `tools/test_check_host_composition.py`. `tools/check_env_example_consistency.py` keeps the reference app's committed `examples/reference-app/.env.example` equal to the environment surface its host actually declares — the loader target's `config:"env=NAME"` pins in `examples/reference-app/internal/app/bootstrap.go` (the `,derive` option included), the `APP_ROOT_KEY` the loader reads through `WithRootKeyEnv`, its argument a string literal or a same-file constant, and the derived names of the declared key materials, read from the key paths `docs/config-reference.json`'s `bootstrap_keys` carry — against the example's own key spellings: active `KEY=` entries and commented-out examples alike, a prose mention never counting — so a variable added to either side alone fails, in either direction. Its planted-drift suite is `tools/test_check_env_example_consistency.py`. `tools/check_markdown_examples.py` closes root CLAUDE.md's own recorded gap ("Examples embedded in markdown prose... have no compile harness"): every fenced ```go block in AGENTS.md/README/ADR prose is either really `go build`+`go vet`'d (a block with its own `package` clause) or `gofmt -e` syntax-checked under several throwaway wrappings (a bare fragment, the corpus majority) — the one script here that genuinely needs a Go toolchain, not just `python3` (see its own section below for why, and for the design tradeoff that keeps a partial snippet legitimate rather than forcing every example into a padded full program). The generator is the backend of the `task new:module` promised by `docs/internal/19-dev-workflow.md`. The release coordinator (`release/lockstep-release.py`) is the M0 deliverable for the roadmap's lockstep-release item (`docs/internal/02-repo-and-release.md`, `docs/internal/18-cicd.md`), an offline verification of the full one-version release plan, wrapped by the root Taskfile's `release:plan` task; its unittest suite and go.mod fixtures live beside it under `tools/release/`. Nothing here needs anything beyond `python3` except the semgrep ruleset (needs a semgrep binary) and `check_markdown_examples.py` (needs `go`/`gofmt` on PATH) — see their own sections for the pinned local versions — and the checkers print hit paths relative to their `--root`.
 
 | Script | Kind | Enforces / does | Exit codes |
 |---|---|---|---|
 | `scan_cjk.py` | Checker | Root `CLAUDE.md` Language Rule: English everywhere outside `docs/internal/` | 0 clean / 1 violations / 2 error |
 | `check_i18n_keys.py` | Checker | Root `CLAUDE.md` internationalization rule: zh-CN and en-US key sets identical | 0 clean / 1 mismatch or parse error / 2 error |
 | `check_repo_isolation.py` | Checker | Multi-tenant isolation discipline: every Repository type (a struct embedding `dbkit.Repository[T]`) is covered by `tenancytest.AssertIsolated` in its package's tests, or by the equivalent `Test<TypeName>_AssertIsolated` suite | 0 all covered / 1 uncovered repository / 2 error |
-| `check_toolchain.py` | Checker | Root `.mise.toml` tool versions mirror their authoritative sources (Taskfile.yml header, `go.work`, `web/.nvmrc`, `web/package.json`, setup-go-env's `GOLANGCI_VERSION`) | 0 all mirrors match / 1 drift / 2 error |
+| `check_toolchain.py` | Checker | Root `.mise.toml` tool versions mirror their authoritative sources (Taskfile.yml header, `go.work`, `web/.nvmrc`, `web/package.json`) | 0 all mirrors match / 1 drift / 2 error |
 | `check_docs_site.py` | Checker | `docs/site/` skeleton structure: required entry files present, internal links resolve inside the tree, offline preview serves (python3 stdlib HTTP server) | 0 clean / 1 violation / 2 error |
-| `check_api_fragments.py` | Checker | `.github/workflows/api-contract.yml`'s backend-fragment enumeration self-consistent: `tools/api_fragments.json` is the single source of truth, and the tree, the pull_request/push trigger path filters, the derivation (`tools/api_fragment_matrix.py`, executed by the gate) feeding the regeneration matrix and the redocly join input list must all agree with it (a fragment added to one leg only, or to the tree without the manifest, goes red) | 0 clean / 1 drift / 2 error |
 | `check_spec_request_tenant_id.py` | Checker | 18-cicd discipline row "the API layer must not accept an externally supplied tenant_id": every backend OpenAPI fragment's requests (requestBody schema properties and parameters) are scanned for a `tenant_id` declaration, with authn's four pre-auth tenant-naming request schemas the one recorded exception (its spec header: a request for that tenant's first access token, never a grant); response schemas are not requests and prose that merely mentions tenant_id is not a property line | 0 clean / 1 finding / 2 error |
 | `check_migration_cross_module_fks.py` | Checker | 18-cicd discipline row "no cross-module database foreign keys": a `REFERENCES` target in a module's migration files must belong to that module, measured by where the target is CREATEd across every `migrations/` tree under go/ and examples/reference-app. STATUS: future guard -- the tree ships no REFERENCES clause at all today; the planted fixtures are the teeth | 0 clean / 1 finding / 2 error |
-| `check_migration_parity.py` | Checker | Dual-dialect migration parity: every shipped migration's `migrations/sqlite/<name>.sql` must have its `migrations/postgres/` sibling (and vice versa), the pair must be textually identical after comment removal, case folding, whitespace collapse and the declared column-type synonyms (BLOB/BYTEA, REAL/DOUBLE PRECISION, INTEGER/BIGINT), and every deliberate departure -- a dialect-only file, a dialect-only set (a backend that exists on one dialect only), a structurally divergent pair (SQLite's table-rebuild recipes, the audit append-only triggers) -- must be declared with its reason in `tools/migration_parity_exceptions.json`, where a stale entry fails too. Planted-drift suite: `tools/test_check_migration_parity.py` (run in the same step pair in fast-check's repo-checks job) | 0 clean / 1 finding / 2 usage error |
-| `check_host_composition.py` | Checker | Shared host composition: the host-neutral kernel (the application assembly engine, authn's mount path, the serve timeouts, the pre-auth allowlist set, the mounted-route label seed and the middleware chain) lives once, in the platform module `go/app`, imported by both the reference app (`examples/reference-app`) and the saasctl template (`go/saasctl/internal/template/project`, the tree `saasctl new` materializes into every generated project) -- so neither host tree may re-declare its symbols, re-grow its statements (the serve loop, the `/healthz`, `/metrics`, `/api/v1/authn` literals) or re-issue the engine-owned assembly calls (`pkgcore.NewComponentRegistry` and the `Prepare`/`Construct`/`Verify`/`Init` drive, `dbkit.Open`, `dbkit.NewMigrationRegistry`, `http.NewServeMux`, `jobs.NewStandaloneQueue`, `jobs.Wire`, `signal.NotifyContext`, `chain.Chain`, `obs.Init`) in its own code; the jobs entries reach the hosts through the `queue.standalone` component and so carry no allowance, and the top-level-mux entry is scoped to the host composition dirs so a business package's own router stays legal. Planted-drift suite: `tools/test_check_host_composition.py` (run in the same step pair in fast-check's repo-checks job) | 0 clean / 1 finding / 2 usage error |
-| `check_env_example_consistency.py` | Checker | Reference-app env-example consistency: the env variables the host declares (`examples/reference-app/internal/app/bootstrap.go`'s `config:"env=NAME"` pins -- the `,derive` option included -- the `APP_ROOT_KEY` the loader reads through `WithRootKeyEnv` and the prefix the loader is built with through `WithEnvPrefix`, each argument a string literal or a same-file constant, and the derived names of the declared key materials, whose key paths are read from `docs/config-reference.json`'s `bootstrap_keys`) must equal the key set `examples/reference-app/.env.example` documents, its active `KEY=` entries and its commented-out examples alike (a prose mention is not an entry); both directions fail, and the example-side one is strict with no in-file escape marker -- the file's declared scope is exactly the host's surface, so a non-host entry is a stale line to remove or a variable to wire in the loader target. Planted-drift suite: `tools/test_check_env_example_consistency.py` (run in the same step pair in fast-check's repo-checks job) | 0 clean / 1 finding / 2 usage error |
-| `check_coverage_baseline.py` | Checker | docs/internal/20-quality-and-security.md's coverage rule for every released module (the gated set is derived from go.work at run time -- every use entry outside tools/, so the go/ modules plus examples/reference-app): the measured unit-suite statement coverage -- generated files (.gen.go) excluded from the census -- must clear the 80% floor (the 2026-09 product decision) and must not sit more than the size-calibrated tolerance below its committed `tools/coverage-baselines.json` row (the earlier foundation-modules no-decline rule, kept): the tolerance is the wider of 0.15 points and the points two statements are worth in the module under measurement (2 * 100 / statements) -- a 2-statement floor that keeps the jitter budget size-invariant, absorbing statement-granular scheduling noise in small modules while the 0.15-point main tolerance governs the larger ones -- and a failure names the effective tolerance and the census it was calibrated against; `--update` records new baselines by real measurement (a deliberate decline must ride the same change that records it, with the reason in the commit, and a sub-floor measurement refuses to be recorded -- the floor is not re-baselineable); `--selfcheck` keeps the baseline file itself complete and current (every row a live gated module, every gated module with a row) so a stale row cannot silently exempt a module. Unit suite: `tools/test_check_coverage_baseline.py` (run as its own step in fast-check's repo-checks job, just before the self-check step) | 0 clean / 1 floor or decline breach, stale/missing row, or toolchain moved / 2 usage error, or the gated set cannot be derived |
-| `check_integration_tiers.py` | Checker | The integration-tier enumeration: full-check.yml's integration-tiers matrix and Taskfile.yml's INTEGRATION_DIRS are two hand-written copies of the go/ modules carrying a `//go:build integration` test file; the set is derived from the tree (a go.work use entry with any .go file whose pre-package region carries a constraint naming the integration tag, in go.work order) and both copies must match it -- go/saasctl is a declared exclusion (its tier builds and boots a whole generated project and runs in scaffold-verify.yml), and a stale exclusion or an exclusion reappearing in a copy fails too. Planted-drift suite: `tools/test_check_integration_tiers.py` (run in the same step pair in fast-check's repo-checks job) | 0 clean / 1 finding / 2 usage error |
+| `check_migration_parity.py` | Checker | Dual-dialect migration parity: every shipped migration's `migrations/sqlite/<name>.sql` must have its `migrations/postgres/` sibling (and vice versa), the pair must be textually identical after comment removal, case folding, whitespace collapse and the declared column-type synonyms (BLOB/BYTEA, REAL/DOUBLE PRECISION, INTEGER/BIGINT), and every deliberate departure -- a dialect-only file, a dialect-only set (a backend that exists on one dialect only), a structurally divergent pair (SQLite's table-rebuild recipes, the audit append-only triggers) -- must be declared with its reason in `tools/migration_parity_exceptions.json`, where a stale entry fails too. Planted-drift suite: `tools/test_check_migration_parity.py` | 0 clean / 1 finding / 2 usage error |
+| `check_host_composition.py` | Checker | Shared host composition: the host-neutral kernel (the application assembly engine, authn's mount path, the serve timeouts, the pre-auth allowlist set, the mounted-route label seed and the middleware chain) lives once, in the platform module `go/app`, imported by both the reference app (`examples/reference-app`) and the saasctl template (`go/saasctl/internal/template/project`, the tree `saasctl new` materializes into every generated project) -- so neither host tree may re-declare its symbols, re-grow its statements (the serve loop, the `/healthz`, `/metrics`, `/api/v1/authn` literals) or re-issue the engine-owned assembly calls (`pkgcore.NewComponentRegistry` and the `Prepare`/`Construct`/`Verify`/`Init` drive, `dbkit.Open`, `dbkit.NewMigrationRegistry`, `http.NewServeMux`, `jobs.NewStandaloneQueue`, `jobs.Wire`, `signal.NotifyContext`, `chain.Chain`, `obs.Init`) in its own code; the jobs entries reach the hosts through the `queue.standalone` component and so carry no allowance, and the top-level-mux entry is scoped to the host composition dirs so a business package's own router stays legal. Planted-drift suite: `tools/test_check_host_composition.py` | 0 clean / 1 finding / 2 usage error |
+| `check_env_example_consistency.py` | Checker | Reference-app env-example consistency: the env variables the host declares (`examples/reference-app/internal/app/bootstrap.go`'s `config:"env=NAME"` pins -- the `,derive` option included -- the `APP_ROOT_KEY` the loader reads through `WithRootKeyEnv` and the prefix the loader is built with through `WithEnvPrefix`, each argument a string literal or a same-file constant, and the derived names of the declared key materials, whose key paths are read from `docs/config-reference.json`'s `bootstrap_keys`) must equal the key set `examples/reference-app/.env.example` documents, its active `KEY=` entries and its commented-out examples alike (a prose mention is not an entry); both directions fail, and the example-side one is strict with no in-file escape marker -- the file's declared scope is exactly the host's surface, so a non-host entry is a stale line to remove or a variable to wire in the loader target. Planted-drift suite: `tools/test_check_env_example_consistency.py` | 0 clean / 1 finding / 2 usage error |
+| `check_coverage_baseline.py` | Checker | docs/internal/20-quality-and-security.md's coverage rule for every released module (the gated set is derived from go.work at run time -- every use entry outside tools/, so the go/ modules plus examples/reference-app): the measured unit-suite statement coverage -- generated files (.gen.go) excluded from the census -- must clear the 80% floor (the 2026-09 product decision) and must not sit more than the size-calibrated tolerance below its committed `tools/coverage-baselines.json` row (the earlier foundation-modules no-decline rule, kept): the tolerance is the wider of 0.15 points and the points two statements are worth in the module under measurement (2 * 100 / statements) -- a 2-statement floor that keeps the jitter budget size-invariant, absorbing statement-granular scheduling noise in small modules while the 0.15-point main tolerance governs the larger ones -- and a failure names the effective tolerance and the census it was calibrated against; `--update` records new baselines by real measurement (a deliberate decline must ride the same change that records it, with the reason in the commit, and a sub-floor measurement refuses to be recorded -- the floor is not re-baselineable); `--selfcheck` keeps the baseline file itself complete and current (every row a live gated module, every gated module with a row) so a stale row cannot silently exempt a module. Unit suite: `tools/test_check_coverage_baseline.py`, next to the `--selfcheck` run | 0 clean / 1 floor or decline breach, stale/missing row, or toolchain moved / 2 usage error, or the gated set cannot be derived |
 | `check_markdown_examples.py` | Checker | Root `CLAUDE.md` Documentation section: every fenced ```go block in AGENTS.md/README/ADR prose really compiles (a complete block) or at least parses under some throwaway wrapping (a fragment) | 0 clean / 1 a block fails its check / 2 error |
 | `license_scan.py` | Checker | Dependency-license compliance: every direct third-party dependency of the implemented Go modules and web packages is adjudicated and within policy in `dependency-licenses.json`, re-derived from the live tree on every run | 0 clean / 1 violation / 2 usage error |
 | `check_error_code_index_coverage.py` | Checker | Error-code index completeness: every code constructed in Go source (declared or inline, literal argument only) has a row in the committed index page `docs/site/content.en/docs/user-guide/error-codes.md`, plus the unindexable classes (non-literal code arguments outside an apperr-constructing helper's body; helper calls with non-literal arguments) — the independent side of `gen_error_code_index.py`'s own drift gate, able to go red on an extractor blind spot the gate cannot see | 0 clean / 1 finding / 2 usage error |
-| `gen_platform_error_bundle.py` | Generator | Frontend error copy derives from the backend: `web/packages/i18n/src/platform-errors/locales/{zh-CN,en-US}.json` is the apperr census (read through `gen_error_code_index.py`'s own public functions, never its generated artifacts) intersected with the modules' `locales/` catalogs, structurally and with no name list -- a catalog id with no apperr construction behind it (an invitation email, a notification template, an SMS body, a default workspace name, demo copy) never enters the bundle. `{{.name}}` normalizes to i18next's `{{name}}`; plural tables become `key_<category>` leaves with cross-language union padding so both bundles register identical leaf sets; any other `{{...}}` shape, an empty translation, a duplicate id across catalogs and a zh-CN id gap refuse the run (exit 2). Sorted keys, deterministic bytes; `--check` compares against a fresh render. Planted-drift suite `tools/test_gen_platform_error_bundle.py` runs first in the same step pair in docs-check | 0 clean / 1 `--check` drift / 2 refusal or usage error |
+| `gen_platform_error_bundle.py` | Generator | Frontend error copy derives from the backend: `web/packages/i18n/src/platform-errors/locales/{zh-CN,en-US}.json` is the apperr census (read through `gen_error_code_index.py`'s own public functions, never its generated artifacts) intersected with the modules' `locales/` catalogs, structurally and with no name list -- a catalog id with no apperr construction behind it (an invitation email, a notification template, an SMS body, a default workspace name, demo copy) never enters the bundle. `{{.name}}` normalizes to i18next's `{{name}}`; plural tables become `key_<category>` leaves with cross-language union padding so both bundles register identical leaf sets; any other `{{...}}` shape, an empty translation, a duplicate id across catalogs and a zh-CN id gap refuse the run (exit 2). Sorted keys, deterministic bytes; `--check` compares against a fresh render. Planted-drift suite: `tools/test_gen_platform_error_bundle.py` | 0 clean / 1 `--check` drift / 2 refusal or usage error |
 | `affected_go_modules.py` | Scope helper | Computes which Go modules a set of changes affects -- changed modules plus their downstream dependents, the dependency edges derived from each module go.mod's require lines (never a hand-maintained table) -- the computation behind the Taskfile `test` task's diff-aware scoping | 0 scope printed (one module dir per line, or the token ALL) / 1 git plumbing failed / 2 usage error |
 | `new_module.py` | Generator | Scaffolds the canonical stub of a new speed Go module under `go/<name>` (go.mod + doc.go + AGENTS.md) with `--category go`, the canonical `@speed/<name>` package skeleton under `web/packages/<name>` (package.json, the tsconfig pair, a doc-comment index.ts plus its wiring test, README and AGENTS.md) with `--category npm`, or the application-side module skeleton at `<app-root>/internal/<name>` with `--category app` (the reference app's notes-module shape: doc.go, model.go, repository.go, handler.go with the generated-`api.ServerInterface` assertion, handler_test.go, the dual-dialect migration pair, the bilingual locale pair and the OpenAPI fragment with its oapi-codegen config; the app root must hold its go.mod, which the tool reads to derive the module's import paths, and the generated `api/<name>-server.gen.go` is left to the pinned oapi-codegen run the checklist names first); prints the category's registration checklist and never modifies shared repository files. The app category's locale pair templates are real files under `tools/new_module_locales/` (a zh-CN/en-US pair, so they sit under `tools/check_i18n_keys.py`'s own parity check; tools/ is an English-only source tree, so the Chinese template cannot live inline in the script) | 0 scaffolded / 2 refusal or validation error |
 | `release/lockstep-release.py` | Release verifier | Verifies the lockstep one-version release plan offline — derives the publishable set at runtime (go.work `use` entries under `go/` + `web/packages/*`) and checks version form, no duplicate tag, go.work-to-tree completeness both ways, uniform npm versions, changesets fixed-group coverage (`web/.changeset/config.json`); `--self-test` runs its unittest suite; `--apply` is a hard-gated local-tag mode (real publishing is M4's job) | 0 consistent plan / 1 inconsistent plan or self-test failure / 2 usage / 3 `--apply` refused |
@@ -178,8 +176,7 @@ struct { *dbkit.Repository[Note] }`, value or pointer, in standalone or
 grouped `type ( ... )` declarations — and checks that each type's package
 tests call `tenancytest.AssertIsolated`, or run the equivalent
 store-level suite named `Test<TypeName>_AssertIsolated` (the coverage
-attribution section below spells the rule out). fast-check's repo-checks
-job mounts it on every PR and every push to main.
+attribution section below spells the rule out).
 
 Usage:
 
@@ -285,13 +282,12 @@ toolchain: MISMATCH    node: .mise.toml pins 24 but web/.nvmrc says 23
 
 The sources, one per tool: `task` from the Taskfile.yml header comment
 (the one tool whose only pin lives there, scanned over the header's first
-40 lines); `go` from go.work's `go` directive (the file actions/setup-go
-actually reads -- setup-go-env's go-version-file input stays go.work
-rather than being repointed at .mise.toml, which setup-go cannot parse);
+40 lines); `go` from go.work's `go` directive (the file the Go toolchain
+installers read, .mise.toml not being a format they parse);
 `node` from web/.nvmrc; `pnpm` from web/package.json's packageManager
-field; `golangci-lint` from GOLANGCI_VERSION in
-.github/actions/setup-go-env/action.yml. Bump a source and its mirror
-together -- the .mise.toml header comments name the source of every tool.
+field. Bump a source and its mirror together -- the .mise.toml header
+comments name the source of every tool. `golangci-lint` and `hugo` are
+pinned in .mise.toml alone, so they have no mirror to check.
 
 ## check_docs_site.py — docs-site skeleton checker
 
@@ -324,91 +320,6 @@ handled:
 docs-site: violation    index.html: required entry file is missing
 docs-site: violation    status.html: link 'aboutx.html' resolves to nothing
 ```
-
-## check_api_fragments.py — api-contract fragment-enumeration drift gate
-
-`.github/workflows/api-contract.yml` names the backend-fragment universe
-in two hand-written places: the trigger path filters (the
-`pull_request` and `push` `paths` blocks carry one `<dir>/**` row per
-fragment) and the redocly `join` input list (the fragments merged into
-`contracts/speed.yaml`, whose input order is load-bearing: the merged
-document is committed and diff-gated, and the order is what join
-renders). The regeneration leg is derived, not enumerated: the
-workflow's contract-gate job runs `tools/api_fragment_matrix.py` over
-the manifest and publishes the derived array as its `fragments` output,
-and the regeneration job's matrix is `fromJson` of exactly that output
-(one runner per fragment, each regenerating with its directory as the
-working directory and gating the result with porcelain). The fragment
-set grew over successive rounds to its current eleven, with the
-hand-written sites' consistency held only by comments in that file
-("keep the two in lockstep") -- an enumeration that can drift silently,
-and one that did. `tools/api_fragments.json` is the single
-machine-readable source of truth for the fragment list, and this gate
-fails (exit 1) when the live tree, the manifest, the derivation and the
-workflow's legs disagree about a fragment.
-
-Manifest schema: one `fragments` array; each entry is `{"name":
-"<fragment id>", "dir": "<repo-relative api directory, ending in
-/api>", "merge_rank": <int, present only for fragments that join the
-redocly merge>}`. `merge_rank` is the join order (rank order == join
-order); its
-absence marks a fragment outside the merge (regenerated and
-compile-checked, but feeding neither the merge nor the frontend SDK).
-
-Checked invariants (each goes red with an actionable message):
-
-* a registered fragment whose `openapi.yaml` or `oapi-codegen.yaml` is
-  missing from the tree;
-* an `api/` directory on disk carrying `openapi.yaml` +
-  `oapi-codegen.yaml` that the manifest does not register (the tree-scan
-  signature of a backend fragment; the scan skips `.git/`, `.claude/`
-  (nested worktree checkouts), `node_modules/`, `vendor/` and
-  `__pycache__/`);
-* a registered fragment missing from the `pull_request` or the `push`
-  path filter, or a fragment-shaped path-filter row (`.../api/**`)
-  naming an unregistered directory;
-* the matrix leg decoupled from the manifest: a matrix that stops
-  consuming the gate job's derived output, a gate job without the
-  derivation step (or with the step off the consumed id /
-  `$GITHUB_OUTPUT`), a regeneration step running outside
-  `${{ matrix.fragment.dir }}` or without the pinned invocation, or a
-  missing porcelain gate -- and, because the gate executes the
-  derivation itself, an output that no longer equals the manifest's
-  fragments in manifest order with the `name`/`dir` keys the workflow
-  reads;
-* the redocly join input list disagreeing with the manifest's merged
-  fragments in membership or order;
-* the manifest, the derivation script or the gate itself missing from
-  either trigger path filter (a change to any of them must re-run this
-  job).
-
-Usage:
-
-```
-python3 tools/check_api_fragments.py --root /path/to/repo
-python3 tools/check_api_fragments.py      # --root defaults to the current directory
-python3 tools/test_check_api_fragments.py # the planted-drift suite
-```
-
-The companion suite (`tools/test_check_api_fragments.py`) reproduces
-every drift class on a small fixture repository -- a fragment added to
-the tree without the manifest, a manifest entry missing from a leg, an
-unregistered fragment in a leg, a join list dropped/swapped/extended --
-plus a final case running the real check against this repository. The
-api-contract pipeline runs the suite and then the gate as its first
-steps on every trigger (`.github/workflows/api-contract.yml`, the
-selftest-first order the security pipeline's license job uses), so a
-change to the workflow that forgets the manifest, or to the manifest
-that forgets a leg, fails there. Deliberately not read: Taskfile.yml's
-`api:gen`/`api:merge` task legs enumerate the same universe for the
-local regeneration command, and keeping them in step with the manifest
-stays a code-review concern (the workflow steps' "the same command as
-Taskfile's api:gen task" comments) -- this gate guards the workflow. A
-fragment added to the tree that touches no trigger path at all does not
-run this job (a path filter cannot name a directory it does not know);
-the moment its author touches any trigger path -- the Taskfile `api:gen`
-leg, the workflow itself, the manifest -- the gate runs and catches an
-omission.
 
 ## check_markdown_examples.py — markdown Go-example compiler/parser
 
@@ -478,8 +389,7 @@ python3 tools/check_markdown_examples.py --keep-temp  # leave throwaway build di
 Needs `go` and `gofmt` on PATH (the one script under `tools/` with that
 requirement) but no network beyond whatever `go mod tidy` needs to
 resolve a complete block's ordinary third-party imports from the local
-module cache, and no Docker. Runs in the docs-check pipeline
-(`.github/workflows/docs-check.yml`) after a pinned Go install.
+module cache, and no Docker.
 
 ## gen_error_code_index.py — error-code index generator
 
@@ -554,8 +464,8 @@ own output, so a construction form it does not index is invisible to that
 gate; the blind spot is closed by
 `tools/check_error_code_index_coverage.py` (next section), which derives
 the expected code set independently from the real tree and turns red on
-any code the index has no row for. The two checkers run side by side in
-the docs-check pipeline.
+any code the index has no row for. The two checkers are meant to be run
+side by side.
 
 ## check_error_code_index_coverage.py — error-code index coverage checker
 
@@ -651,9 +561,8 @@ python3 tools/gen_platform_error_bundle.py --roots go examples --out-dir web/pac
 Its planted-drift suite `tools/test_gen_platform_error_bundle.py` pins
 the filter from both sides -- the red line that a content id never
 enters the bundle, and that the app modules' codes do -- plus the
-conversions, the refusal classes and byte-determinism; the suite runs
-first and the gate over the real tree second, both in the docs-check
-pipeline.
+conversions, the refusal classes and byte-determinism; run the suite
+first and the gate over the real tree second.
 
 ## new_module.py — Go module stub generator
 
@@ -732,9 +641,9 @@ rule (`--config tools/semgrep_rules/<rule>.yml` against that rule's own
 another rule fires on, so a whole-ruleset scan over fixtures is not the
 proof shape.
 
-The same per-rule expectations are re-checked on every pull request by
-`tools/semgrep_fixture_check.py`, invoked at the end of the semgrep step
-in fast-check's repo-checks job: each rule must fire at least once on its
+The same per-rule expectations are re-checked by
+`tools/semgrep_fixture_check.py`, invoked at the end of a semgrep run:
+each rule must fire at least once on its
 own `positive.go` and stay clean on its own `negative.go` (the mirror of
 how the no-literal-text rule's own unit tests keep that rule honest).
 The self-check exists because the real-tree scan alone cannot detect a
@@ -850,8 +759,8 @@ Execution status, stated honestly: the planted-fixture suite
 (`tools/license_scan_testdata/`, one directory per case with an
 `expected_exit` file) passes 11/11, and the real-tree check passes ("60
 manifest entries match the tree, all licenses within policy" -- 51 go +
-9 npm), both proven locally. Wired into the security pipeline's license
-job (selftest, then the real check) in `.github/workflows/security.yml`.
+9 npm), both proven locally. Run the selftest first, then the real
+check.
 
 When a dependency appears, a version changes, or a dependency goes away:
 adjudicate the license (read the license file the release ships, record
@@ -883,8 +792,8 @@ with the tag it would get, every package with the version the
 `web/.changeset` fixed group would bump it to, closing with one aggregate
 line. Exit 0 only when the plan is consistent: the version has
 release-version form (`^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$`, the
-leading `v` required — the same pattern lives in the version-validation
-step of `.github/workflows/release.yml` and the two must stay in step), no
+leading `v` required — the coordinator's `VERSION_PATTERN` is the one
+executable copy of that form), no
 tag exists for it yet, go.work and the `go/` tree are complete in both
 directions (a module missing from go.work, a `use` entry whose go.mod does
 not exist, or a stray module under `go/` not registered all fail loudly),
@@ -901,9 +810,8 @@ is refused otherwise: the gated mode creates LOCAL tags only (never
 pushed), and exists to exercise the tag-creation half of the machinery
 against a scratch git checkout. Real publishing — pushing tags, the
 changesets bump and `npm publish`, artifacts, the GitHub Release — is
-scheduled for the v1.0 release at M4, and `.github/workflows/release.yml`
-wires no publish credential, so no mode of the coordinator (or of that
-workflow) can publish for real.
+scheduled for the v1.0 release at M4; no mode of the coordinator can
+publish for real.
 
 The coordinator also ships the first-release replace-cleanup engine
 (`first_release_replace_cleanup`, the rewrite of transitional
@@ -915,77 +823,47 @@ live module go.mod: the tree keeps its transition state until M4.
 absolute prohibitions, and what must change when a module or package
 joins the tree.
 
-## Running in CI and locally
+## Running the checks
 
-CI workflows mount the checkers directly, from the repository root, and
-fail the build on a nonzero exit: the CJK scan and its unit suite
-(`python3 tools/scan_cjk.py` then `python3 tools/test_scan_cjk.py`),
-`python3 tools/check_toolchain.py`, `python3 tools/check_repo_isolation.py`,
-the coverage-baseline checker's unit suite and file self-check
-(`python3 tools/test_check_coverage_baseline.py` then
-`python3 tools/check_coverage_baseline.py --selfcheck`), the
-integration-tier suite and gate (`python3 tools/test_check_integration_tiers.py`
-then `python3 tools/check_integration_tiers.py`),
+Each checker that ships a planted-drift suite is meant to run as a pair:
+the suite first, the real check second -- the CJK scan
+(`python3 tools/scan_cjk.py` then `python3 tools/test_scan_cjk.py`), the
+coverage-baseline checker (`python3 tools/test_check_coverage_baseline.py`
+then `python3 tools/check_coverage_baseline.py --selfcheck`), the
+migration-parity gate, the host-composition gate, the env-example gate,
+the platform-error bundle's drift gate
+(`python3 tools/gen_platform_error_bundle.py --check`), the semgrep
+ruleset's fixture self-check and the license scanner. The rest take no
+companion: `python3 tools/check_toolchain.py`,
+`python3 tools/check_repo_isolation.py`,
 `python3 tools/check_spec_request_tenant_id.py`,
-`python3 tools/check_migration_cross_module_fks.py`, the migration-parity
-suite and gate (`python3 tools/test_check_migration_parity.py` then
-`python3 tools/check_migration_parity.py`), the host-composition suite and
-gate (`python3 tools/test_check_host_composition.py` then
-`python3 tools/check_host_composition.py`), the env-example suite and gate
-(`python3 tools/test_check_env_example_consistency.py` then
-`python3 tools/check_env_example_consistency.py`) and the semgrep ruleset
-step (catalogued above) run in fast-check's repo-checks job (every pull
-request and every push to main, `.github/workflows/fast-check.yml`);
-`python3 tools/check_i18n_keys.py` plus `python3 tools/check_docs_site.py`
-plus `python3 tools/check_markdown_examples.py` (after a pinned Go
-install, `./.github/actions/setup-go-env`) plus the platform-error
-bundle's suite and drift gate (`python3 tools/test_gen_platform_error_bundle.py`
-then `python3 tools/gen_platform_error_bundle.py --check`) run in the
-docs-check pipeline
-(`.github/workflows/docs-check.yml`), whose pull_request path filter fires
-on PRs touching documentation, i18n resources, or the two modules
-(`go/dbkit`, `go/ratelimit`) a markdown example currently claims to
-build against; and the license scanner (`python3 tools/license_scan.py`,
-selftest first, then the real check) runs in the security pipeline's
-license job (`.github/workflows/security.yml`); and the
-fragment-enumeration gate (suite first, then the real check:
-`python3 tools/test_check_api_fragments.py` and
-`python3 tools/check_api_fragments.py`) runs as the first steps of the
-api-contract job (`.github/workflows/api-contract.yml`), whose path
-filter also names the manifest and the gate itself so a change to
-either re-runs the checks that consume it.
-`tools/gen_error_code_index.py --check` runs in the docs-check pipeline
-(`.github/workflows/docs-check.yml`) as a plain-python3 step alongside
-the i18n key-set parity checker -- no setup step -- failing the job when
-the documentation site's error-codes page
+`python3 tools/check_migration_cross_module_fks.py`,
+`python3 tools/check_i18n_keys.py`, `python3 tools/check_docs_site.py`
+and `python3 tools/check_markdown_examples.py` (this one needs a Go
+toolchain on PATH).
+`tools/gen_error_code_index.py --check` reports when the documentation
+site's error-codes page
 (docs/site/content.en/docs/user-guide/error-codes.md, served at
 /docs/user-guide/error-codes/) is not what the generator renders from the
-current tree. It landed there once the committed index had drifted 271 codes
-behind the 359 the tool rendered (later rounds added codes with no
-regeneration), retiring the row docs-check.yml's own DELIBERATELY NOT
-WIRED list used to carry.
-Locally, run them from the repository root — the default `--root` is the
+current tree.
+Run them from the repository root — the default `--root` is the
 current directory, so plain `python3 tools/scan_cjk.py` also works there. All output paths are relative
 to `--root`. `license_scan.py` is the exception: it takes no `--root` at
 all (passing one is a usage error, exit 2) and always resolves the
 repository root from its own location under `tools/`, so it can be invoked
 by absolute path from any working directory. All scripts here are plain
 executables with no third-party Python dependencies and no module metadata
-of their own; nearly all of them need nothing beyond `python3`, so a CI
-image never needs a Go toolchain or a package install just to enforce
-these disciplines. `check_markdown_examples.py` is the one exception --
+of their own; nearly all of them need nothing beyond `python3`, so
+enforcing these disciplines never requires a Go toolchain or a package
+install. `check_markdown_examples.py` is the one exception --
 compiling a markdown code example is, unavoidably, a Go-toolchain
-operation, so its docs-check step is the one place in this pipeline that
-installs one (`.github/actions/setup-go-env`, no golangci-lint). The
+operation. The
 generator is a developer-time tool: run it when a
 roadmap item assigns a module a milestone, commit the three scaffolded
 files with the design doc, and perform the printed registrations in the
 same change.
 
-The release coordinator is wired the same way: `.github/workflows/
-release.yml` (a manual dispatch with a version number) validates the
-version form and then runs `python3 tools/release/lockstep-release.py
-"$VERSION"` followed by `--self-test`; locally, the root Taskfile's
+The release coordinator runs the same way: the root Taskfile's
 `task release:plan VERSION=v1.2.0` runs the verification form, or run the
 script directly from the repository root — the coordinator discovers the
 publishable set from the tree it runs in, so it must run at the

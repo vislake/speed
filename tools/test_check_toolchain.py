@@ -48,8 +48,6 @@ task = "3.53.1"
 go = "1.26.8"
 node = "24"
 pnpm = "11.1.2"
-golangci-lint = "2.11.4"
-hugo = "0.165.0"
 """
 
 
@@ -68,16 +66,6 @@ def write_fixture(root: pathlib.Path) -> None:
     (web / ".nvmrc").write_text("24\n", encoding="utf-8")
     (web / "package.json").write_text(
         json.dumps({"packageManager": "pnpm@11.1.2"}), encoding="utf-8"
-    )
-    go_env = root / ".github" / "actions" / "setup-go-env"
-    go_env.mkdir(parents=True)
-    (go_env / "action.yml").write_text(
-        'env:\n  GOLANGCI_VERSION: "2.11.4"\n', encoding="utf-8"
-    )
-    hugo_env = root / ".github" / "actions" / "setup-hugo-env"
-    hugo_env.mkdir(parents=True)
-    (hugo_env / "action.yml").write_text(
-        'env:\n  HUGO_VERSION: "0.165.0"\n', encoding="utf-8"
     )
 
 
@@ -150,11 +138,11 @@ class ToolchainGateTests(unittest.TestCase):
         # (nothing to compare a mirror against): exit 2. Fails before the
         # fix -- absence was tallied as drift and exited 1.
         (self.root / ".mise.toml").write_text(
-            MISE.replace("hugo = \"0.165.0\"\n", ""), encoding="utf-8"
+            MISE.replace("pnpm = \"11.1.2\"\n", ""), encoding="utf-8"
         )
         code, out = self._run()
         self.assertEqual(code, 2)
-        self.assertIn("hugo is absent from .mise.toml", out)
+        self.assertIn("pnpm is absent from .mise.toml", out)
 
     def test_taskfile_without_pin_exits_2(self) -> None:
         # A Taskfile that exists but carries no task pin is an unparsable

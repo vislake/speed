@@ -1,7 +1,7 @@
 ---
 title: Repository and release
 weight: 5
-description: "The repository layout and the release model — one repo with two non-overlapping workspace roots, modules and packages as independent release units, lockstep versioning and why every deliverable shares one version number, the CI matrix, and documentation that ships with the code."
+description: "The repository layout and the release model — one repo with two non-overlapping workspace roots, modules and packages as independent release units, lockstep versioning and why every deliverable shares one version number, the quality gates, and documentation that ships with the code."
 ---
 
 # Repository and release
@@ -84,45 +84,38 @@ covering exactly the packages that exist. Scripted verification is
 non-negotiable because hand-tagging a multi-module release is exactly
 the step humans get wrong; the reference app is excluded from the
 release set by design — it is the repository's consumer module, the
-proof shape, never a deliverable. The release workflow
-(`release.yml`) runs this verification and the coordinator's own
-self-tests in its `verify` job on manual dispatch; a `publish` job then
-performs the real release for a verified version — it pushes this
+proof shape, never a deliverable. A real release runs this
+verification and the coordinator's own
+self-tests first, then
+performs the release for the verified version — it pushes this
 version's module tags and the repository root tag, and publishes every
 `@speed` package under `web/packages` to the GitHub Packages registry,
-with the write permissions (`contents`, `packages`) held by that job
-alone and every step idempotent over a re-run (existing tags skipped,
+every step idempotent over a re-run (existing tags skipped,
 an already-published version probed and skipped). Publishing to
 npmjs.org stays deferred. Locally, `task release:plan VERSION=vX.Y.Z`
 runs the same check.
 
-## The CI matrix
+## The quality gates
 
-The CI that guards the repository, in brief:
+The checks that guard the repository, in brief: per-module legs (lint,
+vet, unit tests under the race detector, workspace and standalone
+builds) across the module and package sets; the repo-wide checks — the
+architecture-discipline semgrep rules, tenant-isolation coverage, i18n
+key parity, toolchain drift gates and the workspace ESLint rules' own
+tests; the Docker-backed integration tiers (real PostgreSQL, Redis,
+RustFS via testcontainers) and the reference-app suites, including the
+two-replica distributed-mode boot proof; the documentation and i18n
+checks; the spec-toolchain regeneration with its porcelain comparison
+of the committed artifacts; the dependency, secret and license scans;
+and the scaffold proof — materializing a generated consumer project,
+tidying, building, migrating and booting it under both deployment
+modes.
 
-- **fast-check** runs on every pull request and every direct push to
-  main: per-module legs (lint, vet, unit tests under the race
-  detector, workspace and standalone builds) across the module and
-  package matrices, plus repo-checks — the architecture-discipline
-  semgrep rules, tenant-isolation coverage, i18n key parity, toolchain
-  drift gates and the workspace ESLint rules' own tests.
-- **full-check** runs on `full-ci`-labeled PRs and on pushes to main:
-  the Docker-backed integration tiers (real PostgreSQL, Redis, RustFS
-  via testcontainers) and the reference-app job, including the
-  two-replica distributed-mode boot proof.
-- The narrower pipelines fire on what they guard: docs-check on
-  doc/i18n-touching changes, api-contract on spec-toolchain changes
-  (regenerating everything and porcelain-gating the committed
-  artifacts), security scans on every PR plus a daily schedule, and
-  scaffold-verify daily — materializing a generated consumer project,
-  tidying, building, migrating and booting it under both deployment
-  modes.
-
-Two rules give the matrix its teeth. Every implemented module and
+Two rules give the set its teeth. Every implemented module and
 package genuinely passes its own legs. And the mandatory-first-consumer
 rule means a module API nothing real uses is not done: the reference
 app exercises every module end to end, and consumer-shaped proof runs
-through the scaffold-verify pipeline on real generated projects.
+against real generated projects.
 
 ## Documentation ships with the code
 
@@ -144,7 +137,5 @@ and Chinese.
   the offline one-version plan verifier.
 - [web/.changeset/config.json](https://github.com/vislake/speed/blob/main/web/.changeset/config.json) —
   the npm fixed version group.
-- [fast-check.yml](https://github.com/vislake/speed/blob/main/.github/workflows/fast-check.yml) —
-  the per-PR pipeline's module and package matrix.
 - [saasctl AGENTS.md](https://github.com/vislake/speed/blob/main/go/saasctl/AGENTS.md) —
   the consumer-facing CLI (`new`, `upgrade`, `db migrate`, `config print`).

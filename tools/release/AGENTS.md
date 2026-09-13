@@ -10,7 +10,7 @@ command, deliberately OFFLINE and verification-only:
   runtime (go.work use entries under `go/` for the Go half;
   `web/packages/*` for the npm half), prints the full one-version plan in
   its default mode, and exits 0 only when the plan is consistent. No
-  mode of the coordinator (or of `release.yml`) can publish for real.
+  mode of the coordinator can publish for real.
 - `test_lockstep_release.py` — the coordinator's unittest suite, run by
   `--self-test`, by `python3 -m unittest discover -s tools/release`, or
   directly. Its sandbox proof builds a scratch git repository from the
@@ -31,8 +31,7 @@ python3 tools/release/lockstep-release.py v1.2.0    # offline verification plan
 python3 tools/release/lockstep-release.py --self-test
 ```
 
-The root `Taskfile.yml`'s `release:plan` task wraps the first form;
-`.github/workflows/release.yml` runs both forms on its version input.
+The root `Taskfile.yml`'s `release:plan` task wraps the first form.
 
 ## Absolute prohibitions — every mode, including autonomous agents
 
@@ -69,9 +68,8 @@ The root `Taskfile.yml`'s `release:plan` task wraps the first form;
   vX.Y.Z") derives from the runtime discovery.
 - **A release-version rule changes:** the pattern
   `^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$` is
-  contract language with two executable copies that must stay in step --
-  `VERSION_PATTERN` in `lockstep-release.py` and the version-input
-  validation step of `.github/workflows/release.yml` -- and five prose
+  contract language with one executable copy, `VERSION_PATTERN` in
+  `lockstep-release.py`, and five prose
   copies that cite it verbatim: this file, `tools/README.md`, the
   coordinator's own module docstring, `docs/internal/02-repo-and-release.md`
   and `docs/internal/18-cicd.md`. Grep the pattern before changing it; a

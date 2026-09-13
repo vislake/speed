@@ -83,7 +83,7 @@ WORKDIR /src/examples/reference-app
 # populated for every build (plain `docker build` included: recent Docker
 # builds through buildx by default, which sets these from the current
 # builder's native platform even with no --platform flag) and driven
-# explicitly by reusable-docker-build.yml's multi-arch matrix
+# explicitly by a multi-arch build
 # (linux/amd64, linux/arm64). Declared with no default here; the RUN
 # below's own shell parameter expansion supplies linux/amd64 as a fallback
 # for the unlikely case either arrives empty, rather than risking a
@@ -121,14 +121,13 @@ RUN mkdir -p /data && chown 65532:65532 /data
 
 # ---------------------------------------------------------------------------
 # Frontend stage: builds examples/reference-app/web's production dist -- the
-# same `pnpm build` (tsc -p tsconfig.json, then vite build) the npm-package-ci
-# leg of fast-check.yml runs for this package, replicated inside the image
-# the same way that leg runs it:
+# same `pnpm build` (tsc -p tsconfig.json, then vite build) this package's
+# own build leg runs, replicated inside the image
+# the same way:
 #
-#   - pnpm installed as an exact version via `npm install -g`, exactly the
-#     choice setup-node-env's own header documents (no corepack: gone from
-#     Node 25+, and its first-run download is a failure surface CI already
-#     rejected) -- 11.1.2 is web/package.json's own packageManager field,
+#   - pnpm installed as an exact version via `npm install -g` (no corepack:
+#     gone from Node 25+, and its first-run download is a failure surface
+#     this build rejects) -- 11.1.2 is web/package.json's own packageManager field,
 #     the single version source;
 #   - the frozen-lockfile install run from web/, the pnpm workspace root
 #     (web/pnpm-workspace.yaml lists ../examples/reference-app/web as an
@@ -137,12 +136,12 @@ RUN mkdir -p /data && chown 65532:65532 /data
 #     can);
 #   - the build run from inside the app directory, whose settings-only
 #     pnpm-workspace.yaml (verifyDepsBeforeRun: false, camelCase) keeps the
-#     run-gate off, exactly as in CI.
+#     run-gate off.
 #
 # The vite build resolves every @speed/* specifier onto the workspace
 # siblings' live src through the aliases in the app's vite.config.ts
 # (../../../web/packages/<pkg>/src/...), so this stage copies the whole
-# web/ tree (the same full-checkout file set CI builds against -- package
+# web/ tree (the same file set a complete checkout has -- package
 # sources, shared tsconfig.base.json, the lockfile) plus the app's own web
 # directory, laid out at repository-relative paths so the aliases resolve
 # identically to a checkout. .dockerignore strips node_modules and dist
@@ -159,10 +158,10 @@ WORKDIR /src
 COPY web/ ./web/
 COPY examples/reference-app/web/ ./examples/reference-app/web/
 
-# The pnpm store cache mount mirrors CI's lockfile-keyed pnpm store cache:
-# an install whose lockfile is unchanged reuses the previous build's store
-# instead of re-fetching the registry. npm install -g pins pnpm exactly as
-# setup-node-env does (packageManager field, one source).
+# The pnpm store cache mount is keyed by the lockfile: an install whose
+# lockfile is unchanged reuses the previous build's store
+# instead of re-fetching the registry. npm install -g pins pnpm from the
+# packageManager field, the one source.
 RUN npm install -g pnpm@11.1.2
 
 WORKDIR /src/web

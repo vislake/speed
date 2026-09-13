@@ -2,9 +2,9 @@
 # but lives outside it, at exactly the location a delivered consumer project
 # does. pnpm discovers its workspace root by walking up from the process
 # working directory, and web/ is not on this directory's ancestor path -- so
-# a run started here (the npm-package-ci reusable's lint/typecheck/test/build
-# legs, working-directory: examples/reference-app/web) sees this directory as
-# a one-project workspace of its own.
+# a run started here (the lint/typecheck/test/build legs, with
+# examples/reference-app/web as the working directory) sees this directory
+# as a one-project workspace of its own.
 #
 # pnpm DOES merge settings from a workspace manifest's own top-level keys into
 # its config -- but only camelCase ones (pnpm's own

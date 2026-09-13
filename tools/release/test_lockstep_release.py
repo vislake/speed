@@ -457,11 +457,11 @@ class NpmDerivationTest(unittest.TestCase):
 class NpmPublishOrderTest(unittest.TestCase):
     """The derived dependency-first publish order the publish loop walks.
 
-    The order is what .github/workflows/release.yml walks package by
-    package, so its contract is pinned here: the caller side must never
-    regress to a hand-copied list (which silently skipped any package it
-    had not learned about), and the derivation must order every
-    consumer-facing @speed edge correctly or fail closed.
+    Whoever publishes walks this order package by package, so its
+    contract is pinned here: the caller side must never regress to a
+    hand-copied list (which silently skipped any package it had not
+    learned about), and the derivation must order every consumer-facing
+    @speed edge correctly or fail closed.
     """
 
     def setUp(self) -> None:
@@ -593,23 +593,6 @@ class NpmPublishOrderTest(unittest.TestCase):
         fixed = rel.load_changesets_fixed_group(self.root)
         rel.check_changesets_coverage(fixed, packages)  # must not raise
 
-    def test_release_workflow_walks_the_derived_order(self) -> None:
-        """The workflow carries no hand-copied package list.
-
-        Fail-before: the publish step used to iterate a literal
-        packages="..." list, which a package the list never learned
-        about was silently absent from (verify green, publish skipped).
-        The step must invoke the coordinator's derivation and keep no
-        such list of its own.
-        """
-        workflow = os.path.join(
-            LIVE_ROOT, ".github", "workflows", "release.yml"
-        )
-        with open(workflow, encoding="utf-8") as fh:
-            text = fh.read()
-        self.assertIn("derive_npm_publish_order", text)
-        self.assertNotIn('packages="', text)
-
 
 class CleanupEngineTest(unittest.TestCase):
     """The first-release replace cleanup, exercised ONLY against fixtures.
@@ -740,7 +723,7 @@ class CliGateTest(unittest.TestCase):
         self.assertIn("refused", err)
         self.assertIn("v1.0", err)
         self.assertIn("M4", err)
-        self.assertIn("release.yml", err)
+        self.assertIn("manual operation", err)
 
 
 class SandboxProofTest(unittest.TestCase):
@@ -843,7 +826,7 @@ class SandboxProofTest(unittest.TestCase):
             )
             self.assertEqual(rc, 0, err)
             self.assertIn("NOT done by this gated apply mode", out)
-            self.assertIn("release.yml", out)
+            self.assertIn("manual operation", out)
             expected = self.expected_sandbox_tags(sb)
             actual = sorted(rel.list_existing_tags(sb))
             self.assertEqual(actual, expected)

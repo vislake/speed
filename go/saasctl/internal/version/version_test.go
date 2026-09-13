@@ -2,10 +2,10 @@ package version
 
 import "testing"
 
-// TestValidate mirrors the release pipeline's own acceptance boundary: the
-// versions here are the same cases release.yml's version-input validation
-// and lockstep-release.py's VERSION_PATTERN accept or refuse. A mismatch
-// between this table and either of those is a broken release form, not a
+// TestValidate mirrors the release coordinator's own acceptance boundary:
+// the versions here are the same cases lockstep-release.py's
+// VERSION_PATTERN accepts or refuses. A mismatch
+// between this table and that pattern is a broken release form, not a
 // test detail.
 func TestValidate(t *testing.T) {
 	t.Parallel()

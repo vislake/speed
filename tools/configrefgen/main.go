@@ -59,8 +59,8 @@
 //
 //	go run . [--check]
 //
-// --check exits nonzero (printing a diff) instead of writing, for the CI
-// wiring in docs-check.yml.
+// --check exits nonzero (printing a diff) instead of writing, so a caller
+// can gate the committed artifacts.
 package main
 
 import (

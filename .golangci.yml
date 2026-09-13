@@ -110,8 +110,7 @@ linters:
         # whose code legitimately owns an implementation could not be
         # singled out any other way. Paths are resolved relative to this
         # config file, so the same rule is live whether golangci-lint runs
-        # from the workspace root or from inside a module directory (the
-        # go-module-ci shape: working-directory go/<module>).
+        # from the workspace root or from inside a module directory.
         #
         # redis-only-in-pkgcore-and-jobs and minio-only-in-pkgcore exempt a
         # package, not a module: the Redis and S3 implementations that used
@@ -145,7 +144,7 @@ linters:
         #     is a decision for the observability round.
         #   * rbac importing authn -- encoded below as the
         #     rbac-must-not-import-authn rule now that M1 business modules
-        #     are real and the go-module-ci matrix lints them (the old
+        #     are real and the per-module lint legs cover them (the old
         #     "still stubs" deferral died with the stubs). The GENERAL
         #     discipline rows -- importing another business module's
         #     structs for database relations, and the whole module-import
@@ -278,7 +277,7 @@ linters:
           # before this split, when the whole module shared one exemption.
           # Every file there carries `//go:build integration`, so this rule
           # never actually sees them in the default `golangci-lint run
-          # ./...` CI leg (go-module-ci.yml never passes -tags=integration);
+          # ./...` leg, which never passes -tags=integration;
           # the exemption only matters for someone running the linter
           # locally with that tag set, matching `go test`'s own convention.
           files:

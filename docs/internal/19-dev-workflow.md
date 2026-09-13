@@ -22,7 +22,7 @@ task release:plan   # 离线验证某个版本号下全模块的 lockstep 发布
 
 **`task`/`mise` 二进制本身在标准检出环境里可能未安装**（根 `CLAUDE.md` 已有此说明）：`Taskfile.yml` 与其包装的命令都真实存在且能跑，但 `task` 这个 CLI 本身不一定在 `PATH` 上——遇到时直接跑它包装的原始命令（`go test ./...`、`go vet ./...`、`golangci-lint run ./...` 等），不要假设 `task xxx` 就一定可用，先确认 `task` 在 `PATH` 上。`mise` 同理：`task setup` 的工具链腿在 `mise` 缺席时只警告并跳过，不会失败（见下方「工具链版本统一」一节）。
 
-`task release:plan` 是真实任务（非 stub），离线验证「给定版本号下，全部 Go 模块与 npm 包能按同一版本号一致发布」：它包装 `tools/release/lockstep-release.py` 的默认校验模式——退出码 0 仅当计划一致，不写任何文件。用法：`task release:plan VERSION=v1.2.0`。`.github/workflows/release.yml` 手动触发时先由只读的 `verify` job 运行同一校验并跑协调器自测，再由 `publish` job（job 级 `contents: write` + `packages: write`）执行真实发布：推送模块 tag 与仓库根 tag、把十二个 `@speed` 包发布到 GitHub Packages。真实发布动作里，推 tag 与 npm publish 已接线且已真实执行（首发 v0.0.1 半成功并作废的经过见 `docs/internal/18-cicd.md` 发布流水线一节的实施状态注记）；未接线的仅剩 changesets bump 与 GitHub Release。
+`task release:plan` 是真实任务（非 stub），离线验证「给定版本号下，全部 Go 模块与 npm 包能按同一版本号一致发布」：它包装 `tools/release/lockstep-release.py` 的默认校验模式——退出码 0 仅当计划一致，不写任何文件。用法：`task release:plan VERSION=v1.2.0`。真实发布是手工操作，先跑同一校验与协调器自测，再推送模块 tag 与仓库根 tag、把十二个 `@speed` 包发布到 GitHub Packages。真实发布动作里，推 tag 与 npm publish 已接线且已真实执行（首发 v0.0.1 半成功并作废的经过见 `docs/internal/18-cicd.md` 发布流水线一节的实施状态注记）；未接线的仅剩 changesets bump 与 GitHub Release。
 
 `task dev` 必须在**单进程部署模式**下工作：单进程、SQLite、零外部依赖。这是单进程部署模式给开发体验带来的直接收益——本地开发不需要 `docker compose up` 拉起一堆容器。
 
@@ -34,7 +34,7 @@ task release:plan   # 离线验证某个版本号下全模块的 lockstep 发布
 
 用 **mise**（或 asdf）锁定 Go、Node、pnpm、golangci-lint 等版本，配置文件入库。CI 与本地读同一份配置，杜绝「我本地是好的」。
 
-根目录 `.mise.toml` 用 mise 锁定五个工具：task 3.53.1（唯一来源是 Taskfile 头部注释）、go 1.26.8（镜像 `go.work` 指令）、node 24（镜像 `web/.nvmrc`）、pnpm 11.1.2（镜像 `web/package.json` 的 `packageManager`）、golangci-lint 2.11.4（镜像 setup-go-env 的 `GOLANGCI_VERSION`）。与计划句「CI 与本地读同一份配置」有一个诚实偏差：CI 读不到 `.mise.toml`——`actions/setup-go` 的 go-version-file 只解析 go.mod / go.work / go.sum / .go-version，`setup-node` 只读 `web/.nvmrc`——所以 CI 继续读权威源，`.mise.toml` 是本地 `mise install`（`task setup` 的工具链腿）使用的镜像；两份文件并存必然漂移，因此 `tools/check_toolchain.py` 作为漂移闸门接在 fast-check 的 repo-checks job（每次 PR 都跑），任一镜像与权威源不一致即失败。升版本时权威源与 `.mise.toml` 必须一起改，各工具的来源逐条写在 `.mise.toml` 头部注释里。数据库初始化与 lefthook 预提交钩子仍未实现——原因写在 `task setup` 的注释里。
+根目录 `.mise.toml` 用 mise 锁定五个工具：task 3.53.1（唯一来源是 Taskfile 头部注释）、go 1.26.8（镜像 `go.work` 指令）、node 24（镜像 `web/.nvmrc`）、pnpm 11.1.2（镜像 `web/package.json` 的 `packageManager`）、golangci-lint 2.11.4 与 hugo 0.165.0 只钉在 `.mise.toml` 一处、没有镜像对象。与计划句「各处读同一份配置」有一个诚实偏差：多数工具读不到 `.mise.toml`——例如 `actions/setup-go` 的 go-version-file 只解析 go.mod / go.work / go.sum / .go-version，`setup-node` 只读 `web/.nvmrc`——所以这些工具继续读权威源，`.mise.toml` 是本地 `mise install`（`task setup` 的工具链腿）使用的镜像；两份文件并存必然漂移，因此 `tools/check_toolchain.py` 作为漂移闸门核对任一镜像与权威源，不一致即失败。升版本时权威源与 `.mise.toml` 必须一起改，各工具的来源逐条写在 `.mise.toml` 头部注释里。数据库初始化与 lefthook 预提交钩子仍未实现——原因写在 `task setup` 的注释里。
 
 ### 种子数据
 
@@ -57,7 +57,7 @@ python3 tools/new_module.py NAME --description '...' --design-doc docs/internal/
 - **CI 矩阵登记、发布登记**：出现在注册清单里（连同 go.work `use` 条目与 roadmap/文档导航登记）。这两类登记漏掉不会立即报错——CI 矩阵漏登记会让模块漏跑 CI，正是生成器要兜住的遗漏；发布登记则与清单第 1 项的 go.work `use` 条目是同一件事。
 - **迁移目录、测试骨架**：stub 没有迁移也没有测试，生成器不为它们占位空目录；两者随模块的实现一起落地（版本化迁移与测试要求见根 [CLAUDE.md](../../CLAUDE.md)），空占位反而比骨架阶段更偏离真实状态。
 
-发布协调器（`tools/release/lockstep-release.py`，含其 unittest 套件；入口为 `task release:plan` 与 `.github/workflows/release.yml`）在运行时从 go.work 推导可发布模块集合，因此清单第 1 项的 go.work `use` 条目本身就是发布登记，不存在独立的「每模块 tag 列表」。协调器的完备性检查双向核对 go.work 与 `go/` 目录树：`use` 条目缺 go.mod、`go/` 下存在未登记模块都报错退出——漏了任何一项，`task release:plan` 与 release.yml 的发布验证直接失败。npm 侧的对应物是 `web/.changeset/config.json` 的 fixed group 覆盖集合：新增或移除 npm 包时必须与包列表在同一改动里同步（覆盖不齐同样使发布验证失败）。各模块 go.mod 目前带过渡态 replace 行（`replace ... => ../<模块>`）；把 replace 行改写为真实版本的清理只以纯函数 + testdata 夹具形式存在，**严禁对真实 go.mod 运行**。
+发布协调器（`tools/release/lockstep-release.py`，含其 unittest 套件；入口为 `task release:plan`）在运行时从 go.work 推导可发布模块集合，因此清单第 1 项的 go.work `use` 条目本身就是发布登记，不存在独立的「每模块 tag 列表」。协调器的完备性检查双向核对 go.work 与 `go/` 目录树：`use` 条目缺 go.mod、`go/` 下存在未登记模块都报错退出——漏了任何一项，`task release:plan` 的发布验证直接失败。npm 侧的对应物是 `web/.changeset/config.json` 的 fixed group 覆盖集合：新增或移除 npm 包时必须与包列表在同一改动里同步（覆盖不齐同样使发布验证失败）。各模块 go.mod 目前带过渡态 replace 行（`replace ... => ../<模块>`）；把 replace 行改写为真实版本的清理只以纯函数 + testdata 夹具形式存在，**严禁对真实 go.mod 运行**。
 
 `task new:module` 是这层脚手架的 Taskfile 包装，已接线转调本脚本（接线契约见脚本 `--help` 的 epilog）：
 
@@ -65,7 +65,7 @@ python3 tools/new_module.py NAME --description '...' --design-doc docs/internal/
 task new:module NAME=<name> DESCRIPTION='...' DESIGN_DOC=docs/internal/NN-<name>.md
 ```
 
-直接运行上面的 `python3` 命令效果相同。npm 包模板由同一脚本的 `--category npm` 提供：它把十二个已发布 `@speed` 包共有的公共核心骨架物化到 `<target-dir>/web/packages/<name>/`（package.json、tsconfig.json、tsconfig.build.json、src/index.ts、src/index.test.ts、README.md、AGENTS.md），即一个尚无 API 的包通过四个 npm-package-ci 腿（pnpm lint/typecheck/test/build）所需的文件；Taskfile 的 `task new:npm-package` 包装尚未接线，接线后与 `new:module` 包装 go 类别的关系相同。这是脚手架项目对自己的「脚手架化」——如果我们自己都嫌新增模块麻烦，说明模板设计有问题。
+直接运行上面的 `python3` 命令效果相同。npm 包模板由同一脚本的 `--category npm` 提供：它把十二个已发布 `@speed` 包共有的公共核心骨架物化到 `<target-dir>/web/packages/<name>/`（package.json、tsconfig.json、tsconfig.build.json、src/index.ts、src/index.test.ts、README.md、AGENTS.md），即一个尚无 API 的包通过四项包检查（pnpm lint/typecheck/test/build）所需的文件；Taskfile 的 `task new:npm-package` 包装尚未接线，接线后与 `new:module` 包装 go 类别的关系相同。这是脚手架项目对自己的「脚手架化」——如果我们自己都嫌新增模块麻烦，说明模板设计有问题。
 
 `--category app` 面向的是另一半场景：往一个**已存在的应用**里加应用侧业务模块，产物是参考应用 notes 模块的同一形态（doc.go / model.go / repository.go / handler.go 与编译期 `api.ServerInterface` 断言 / handler_test.go / 双方言迁移对 / 双语 locale 对 / OpenAPI 片段与其 oapi-codegen 配置），落地在 `<应用根>/internal/<name>/`；应用根由 `--target-dir` 指定（必须含应用的 go.mod），脚本读取它推导模块的 import 路径，保证物化出来即可编译。生成器**不**写 `api/<name>-server.gen.go`——那是 pinned 生成器的产物，清单第一步给出与仓库 api 生成腿同一版本的 oapi-codegen 命令；物化 + 生成 + `go build` + `go test` 走通一次，就是这一类别形状的验证。脚手架的双语 locale 模板以真实文件形式放在 `tools/new_module_locales/`（tools/ 是英文区，中文文案不能内联在脚本源码里），顺带被 `tools/check_i18n_keys.py` 的键集奇偶校验覆盖。
 
@@ -115,13 +115,13 @@ PR 模板包含一份 checklist，对应仓库根 [CLAUDE.md](../../CLAUDE.md) �
 
 改任何对外接口都必须按固定顺序：**先改 spec → 重新生成 → 编译失败暴露待改点 → 补实现 → 补前端 → 同一个 PR 提交**。**先写实现再补 spec 是被禁止的**——那等于回到 code-first，失去编译期约束的全部意义。
 
-`task api:gen` 一键完成「合并 spec + 生成后端 interface + 生成前端 sdk」，其各 leg 与 api-contract.yml 的再生成步骤一一对应、保持 lockstep。PR 中 spec 与生成物必须同时存在，CI 会重新生成并做一致性比对——spec-first 闭环真实运转，现状如下：
+`task api:gen` 一键完成「合并 spec + 生成后端 interface + 生成前端 sdk」。改动中 spec 与生成物必须同时存在，再生成后的一致性比对守住这一点——spec-first 闭环真实运转，现状如下：
 
-- **后端片段**：`task api:gen` 与 api-contract.yml 覆盖十一个平台模块 spec 片段——org、storage、authn、notification、billing、sharing、pki、admin、integration、ai-gateway、config；片段清单以 `tools/api_fragments.json` 的 `fragments` 为单一来源（同一清单的 `app_owned` 列出 reference-app 自有的 notes、cases、smilesim——它们归应用自有生成流，见下），`tools/check_api_fragments.py` 做漂移闸门（树、清单与本工作流各 leg 不一致即红）。片段按 `<module>/api/openapi.yaml` 惯例组织，生成器配置与生成物同目录；reference-app 自己的片段落在应用内而非 go/ 模块下（notes 在 `examples/reference-app/internal/notes/api/openapi.yaml`，其 `oapi-codegen.yaml` 钉定 oapi-codegen v2.8.0，生成 `notes-server.gen.go`，由 `task api:gen:app` 再生成）。后端 leg 在片段目录内执行 `go run github.com/oapi-codegen/oapi-codegen/v2/cmd/oapi-codegen@v2.8.0 -config oapi-codegen.yaml openapi.yaml`，逐片段重新生成。
+- **后端片段**：`task api:gen` 覆盖十一个平台模块 spec 片段——org、storage、authn、notification、billing、sharing、pki、admin、integration、ai-gateway、config；片段清单以 `tools/api_fragments.json` 的 `fragments` 为单一来源（同一清单的 `app_owned` 列出 reference-app 自有的 notes、cases、smilesim——它们归应用自有生成流，见下），清单与树不一致即为缺陷。片段按 `<module>/api/openapi.yaml` 惯例组织，生成器配置与生成物同目录；reference-app 自己的片段落在应用内而非 go/ 模块下（notes 在 `examples/reference-app/internal/notes/api/openapi.yaml`，其 `oapi-codegen.yaml` 钉定 oapi-codegen v2.8.0，生成 `notes-server.gen.go`，由 `task api:gen:app` 再生成）。后端 leg 在片段目录内执行 `go run github.com/oapi-codegen/oapi-codegen/v2/cmd/oapi-codegen@v2.8.0 -config oapi-codegen.yaml openapi.yaml`，逐片段重新生成。
 - **「编译失败暴露待改点」真实生效**：handler 以 `var _ api.ServerInterface = (*Handler)(nil)` 编译期断言实现生成的 interface，并以 `api.HandlerFromMux` 让路由从片段本身推导——往片段加一个 operation 后重新生成，handler 不补实现就编译不过。
-- **多片段合并与 lint**：仓库根 `redocly.yaml` 定义合并规则与命名规范 lint；`task api:merge` 与 api-contract.yml 用钉定的 `@redocly/cli@2.51.1` 的 `join` 命令把片段合并进 `contracts/speed.yaml` 并按 `redocly.yaml` 的规则 lint。合并文档现为十一个平台模块片段（admin、ai-gateway、authn、billing、config、integration、notification、org、pki、sharing、storage）；凡带 HTTP 片段的平台模块一律进合并文档（模块驱动策略，见 docs/internal/21-api-contract.md），orval 前端 leg 依赖合并结果，从该文档生成 `@speed/api-sdk`。reference-app 自有的 notes、cases、smilesim 不进平台合并——`task api:gen:app` 把它们并入应用自有合并文档 `examples/reference-app/web/app-openapi.yaml` 并生成应用自有 SDK（`src/app-api`），门禁在 full-check 的 reference-app job（见 docs/internal/21-api-contract.md 的应用自有生成流节）。
-- **前端 sdk**：`@speed/api-sdk`（`web/packages/api-sdk`；DO-NOT-EDIT 头带钉定版本）由钉定的 orval 8.17.0 生成 hooks 与 TS 类型；`task api:gen` 的前端 leg 执行 `cd web && pnpm dlx orval@8.17.0 --config orval.config.ts && node scripts/orval-nodenext-fixup.mjs`——`pnpm dlx` 使 orval 永不进入 lockfile。生成代码不直接触碰网络：它经包内唯一手写绑定 `src/runtime.ts`（`bindRequestFn(createClient(...))`，由宿主在启动时绑定）路由到 api-client 运行时；orval 发射的无扩展名 mutator 导入由 `web/scripts/orval-nodenext-fixup.mjs` 确定性改写为显式 `.js`（nodenext 构建拒绝无扩展名相对导入，TS2835）。api-sdk 进入 fast-check 的 npm 矩阵，并与合并文档一起受 api-contract.yml 的一致性闸门覆盖。
-- **CI 兜底**：`.github/workflows/api-contract.yml` 在改动平台 spec 片段 / 生成器配置（含 `web/orval.config.ts` 与 `web/scripts/**`）/ `Taskfile.yml` / 流水线自身的 PR 上触发（路径过滤）。每次再生成后的一致性闸门是 porcelain 形态（再生成新建文件会静默通过 diff 闸门，故用状态检查）——共十三道（十一个平台后端片段 + 合并文档 + 前端 sdk），随后再对 reference-app 跑 `go build` 保证平台 handler 跟上 spec（authn 另设自己的再生成与 build leg）。应用自有产物（三片段后端 gen、应用合并文档、应用 SDK）由 full-check 的 reference-app job 跑 `task api:gen:app` 同一组命令并做同形态闸门。
+- **多片段合并与 lint**：仓库根 `redocly.yaml` 定义合并规则与命名规范 lint；`task api:merge` 用钉定的 `@redocly/cli@2.51.1` 的 `join` 命令把片段合并进 `contracts/speed.yaml` 并按 `redocly.yaml` 的规则 lint。合并文档现为十一个平台模块片段（admin、ai-gateway、authn、billing、config、integration、notification、org、pki、sharing、storage）；凡带 HTTP 片段的平台模块一律进合并文档（模块驱动策略，见 docs/internal/21-api-contract.md），orval 前端 leg 依赖合并结果，从该文档生成 `@speed/api-sdk`。reference-app 自有的 notes、cases、smilesim 不进平台合并——`task api:gen:app` 把它们并入应用自有合并文档 `examples/reference-app/web/app-openapi.yaml` 并生成应用自有 SDK（`src/app-api`），门禁是该流自己的 porcelain 比对（见 docs/internal/21-api-contract.md 的应用自有生成流节）。
+- **前端 sdk**：`@speed/api-sdk`（`web/packages/api-sdk`；DO-NOT-EDIT 头带钉定版本）由钉定的 orval 8.17.0 生成 hooks 与 TS 类型；`task api:gen` 的前端 leg 执行 `cd web && pnpm dlx orval@8.17.0 --config orval.config.ts && node scripts/orval-nodenext-fixup.mjs`——`pnpm dlx` 使 orval 永不进入 lockfile。生成代码不直接触碰网络：它经包内唯一手写绑定 `src/runtime.ts`（`bindRequestFn(createClient(...))`，由宿主在启动时绑定）路由到 api-client 运行时；orval 发射的无扩展名 mutator 导入由 `web/scripts/orval-nodenext-fixup.mjs` 确定性改写为显式 `.js`（nodenext 构建拒绝无扩展名相对导入，TS2835）。api-sdk 与合并文档一起受同一套再生成一致性比对覆盖。
+- **一致性兜底**：改动平台 spec 片段 / 生成器配置（含 `web/orval.config.ts` 与 `web/scripts/**`）/ `Taskfile.yml` 后必须重新生成。每次再生成后的一致性比对取 porcelain 形态（再生成新建文件会静默通过 diff 比对，故用状态检查）——共十三道（十一个平台后端片段 + 合并文档 + 前端 sdk），随后再对 reference-app 跑 `go build` 保证平台 handler 跟上 spec（authn 另设自己的再生成与 build leg）。应用自有产物（三片段后端 gen、应用合并文档、应用 SDK）由 `task api:gen:app` 同一组命令并做同形态比对。
 
 生成面有真实的消费证明，分三个层次：
 
@@ -132,20 +132,19 @@ PR 模板包含一份 checklist，对应仓库根 [CLAUDE.md](../../CLAUDE.md) �
 尚未实现、如实披露的边界：
 
 - **oasdiff 破坏性变更闸门**：不存在。破坏性变更检测需要发布基线才有比较对象——v0.0.1 作废，但其发布提交 `fbaaaf98` 之树仍提供完整基线（main 的祖先；Go module proxy 只解析 21 个模块中的 17 个）；闸门的缺席是如实披露的机制决策，而非以假闸门占位。
-- **浏览器自动化**：Playwright 套件（`examples/reference-app/web/e2e`，27 个 spec 文件、chromium/webkit/ipad 三个项目）已驱动真实宿主；`.github/workflows/e2e.yml` 以按需触发加每日定时运行，加上每次推送到 main（push 触发已按既定条件开启——以首次全绿的 dispatched 运行为据，即 2026-09-11 的第三次 dispatched 运行；触发细节与理由见 `.github/workflows/e2e.yml` 文件头）。`@deployment` 门在指向真实部署时（需 `E2E_BASE_URL`）驱动该部署的伺服页面。
+- **浏览器自动化**：Playwright 套件（`examples/reference-app/web/e2e`，27 个 spec 文件、chromium/webkit/ipad 三个项目）已驱动真实宿主。`@deployment` 门在指向真实部署时（需 `E2E_BASE_URL`）驱动该部署的伺服页面。
 
 ## 文件拆分与移动的引用清扫
 
-拆分或移动文件（拆包、改名、换目录）会同时打断仓库里一批不以 import 关系表达的引用：闸门里硬编码的路径、工作流的触发集合与步骤引用、allowlist 与禁调表、清单文件、Dockerfile 的 `COPY` 列表——这些引用不会自动跟随，只会在下一次 CI 运行时逐层暴露。因此每一轮拆分/移动都必须做一次全仓引用清扫（旧文件名一轮、旧符号名一轮），并把逐条处置作为该轮的验收项。
+拆分或移动文件（拆包、改名、换目录）会同时打断仓库里一批不以 import 关系表达的引用：闸门里硬编码的路径、allowlist 与禁调表、清单文件、Dockerfile 的 `COPY` 列表——这些引用不会自动跟随，只会在下一次运行时逐层暴露。因此每一轮拆分/移动都必须做一次全仓引用清扫（旧文件名一轮、旧符号名一轮），并把逐条处置作为该轮的验收项。
 
 **旧文件名**——对每个被移动、改名或拆走内容的路径逐一核对下列面（先做一次仓库根全仓 `grep -rn` 兜底，再逐面确认）：
 
 - **`tools/**`**：按路径引用文件的 checker 与 generator——硬编码的输入路径（如 `check_env_example_consistency.py` 的声明点常量、`check_host_composition.py` 的命名 allowlist 条目）与随附清单（`api_fragments.json`、`migration_parity_exceptions.json`、`coverage-baselines.json`、`dependency-licenses.json` 的 `used_by`）。
-- **`.github/workflows/**`**：两处都要查——触发器的 `paths:` 集合（目录与文件逐行枚举），与步骤体的脚本引用（`run: python3 tools/...` 及其参数、头部注释里的成员枚举行）。
 - **`tools/semgrep_rules/**`**：每条规则的 `paths.exclude` allowlist——旧路径留在名单里成为死条目，新路径漏配则在规则应豁免处直接报红。
 - **根 `.golangci.yml`**：depguard 等规则的 `files:` glob 与允许/禁止的导入路径。
 - **`examples/reference-app/Dockerfile` 与根 `.dockerignore`**：`COPY` 列表必须与 go.work 的 `use` 集合同构（workspace 成员目录缺一即构建失败）；`.dockerignore` 的排除规则核对是否仍对准真实路径。
-- **`tools/README.md`**：每个脚本的专节与「Running in CI and locally」清单。
+- **`tools/README.md`**：每个脚本的专节与「Running the checks」清单。
 - **文档锚点**：`docs/internal/**`、`docs/site/**`、各 `AGENTS.md` 与 README、`.claude/skills/**` 中引用旧路径的行。
 
 **旧符号名**——对被改名或抽取的标识符，在禁/允名单位置 grep：

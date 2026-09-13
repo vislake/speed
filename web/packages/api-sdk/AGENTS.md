@@ -60,10 +60,10 @@ and `src/` must keep passing it on every regeneration.
   namespacing is a consumer-shell discipline, recorded in
   `web/orval.config.ts` and the README.
 - **orval stays out of the lockfile.** Every runner -- the Taskfile
-  `api:gen` frontend leg and the `api-contract.yml` regen step --
+  `api:gen` frontend leg above all --
   invokes `pnpm dlx orval@8.17.0 --config orval.config.ts` from `web/`
-  followed by the fixup script. A version bump lands in all three
-  places (config comment, Taskfile, workflow) at once.
+  followed by the fixup script. A version bump lands in both
+  places (config comment, Taskfile) at once.
 - **No user-facing text, no i18n resources.** Errors are typed as the
   spec's `{code, params}` envelope; codes map to bilingual text in
   consumer catalogs. The runtime binding's programmer errors are constant

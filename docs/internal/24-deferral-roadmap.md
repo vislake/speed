@@ -87,15 +87,15 @@
 | 普查号 | 判定 | 文件 | 主题 | 标记/锚点/落地 |
 |---|---|---|---|---|
 | 86 | BLOCKED | `docs/internal/20-quality-and-security.md` | nightly 停在 gated stub | 加排:nightly gate=issues:write token(仓内无凭据可满足);benchmark 半已闭 |
-| 129 | BLOCKED | `.github/workflows/security.yml` | Renovate 自动依赖更新与 gitleaks pre-commit hook 未做 | 加排:Renovate 需 GitHub App 凭据;gitleaks pre-commit 半归 dev 工具轮 |
+| 129 | BLOCKED | CI 工作流(不再在仓内) | Renovate 自动依赖更新与 gitleaks pre-commit hook 未做 | 加排:Renovate 需 GitHub App 凭据;gitleaks pre-commit 半归 dev 工具轮 |
 | 163 | BLOCKED | `docs/internal/20-quality-and-security.md` | Renovate 依赖自动化未落地 | 加排:Renovate 依赖自动化需外部服务/GitHub App 凭据 |
-| 179 | BLOCKED | `.github/workflows/nightly.yml` | nightly 管线未实现(gated stub) | 加排:nightly gate=issues:write token(仓内无凭据可满足);benchmark 半已闭 |
+| 179 | BLOCKED | CI 工作流(不再在仓内) | nightly 管线未实现(gated stub) | 加排:nightly gate=issues:write token(仓内无凭据可满足);benchmark 半已闭 |
 
 ## 5. 真实发布类(◆M4-forward)
 
-此类事项原以 v1.0(M4)版本冻结与真实发布为共同前置。首个真实发布的机制已于 2026-09-10 落地(Go 模块经 `go/<module>/<version>` tag 由 Go module proxy 服务;`release.yml` 由只读验证扩展为验证+发布,权限 contents: write + packages: write——闭合 sha 见第 9 章行 127、212)。首个真实运行(v0.0.1)半成功:Go 21 个模块 tag 推送成功;npm 十二包发布失败——首个包 @speed/tokens PUT 即 403 permission_denied,`@speed` scope 未关联仓库 owner 的 GitHub Packages 安装(仓库外 org 配置,非代码缺陷),十二包零上 registry。该版本随后作废:21 个模块 tag 已从远端与本地删除、代理缓存不可改写使该版本号不可复用,下一次发布必须换新版本号——npm 半不再重发,org 侧关联 @speed scope(或等效配置)后由下一个版本号完整收敛。半成功态的恢复机制(已存在 tag 一律跳过——模块 tag 与仓库根 tag 同规;npm 步发布前先探测 registry、对已存在的版本跳过)保留为发布流水线的部分态语义,面向后续版本:任何已发布内容都不会被重复发布。类内其余机制仍随 v1.0(M4):npmjs.org registry、changesets 流程与 npm provenance、SBOM 与 GitHub Release 对象、制品腿(goreleaser 二进制、版本化镜像发布、speed.yaml 附件与文档站版本目录)、oasdiff 接线、post-release 触发、trivy、许可证扫描传递依赖扩展。未随动的发布机制行文(docs/02、docs/18、tools/release 运行文本、Taskfile)由第 10 章对应普查行跟踪。以下分组只表达各事项在发布机制中的位置,不表达先后依赖。
+此类事项原以 v1.0(M4)版本冻结与真实发布为共同前置。首个真实发布的机制已于 2026-09-10 落地(Go 模块经 `go/<module>/<version>` tag 由 Go module proxy 服务;发布腿由只读验证扩展为验证+发布,权限 contents: write + packages: write——闭合 sha 见第 9 章行 127、212)。首个真实运行(v0.0.1)半成功:Go 21 个模块 tag 推送成功;npm 十二包发布失败——首个包 @speed/tokens PUT 即 403 permission_denied,`@speed` scope 未关联仓库 owner 的 GitHub Packages 安装(仓库外 org 配置,非代码缺陷),十二包零上 registry。该版本随后作废:21 个模块 tag 已从远端与本地删除、代理缓存不可改写使该版本号不可复用,下一次发布必须换新版本号——npm 半不再重发,org 侧关联 @speed scope(或等效配置)后由下一个版本号完整收敛。半成功态的恢复机制(已存在 tag 一律跳过——模块 tag 与仓库根 tag 同规;npm 步发布前先探测 registry、对已存在的版本跳过)保留为发布流程的部分态语义,面向后续版本:任何已发布内容都不会被重复发布。类内其余机制仍随 v1.0(M4):npmjs.org registry、changesets 流程与 npm provenance、SBOM 与 GitHub Release 对象、制品腿(goreleaser 二进制、版本化镜像发布、speed.yaml 附件与文档站版本目录)、oasdiff 接线、post-release 触发、trivy、许可证扫描传递依赖扩展。未随动的发布机制行文(docs/02、docs/18、tools/release 运行文本、Taskfile)由第 10 章对应普查行跟踪。以下分组只表达各事项在发布机制中的位置,不表达先后依赖。
 
-补记(2026-09-10):上述跟踪清单之外另有两条同族行文残留,不在普查行内,已随文改述并在此补记——scaffold-verify.yml 触发注释(该文件 :36-39)原称 "release.yml carries no publish credential"、仓内无发布,与 5.4 行 51/52/80 已重述的 "release.yml dispatch 即发布" 前提相悖;web/.changeset/README.md 的版本现状句(该文件 :15-18)原称十二包全在 0.0.0、与 Go 半同处过渡态,与 5.3 行 85/130 记的直接 bump 落地相悖。
+补记(2026-09-10):上述跟踪清单之外另有两条同族行文残留,不在普查行内,已随文改述并在此补记——脚手架验证的触发注释原称仓内无发布凭据,与 5.4 行 51/52/80 已重述的"发布事件真实存在"前提相悖;web/.changeset/README.md 的版本现状句(该文件 :15-18)原称十二包全在 0.0.0、与 Go 半同处过渡态,与 5.3 行 85/130 记的直接 bump 落地相悖。
 
 **同一版本 tag 的语义(2026-09-10 定稿;权威叙述见 [02 仓库结构与发布](02-repo-and-release.md))**:模块 tag `go/<module>/<version>` 与根 tag `<version>` 并存、互不替代——模块 tag 是 Go module proxy 的解析面,钉在发布提交上(v0.0.1 的 21 个模块 tag 发布时指向 `fbaaaf98`,后随该版本作废从远端与本地删除),永不重打或移动;根 tag 是版本里程碑参照,由发布运行在其 checkout(dispatch 时的 main 尖端)创建,因此对早期版本的补发运行而言,根 tag 可能指向发布之后的修复提交,与模块 tag 不在同一提交上——**同一版本两个 tag 的 sha 不同是设计使然,不是漂移**。发布机制对两者一视同仁:已存在即跳过(模块 tag 与根 tag 同规),重发从任意部分状态收敛。
 
@@ -116,30 +116,30 @@
 |---|---|---|---|---|
 | 156 | BLOCKED | `web/packages/api-sdk/AGENTS.md` | oasdiff breaking-change gate | v0.0.1 的 21 个模块 tag 已从远端与本地删除、该版本作废;基线取自仓库自身历史——发布提交 `fbaaaf98` 是 main 的祖先,其树带着完整的合并文档与全部 spec 片段;Go module proxy 只解析 21 个模块中的 17 个(admin、ai-gateway、integration、saasctl 返回 404),单靠代理拼不出完整基线。下一个发布版本成为新基线。oasdiff 接线仍未做,随 v1.0(M4) |
 | 164 | BLOCKED | `docs/internal/21-api-contract.md` | oasdiff 破坏性变更闸门未交付 | v0.0.1 的 21 个模块 tag 已从远端与本地删除、该版本作废;基线取自仓库自身历史——发布提交 `fbaaaf98` 是 main 的祖先,其树带着完整的合并文档与全部 spec 片段;Go module proxy 只解析 21 个模块中的 17 个(admin、ai-gateway、integration、saasctl 返回 404),单靠代理拼不出完整基线。下一个发布版本成为新基线。oasdiff 接线仍未做,随 v1.0(M4) |
-| 178 | BLOCKED | `.github/workflows/api-contract.yml` | oasdiff 破坏性变更检测未接线 | v0.0.1 的 21 个模块 tag 已从远端与本地删除、该版本作废;基线取自仓库自身历史——发布提交 `fbaaaf98` 是 main 的祖先,其树带着完整的合并文档与全部 spec 片段;Go module proxy 只解析 21 个模块中的 17 个(admin、ai-gateway、integration、saasctl 返回 404),单靠代理拼不出完整基线。下一个发布版本成为新基线。oasdiff 接线仍未做,随 v1.0(M4) |
+| 178 | BLOCKED | CI 工作流(不再在仓内) | oasdiff 破坏性变更检测未接线 | v0.0.1 的 21 个模块 tag 已从远端与本地删除、该版本作废;基线取自仓库自身历史——发布提交 `fbaaaf98` 是 main 的祖先,其树带着完整的合并文档与全部 spec 片段;Go module proxy 只解析 21 个模块中的 17 个(admin、ai-gateway、integration、saasctl 返回 404),单靠代理拼不出完整基线。下一个发布版本成为新基线。oasdiff 接线仍未做,随 v1.0(M4) |
 | 195 | ROADMAP | `web/packages/api-sdk/AGENTS.md` | release-time SDK packaging and browser-page leg | 部分:api-sdk 发布期打包随 v0.0.1 直接 bump 发布落地(不经 changesets/发布期再生成——生成物已提交);浏览器腿已落地(e2e 套件驱动真实服务器,@deployment 门驱动伺服页面;api-sdk 的 README/AGENTS 句已改写为现状);oasdiff 基线门仍随 v1.0(M4) |
 
 ### 5.3 发布机制装配(publint 与 changesets)
 
 | 普查号 | 判定 | 文件 | 主题 | 标记/锚点/落地 |
 |---|---|---|---|---|
-| 85 | BLOCKED | `docs/internal/20-quality-and-security.md` | publint 与 changesets wiring 未接线 | v0.0.1 npm 发布走直接 bump + release.yml 发布腿,不经 changesets 流程;publint/changesets 接线仍随 v1.0(M4) |
-| 130 | ROADMAP | `.github/workflows/reusable-npm-package-ci.yml` | publint 发布形态校验与 changesets 发布接线未做 | v0.0.1 npm 发布走直接 bump + release.yml 发布腿,不经 changesets 流程;publint/changesets 接线仍随 v1.0(M4) |
+| 85 | BLOCKED | `docs/internal/20-quality-and-security.md` | publint 与 changesets wiring 未接线 | v0.0.1 npm 发布走直接 bump + 发布腿,不经 changesets 流程;publint/changesets 接线仍随 v1.0(M4) |
+| 130 | ROADMAP | CI 工作流(不再在仓内) | publint 发布形态校验与 changesets 发布接线未做 | v0.0.1 npm 发布走直接 bump + 发布腿,不经 changesets 流程;publint/changesets 接线仍随 v1.0(M4) |
 
 ### 5.4 post-release 触发
 
 | 普查号 | 判定 | 文件 | 主题 | 标记/锚点/落地 |
 |---|---|---|---|---|
-| 51 | BLOCKED | `.github/workflows/release.yml` | post-release scaffold-verify 触发未接线 | v0.0.1 起发布事件真实存在(release.yml dispatch 即发布);触发接线仍未做,随 v1.0(M4) |
-| 52 | BLOCKED | `.github/workflows/scaffold-verify.yml` | post-release 触发未接线 | v0.0.1 起发布事件真实存在(release.yml dispatch 即发布);触发接线仍未做,随 v1.0(M4) |
-| 80 | BLOCKED | `docs/internal/16-verification.md` | scaffold-verify 发布后触发未接线 | v0.0.1 起发布事件真实存在(release.yml dispatch 即发布);触发接线仍未做,随 v1.0(M4) |
+| 51 | BLOCKED | CI 工作流(不再在仓内) | 发布后的脚手架验证触发未接线 | v0.0.1 起发布事件真实存在;触发接线仍未做,随 v1.0(M4) |
+| 52 | BLOCKED | CI 工作流(不再在仓内) | 发布后触发未接线 | v0.0.1 起发布事件真实存在;触发接线仍未做,随 v1.0(M4) |
+| 80 | BLOCKED | `docs/internal/16-verification.md` | 脚手架验证的发布后触发未接线 | v0.0.1 起发布事件真实存在;触发接线仍未做,随 v1.0(M4) |
 
 ### 5.5 镜像扫描(trivy)
 
 | 普查号 | 判定 | 文件 | 主题 | 标记/锚点/落地 |
 |---|---|---|---|---|
 | 32 | BLOCKED | `docs/internal/18-cicd.md` | trivy 镜像扫描未接线 | v0.0.1 发布不产镜像,前提未变;仍随 v1.0(M4) |
-| 99 | BLOCKED | `.github/workflows/security.yml` | trivy 容器镜像扫描未接线 | v0.0.1 发布不产镜像,前提未变;仍随 v1.0(M4) |
+| 99 | BLOCKED | CI 工作流(不再在仓内) | trivy 容器镜像扫描未接线 | v0.0.1 发布不产镜像,前提未变;仍随 v1.0(M4) |
 
 ## 6. 真实消费方类
 
@@ -209,7 +209,7 @@
 
 ## 8. 路线图行类
 
-锚点坐标对应 docs/internal/15-roadmap.md 的 M1–M4 行、具名轮(org-web、create-saas-app、admin-shell、notification-ui、scaffold-verify 门、M4 e2e 行、M4 Storybook 行、M4 文档站完整化行等)与 docs/internal/19 计划命令;"待排期"坐标=无锚 backlog,排轮时优先于新需求提出。行内注记与其它类别行的关联。
+锚点坐标对应 docs/internal/15-roadmap.md 的 M1–M4 行、具名轮(org-web、create-saas-app、admin-shell、notification-ui、脚手架验证门、M4 e2e 行、M4 Storybook 行、M4 文档站完整化行等)与 docs/internal/19 计划命令;"待排期"坐标=无锚 backlog,排轮时优先于新需求提出。行内注记与其它类别行的关联。
 
 ### 8.1 锚:M1(租户与身份行:org-web、create-saas-app 轮)
 
@@ -220,9 +220,9 @@
 | 118 | ROADMAP | `docs/internal/16-verification.md` | create-saas-app 与前端脚手架未建 | 锚:create-saas-app v0.1(M1 行)+M4 出口/web 侧 acceptance;saasctl 模板与三组合矩阵注记 |
 | 200 | ROADMAP | `docs/internal/17-risks.md` | saasctl upgrade npm 侧改写与自检未落地 | 锚:create-saas-app;upgrade 的 web/package.json 改写随 web 模板 |
 | 205 | ROADMAP | `docs/internal/02-repo-and-release.md` | create-saas-app 与前端模板未实现 | 锚:create-saas-app v0.1(M1 行)+M4 出口/web 侧 acceptance;saasctl 模板与三组合矩阵注记 |
-| 213 | ROADMAP | `.github/workflows/scaffold-verify.yml` | create-saas-app 与 web 侧模板未建 | 锚:create-saas-app v0.1(M1 行)+M4 出口/web 侧 acceptance;saasctl 模板与三组合矩阵注记 |
+| 213 | ROADMAP | CI 工作流(不再在仓内) | create-saas-app 与 web 侧模板未建 | 锚:create-saas-app v0.1(M1 行)+M4 出口/web 侧 acceptance;saasctl 模板与三组合矩阵注记 |
 | 215 | ROADMAP | `internal/app/demo/demo_subject.go` | X-Demo-User/X-Demo-User-Id demo 身份头的移除未做 | 锚:org-web 轮;X-Demo-User 演示身份头移除(kill switch 已交付) |
-| 218 | ROADMAP | `.github/workflows/scaffold-verify.yml` | 注释 "a web-side scaffold-verify leg waits for create-saas-app"(:31)与 "the other four selections ... do NOT get a per-PR (or per-schedule) dual-mode BOOT proof of their own" 缺口说明(:23-31) | 锚:create-saas-app v0.1(M1 行)+M4 出口/web 侧 acceptance;saasctl 模板与三组合矩阵注记 |
+| 218 | ROADMAP | CI 工作流(不再在仓内) | 注释"web 侧脚手架验证腿等 create-saas-app"与"其余四个选集没有按次或按日的双模式 BOOT 证明" their own" 缺口说明(:23-31) | 锚:create-saas-app v0.1(M1 行)+M4 出口/web 侧 acceptance;saasctl 模板与三组合矩阵注记 |
 
 ### 8.2 锚:M2(媒体与变现行:storage、notification-ui、billing 前端包、ui-kit 组件族)
 
@@ -259,50 +259,50 @@
 | 193 | ROADMAP | `go/org/tree.go` | TreeService/MemberService Restore 无 HTTP 表面 | 锚:admin-shell;org/rbac Restore 为 Service-level only(运维/控制台面) |
 | 209 | ROADMAP | `CLAUDE.md` | org Restore 的 HTTP 表面 | 锚:admin-shell;org/rbac Restore 为 Service-level only(运维/控制台面) |
 
-### 8.4 锚:M4(审计合规与硬化行:compliance 治理、e2e、Storybook、文档站完整化、scaffold-verify 门、出口条件)
+### 8.4 锚:M4(审计合规与硬化行:compliance 治理、e2e、Storybook、文档站完整化、脚手架验证门、出口条件)
 
 | 普查号 | 判定 | 文件 | 主题 | 标记/锚点/落地 |
 |---|---|---|---|---|
 | 24 | ROADMAP | `web/packages/ui-kit/AGENTS.md` | Storybook / browser-side visual verification | 锚:Storybook 组件文档站+可视化回归(M4 行) |
-| 25 | ROADMAP | `web/packages/tenancy-ui/README.md` | 浏览器驱动真实服务器的 e2e 腿未接线(原指 M4 html-runner/e2e) | 锚:M4 e2e 行;浏览器自动化已落地(e5ec05b9:套件驱动真实服务器;e2e.yml 真实运行——按需+每日+push);包 README 的 "A browser driving the real server is not wired" 句已改写为现状 |
+| 25 | ROADMAP | `web/packages/tenancy-ui/README.md` | 浏览器驱动真实服务器的 e2e 腿未接线(原指 M4 html-runner/e2e) | 锚:M4 e2e 行;浏览器自动化已落地(e5ec05b9:套件驱动真实服务器);包 README 的 "A browser driving the real server is not wired" 句已改写为现状 |
 | 26 | ROADMAP | `web/packages/account-ui/README.md` | 无 Storybook/预览 harness,真实浏览器对比度验证缺失 | 锚:Storybook 组件文档站+可视化回归(M4 行) |
-| 29 | ROADMAP | `docs/internal/16-verification.md` | 浏览器端到端(Playwright)未实现 | 锚:M4 e2e 行;浏览器自动化已落地(e5ec05b9:套件驱动真实服务器;e2e.yml 真实运行——按需+每日+push) |
+| 29 | ROADMAP | `docs/internal/16-verification.md` | 浏览器端到端(Playwright)未实现 | 锚:M4 e2e 行;浏览器自动化已落地(e5ec05b9:套件驱动真实服务器) |
 | 41 | ROADMAP | `docs/internal/10-compliance-and-audit.md` | compliance 哈希链、按分区归档、自身 HTTP 面未实现 | 锚:M4 compliance 行;哈希链/时间分区归档/HTTP 面 |
 | 47 | ROADMAP | `CLAUDE.md` | compliance 分时归档 | 锚:M4 compliance 行;哈希链/时间分区归档/HTTP 面 |
-| 48 | ROADMAP | `CLAUDE.md` | 对已伺服页面的浏览器自动化 | 锚:M4 e2e 行;浏览器自动化已落地(e5ec05b9:套件驱动真实服务器;e2e.yml 真实运行——按需+每日+push);伺服页面的驱动腿为 @deployment 门(缺 E2E_BASE_URL 时自跳过) |
+| 48 | ROADMAP | `CLAUDE.md` | 对已伺服页面的浏览器自动化 | 锚:M4 e2e 行;浏览器自动化已落地(e5ec05b9:套件驱动真实服务器);伺服页面的驱动腿为 @deployment 门(缺 E2E_BASE_URL 时自跳过) |
 | 57 | ROADMAP | `go/compliance/AGENTS.md` | audit_events 可选 hash chain 未实现 | 锚:M4 compliance 行;哈希链/时间分区归档/HTTP 面 |
 | 58 | ROADMAP | `go/compliance/AGENTS.md` | tenant-scoped 模型所有者未注册 retention/erasure participant | 锚:M4 权务;tenant-scoped 模型 owner 注册 retention/erasure participant(边界只由注册闭合) |
 | 67 | ROADMAP | `go/dbkit/repository.go` | Restore 无保留期窗口强制 | 锚:M4 compliance 保留策略;dbkit Restore 不强制保留窗口 |
 | 68 | ROADMAP | `go/dbkit/audit/AGENTS.md` | 审计表无 hash 链、无查询/报表 API、无保留/归档 | 锚:M4 compliance 行;哈希链/时间分区归档/HTTP 面 |
 | 78 | ROADMAP | `web/packages/account-ui/README.md` | 消费者壳无真实 callback 路由,binding 完成腿从不被行使 | 锚:M4 浏览器 leg;社交绑定回调路径→binding 片段桥(壳不服务 callback 路由) |
 | 90 | ROADMAP | `docs/internal/07-platform-services.md` | storage 按租户保留策略与 compliance 联动未实现 | 锚:M4 保留联动(compliance);片段入合并文档的半随模块驱动合并策略落地(d9fbb527),storage 路径已在 merged 文档 |
-| 92 | ROADMAP | `docs/internal/12-frontend.md` | 浏览器自动化(M4 e2e)未落地 | 锚:M4 e2e 行;浏览器自动化已落地(e5ec05b9:套件驱动真实服务器;e2e.yml 真实运行——按需+每日+push) |
-| 98 | ROADMAP | `.github/workflows/docs-check.yml` | docs/site/ 按版本分目录发布未做 | 锚:M4 文档站完整化(自动生成配置清单/按版本分目录发布);生成入口需真实宿主 schema |
-| 100 | ROADMAP | `.github/workflows/reusable-npm-package-ci.yml` | Storybook 组件预览 harness 不存在 | 锚:Storybook 组件文档站+可视化回归(M4 行) |
+| 92 | ROADMAP | `docs/internal/12-frontend.md` | 浏览器自动化(M4 e2e)未落地 | 锚:M4 e2e 行;浏览器自动化已落地(e5ec05b9:套件驱动真实服务器) |
+| 98 | ROADMAP | CI 工作流(不再在仓内) | docs/site/ 按版本分目录发布未做 | 锚:M4 文档站完整化(自动生成配置清单/按版本分目录发布);生成入口需真实宿主 schema |
+| 100 | ROADMAP | CI 工作流(不再在仓内) | Storybook 组件预览 harness 不存在 | 锚:Storybook 组件文档站+可视化回归(M4 行) |
 | 102 | ROADMAP | `examples/reference-app/web/src/views/account-view.tsx` | 社交绑定回调路径到 binding 片段桥缺失 | 锚:M4 浏览器 leg;社交绑定回调路径→binding 片段桥(壳不服务 callback 路由) |
 | 103 | ROADMAP | `go/sharing/AGENTS.md` | Known limitations 段(126 行起):share.accessed 事件无消费者、constant-time 由 review 保证、窗口语义测试说明等保留的 deferral | 锚:M4 compliance;sharing.share.accessed 无实时订阅者(模块只发布) |
 | 105 | ROADMAP | `go/compliance/AGENTS.md` | time-partitioned archival / cold storage 未实现 | 锚:M4 compliance 行;哈希链/时间分区归档/HTTP 面 |
 | 106 | ROADMAP | `go/compliance/AGENTS.md` | export 送达通知机制未实现 | 锚:M4 compliance 后续轮;export 送达通知(现只铸 share 交还 token) |
 | 115 | ROADMAP | `web/packages/tenancy-ui/README.md` | 无 Storybook/预览 harness,真实浏览器对比度验证缺失 | 锚:Storybook 组件文档站+可视化回归(M4 行) |
-| 117 | ROADMAP | `go/saasctl/AGENTS.md` | --with 宇宙限于 {authn,rbac,org};其余选择无 CI 双模式 boot 证明 | 锚:M4 scaffold-verify 门;saasctl 选集/三组合双模式 boot 矩阵 |
-| 119 | ROADMAP | `docs/internal/16-verification.md` | 三种开关组合构建矩阵未接线 | 锚:M4 scaffold-verify 门;saasctl 选集/三组合双模式 boot 矩阵 |
+| 117 | ROADMAP | `go/saasctl/AGENTS.md` | --with 宇宙限于 {authn,rbac,org};其余选择无机械双模式 boot 证明 | 锚:M4 脚手架验证门;saasctl 选集/三组合双模式 boot 矩阵 |
+| 119 | ROADMAP | `docs/internal/16-verification.md` | 三种开关组合构建矩阵未接线 | 锚:M4 脚手架验证门;saasctl 选集/三组合双模式 boot 矩阵 |
 | 120 | ROADMAP | `docs/internal/20-quality-and-security.md` | 可视化回归基线缺失 | 锚:Storybook 组件文档站+可视化回归(M4 行) |
-| 128 | ROADMAP | `.github/workflows/e2e.yml` | e2e 管线未实现(gated stub) | 锚:M4 e2e 行;浏览器自动化已落地(e5ec05b9:套件驱动真实服务器;e2e.yml 真实运行——按需+每日+push) |
+| 128 | ROADMAP | CI 工作流(不再在仓内) | e2e 腿未实现(gated stub) | 锚:M4 e2e 行;浏览器自动化已落地(e5ec05b9:套件驱动真实服务器) |
 | 131 | ROADMAP | `examples/reference-app/web/e2e/account-surface.spec.ts` | 浏览器级账户变更旅程缺失 | 锚:M4 e2e;浏览器级账户变更旅程(撤销会话/解绑/MFA) |
 | 134 | ROADMAP | `go/compliance/AGENTS.md` | compliance HTTP surface / OpenAPI fragment 未实现 | 锚:M4/later 表行;compliance 自有 HTTP 面/OpenAPI fragment |
 | 135 | ROADMAP | `go/sharing/AGENTS.md` | sharing.share.accessed 事件无实时订阅者 | 锚:M4 compliance;sharing.share.accessed 无实时订阅者(模块只发布) |
-| 158 | ROADMAP | `web/packages/account-ui/README.md` | 浏览器驱动真实服务器的 e2e 腿未接线 | 锚:M4 e2e 行;浏览器自动化已落地(e5ec05b9:套件驱动真实服务器;e2e.yml 真实运行——按需+每日+push);包 README 的 "A browser driving the real server is not wired" 句已改写为现状 |
+| 158 | ROADMAP | `web/packages/account-ui/README.md` | 浏览器驱动真实服务器的 e2e 腿未接线 | 锚:M4 e2e 行;浏览器自动化已落地(e5ec05b9:套件驱动真实服务器);包 README 的 "A browser driving the real server is not wired" 句已改写为现状 |
 | 175 | ROADMAP | `CLAUDE.md` | compliance 自有 HTTP 表面 | 锚:M4 compliance 行;哈希链/时间分区归档/HTTP 面 |
-| 176 | ROADMAP | `CLAUDE.md` | e2e 与 nightly 流水线 | 锚:M4 e2e(+nightly 半见 4.5 节);e2e 半已落地(e5ec05b9:套件驱动真实服务器;e2e.yml 真实运行——按需+每日+push);nightly 半仍为 gated stub(见 4.5 普查行 86、179) |
+| 176 | ROADMAP | `CLAUDE.md` | e2e 与定时回归腿 | 锚:M4 e2e(+定时回归腿半见 4.5 节);e2e 半已落地(e5ec05b9:套件驱动真实服务器);定时回归腿半仍为 gated stub(见 4.5 普查行 86、179) |
 | 184 | ROADMAP | `internal/cases/model.go` | case 创建后加照片(add-photo-after-create)无 API | 锚:M4 页面/需求;cases add-photo-after-create 无端点(photos schema 已预留) |
 | 185 | ROADMAP | `go/compliance/doc.go` | What is not shipped: subject-scoped export、HTTP 面、哈希链、时间分区归档(边界形态) | 锚:M4 compliance 行;哈希链/时间分区归档/HTTP 面 |
 | 186 | ROADMAP | `go/dbkit/audit/doc.go` | audit 表无 hash chain、无保留/归档、无搜索查询面 | 锚:M4 compliance 行;哈希链/时间分区归档/HTTP 面 |
 | 196 | ROADMAP | `web/packages/auth-ui/README.md` | 无 Storybook/预览 harness,真实浏览器对比度验证缺失 | 锚:Storybook 组件文档站+可视化回归(M4 行) |
 | 199 | ROADMAP | `docs/internal/14-reference-app.md` | reference-app 端到端链路未串通 | 锚:M4 出口条件行;reference-app 完整业务闭环全链路 |
 | 211 | ROADMAP | `CLAUDE.md` | compliance 哈希链 | 锚:M4 compliance 行;哈希链/时间分区归档/HTTP 面 |
-| 214 | ROADMAP | `examples/reference-app/web/src/main.tsx` | 浏览器自动化(html-runner/e2e)未落地 | 锚:M4 e2e 行;浏览器自动化已落地(e5ec05b9:套件驱动真实服务器;e2e.yml 真实运行——按需+每日+push);main.tsx 注释句已改写为现状 |
+| 214 | ROADMAP | `examples/reference-app/web/src/main.tsx` | 浏览器自动化(html-runner/e2e)未落地 | 锚:M4 e2e 行;浏览器自动化已落地(e5ec05b9:套件驱动真实服务器);main.tsx 注释句已改写为现状 |
 | 216 | ROADMAP | `go/dbkit/hard_delete.go` | HardDelete 外部编排 — 保留窗口配置/清理调度/right-to-erasure 入口均不存在(原 M4 compliance-module 承诺改写为 does-not-exist-yet) | 锚:M4 权务行(保留/被遗忘权);宿主级清理调度与 right-to-erasure 入口;服务层编排大半已落地 |
-| 217 | ROADMAP | `examples/reference-app/web/src/main.tsx` | 行 78 'What does not ship is browser automation driving that server-served page' — e2e-stub 时代遗留句,已改写为现状(e2e @deployment 门驱动伺服页面) | 锚:M4 e2e 行;浏览器自动化已落地(e5ec05b9:套件驱动真实服务器;e2e.yml 真实运行——按需+每日+push) |
+| 217 | ROADMAP | `examples/reference-app/web/src/main.tsx` | 行 78 'What does not ship is browser automation driving that server-served page' — e2e-stub 时代遗留句,已改写为现状(e2e @deployment 门驱动伺服页面) | 锚:M4 e2e 行;浏览器自动化已落地(e5ec05b9:套件驱动真实服务器) |
 
 ### 8.5 锚:v1.0(M4)之后
 
@@ -363,7 +363,7 @@
 | 36 | ROADMAP | `docs/internal/21-api-contract.md` | org 片段进入合并文档待前端消费者 | 闭:d9fbb527 org 片段已并入合并文档与 SDK(模块驱动策略;org-web 轮锚作废) |
 | 56 | ROADMAP | `go/ai-gateway/api/openapi.yaml` | ai-gateway fragment 未并入 merged build/openapi/speed.yaml | 闭:d9fbb527 ai-gateway 片段已并入合并文档与 @speed/api-sdk |
 | 76 | ROADMAP | `web/packages/ui-kit/AGENTS.md` | storage frontend leg (generated storage operations in api-sdk) | 闭:d9fbb527 storage 操作已由 orval 生成进 @speed/api-sdk(合并文档现覆盖 storage 片段) |
-| 101 | ROADMAP | `Taskfile.yml` | org/storage/sharing/pki/integration/ai-gateway 前端 merge/orval 腿未做 | 闭:d9fbb527 Taskfile api:merge/api:gen 与 api-contract.yml 的 merge+orval 腿现覆盖全部十三片段(含 org、storage、sharing、pki、integration、ai-gateway) |
+| 101 | ROADMAP | `Taskfile.yml` | org/storage/sharing/pki/integration/ai-gateway 前端 merge/orval 腿未做 | 闭:d9fbb527 Taskfile api:merge/api:gen 的 merge+orval 腿现覆盖全部十三片段(含 org、storage、sharing、pki、integration、ai-gateway) |
 | 109 | BLOCKED | `go/dbkit/soft_delete.go` | Update 不尊重 deleted_at 的未修复缺陷 | 闭:907e864a 修软删模型 Update 清标;d7c9a8b3 错误码索引再生成 |
 | 143 | BLOCKED | `go/authn/sms.go` | SMS 厂商适配器(Aliyun/Tencent/Twilio)未实现 | 闭:e10d3d49 阿里云/腾讯云/Twilio 短信适配器;3e1933f6 行文随行;SMS 模块升格后适配器随 b5cc4f4b 移入 pkgcore/sms;真网关验收残余:三适配器真实账号验收为 env 门控集成 leg(缺凭据自跳过) |
 | 153 | ROADMAP | `go/org/AGENTS.md` | org fragment 未并入 merged openapi/speed.yaml | 闭:d9fbb527 org 片段已并入 merged speed.yaml(AGENTS.md 同步改写) |
@@ -371,15 +371,15 @@
 | 171 | ROADMAP | `CLAUDE.md` | notes 模块删除/恢复 HTTP 端点 | 闭:2b2cd5da notes HTTP delete/restore 端点(spec 先行);8419861b 合并文档再生成 |
 | 174 | BLOCKED | `CLAUDE.md` | pki X.509 层的真实消费方 | 闭:66c81ee9 CAService.SignCertificate;e0f4e691 reference-app 公证 AI 输出+分享门控;65cd4362/d2e991ee 记录残余 |
 | 30 | ROADMAP | `docs/internal/16-verification.md` | 配置清单生成一致性检查未接线 | 闭:dec7074f 生成核心落地——`examples/reference-app/cmd/configrefgen` 以真实宿主组合(声明配置项的五个平台模块 authn/metering/compliance/sharing/pki+config,内存 SQLite)Attach 冻结 schema 经 `Service.Describe` 导出,产出 `docs/config-reference.md`/`.json` 与根 `.env.example`;`config.example.yaml` 过真实 loader 的加载验证随命令单测;生成器后归位为独立 Go 工具模块 `tools/configrefgen`(go.work use 条目在 go/ 之外);残余:文档站用户引导页版式与按版本分目录发布随 M4 文档站完整化 |
-| 50 | ROADMAP | `.github/workflows/docs-check.yml` | config-reference 生成漂移未进 CI | 闭:dec7074f 漂移门接线——docs-check.yml 的 Config reference drift check 步(Go 装好后 `go run ./cmd/configrefgen --check`),声明侧路径(authn/metering/compliance/sharing/pki 的 module.go、go/config/**、internal/app/**、生成器自身)入 PATH SET 按 api-contract 模式自触发;生成器后归位 `tools/configrefgen`,漂移步改为工作目录 `tools/configrefgen` 下 `go run . --check`,PATH SET 改 `tools/configrefgen/**`,单测随 fast-check/full-check 的 `tools/configrefgen` 矩阵行;残余:站点版式与按版本发布随 M4 文档站完整化 |
-| 127 | ROADMAP | `CLAUDE.md` | release 真实发布 | 闭:00e24732(2026-09-10)v0.0.1 真实发布执行腿落地——release.yml 验证+发布两 job;首轮真实运行半成功:Go 21 个模块 tag 曾推送发布(`go/<module>/v0.0.1`,指向 fbaaaf98;后随该版本作废从远端与本地删除),npm 十二包发布失败——首个包 @speed/tokens PUT 即 403 permission_denied,`@speed` scope 未关联仓库 owner 的 GitHub Packages 安装(仓库外 org 配置,非代码缺陷),十二包零上 registry;半成功态恢复机制已落地(2026-09-10:跳过已存在 tag、npm 逐包已存在跳过,含根 tag,语义见第 5 章导言)并保留为流水线的部分态语义、面向后续版本;该版本号已不复用,org 侧关联 @speed scope(或等效配置)后由下一个版本号的发布完整收敛;CLAUDE.md 经重构已不载"发布未接线"判定,无现文可改述 |
-| 212 | ROADMAP | `.github/workflows/release.yml` | 真实发布序列未接线 | 闭:00e24732(2026-09-10)接线落地——release.yml 由只读验证扩展为验证+发布(Go tag 推送 + npm 发布至 GitHub Packages),权限 contents: write + packages: write,写权限只挂 publish job;web 十二包 0.0.1 bump 随 bd0399b8 先落;首轮真实运行半成功——Go 21 个模块 tag 推送成功,npm 发布半程失败(E403,`@speed` scope 未关联仓库 owner 的 GitHub Packages 安装,属仓库外 org 配置,十二包零上 registry);半成功态恢复机制已落地(2026-09-10:tag 步跳过已存在 tag、npm 逐包探测跳过已存在版本,模块 tag 与根 tag 同规,语义见第 5 章导言)并保留为流水线的部分态语义、面向后续版本;该版本随后作废(21 个模块 tag 已从远端与本地删除、版本号不复用),org 侧关联 @speed scope(或等效配置)后由下一个版本号的发布完整收敛 |
+| 50 | ROADMAP | CI 工作流(不再在仓内) | config-reference 生成漂移无机械门 | 闭:dec7074f 漂移门接线——`go run ./cmd/configrefgen --check`;生成器后归位 `tools/configrefgen`,漂移步改为工作目录 `tools/configrefgen` 下 `go run . --check`;残余:站点版式与按版本发布随 M4 文档站完整化 |
+| 127 | ROADMAP | `CLAUDE.md` | release 真实发布 | 闭:00e24732(2026-09-10)v0.0.1 真实发布执行腿落地——验证与发布两段;首轮真实运行半成功:Go 21 个模块 tag 曾推送发布(`go/<module>/v0.0.1`,指向 fbaaaf98;后随该版本作废从远端与本地删除),npm 十二包发布失败——首个包 @speed/tokens PUT 即 403 permission_denied,`@speed` scope 未关联仓库 owner 的 GitHub Packages 安装(仓库外 org 配置,非代码缺陷),十二包零上 registry;半成功态恢复机制已落地(2026-09-10:跳过已存在 tag、npm 逐包已存在跳过,含根 tag,语义见第 5 章导言)并保留为发布流程的部分态语义、面向后续版本;该版本号已不复用,org 侧关联 @speed scope(或等效配置)后由下一个版本号的发布完整收敛;CLAUDE.md 经重构已不载"发布未接线"判定,无现文可改述 |
+| 212 | ROADMAP | CI 工作流(不再在仓内) | 真实发布序列未接线 | 闭:00e24732(2026-09-10)接线落地——由只读验证扩展为验证+发布(Go tag 推送 + npm 发布至 GitHub Packages),权限 contents: write + packages: write,写权限只挂发布段;web 十二包 0.0.1 bump 随 bd0399b8 先落;首轮真实运行半成功——Go 21 个模块 tag 推送成功,npm 发布半程失败(E403,`@speed` scope 未关联仓库 owner 的 GitHub Packages 安装,属仓库外 org 配置,十二包零上 registry);半成功态恢复机制已落地(2026-09-10:tag 步跳过已存在 tag、npm 逐包探测跳过已存在版本,模块 tag 与根 tag 同规,语义见第 5 章导言)并保留为发布流程的部分态语义、面向后续版本;该版本随后作废(21 个模块 tag 已从远端与本地删除、版本号不复用),org 侧关联 @speed scope(或等效配置)后由下一个版本号的发布完整收敛 |
 | 145 | ROADMAP | `go/config/module.go` | 两个 pre-auth 端点无 OpenAPI fragment | 闭:5cb0ce68 pre-auth 端点先 secured/versioned——移入 `/api/v1/config/...` 版本化前缀、两路径共享每地址限流预算、成功答案一分钟公开缓存 + `Vary: Host`(行内记录的前置条件达成);片段随 ba3ddb76 落地——`go/config/api/openapi.yaml` 声明 config_getPublicConfig/config_getSystemFeatures 两个操作,`*Module` 以编译期断言实现生成 `api.ServerInterface` 并经生成 wrapper 挂载 |
 | 154 | ROADMAP | `web/packages/api-client/src/config-fetcher.ts` | OpenAPI fragment for go/config pre-auth endpoints | 闭:ba3ddb76 go/config 片段落地并进合并文档与 `@speed/api-sdk`;前端手写面与之同步——config-fetcher 保持 per-key 映射层、路径常量与片段一致,片段生成的 hook(useConfigGetPublicConfig/useConfigGetSystemFeatures)为前端的主调用面;前置 secured/versioned 由 5cb0ce68 达成 |
 | 4 | ROADMAP | `go/compliance/AGENTS.md` | retention sweep 无模块内置调度点 | 闭:周期调度席位 R2 落地——`pkgcore.Registry.Schedules` 座席(声明即排产)随 `4e7535cb`,`jobs.Scheduler` + `TenantLister` 模块 + 统一窗口键派生随 `88b169f8`;七处声明随 `e784bd46`/`504ac66e`/`68fbd307`/`9ea05043`/`6f0cf229`/`fa9fed84`(storage/compliance/pki 两处/billing/sharing/integration;站点前缀与调度器派生的逐字节同键由各模块窗口测试钉住),参考应用宿主 ticker 删除与 `periodicTenantUniverse` 转 `TenantLister` 实现随 `9b61449f`。compliance AGENTS 该 bullet 已改写为现文(声明制:模块拥有自己的默认排产,宿主的总开关是启不启动调度器) |
 | 155 | ROADMAP | `web/packages/i18n/src/create.ts` | platform user-profile locale feature | 闭:66c01f60 profile-locale 槽位落地——`users.locale` 已有,读写在 `GET/PATCH /api/v1/authn/me/preferences`(PATCH 部分更新,空串清空);前端消费面两处——account-ui 偏好设置面(3d730820,PATCH 优先后持久化语言)与 reference-app 的 ProfilePreferenceSync(775b156a,登录后把 profile 语言非持久化应用到实例,URL/手动槽位已决时不覆盖);宿主的"已支持语言"解析由 `@speed/i18n` 的 `readSupportedLanguages` 导出供给(create.ts 留的扩展点在消费侧以该导出兑现,create.ts 本身保持单例创建职责) |
 
-**部分闭**:普查行 86、179(基准半闭,issues:write token 半边仍开,见第 4.5 节)、74、88(rbac 自身基准已落地,千级树压测仍缺,见 8.6)、141(pki PostgreSQL 腿已入 full-check 集成矩阵(`a93af455`),覆盖边界记录于 `2f760d14`,加宽覆盖仍开,见 8.6)、197(账户字段编辑半已闭——language/timezone 偏好面与 PATCH 端点随 66c01f60、3d730820 落地;change-password 半仍开)。
+**部分闭**:普查行 86、179(基准半闭,issues:write token 半边仍开,见第 4.5 节)、74、88(rbac 自身基准已落地,千级树压测仍缺,见 8.6)、141(pki PostgreSQL 腿已入集成矩阵(`a93af455`),覆盖边界记录于 `2f760d14`,加宽覆盖仍开,见 8.6)、197(账户字段编辑半已闭——language/timezone 偏好面与 PATCH 端点随 66c01f60、3d730820 落地;change-password 半仍开)。
 
 **维护规则**:任何行落地(实现、裁决、文本改述)后,把该行移入本章并记 sha 与闭因;本章行只增不减,直至调度记录使命结束。新 deferral 由审查产出直接补入对应类别表。
 
@@ -404,7 +404,7 @@ TEXT 判定=注释/文档措辞改述候选(流程词、未来承诺句、里程
 | 6 | `go/authn/unittest/standalone_build_test.go` | 注释中 "replace lines get deleted entirely once every module has its first tag" 为对未来锁步发布流程的承诺断言 | authn standalone_build_test "first tag" 承诺断言句已清;抽查已核 |
 | 7 | `go/dbkit/repository.go` | Restore 不强制保留窗口 — 配置属 compliance 侧且尚不存在(原 deferred-scope 改写) | dbkit repository.go "(deferred scope)" 标签已清;抽查已核 |
 | 16 | `go/billing/AGENTS.md` | 第58行 'a caller (business code today; a live webhook endpoint eventually)' 的 'eventually' 属 C 类未来承诺,未清理(同文件其余未来承诺均已转'not implemented/deliberately not shipped'措辞) | billing AGENTS 指名 "a later round's ... endpoint eventually" 句已清(现文为现状段落);抽查已核 |
-| 19 | `.github/workflows/nightly.yml` | stub guard echo "Wire the full matrix + benchmark + flaky-detection legs once full-check is live and the first benchmarks exist" | nightly.yml guard echo 已与头注同步更新(full-check 半解锁、benchmark 落地);抽查已核 |
+| 19 | CI 工作流(不再在仓内) | 定时回归腿的 stub guard 文本以计划时态描述全量矩阵、benchmark 与 flaky 检测 | guard 文本已与头注同步更新(全量矩阵半解锁、benchmark 落地);抽查已核 |
 | 20 | `go/pki/module.go` | CA/证书有效期 config 键未接入发放决策 | pki module.go 配置键注释已为 "declare-but-do-not-read discipline" 现状纪律表述;抽查已核 |
 | 22 | `go/sharing/AGENTS.md` | 35 行 if a policy-driven, host-configurable share password writer ever matters, that is this module's own future work(...) | sharing AGENTS 条件式句已按规范改写+就地指针;仅余润色空间 |
 | 23 | `go/ai-gateway/image_job_store.go` | 代码注释内 Accepted residual risk:pending 卡死需 operator 手删行、崩溃窗口 | image_job_store "Accepted residual risk" 小节=现状接受式风险陈述;如需收紧属润色 |
@@ -435,17 +435,17 @@ TEXT 判定=注释/文档措辞改述候选(流程词、未来承诺句、里程
 | 60 | `docs/internal/03-deployment-modes.md` | saasctl 生成项目模板未 blank-import exporter/prometheus | docs/03 exporter 已按现状重述(生成模板 blank-import 缺口记录于 observability AGENTS);抽查已核 |
 | 61 | `CLAUDE.md` | notification: pkgcore 级 SMS 模块 | 原前提已随普查行 61 闭合而变:SMS 模块已升格 pkgcore(44d02dbf/b5cc4f4b/b7954842),CLAUDE.md 相应措辞已改写为共享模块现文(pkgcore/authn/notification 三条目+notification 延付清单去项) |
 | 62 | `CLAUDE.md` | Trivy 每 PR 容器镜像扫描 | CLAUDE.md Trivy DEFERRED 条目已随 docker-image 轮更新为具体缺前置的现文 |
-| 63 | `.github/workflows/docs-check.yml` | docs/ 整树 markdown 链接检查未做 | docs-check 整树链接检查=记于 workflow 的刻意决定(DELIBERATELY NOT WIRED) |
+| 63 | CI 工作流(不再在仓内) | docs/ 整树 markdown 链接检查未做 | 整树链接检查是记录在案的刻意不接线决定 |
 | 64 | `go/integration/AGENTS.md` | Deliberately not in scope 表 + Known limitations 段(8 条)在轮次史改写中保留的 deferral 记录(无手动重投、无 API-key expiry sweep、Rotate 非原子、Payload 冻结、无每租户量限等) | integration 范围表+Known limitations 保持最新(两条已标 DISCHARGED) |
 | 65 | `go/compliance/AGENTS.md` | 「Not here \| Why」表:哈希链/归档/HTTP 面/subject-scoped export/报告 reader 未实现(时间分区归档附注 'simply not shipped') | compliance Not-here 表每条带明确现状标注 |
 | 66 | `go/compliance/export.go` | 24h 窗口旁 '(see ExportDelivery)':export 送达通知未实现,已从'later round's job'改写为现状 | export.go 已为现状表述(24h 窗口+送达通知缺失一致);无 later round 措辞 |
 | 67 | `go/pkgcore/AGENTS.md` | broker 后端(eventbus/redis\|nats\|postgres)同实例本地 fan-out 的 panic 防护不延伸(原 future-work 改写为 deliberately-not-extended) | pkgcore broker 本地 fan-out panic 防护已实际落地(31246d14)+AGENTS 记录闭合(19a4456b/33b70db5) |
 | 71 | `CLAUDE.md` | census 自指措辞 4 处(行 8×2 "this census's `go/dbkit` entry records" 与 "this census's `go/dbkit` entry has the detail";行 11 "the auth-ui census entry below";行 13 "the auth-ui census defers to this shell";原记行 12/14 锚已校为行 11/13) | 4 处实测均在(抽查已核);按"可改可留"全部保留并记因——四句均为 census 条目间互指(指向 go/dbkit、auth-ui 条目),属导航措辞而非流程措辞;原记引语 "The census closes with…" 经 CLAUDE.md 全史检索不存在,已从记录删除 |
 | 24 | `go/storage/api/openapi.yaml` | 22 行 "Merging this fragment into an application-wide build/openapi/speed.yaml stays future work until the merge tooling lands"(已被现状取代) | 闭:d9fbb527 随片段并入合并文档改写为现状(future-work 句由 merge 成员段落取代;另见第 9 章普查行 153 同批闭) |
-| 30 | `.github/workflows/release.yml` | Report 步 echo "Real publishing is scheduled for the v1.0 release at M4, by design of this M0 round"(运行时文本保留 M0/M4 承诺;job name 的 "(M0)" 反而删了,不一致) | 闭:00e24732(2026-09-10)随 v0.0.1 发布机制改写——Report 步与头注现述验证+发布现状(M0/M4 承诺句已删);由 10.3 移档于此 |
+| 30 | CI 工作流(不再在仓内) | Report 步的运行时文本保留 M0/M4 承诺,与已删的 job 名不一致 | 闭:00e24732(2026-09-10)随 v0.0.1 发布机制改写——Report 步与头注现述验证+发布现状(M0/M4 承诺句已删);由 10.3 移档于此 |
 | 70 | `web/packages/api-client/README.md` | 286 行表格 "(no spec fragment exists yet)" — "yet" 残余(低信号;config-fetcher.ts 同义句已改),未改未声明(已被现状取代) | 闭:ba3ddb76 README 表格行改述为现状——两个路径常量与 go/config 的 OpenAPI 片段同步(片段生成 `@speed/api-sdk` 的 `useConfigGetPublicConfig`/`useConfigGetSystemFeatures`);api-client 包内该句无残留;由 10.3 移档于此 |
-| 12 | `.github/workflows/e2e.yml` | stub guard 文本与头部 PURPOSE 以计划时态描述未实现套件 | 闭:e5ec05b9(2026-09-11)真实流水线改写——guard stub 移除,PURPOSE 与 WHAT EXISTS 现述既有套件;由 10.3 移档于此 |
-| 31 | `.github/workflows/reusable-docker-build.yml` | header deferral 指针 "not wired (release.yml's own header)" 与 "trivy image scanning (security.yml's own DEFERRED note)" | 闭:e5ec05b9(2026-09-11)"those three stay gated stubs" 句改写为 e2e/release 真实运行、nightly 单独 gated stub 的现文;由 10.3 移档于此 |
+| 12 | CI 工作流(不再在仓内) | stub guard 文本与头部 PURPOSE 以计划时态描述未实现套件 | 闭:e5ec05b9(2026-09-11)改写为真实运行——guard stub 移除,现述既有套件;由 10.3 移档于此 |
+| 31 | CI 工作流(不再在仓内) | header 的两条 deferral 指针(发布未接线、trivy 镜像扫描) | 闭:e5ec05b9(2026-09-11)"三者均为 gated stub"句改写为 e2e 与发布真实运行、定时回归腿单独 gated stub 的现文;由 10.3 移档于此 |
 | 11 | `docs/internal/12-frontend.md` | reference-app 浏览器自动化(Playwright/e2e)腿的 deferral 记录形态过时 | docs/12 157/159 行的 html-runner M4 表述已改写为现状——伺服页面与驱动自动化分列陈述,与 15/19/21 号文口径一致;由 10.3 移档于此 |
 
 ### 10.2 台账缓办(L,9 项)
@@ -475,6 +475,6 @@ TEXT 判定=注释/文档措辞改述候选(流程词、未来承诺句、里程
 | 27 | `go/admin/export_test.go` | 测试失败消息字符串保留过程措辞("on the unfixed code…" 等) | 测试失败消息字符串判为边界合法;残余=把字符串/注释边界判断写进规范文档(13 章) |
 | 28 | `web/packages/i18n/src/create.test.ts` | it() 标题含 "(M1 extension point)" 里程碑代号,未改未声明 | create.test.ts(非 .tsx)96 行 "(M1 extension point)" 标题仍在;抽查已核 |
 | 29 | `examples/reference-app/web/src/test-utils/matchMedia.ts` | 行 18 'recorded DEFERRED, as in real-client.ts' — 同族 deferral 语句 | matchMedia.ts:18 "recorded DEFERRED, as in real-client.ts" 仍在;抽查已核(需与 18 两处同步) |
-| 40 | `.github/workflows/fast-check.yml` | react-hooks ESLint 插件不存在 | fast-check 头注 react-hooks "无阻塞声明"前提已过时,声明在配置头内 |
+| 40 | CI 工作流(不再在仓内) | react-hooks ESLint 插件不存在 | 头注的 react-hooks"无阻塞声明"前提已过时,声明在配置头内 |
 | 42 | `web/packages/auth-core/AGENTS.md` | 整文件未清理:两条 C 类 deferral 语句残留 | auth-core AGENTS:171 "Planned for a later round." 仍在;抽查已核 |
 | 68 | `web/packages/tenancy-ui/AGENTS.md` | 整文件未清理:'needs a round of its own' 轮次语句与 docs/internal/12-frontend.md 出处引用 | tenancy-ui AGENTS:18 "needs a round of its own" 仍在;抽查已核 |

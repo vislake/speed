@@ -25,8 +25,8 @@ What counts as a changed module
     directory covers (a scaffolded module not yet registered, a stray
     file) maps to ALL modules, the safe direction: scope is computed to
     over-run, never to skip something that might be affected.
-  * Everything else -- tools/, web/, docs/, .github/, Taskfile.yml and
-    other root files -- maps to no Go module.
+  * Everything else -- tools/, web/, docs/, Taskfile.yml and other
+    root files -- maps to no Go module.
 
 Downstream closure
 
@@ -160,8 +160,8 @@ def paths_to_modules(
             # go.work yet, or a stray file. Scope to everything rather
             # than risk skipping the very module being scaffolded.
             affected.add("ALL")
-        # Anything else (tools/, web/, docs/, .github/, root files)
-        # maps to no Go module.
+        # Anything else (tools/, web/, docs/, root files) maps to no
+        # Go module.
 
     if "ALL" in affected or not affected:
         return {"ALL"}

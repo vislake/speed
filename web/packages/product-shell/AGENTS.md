@@ -314,9 +314,8 @@ bind one explicitly before rendering.
   view machine over the real session and client composition, and
   the server serves the production build from disk under `APP_WEB_DIST`.
   Browser automation drives that composition from the host's side: the
-  app's e2e suite (`examples/reference-app/web/e2e`, run by
-  `.github/workflows/e2e.yml` on dispatch, daily and every push to
-  main) drives the composed app in a real browser against a real,
+  app's e2e suite (`examples/reference-app/web/e2e`)
+  drives the composed app in a real browser against a real,
   freshly booted server — the default and `@budget` tiers over the
   dev-server page, and the `@deployment` gates
   (`deployment-serves-the-app.spec.ts` among them) against a deployed,

@@ -1,29 +1,20 @@
 # Toolchain versions for local development, pinned by mise (https://mise.jdx.dev).
 #
-# Every version here MIRRORS an authoritative source elsewhere in the
-# repository: CI cannot read this file (actions/setup-go's go-version-file
-# resolves go.mod / go.work / go.sum / .go-version only, and setup-node
-# reads web/.nvmrc), so CI keeps reading the sources and .mise.toml exists
-# for `mise install` (the Taskfile setup task's toolchain leg). Two files
-# that both state a version drift unless something checks them, which is
-# why tools/check_toolchain.py -- wired into fast-check's repo-checks job,
-# every pull request -- fails when a mirror no longer equals its source.
-# Bump the authoritative source and this file together. Sources, one per
-# tool:
+# Some versions here MIRROR an authoritative source elsewhere in the
+# repository, because the tool that consumes them reads that source and not
+# this file; .mise.toml exists for `mise install` (the Taskfile setup task's
+# toolchain leg). Two files that both state a version drift unless something
+# checks them, which is why tools/check_toolchain.py fails when a mirror no
+# longer equals its source. Bump the authoritative source and this file
+# together. Mirrored tools, with their sources:
 #   task          the Taskfile.yml header comment -- "task 3.53.1 (the
 #                 version verified against this file)" -- the one tool
 #                 whose only pin lives there
-#   go            go.work's `go` directive, which actions/setup-go reads
-#                 (.github/actions/setup-go-env/action.yml)
-#   node          web/.nvmrc, which the shared setup-node-env action reads
+#   go            go.work's `go` directive
+#   node          web/.nvmrc
 #   pnpm          web/package.json's packageManager field
-#   golangci-lint GOLANGCI_VERSION in
-#                 .github/actions/setup-go-env/action.yml
-#   hugo          HUGO_VERSION in
-#                 .github/actions/setup-hugo-env/action.yml -- the shared
-#                 composite action docs-site-deploy.yml and docs-check.yml
-#                 both call, mirrored here the same way every other tool's
-#                 CI-side pin is mirrored
+# The remaining tools are pinned here and nowhere else, so they have no
+# mirror to drift from and the gate does not check them.
 
 [tools]
 # Mirror of the Taskfile.yml header's task pin.
@@ -34,7 +25,7 @@ go = "1.26.8"
 node = "24"
 # Mirror of web/package.json's packageManager (the version after "pnpm@").
 pnpm = "11.1.2"
-# Mirror of GOLANGCI_VERSION in .github/actions/setup-go-env/action.yml.
+# Pinned here only; .golangci.yml carries the configuration, not the version.
 golangci-lint = "2.11.4"
-# Mirror of HUGO_VERSION in .github/actions/setup-hugo-env/action.yml.
+# Pinned here only; the docs site build takes the version from this file.
 hugo = "0.165.0"

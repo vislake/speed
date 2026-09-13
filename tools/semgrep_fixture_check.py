@@ -41,11 +41,10 @@ same-rule expectations are meaningful.
 Usage:
   python3 tools/semgrep_fixture_check.py [SEMGREP_BIN]
 
-SEMGREP_BIN defaults to "semgrep" on PATH. fast-check's repo-checks job
-passes the venv-installed binary from its throwaway pip install; local
-runs pass the pinned returntocorp/semgrep docker image through a shim.
-The scan of the real tree itself (go/ examples/ tools/, fixtures
-excluded) is the separate step in the same repo-checks job.
+SEMGREP_BIN defaults to "semgrep" on PATH; local runs pass the pinned
+returntocorp/semgrep docker image through a shim. The scan of the real
+tree itself (go/ examples/ tools/, fixtures excluded) is a separate
+run of semgrep over the ruleset.
 
 Exit codes: 0 every rule fired on its fixture and stayed clean on its
 negative; 1 at least one expectation failed; 2 usage error.

@@ -12,11 +12,8 @@ version: '3'
 # The commands are either implemented honestly or present as an explicit
 # "not implemented yet" stub that exits non-zero; nothing here promises
 # behaviour the repository cannot yet deliver. The discipline checkers in
-# tools/ are intentionally wired into no task: the CI workflows run them
-# directly, exactly as tools/README.md documents (tools/scan_cjk.py and
-# tools/check_repo_isolation.py in fast-check's repo-checks job,
-# tools/check_i18n_keys.py in the docs-check pipeline, which fires on
-# doc/i18n-touching PRs).
+# tools/ are intentionally wired into no task: they are run directly,
+# exactly as tools/README.md documents.
 #
 # NOTE ON RUNNING IN ANOTHER DIRECTORY
 # Commands that must run from a module directory rather than the workspace
@@ -38,15 +35,12 @@ vars:
   # Modules with a Docker-backed integration tier under integration_test/
   # (go test -tags=integration ./... from the module directory): one entry
   # per go/ module whose tree carries a //go:build integration test file.
-  # full-check.yml's integration-tiers header carries the per-module
-  # detail (which services each leg needs). The reference app also carries
+  # Each module's own AGENTS.md carries the per-module detail (which
+  # services each leg needs). The reference app also carries
   # a tier -- its own APP_DIR leg of test:full, below, since it lives
   # outside go/. go/saasctl carries a tier too but deliberately has no
-  # entry: it materializes and boots a whole generated project, running in
-  # scaffold-verify.yml instead. tools/check_integration_tiers.py derives
-  # the set from the tree and gates this list and full-check.yml's
-  # integration-tiers matrix against it, so a module shipping a tier
-  # cannot silently drop out of test:full.
+  # entry: it materializes and boots a whole generated project, and is
+  # run on its own.
   INTEGRATION_DIRS: go/dbkit go/tenancy go/jobs go/pkgcore go/config go/rbac go/org go/authn go/storage go/notification go/integration go/metering go/billing go/pki go/sharing
 
 tasks:
@@ -61,7 +55,7 @@ tasks:
     # Setup does toolchain installation (mise) and Go workspace sync. The
     # root .mise.toml pins task/go/node/pnpm/golangci-lint, each version
     # mirroring an authoritative source (go.work, web/.nvmrc,
-    # web/package.json, the Taskfile header, setup-go-env's GOLANGCI_VERSION),
+    # web/package.json, the Taskfile header),
     # and the first leg below runs `mise install` against it. The leg warns
     # and continues when mise is not on PATH rather than failing, because the
     # underlying commands stay directly runnable: `mise install` from the
@@ -149,8 +143,7 @@ tasks:
       # MultiReplicaSafe implementation composing into a STANDALONE
       # topology, the proof that implementation composition is orthogonal
       # to deployment mode. Kept out of {{.INTEGRATION_DIRS}} because that
-      # list enumerates modules under go/ (see its comment above);
-      # full-check.yml mirrors this leg in the reference-app job.
+      # list enumerates modules under go/ (see its comment above).
       - cd "{{.APP_DIR}}" && go test -race -tags=integration ./...
       - |
         for d in {{.INTEGRATION_DIRS}}; do
@@ -165,9 +158,7 @@ tasks:
     # and gets its own dir-scoped vet.
     #
     # golangci-lint is the project standard (.golangci.yml at the repo
-    # root, v2 schema) and CI enforces
-    # it on every pull request (the reusable go-module-ci workflow's
-    # golangci-lint leg; the reference app lints in full-check). It cannot run
+    # root, v2 schema), run per module directory. It cannot run
     # from the workspace root, though: with go.work in effect, golangci-lint
     # v2 effectively lints nothing there (logs "typechecking error ...
     # directory prefix . does not contain modules listed in go.work", reports
@@ -188,12 +179,11 @@ tasks:
           done
         else
           echo "warning: golangci-lint is not on PATH, so the golangci legs above were"
-          echo "         skipped -- CI runs them on every pull request, so a local run that"
-          echo "         skips them can be green while the PR fails. Install version 2.11.4,"
-          echo "         the version CI pins (.github/actions/setup-go-env/action.yml), from"
-          echo "         the release tarball at github.com/golangci/golangci-lint and re-run;"
-          echo "         note that 'brew install golangci-lint' pins no version and verifies"
-          echo "         no checksum, so it can disagree with CI. With mise on PATH,"
+          echo "         skipped -- a local run that skips them is not a clean run."
+          echo "         Install version 2.11.4, the version the root .mise.toml pins,"
+          echo "         from the release tarball at github.com/golangci/golangci-lint"
+          echo "         and re-run; note that 'brew install golangci-lint' pins no"
+          echo "         version and verifies no checksum. With mise on PATH,"
           echo "         'task setup' installs the pinned toolchain from the root .mise.toml"
           echo "         (golangci-lint included; tools/check_toolchain.py keeps the mirrors"
           echo "         honest in CI -- docs/internal/19-dev-workflow.md)."
@@ -203,8 +193,8 @@ tasks:
         # web/ is a separate pnpm workspace (not part of go.work), and the
         # @speed/* packages plus the reference app's web host
         # (examples/reference-app/web, wired in as an external member of
-        # web/pnpm-workspace.yaml) all carry their own lint script; CI
-        # enforces it per-package in the reusable npm-package-ci workflow.
+        # web/pnpm-workspace.yaml) all carry their own lint script, run
+        # once per package.
         # Guarded exactly like the golangci-lint loop above: warn and skip
         # rather than hard-fail when pnpm is not on PATH, so a bare
         # `task lint` still gets as far as it can on a machine that never
@@ -214,10 +204,9 @@ tasks:
           (cd web && pnpm -r lint) || exit 1
         else
           echo "warning: pnpm is not on PATH, so the frontend lint leg above was"
-          echo "         skipped -- CI runs it on every pull request (the reusable"
-          echo "         npm-package-ci workflow's lint leg, once per web package and"
-          echo "         for the reference app's web host), so a local run that skips"
-          echo "         it can be green while the PR fails. With mise on PATH, 'task"
+          echo "         skipped -- the lint leg runs once per web package and for"
+          echo "         the reference app's web host, so a local run that skips"
+          echo "         it is not a clean run. With mise on PATH, 'task"
           echo "         setup' installs the pinned Node/pnpm versions (web/.nvmrc,"
           echo "         web/package.json's packageManager field are the single version"
           echo "         sources) from the root .mise.toml. Run it manually from web/:"
@@ -266,8 +255,7 @@ tasks:
     # below), never enumerated here, so a fragment registered in that
     # manifest regenerates with no Taskfile edit. Each generated
     # ServerInterface's growth is what makes an un-updated handler stop
-    # compiling (the compile-time assertions live in the handlers, listed
-    # in .github/workflows/api-contract.yml's own header). The reference
+    # compiling (the compile-time assertions live in the handlers). The reference
     # app's own notes, cases and smilesim fragments are not here: the
     # app owns those three backend surfaces, and task api:gen:app
     # regenerates them alongside the app-owned merged document and SDK.
@@ -295,19 +283,16 @@ tasks:
     # independent of the merge. Breaking-change detection (oasdiff) is
     # not wired: it needs a released baseline to diff against.
     #
-    # Keep the commands in lockstep with
-    # .github/workflows/api-contract.yml's regeneration steps: both
-    # sides now derive the fragment universe from the same manifest,
+    # Every leg derives the fragment universe from the same manifest,
     # and the commands stay the same go run over the same backend
     # directories and the same pnpm dlx orval + fixup pair from web/.
-    # That workflow's porcelain gate
-    # fails any PR whose spec change was not committed with its
+    # A porcelain comparison after regeneration
+    # catches any spec change not committed with its
     # regenerated artifact.
     vars:
       # The fragment universe this task regenerates comes from
       # tools/api_fragments.json -- the single machine-readable source of
-      # truth the api-contract.yml regeneration matrix derives from too
-      # (tools/check_api_fragments.py holds that workflow to it) -- so a
+      # truth every regeneration leg derives from -- so a
       # fragment joins this leg by joining the manifest, never by a
       # Taskfile edit. tools/api_fragment_matrix.py is the manifest's own
       # reader; the second python turns its one-line JSON array into the
@@ -358,8 +343,7 @@ tasks:
     # rewrites title and description to the application level -- without
     # it the merged document, and the generated SDK's "Source:" header,
     # would carry authn's title and a description claiming the merge is
-    # still future work. Keep the commands here in lockstep with
-    # .github/workflows/api-contract.yml's merge steps.
+    # still future work.
     vars:
       # The join input list derives from tools/api_fragments.json in its
       # own order -- the same manifest api:gen's FRAGMENT_API_DIRS reads,
@@ -381,10 +365,9 @@ tasks:
       # merged document, so the committed site copy must track it. The
       # site copy is a plain file copy of the merge output (the
       # reference page /docs/user-guide/api-reference/ loads it with
-      # Redoc); api-contract.yml's merge leg runs the same copy, and
-      # its porcelain gate covers the copy, so a fragment change not
-      # committed with the refreshed site copy fails there -- the same
-      # lockstep as every generated artifact in this pipeline.
+      # Redoc); the porcelain comparison covers the copy, so a fragment
+      # change not committed with the refreshed site copy is caught
+      # there -- the same lockstep as every generated artifact here.
       - cp contracts/speed.yaml docs/site/static/apidocs/speed.yaml
 
   api:gen:app:
@@ -416,9 +399,9 @@ tasks:
     #      entry and binding.
     #
     # The generated SDK entry (examples/reference-app/web/src/app-api/
-    # index.ts) is committed and consistency-gated by the porcelain gate
-    # of full-check.yml's reference-app job, which runs these same
-    # commands -- keep the two in lockstep. The app web host imports
+    # index.ts) is committed and consistency-gated by a porcelain
+    # comparison after running these same
+    # commands. The app web host imports
     # this app-local SDK for its own operations, and the platform
     # @speed/api-sdk for platform operations, both riding the same
     # @speed/api-sdk/runtime binding (the app SDK's binding re-exports
@@ -458,8 +441,8 @@ tasks:
     # .mise.toml's `hugo` entry; `mise install` by way of the setup
     # task's toolchain leg) and the theme submodule checked out
     # (`git submodule update --init` if it is not already). The
-    # structural check keeping the built output honest in CI is
-    # tools/check_docs_site.py (docs-check pipeline), which builds the
+    # structural check keeping the built output honest is
+    # tools/check_docs_site.py, which builds the
     # site and checks docs/site/public/, not the Markdown source tree.
     # The underlying command is directly runnable without the task CLI:
     #   hugo server --minify --source docs/site
@@ -535,9 +518,8 @@ tasks:
     # when the plan is consistent; nothing is tagged, written or
     # published. Pass the version as a CLI var:
     #   task release:plan VERSION=v1.2.0
-    # .github/workflows/release.yml runs this same verification on its
-    # version input, and its publish job carries the real release (tag
-    # pushes and the npm publish to GitHub Packages).
+    # A real release runs this same verification first, then carries out
+    # the tag pushes and the npm publish to GitHub Packages.
     cmds:
       # Quoted for the same reason as new:module: a malformed VERSION reaches
       # the script whole and fails there with its own message (exit 2).
@@ -545,11 +527,10 @@ tasks:
 
   docker:build:
     desc: Build the reference app's Docker image locally (examples/reference-app/Dockerfile) and load it into the local Docker daemon.
-    # Local-build convenience mirroring the single-platform (native-arch),
-    # --load leg .github/workflows/reusable-docker-build.yml runs in CI
-    # for its smoke test -- minus the registry push and the
+    # Local-build convenience: the single-platform (native-arch), --load
+    # build -- minus the registry push and the
     # cross-architecture manifest combination, which produce nothing a
-    # local Docker daemon needs (see that workflow's own header). The
+    # local Docker daemon needs. The
     # build context MUST be the repository root,
     # not examples/reference-app/ -- see the Dockerfile's own header for
     # why (its go.mod's replace directives reach every sibling go/*

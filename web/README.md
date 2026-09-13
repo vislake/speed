@@ -18,17 +18,17 @@ root:
 - Nothing Go-side ever needs to resolve an npm package, and nothing npm-side
   ever needs a Go module. Two roots, one repo, zero overlap.
 
-CI treats the boundary the same way: Go checks run from module directories,
-npm checks run from `web/` (see `.github/workflows/reusable-npm-package-ci.yml`).
+Tooling treats the boundary the same way: Go checks run from module
+directories, npm checks run from `web/`.
 
-## Node and pnpm versions: single sources, identical locally and in CI
+## Node and pnpm versions: single sources
 
 | What | Single source of truth | Consumers |
 |---|---|---|
-| Node version | `web/.nvmrc` (content: `24`) | `setup-node`'s `node-version-file` input in `.github/actions/setup-node-env`; local `nvm`/`mise` if you use one |
-| pnpm version | `"packageManager": "pnpm@11.1.2"` in `web/package.json` | CI parses it and installs exactly that version; local `corepack` can do the same |
+| Node version | `web/.nvmrc` (content: `24`) | any `node-version-file` consumer; local `nvm`/`mise` if you use one |
+| pnpm version | `"packageManager": "pnpm@11.1.2"` in `web/package.json` | `corepack` installs exactly that version |
 
-The Node major is pinned to 24 because that is what CI runners provide;
+The Node major is pinned to 24;
 `web/package.json`'s `engines` accepts `>=24` so local development on newer
 Node (e.g. 26) keeps working. Never add a second version source; when either
 version moves, update the source row above and the CI action stays in sync

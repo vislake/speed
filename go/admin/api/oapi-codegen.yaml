@@ -7,13 +7,12 @@
 # admin-specific.
 #
 # The module's generated surface is regenerated with oapi-codegen v2.8.0,
-# pinned at exactly that version in the two commands that must move
-# together: Taskfile.yml's api:gen task command and
-# .github/workflows/api-contract.yml's admin regeneration step -- both run
+# pinned at exactly that version in the command that regenerates it:
+# Taskfile.yml's api:gen task command, which runs
 # `go run .../cmd/oapi-codegen@v2.8.0 -config oapi-codegen.yaml
 # openapi.yaml` from this directory. The generated file's header records
 # the generator version, so a regeneration with a different tool version
-# shows up as drift in CI's regenerate-then-diff check.
+# shows up as drift in the regenerate-then-compare check.
 #
 # generate.std-http-server emits the pure net/http ServerInterface --
 # plain (w http.ResponseWriter, r *http.Request) method signatures --

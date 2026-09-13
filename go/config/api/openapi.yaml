@@ -10,8 +10,7 @@ info:
     (config_<verb><Resource>) and schema-name (Config<Type>) naming
     conventions of the repository's OpenAPI fragments. task api:gen
     regenerates config-server.gen.go (in this directory) from this file,
-    with oapi-codegen pinned at v2.8.0 -- see oapi-codegen.yaml and
-    .github/workflows/api-contract.yml.
+    with oapi-codegen pinned at v2.8.0 -- see oapi-codegen.yaml.
 
     Both operations are deliberately unauthenticated: config.PathPublic and
     config.PathSystemFeatures are a login page's dependency -- the brand

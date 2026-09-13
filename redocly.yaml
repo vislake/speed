@@ -1,6 +1,6 @@
 # Lint config for the merged, multi-module OpenAPI document
-# (contracts/speed.yaml), produced by `task api:merge` /
-# .github/workflows/api-contract.yml from every module's own api/openapi.yaml
+# (contracts/speed.yaml), produced by `task api:merge`
+# from every module's own api/openapi.yaml
 # fragment (docs/internal/21-api-contract.md's "spec organization and
 # merging" section). Each
 # fragment still generates its backend/frontend artifacts independently
@@ -14,8 +14,8 @@
 # Pinned at @redocly/cli 2.51.1 (`pnpm --package=@redocly/cli@2.51.1 dlx
 # redocly ...`), the same pinning discipline as oapi-codegen (v2.8.0) and
 # orval (8.17.0) elsewhere in this repository -- see Taskfile.yml's api:gen
-# and api:merge tasks and .github/workflows/api-contract.yml, which must
-# stay in lockstep with the version pinned here and with each other.
+# and api:merge tasks, which must
+# stay in lockstep with the version pinned here.
 #
 # `extends: minimal` rather than `recommended`: the recommended preset's
 # `security-defined` and `no-empty-servers` rules are real documentation
