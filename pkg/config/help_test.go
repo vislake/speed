@@ -206,3 +206,37 @@ func helpLineFor(t *testing.T, out, argument string) string {
 	t.Fatalf("the help output has no line for %s:\n%s", argument, out)
 	return ""
 }
+
+// booleanHelpOptions carries the two boolean shapes the help output has to
+// render the same way: a plain one, and one behind a pointer.
+type booleanHelpOptions struct {
+	Verbose bool
+	Trace   *bool
+}
+
+func booleanHelpManifest(t *testing.T) *manifest {
+	t.Helper()
+	var defaults booleanHelpOptions
+	return collect(t, declaring("greeter", Schema{
+		Namespace: "greeter",
+		Mounts:    []Mount{{Value: &defaults}},
+		Items: map[string]Item{
+			"verbose": {Origins: OriginFlag, FlagName: "verbose", Description: "say more"},
+			"trace":   {Origins: OriginFlag, FlagName: "trace", Description: "record the calls"},
+		},
+	}))
+}
+
+// TestHelpGivesEitherBooleanNoPlaceholder pins that the help output looks
+// through the pointer exactly as the parser does. Rendering "--trace VALUE"
+// would advertise a spelling the parser refuses, and the two ends have to
+// agree or the documented command line is not the accepted one.
+func TestHelpGivesEitherBooleanNoPlaceholder(t *testing.T) {
+	out := renderedHelp(t, booleanHelpManifest(t))
+	for _, name := range []string{"--verbose", "--trace"} {
+		if line := helpLineFor(t, out, name); strings.Contains(line, "VALUE") {
+			t.Fatalf("the help output renders %s as %q, offering a value the parser does not "+
+				"take", name, line)
+		}
+	}
+}

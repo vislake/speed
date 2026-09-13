@@ -415,6 +415,20 @@ func classify(t reflect.Type) leafKind {
 	return kindScalar
 }
 
+// booleanLeaf reports whether a leaf takes its value the way a boolean does:
+// the argument may be written without one, and the word after it is never read
+// as its value. The pointer is looked through, because a scalar pointer is a
+// leaf of its own and *bool is the shape a module uses when "nobody set it"
+// has to be told from "set to false". Reading the next word for one of those
+// would swallow whatever follows the argument, and the help output would
+// advertise a value the parser refuses to take.
+func booleanLeaf(t reflect.Type) bool {
+	for t.Kind() == reflect.Pointer {
+		t = t.Elem()
+	}
+	return t.Kind() == reflect.Bool
+}
+
 // textUnmarshalerType is the interface a type uses to decode itself from a
 // string.
 var textUnmarshalerType = reflect.TypeFor[encoding.TextUnmarshaler]()

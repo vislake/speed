@@ -2,7 +2,6 @@ package config
 
 import (
 	"fmt"
-	"reflect"
 	"strconv"
 	"strings"
 	"unicode/utf8"
@@ -149,7 +148,7 @@ func acceptsFlag(item *manifestItem, written string) error {
 // giving it one is written with an equals sign, never as the next word, or
 // whether that word is the value or the next argument could not be told.
 func (p *parsedFlags) record(item *manifestItem, args []string, i *int, written, value string, hasValue bool) error {
-	if item.typ.Kind() == reflect.Bool && !hasValue {
+	if booleanLeaf(item.typ) && !hasValue {
 		p.values[item.path] = "true"
 		return nil
 	}

@@ -169,7 +169,7 @@ func placeholder(item *manifestItem) string {
 	if item.item.Placeholder != "" {
 		return item.item.Placeholder
 	}
-	if item.typ.Kind() == reflect.Bool {
+	if booleanLeaf(item.typ) {
 		return ""
 	}
 	return "VALUE"

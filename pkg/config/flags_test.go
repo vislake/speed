@@ -331,3 +331,63 @@ func TestFlagTypeMismatch(t *testing.T) {
 		t.Fatalf("the rejection reads %q, which does not name the path", err)
 	}
 }
+
+// pointerBoolOptions carries a boolean behind a pointer, the shape a module
+// uses when "nobody set it" has to be told from "set to false".
+type pointerBoolOptions struct {
+	Verbose *bool
+}
+
+func pointerBoolManifest(t *testing.T) *manifest {
+	t.Helper()
+	var defaults pointerBoolOptions
+	return collect(t, declaring("server", Schema{
+		Namespace: "server",
+		Mounts:    []Mount{{Value: &defaults}},
+		Items: map[string]Item{
+			"verbose": {Origins: OriginFlag, FlagName: "verbose", FlagShort: "v"},
+		},
+	}))
+}
+
+// TestPointerBoolFlagOmitsItsValue pins that the boolean rule looks through
+// the pointer. A *bool is a leaf like any other scalar pointer, and if the
+// parser read the next word as its value the argument would take one on the
+// command line while the help output and the declaration both call it a
+// boolean.
+func TestPointerBoolFlagOmitsItsValue(t *testing.T) {
+	m := pointerBoolManifest(t)
+	for _, args := range [][]string{{"--verbose"}, {"-v"}} {
+		if got := parse(t, m, args...).values["server.verbose"]; got != "true" {
+			t.Fatalf("%v gave %q, want true", args, got)
+		}
+	}
+	if got := parse(t, m, "--verbose=false").values["server.verbose"]; got != "false" {
+		t.Fatalf("--verbose=false gave %q, want false", got)
+	}
+
+	d := newData(m)
+	if err := d.applyFlags(m, parse(t, m, "--verbose")); err != nil {
+		t.Fatalf("applying the command line failed: %v", err)
+	}
+	var opts pointerBoolOptions
+	if err := (&reader{manifest: m, data: d}).Decode("server", &opts); err != nil {
+		t.Fatalf("decoding failed: %v", err)
+	}
+	if opts.Verbose == nil || !*opts.Verbose {
+		t.Fatalf("the field holds %v, want a pointer to true", opts.Verbose)
+	}
+}
+
+// TestPointerBoolFlagDoesNotSwallowTheNextArgument pins the consequence the
+// finding turns on: taking the next word as the value of a *bool would eat an
+// undeclared argument without a word, which is exactly the silent swallowing
+// the absent terminator is there to rule out.
+func TestPointerBoolFlagDoesNotSwallowTheNextArgument(t *testing.T) {
+	m := pointerBoolManifest(t)
+	err := parseRejects(t, m, "--verbose", "--nope")
+	if !errors.Is(err, ErrUnknownKey) {
+		t.Fatalf("--verbose --nope returned %v, want ErrUnknownKey for --nope: the boolean "+
+			"takes no value, so the argument after it is read as an argument", err)
+	}
+}
