@@ -233,7 +233,7 @@ type ImpersonationGrant struct {
 
 沿用各模块的既有模式：`go/admin/api/openapi.yaml` 是 admin 自己的 spec 片段，pinned oapi-codegen 生成 `admin-server.gen.go`，`Handler` 背后有 `var _ api.ServerInterface` 编译期断言。所有路由都要求 `rbac.RequirePermission(..., domain=system)` 且**不**走常规的 `tenancy.Middleware` 租户解析——这些是平台运营对"跨租户"这件事本身的操作，请求本身没有单一租户可言（除非落到模拟登录场景，见第 4 节）：
 
-> `admin` 的 spec 片段在 `task api:gen` 的再生成覆盖范围内（片段清单以 `tools/api_fragments.json` 为单一来源）。`Handler` 编译期实现的接口一致性由 reference-app（import `go/admin`）的 `go build` 兜底，与这条专门的 spec-vs-生成产物闸门共同把关。
+> `admin` 的 spec 片段在 `task api:gen` 的再生成覆盖范围内（片段清单以 `tools/api_fragments.json` 为单一来源，`tools/check_api_fragments.py` 做清单与树的漂移闸门）。`Handler` 编译期实现的接口一致性由 reference-app（import `go/admin`）的 `go build` 兜底，与这条专门的 spec-vs-生成产物闸门共同把关。
 
 | 方法 | 路径 | 对应决策 |
 |---|---|---|

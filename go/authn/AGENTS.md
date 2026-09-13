@@ -199,7 +199,7 @@ plus two rules that apply to `repository.go` specifically:
 
 * **No `.Table`, `.Model` or `.Raw`.** Nothing here needs them: every conditional
   update passes its target struct to `Updates`, from which GORM parses the same
-  schema `.Model` would have named. A semgrep rule in repo-checks watches these
+  schema `.Model` would have named. A semgrep rule watches these
   three entry points.
 * **No hand-written `WHERE tenant_id = ?`.** There is no such column to filter on,
   and writing one would mean the model was put in the wrong data domain.

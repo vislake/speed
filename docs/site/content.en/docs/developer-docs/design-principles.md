@@ -17,14 +17,14 @@ records what each pipeline runs today.
 
 ```mermaid
 flowchart LR
-    C[Change] --> S[Static rules in repo-checks<br/>semgrep, isolation coverage]
+    C[Change] --> S[Static rules under tools/<br/>semgrep, isolation coverage]
     C --> U[Per-module unit tests under race]
     C --> A[Spec regeneration and compile gates]
     S --> R{Code review}
     U --> R
     A --> R
     R -->|merged to main| M[Main]
-    M --> F[Full-check Docker-backed tiers<br/>integration, reference app]
+    M --> F[Docker-backed tiers<br/>integration, reference app]
 ```
 
 ## Module boundaries
@@ -98,11 +98,11 @@ fragment, and the toolchain makes drift a compile error.
   reveal every handler to fix, implement, update the frontend, commit
   together. The generated server interface participates in
   compilation, so a spec change without an implementation change
-  cannot compile. CI-enforced: the api-contract pipeline regenerates
-  every fragment and fails when any committed artifact is not what
-  its spec generates — a porcelain check, since a regeneration that
-  *creates* a file would pass a diff gate silently — then builds the
-  reference app.
+  cannot compile. Regeneration is the single source: `task api:gen`
+  regenerates every fragment, and any committed artifact that is not
+  what its spec generates is the finding — compare with a porcelain
+  check, since a regeneration that *creates* a file would pass a diff
+  gate silently.
 - **The frontend never hand-writes backend calls.** `fetch` and
   `axios` live only inside `@speed/api-client`; application code uses
   the generated hooks of `@speed/api-sdk`. CI-enforced by the

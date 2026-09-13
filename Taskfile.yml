@@ -40,7 +40,9 @@ vars:
   # a tier -- its own APP_DIR leg of test:full, below, since it lives
   # outside go/. go/saasctl carries a tier too but deliberately has no
   # entry: it materializes and boots a whole generated project, and is
-  # run on its own.
+  # run on its own. tools/check_integration_tiers.py derives the set
+  # from the tree and gates this list against it, so a module shipping
+  # a tier cannot silently drop out of test:full.
   INTEGRATION_DIRS: go/dbkit go/tenancy go/jobs go/pkgcore go/config go/rbac go/org go/authn go/storage go/notification go/integration go/metering go/billing go/pki go/sharing
 
 tasks:
@@ -270,7 +272,7 @@ tasks:
     # web/scripts/orval-nodenext-fixup.mjs -- see that package's AGENTS.md
     # for the binding and the fixup's why. Every platform module with an HTTP
     # fragment belongs to the merged document and the generated SDK: the
-    # api-contract consistency gates pin the generated surface, which does
+    # generated surface is regenerated wholesale from the fragments and does
     # not rot from being uncalled, and whether a surface has an
     # in-workspace web consumer is a consumption-proof question, not a
     # merge-membership criterion (docs/internal/21-api-contract.md). The
@@ -320,9 +322,10 @@ tasks:
     # artifacts independently, but the MERGED document is a real release
     # artifact (contracts/speed.yaml, committed) joining the platform
     # fragments registered in tools/api_fragments.json -- the join input
-    # list below is derived from that manifest in its own order (the
-    # merge_rank order tools/check_api_fragments.py pins the workflow's
-    # join step to, and what the committed document's diff rests on). The
+    # list below is derived from that manifest in its own order, which is
+    # what the committed document's diff rests on
+    # (tools/check_api_fragments.py pins the derivation to the manifest,
+    # entry for entry and in manifest order). The
     # reference app's own notes, cases and smilesim fragments are not
     # members: they join the app's own merged document through task
     # api:gen:app below (the app-owned flow; docs/internal/

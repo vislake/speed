@@ -60,7 +60,7 @@ import sys
 RULES_REL = os.path.join("tools", "semgrep_rules")
 TESTDATA_REL = os.path.join(RULES_REL, "testdata")
 
-# The scanned real tree (mirrors the repo-checks semgrep invocation).
+# The scanned real tree (mirrors the real-tree semgrep invocation).
 SCAN_ROOTS = ("go", "examples", "tools")
 
 _CONST_SINGLE_RE = re.compile(r'\bconst\s+([A-Za-z_]\w*)\s*=\s*"([^"]*)"')
@@ -117,8 +117,7 @@ def live_env_reads(root):
     """The env-name literals the scanned real tree reads: union of
     env_literals_read over every non-test .go file under go/ examples/
     tools/, with tools/semgrep_rules/ and integration_test/ directories
-    pruned -- the same exclusion shape the repo-checks real-tree scan
-    applies."""
+    pruned -- the same exclusion shape the real-tree scan applies."""
     live = set()
     for scan_root in SCAN_ROOTS:
         scan_dir = os.path.join(root, scan_root)

@@ -58,7 +58,7 @@
 #     pin, the same loader-tag shape the reference-app bootstrap.go
 #     exemption covers) at bootstrap. The file carries the template's
 #     //go:build ignore compile-containment marker and materializes into
-#     consumer projects outside this tree, where repo-checks does not
+#     consumer projects outside this tree, where this rule does not
 #     scan it; the in-tree copy is the template, not library code.
 #   * go/saasctl/internal/template/project/selection/{authn,authn+org,
 #     authn+rbac,authn+org+rbac}/server.go -- the saasctl-distributed-mode

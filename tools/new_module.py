@@ -1277,7 +1277,9 @@ def registration_checklist(module_name: str, design_doc: str) -> list[str]:
         f"\"{GO_DIR_NAME}/{module_name}\"; the coverage gate reports 'has "
         "no baseline row' until the row lands), and if the module ships a "
         "Docker-backed integration tier (a //go:build integration test "
-        "file), add it to Taskfile.yml's INTEGRATION_DIRS.",
+        "file), add it to Taskfile.yml's INTEGRATION_DIRS -- "
+        "tools/check_integration_tiers.py gates that list against the "
+        "tree.",
         "  3. Lockstep release: the same go.work use entry is this "
         "module's release registration -- the release coordinator "
         "(tools/release/lockstep-release.py) derives the per-module tag "

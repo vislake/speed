@@ -19,8 +19,8 @@
  * eleven platform-module fragments -- admin, ai-gateway, authn, billing,
  * config, integration, notification, org, pki, sharing and storage: every
  * platform module with an HTTP fragment belongs to the merged document
- * and this generated surface, which the api-contract consistency gates
- * pin and which does not rot from being uncalled
+ * and this generated surface, which is regenerated wholesale from the
+ * fragments and does not rot from being uncalled
  * (docs/internal/21-api-contract.md's module-driven inclusion policy).
  * The reference app's own notes, cases and smilesim fragments are
  * deliberately not members -- the platform SDK covers the platform,

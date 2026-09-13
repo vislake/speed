@@ -12,12 +12,14 @@ for `tomllib`) that back the repository's cross-cutting disciplines and its rele
 | `check_repo_isolation.py` | Checker | Multi-tenant isolation discipline: every Repository type (a struct embedding `dbkit.Repository[T]`) is covered by `tenancytest.AssertIsolated` in its package's tests, or by the equivalent `Test<TypeName>_AssertIsolated` suite | 0 all covered / 1 uncovered repository / 2 error |
 | `check_toolchain.py` | Checker | Root `.mise.toml` tool versions mirror their authoritative sources (Taskfile.yml header, `go.work`, `web/.nvmrc`, `web/package.json`) | 0 all mirrors match / 1 drift / 2 error |
 | `check_docs_site.py` | Checker | `docs/site/` skeleton structure: required entry files present, internal links resolve inside the tree, offline preview serves (python3 stdlib HTTP server) | 0 clean / 1 violation / 2 error |
+| `check_api_fragments.py` | Checker | The backend-fragment enumeration self-consistent: `tools/api_fragments.json` is the single source of truth, and the tree (every api/ directory carrying `openapi.yaml` + `oapi-codegen.yaml`), the manifest's own well-formedness and the derivation every regeneration leg reads (`tools/api_fragment_matrix.py`) must all agree with it; the reference app's own fragments are listed under `app_owned` and belong to the app-owned generation leg instead. Planted-drift suite: `tools/test_check_api_fragments.py` | 0 clean / 1 drift / 2 error |
 | `check_spec_request_tenant_id.py` | Checker | 18-cicd discipline row "the API layer must not accept an externally supplied tenant_id": every backend OpenAPI fragment's requests (requestBody schema properties and parameters) are scanned for a `tenant_id` declaration, with authn's four pre-auth tenant-naming request schemas the one recorded exception (its spec header: a request for that tenant's first access token, never a grant); response schemas are not requests and prose that merely mentions tenant_id is not a property line | 0 clean / 1 finding / 2 error |
 | `check_migration_cross_module_fks.py` | Checker | 18-cicd discipline row "no cross-module database foreign keys": a `REFERENCES` target in a module's migration files must belong to that module, measured by where the target is CREATEd across every `migrations/` tree under go/ and examples/reference-app. STATUS: future guard -- the tree ships no REFERENCES clause at all today; the planted fixtures are the teeth | 0 clean / 1 finding / 2 error |
 | `check_migration_parity.py` | Checker | Dual-dialect migration parity: every shipped migration's `migrations/sqlite/<name>.sql` must have its `migrations/postgres/` sibling (and vice versa), the pair must be textually identical after comment removal, case folding, whitespace collapse and the declared column-type synonyms (BLOB/BYTEA, REAL/DOUBLE PRECISION, INTEGER/BIGINT), and every deliberate departure -- a dialect-only file, a dialect-only set (a backend that exists on one dialect only), a structurally divergent pair (SQLite's table-rebuild recipes, the audit append-only triggers) -- must be declared with its reason in `tools/migration_parity_exceptions.json`, where a stale entry fails too. Planted-drift suite: `tools/test_check_migration_parity.py` | 0 clean / 1 finding / 2 usage error |
 | `check_host_composition.py` | Checker | Shared host composition: the host-neutral kernel (the application assembly engine, authn's mount path, the serve timeouts, the pre-auth allowlist set, the mounted-route label seed and the middleware chain) lives once, in the platform module `go/app`, imported by both the reference app (`examples/reference-app`) and the saasctl template (`go/saasctl/internal/template/project`, the tree `saasctl new` materializes into every generated project) -- so neither host tree may re-declare its symbols, re-grow its statements (the serve loop, the `/healthz`, `/metrics`, `/api/v1/authn` literals) or re-issue the engine-owned assembly calls (`pkgcore.NewComponentRegistry` and the `Prepare`/`Construct`/`Verify`/`Init` drive, `dbkit.Open`, `dbkit.NewMigrationRegistry`, `http.NewServeMux`, `jobs.NewStandaloneQueue`, `jobs.Wire`, `signal.NotifyContext`, `chain.Chain`, `obs.Init`) in its own code; the jobs entries reach the hosts through the `queue.standalone` component and so carry no allowance, and the top-level-mux entry is scoped to the host composition dirs so a business package's own router stays legal. Planted-drift suite: `tools/test_check_host_composition.py` | 0 clean / 1 finding / 2 usage error |
 | `check_env_example_consistency.py` | Checker | Reference-app env-example consistency: the env variables the host declares (`examples/reference-app/internal/app/bootstrap.go`'s `config:"env=NAME"` pins -- the `,derive` option included -- the `APP_ROOT_KEY` the loader reads through `WithRootKeyEnv` and the prefix the loader is built with through `WithEnvPrefix`, each argument a string literal or a same-file constant, and the derived names of the declared key materials, whose key paths are read from `docs/config-reference.json`'s `bootstrap_keys`) must equal the key set `examples/reference-app/.env.example` documents, its active `KEY=` entries and its commented-out examples alike (a prose mention is not an entry); both directions fail, and the example-side one is strict with no in-file escape marker -- the file's declared scope is exactly the host's surface, so a non-host entry is a stale line to remove or a variable to wire in the loader target. Planted-drift suite: `tools/test_check_env_example_consistency.py` | 0 clean / 1 finding / 2 usage error |
 | `check_coverage_baseline.py` | Checker | docs/internal/20-quality-and-security.md's coverage rule for every released module (the gated set is derived from go.work at run time -- every use entry outside tools/, so the go/ modules plus examples/reference-app): the measured unit-suite statement coverage -- generated files (.gen.go) excluded from the census -- must clear the 80% floor (the 2026-09 product decision) and must not sit more than the size-calibrated tolerance below its committed `tools/coverage-baselines.json` row (the earlier foundation-modules no-decline rule, kept): the tolerance is the wider of 0.15 points and the points two statements are worth in the module under measurement (2 * 100 / statements) -- a 2-statement floor that keeps the jitter budget size-invariant, absorbing statement-granular scheduling noise in small modules while the 0.15-point main tolerance governs the larger ones -- and a failure names the effective tolerance and the census it was calibrated against; `--update` records new baselines by real measurement (a deliberate decline must ride the same change that records it, with the reason in the commit, and a sub-floor measurement refuses to be recorded -- the floor is not re-baselineable); `--selfcheck` keeps the baseline file itself complete and current (every row a live gated module, every gated module with a row) so a stale row cannot silently exempt a module. Unit suite: `tools/test_check_coverage_baseline.py`, next to the `--selfcheck` run | 0 clean / 1 floor or decline breach, stale/missing row, or toolchain moved / 2 usage error, or the gated set cannot be derived |
+| `check_integration_tiers.py` | Checker | The integration-tier enumeration: `Taskfile.yml`'s `INTEGRATION_DIRS` is a hand-written copy of the go/ modules carrying a `//go:build integration` test file; the set is derived from the tree (go.work `use` entries under go/, read with the release coordinator's own parser) and the copy is proved against it, with `go/saasctl` a declared exclusion checked in both directions. Planted-drift suite: `tools/test_check_integration_tiers.py` | 0 clean / 1 drift / 2 error |
 | `check_markdown_examples.py` | Checker | Root `CLAUDE.md` Documentation section: every fenced ```go block in AGENTS.md/README/ADR prose really compiles (a complete block) or at least parses under some throwaway wrapping (a fragment) | 0 clean / 1 a block fails its check / 2 error |
 | `license_scan.py` | Checker | Dependency-license compliance: every direct third-party dependency of the implemented Go modules and web packages is adjudicated and within policy in `dependency-licenses.json`, re-derived from the live tree on every run | 0 clean / 1 violation / 2 usage error |
 | `check_error_code_index_coverage.py` | Checker | Error-code index completeness: every code constructed in Go source (declared or inline, literal argument only) has a row in the committed index page `docs/site/content.en/docs/user-guide/error-codes.md`, plus the unindexable classes (non-literal code arguments outside an apperr-constructing helper's body; helper calls with non-literal arguments) — the independent side of `gen_error_code_index.py`'s own drift gate, able to go red on an extractor blind spot the gate cannot see | 0 clean / 1 finding / 2 usage error |
@@ -320,6 +322,58 @@ handled:
 docs-site: violation    index.html: required entry file is missing
 docs-site: violation    status.html: link 'aboutx.html' resolves to nothing
 ```
+
+## check_api_fragments.py — fragment-enumeration drift gate
+
+`tools/api_fragments.json` is the single machine-readable source of
+truth for the backend-fragment universe: every regeneration leg derives
+its set from it rather than enumerating fragments of its own
+(`Taskfile.yml`'s `api:gen` and `api:merge` read it through
+`tools/api_fragment_matrix.py`, so a fragment joins those legs by
+joining the manifest). What the manifest cannot derive is its own
+agreement with the tree -- a fragment can be added to disk and never
+registered, or registered and then moved -- and that agreement is what
+this gate proves.
+
+Manifest schema: one `fragments` array; each entry is `{"name":
+"<fragment id>", "dir": "<repo-relative api directory, ending in
+/api>", "merge_rank": <int, present only for fragments that join the
+redocly merge>}`. A second `app_owned` array lists the api/ directories
+carrying the same on-disk signature that belong to the reference app's
+own generation flow (`task api:gen:app`) -- deliberately not platform
+fragments.
+
+Drift (exit 1):
+
+* a registered fragment whose `openapi.yaml` or `oapi-codegen.yaml` is
+  missing from the tree;
+* an api/ directory on disk holding both files that the manifest
+  neither registers nor lists under `app_owned` (the on-disk signature
+  of a backend fragment; the scan skips `.git/`, `.claude/`,
+  `node_modules/`, `vendor/` and `__pycache__/`);
+* an `app_owned` entry missing from the tree or missing either file, or
+  one directory appearing in both lists;
+* a manifest entry malformed in itself: a missing name or dir, a dir
+  that is not a repo-relative path ending in `/api`, a duplicated name,
+  dir or merge_rank, or a merge_rank that is not a positive integer;
+* the derivation decoupled from the manifest: `tools/api_fragment_matrix.py`,
+  executed against the tree, must emit exactly the manifest's fragments
+  in manifest order with the `name`/`dir` keys its consumers read.
+
+Infrastructure error (exit 2): the manifest missing or unparsable.
+
+```
+python3 tools/check_api_fragments.py --root /path/to/repo
+python3 tools/check_api_fragments.py      # --root defaults to the current directory
+python3 tools/test_check_api_fragments.py # the planted-drift suite
+```
+
+The companion suite reproduces every drift class on a small fixture
+repository -- a fragment added to the tree without its manifest entry, a
+registered fragment whose files vanished, an app-owned entry that lost
+its listing or its files, a manifest malformed in itself, and a
+derivation that drops, reorders or decorates an entry (the gate executes
+the planted script, so the derivation leg has real teeth).
 
 ## check_markdown_examples.py — markdown Go-example compiler/parser
 
@@ -832,7 +886,8 @@ coverage-baseline checker (`python3 tools/test_check_coverage_baseline.py`
 then `python3 tools/check_coverage_baseline.py --selfcheck`), the
 migration-parity gate, the host-composition gate, the env-example gate,
 the platform-error bundle's drift gate
-(`python3 tools/gen_platform_error_bundle.py --check`), the semgrep
+(`python3 tools/gen_platform_error_bundle.py --check`), the
+fragment-enumeration gate, the integration-tier gate, the semgrep
 ruleset's fixture self-check and the license scanner. The rest take no
 companion: `python3 tools/check_toolchain.py`,
 `python3 tools/check_repo_isolation.py`,

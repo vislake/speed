@@ -16,7 +16,7 @@
 // Two rules therefore apply to this file specifically:
 //
 //   - No .Table, .Model or .Raw. They are the three entry points a semgrep
-//     rule in repo-checks watches for, and nothing here needs them: every
+//     rule watches for, and nothing here needs them: every
 //     conditional update below passes its target struct to Updates, from
 //     which GORM parses the same schema .Model would have named.
 //   - No hand-written "WHERE tenant_id = ?", ever. There is no tenant column

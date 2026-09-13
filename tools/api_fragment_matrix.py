@@ -9,7 +9,8 @@ manifest order.
 
 Taskfile.yml's api:gen task consumes this array, so no caller enumerates
 fragments for regeneration: a fragment joins the regeneration set by
-joining the manifest.
+joining the manifest. tools/check_api_fragments.py proves this output
+against the manifest, entry for entry and in manifest order.
 
 Standard library only; --root defaults to the current directory and
 must be the repository root.

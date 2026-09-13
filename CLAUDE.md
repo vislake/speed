@@ -44,7 +44,7 @@ task test:full    # full matrix (dual deployment mode x dual dialect)
 task lint         # lint everything
 task api:gen      # merge specs, generate backend interfaces and frontend sdk
 task docs:serve   # preview the docs site locally
-task new:module   # scaffold a new module (prints the registration checklist: go.work use entry, CI matrix, roadmap rows)
+task new:module   # scaffold a new module (prints the registration checklist: go.work use entry, coverage baseline, roadmap rows)
 task release:plan # verify the lockstep release plan for one version, offline
 ```
 
@@ -130,7 +130,7 @@ Every rule below is enforced by code review, and by the checkers under `tools/` 
 ### Multi-tenant isolation
 
 - **Do not hold a `*gorm.DB` and write queries yourself.** Business repositories for tenant-owned data must embed `dbkit.Repository[T]`. Identity and platform data (see the data-domain table in `docs/internal/04-data-and-tenancy.md`) can't use it — the generic constraint requires `TenantScoped`, which those domains must *not* implement — so they use `dbkit.Open()`'s plain `*gorm.DB` directly; see `go/dbkit/AGENTS.md`'s "Known limitations" for why that's safe rather than a loophole.
-- **Do not use `db.Table` / `db.Model` / `db.Raw` to work around the Repository.** The three bypass entry points are checked in CI by the semgrep rule `tools/semgrep_rules/raw-gorm-bypass.yml` (repo-checks, every PR), whose header names the allowlisted sites (dbkit's own internals, `go/jobs/store.go`'s platform-data queries) and the residual gap it deliberately leaves (a workaround through another `*gorm.DB` method, e.g. `Exec` with hand-written SQL) — code review owns the residue.
+- **Do not use `db.Table` / `db.Model` / `db.Raw` to work around the Repository.** The three bypass entry points are checked by the semgrep rule `tools/semgrep_rules/raw-gorm-bypass.yml`, whose header names the allowlisted sites (dbkit's own internals, `go/jobs/store.go`'s platform-data queries) and the residual gap it deliberately leaves (a workaround through another `*gorm.DB` method, e.g. `Exec` with hand-written SQL) — code review owns the residue.
 - **Do not hand-write `WHERE tenant_id = ?`.** Tenant filtering is injected by the GORM plugin and the Repository; writing it by hand means you are bypassing the guard.
 - **Do not accept a caller-supplied `tenant_id` at the API layer.** The tenant comes from the access token claims, never from request parameters, headers or bodies.
 - Every new repository **must** run `tenancytest.AssertIsolated` (tenant data) or `AssertNotTenantScoped` (identity and platform data).

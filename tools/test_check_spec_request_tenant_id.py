@@ -8,7 +8,7 @@ directly:
 
 The planted fixtures spell each rule's firing and staying-silent shape;
 the real tree (13 fragment files, zero findings) is the scanner's
-end-to-end negative, run by the checker itself and by repo-checks.
+end-to-end negative, run by the checker itself.
 
 Rules pinned here:
 

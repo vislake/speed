@@ -161,8 +161,8 @@ Modes
     a sub-floor measured total refuses to be recorded (above).
   --selfcheck: verify the baseline file itself -- every row names a
     gated module whose directory exists and carries a go.mod, and
-    every gated module has a row. Runs in repo-checks; a dead or
-    missing row goes red before any comparison can silently skip.
+    every gated module has a row; a dead or missing row goes red
+    before any comparison can silently skip.
 
 Usage:
     python3 tools/check_coverage_baseline.py --check --module go/pkgcore

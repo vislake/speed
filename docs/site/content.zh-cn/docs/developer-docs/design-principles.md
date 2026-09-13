@@ -10,14 +10,14 @@ description: "每个 speed 模块都遵守的纪律——模块边界、多租�
 
 ```mermaid
 flowchart LR
-    C[Change] --> S[Static rules in repo-checks<br/>semgrep, isolation coverage]
+    C[Change] --> S[Static rules under tools/<br/>semgrep, isolation coverage]
     C --> U[Per-module unit tests under race]
     C --> A[Spec regeneration and compile gates]
     S --> R{Code review}
     U --> R
     A --> R
     R -->|merged to main| M[Main]
-    M --> F[Full-check Docker-backed tiers<br/>integration, reference app]
+    M --> F[Docker-backed tiers<br/>integration, reference app]
 ```
 
 ## 模块边界纪律
@@ -46,7 +46,7 @@ flowchart LR
 
 API 契约只有一个真源——每个模块自己的 OpenAPI 片段——工具链让漂移成为编译错误,而不是评审意见。
 
-- **先改 spec,再改实现,顺序不可颠倒**:改片段、重新生成、让编译失败指出每个要修的 handler、实现、更新前端、一起提交。生成的 Go 服务端接口参与编译,因此"改了 spec 却没改实现"无法编译。CI 强制:api-contract 流水线从每个 spec 重新生成全部片段,任何已提交产物不是其 spec 的生成结果即失败——用 porcelain 检查,因为一次*新建*文件的再生成会静默通过 diff 检查——然后构建参考应用。
+- **先改 spec,再改实现,顺序不可颠倒**:改片段、重新生成、让编译失败指出每个要修的 handler、实现、更新前端、一起提交。生成的 Go 服务端接口参与编译,因此"改了 spec 却没改实现"无法编译。再生成是唯一来源:`task api:gen` 从每个 spec 重新生成全部片段,任何已提交产物不是其 spec 的生成结果都是问题——比对用 porcelain 检查,因为一次*新建*文件的再生成会静默通过 diff 检查。
 - **前端永不手写后端调用。** `fetch` 与 `axios` 只允许存在于 `@speed/api-client`;应用代码使用 `@speed/api-sdk` 的生成 hooks。CI 的 `no-direct-http` ESLint 规则强制。
 - **生成代码永不手改**——SDK 与 `*.gen.go` 接口在下次再生成时整份覆盖。同一批一致性闸门在 CI 强制。
 
