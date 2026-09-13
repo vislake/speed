@@ -2,6 +2,7 @@ package config
 
 import (
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -282,28 +283,39 @@ func TestDecodeWritesEveryLayer(t *testing.T) {
 	}
 }
 
+// TestDecodeNeedsAPointerToStruct pins that a target Decode cannot write into
+// panics instead of returning. What the caller passes is fixed in the source,
+// not in anyone's configuration, so there is no run in which the same call
+// site works; a host handed an error here could only re-raise it.
 func TestDecodeNeedsAPointerToStruct(t *testing.T) {
 	m := collect(t, declaring("cache", Schema{Namespace: "cache", Mounts: []Mount{{Value: &decodeOptions{}}}}))
 	r, _ := newReader(t, m)
 
-	for name, target := range map[string]any{
-		"a value":               decodeOptions{},
-		"a nil pointer":         (*decodeOptions)(nil),
-		"a pointer to a scalar": new(int),
+	for name, c := range map[string]struct {
+		target any
+		names  string
+	}{
+		"a value":               {target: decodeOptions{}, names: "config.decodeOptions"},
+		"a nil pointer":         {target: (*decodeOptions)(nil), names: "*config.decodeOptions"},
+		"a pointer to a scalar": {target: new(int), names: "*int"},
 	} {
 		t.Run(name, func(t *testing.T) {
-			err := r.Decode("cache", target)
-			if err == nil {
-				t.Fatalf("decoding into %s was accepted, and there is nowhere to write", name)
-			}
-			// The sentinel table is closed and covers every startup failure,
-			// so this one is told apart by errors.Is like the rest. A carrier
-			// the module cannot be decoded into is a defect of that module's
-			// declaration alone, and the host fixes it where it fixes the
-			// other defective declarations.
-			if !errors.Is(err, ErrInvalidSchema) {
-				t.Fatalf("decoding into %s returned %v, want ErrInvalidSchema", name, err)
-			}
+			// An illegal target is a programming error at the call site: it
+			// is unrelated to data, it shows up on first execution, and the
+			// host has nothing to handle. It therefore panics rather than
+			// returning a sentinel a host would be invited to inspect.
+			defer func() {
+				raised := recover()
+				if raised == nil {
+					t.Fatalf("decoding into %s returned, and there is nowhere to write", name)
+				}
+				text := fmt.Sprint(raised)
+				if !strings.Contains(text, c.names) || !strings.Contains(text, `"cache"`) {
+					t.Fatalf("the panic reads %q, which does not name both the target %s and "+
+						"the path it was given for", text, c.names)
+				}
+			}()
+			_ = r.Decode("cache", c.target)
 		})
 	}
 }
@@ -317,26 +329,27 @@ type cyclicTarget struct {
 }
 
 // TestDecodeRefusesATargetThatCyclesBack pins that the walk over the target
-// stops on a back edge and says so with the same sentinel the walk over the
-// declaration uses: the two are one defect seen from two ends, and the host's
-// fixing action is the same.
+// stops on a back edge, and that it stops by panicking: the carrier is
+// assembled at the call site, so a cycle in it is that site's programming
+// error rather than anything the host could act on.
 func TestDecodeRefusesATargetThatCyclesBack(t *testing.T) {
 	m := collect(t, declaring("cache", Schema{Namespace: "cache", Mounts: []Mount{{Value: &decodeOptions{}}}}))
 	r, _ := newReader(t, m)
 
 	var target cyclicTarget
 	target.Next = &target
-	err := r.Decode("cache", &target)
-	if err == nil {
-		t.Fatalf("decoding into a target that reaches itself was accepted, and the walk does " +
-			"not terminate")
-	}
-	if !errors.Is(err, ErrInvalidSchema) {
-		t.Fatalf("a cyclic target returned %v, want ErrInvalidSchema", err)
-	}
-	if !strings.Contains(err.Error(), "Next") {
-		t.Fatalf("the rejection reads %q, which does not name the field that closes the cycle", err)
-	}
+	defer func() {
+		raised := recover()
+		if raised == nil {
+			t.Fatalf("decoding into a target that reaches itself returned, and the walk does " +
+				"not terminate")
+		}
+		text := fmt.Sprint(raised)
+		if !strings.Contains(text, "Next") {
+			t.Fatalf("the panic reads %q, which does not name the field that closes the cycle", text)
+		}
+	}()
+	_ = r.Decode("cache", &target)
 }
 
 // TestDecodeReadsAnInlinedEmbeddedField pins that the expansion and the decode

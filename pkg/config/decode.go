@@ -30,18 +30,25 @@ var _ Reader = (*reader)(nil)
 // manifest holds the items of modules this run will not enable, and failing
 // on theirs would break the very stance that lets a default implementation
 // stand down.
+//
+// An illegal target panics rather than returning an error: a non-pointer, a
+// nil, or a struct that cycles back into itself is a programming error at the
+// call site, unrelated to data, showing up deterministically on first
+// execution and leaving the host nothing to handle. The panic lands while the
+// lifecycle is being driven, so rollback does not run; that is the standing
+// cost of a programming error, and the process was going to terminate anyway.
 func (r *reader) Decode(path string, target any) error {
 	v := reflect.ValueOf(target)
 	if v.Kind() != reflect.Pointer || v.IsNil() {
-		return fmt.Errorf("%w: Decode was given %T for %s, and it writes into a non-nil pointer "+
-			"to a struct. Pass the address of the carrier struct declared for this path",
-			ErrInvalidSchema, target, pathLabel(path))
+		panic(fmt.Sprintf("config: Decode was given %T for %s, and it writes into a non-nil "+
+			"pointer to a struct. Pass the address of the carrier struct declared for this path",
+			target, pathLabel(path)))
 	}
 	v = v.Elem()
 	if v.Kind() != reflect.Struct {
-		return fmt.Errorf("%w: Decode was given %T for %s, which points at %s, and it writes "+
-			"into a struct. Pass the address of the carrier struct declared for this path",
-			ErrInvalidSchema, target, pathLabel(path), v.Kind())
+		panic(fmt.Sprintf("config: Decode was given %T for %s, which points at %s, and it "+
+			"writes into a struct. Pass the address of the carrier struct declared for this path",
+			target, pathLabel(path), v.Kind()))
 	}
 	return r.decodeStruct(v, path, []reflect.Type{v.Type()})
 }
@@ -107,15 +114,16 @@ func (r *reader) decodeStruct(v reflect.Value, prefix string, chain []reflect.Ty
 // descend walks into a nested struct, refusing a type already on the way in.
 // A declared mount cannot hold a cycle, collection rejects those; a target the
 // caller assembled for itself can, and stopping is better than not returning.
-// It is the same defect collection names, so it carries the same sentinel:
-// the sentinel table is closed and every startup failure is in it.
+// It panics for the reason Decode's other target checks do: the carrier is
+// written at the call site, so a back edge in it is a programming error the
+// host cannot act on.
 func (r *reader) descend(v reflect.Value, key string, chain []reflect.Type, f reflect.StructField) error {
 	st := v.Type()
 	if slices.Contains(chain, st) {
-		return fmt.Errorf("%w: decoding %s reaches %s again through field %s, so walking the "+
-			"target does not terminate. A configuration carrier has no back edges: drop the "+
-			"field, or mirror the part of it that is meant to be configurable",
-			ErrInvalidSchema, pathLabel(key), typeName(st), f.Name)
+		panic(fmt.Sprintf("config: decoding %s reaches %s again through field %s, so walking "+
+			"the target does not terminate. A configuration carrier has no back edges: drop "+
+			"the field, or mirror the part of it that is meant to be configurable",
+			pathLabel(key), typeName(st), f.Name))
 	}
 	return r.decodeStruct(v, key, append(chain, st))
 }
