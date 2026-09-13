@@ -2,8 +2,6 @@ package main
 
 import (
 	"context"
-	"fmt"
-	"os"
 
 	"github.com/vislake/speed/pkg/core"
 )
@@ -39,24 +37,27 @@ func appModule() core.Module {
 			return &application{greeter: greeter}, nil
 		},
 		Start: func(_ context.Context, _ *core.Registry, instance any) error {
+			//nolint:errcheck // the instance is what this module's own New
+			// returned, so a different type would be a defect in the driver,
+			// not a case to handle: the panic is the intended report.
 			a := instance.(*application)
-			fmt.Fprintln(os.Stdout, appModuleName+": greeting: "+a.greeter.Greet("world"))
-			fmt.Fprintln(os.Stdout, appModuleName+": endpoint: "+a.greeter.Endpoint())
+			say(appModuleName + ": greeting: " + a.greeter.Greet("world"))
+			say(appModuleName + ": endpoint: " + a.greeter.Endpoint())
 			return nil
 		},
 		Serve: func(_ context.Context, _ *core.Registry, _ any) error {
 			// Serve opens the entry points and returns. A real host
 			// would start its listener on a goroutine here; blocking
 			// would starve every module after it in the stage.
-			fmt.Fprintln(os.Stdout, readyMarker)
+			say(readyMarker)
 			return nil
 		},
 		Stop: func(_ context.Context, _ *core.Registry, _ any) error {
-			fmt.Fprintln(os.Stdout, appModuleName+": stop")
+			say(appModuleName + ": stop")
 			return nil
 		},
 		Close: func(_ context.Context, _ *core.Registry, _ any) error {
-			fmt.Fprintln(os.Stdout, appModuleName+": close")
+			say(appModuleName + ": close")
 			return nil
 		},
 	}

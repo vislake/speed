@@ -17,6 +17,10 @@ func Resolve[T any](r *Registry) (T, error) {
 	if err != nil {
 		return zero, err
 	}
+	//nolint:errcheck // the assertion cannot fail: Resolve matched the module
+	// against this very token[T], so a value that does not implement T would be
+	// a defect in the registry, not a case the caller could handle. The panic
+	// reports it; the comma-ok form would hand back a zero T and hide it.
 	return v.(T), nil
 }
 
@@ -26,6 +30,8 @@ func ResolveAll[T any](r *Registry) []T {
 	values := r.ResolveAll(token[T]())
 	out := make([]T, 0, len(values))
 	for _, v := range values {
+		//nolint:errcheck // ResolveAll selected these instances by the same
+		// token[T], so the assertion holds for the reason Resolve's does above.
 		out = append(out, v.(T))
 	}
 	return out
@@ -37,6 +43,8 @@ func Resources[T any](r *Registry) []Resource[T] {
 	found := r.Resources(token[T]())
 	out := make([]Resource[T], 0, len(found))
 	for _, res := range found {
+		//nolint:errcheck // Resources selected these values by assignability to
+		// T, so the assertion holds for the reason Resolve's does above.
 		out = append(out, Resource[T]{Module: res.Module, Value: res.Value.(T)})
 	}
 	return out

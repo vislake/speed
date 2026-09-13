@@ -2,8 +2,6 @@ package main
 
 import (
 	"context"
-	"fmt"
-	"os"
 
 	"github.com/vislake/speed/pkg/config"
 	"github.com/vislake/speed/pkg/core"
@@ -79,11 +77,11 @@ func localGreeterModule() core.Module {
 			return &localGreeter{salutation: opts.Salutation}, nil
 		},
 		Stop: func(_ context.Context, _ *core.Registry, _ any) error {
-			fmt.Fprintln(os.Stdout, localModuleName+": stop")
+			say(localModuleName + ": stop")
 			return nil
 		},
 		Close: func(_ context.Context, _ *core.Registry, _ any) error {
-			fmt.Fprintln(os.Stdout, localModuleName+": close")
+			say(localModuleName + ": close")
 			return nil
 		},
 	}

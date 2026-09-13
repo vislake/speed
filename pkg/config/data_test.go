@@ -106,6 +106,9 @@ func TestKeysInsideContainerLeafNotValidated(t *testing.T) {
 func TestUnknownKeyNotInManifest(t *testing.T) {
 	m := cacheManifest(t, nil)
 	d := newData(m)
+	//nolint:misspell // "addres" is the test input, not prose: this case pins
+	// that a key no module declares is refused, and spelling it correctly would
+	// make it a known key and test nothing.
 	err := d.applyPrimary(m, map[string]any{"cache": map[string]any{"addres": "typo"}})
 	if !errors.Is(err, ErrUnknownKey) {
 		t.Fatalf("a misspelled key returned %v, want ErrUnknownKey", err)

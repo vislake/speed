@@ -236,6 +236,8 @@ func TestUnknownEnvDiagnosticsOnStderr(t *testing.T) {
 func TestPrimarySourceUnknownKeyStopsTheStartup(t *testing.T) {
 	s := newLoaderSetup(t,
 		HostIdentity{Prefix: "MYAPP", DefaultLocator: "file:///app.yaml"},
+		//nolint:misspell // "addres" is the unknown-key input under test, for
+		// the reason data_test.go's identical case gives.
 		map[string]any{"cache": map[string]any{"addres": "typo"}},
 		nil, nil,
 	)

@@ -136,19 +136,27 @@ func TestOverlappingMountPathsAllowed(t *testing.T) {
 
 func TestFlagLongNameConflict(t *testing.T) {
 	collectRejects(t, []string{"alpha", "beta", "listen"},
-		declaring("alpha", Schema{Namespace: "a", Mounts: []Mount{{Value: &addrCarrier{}}},
-			Items: map[string]Item{"addr": {Origins: OriginFlag, FlagName: "listen"}}}),
-		declaring("beta", Schema{Namespace: "b", Mounts: []Mount{{Value: &addrCarrier{}}},
-			Items: map[string]Item{"addr": {Origins: OriginFlag, FlagName: "listen"}}}),
+		declaring("alpha", Schema{
+			Namespace: "a", Mounts: []Mount{{Value: &addrCarrier{}}},
+			Items: map[string]Item{"addr": {Origins: OriginFlag, FlagName: "listen"}},
+		}),
+		declaring("beta", Schema{
+			Namespace: "b", Mounts: []Mount{{Value: &addrCarrier{}}},
+			Items: map[string]Item{"addr": {Origins: OriginFlag, FlagName: "listen"}},
+		}),
 	)
 }
 
 func TestFlagShortNameConflict(t *testing.T) {
 	collectRejects(t, []string{"alpha", "beta", "l"},
-		declaring("alpha", Schema{Namespace: "a", Mounts: []Mount{{Value: &addrCarrier{}}},
-			Items: map[string]Item{"addr": {Origins: OriginFlag, FlagName: "listen", FlagShort: "l"}}}),
-		declaring("beta", Schema{Namespace: "b", Mounts: []Mount{{Value: &addrCarrier{}}},
-			Items: map[string]Item{"addr": {Origins: OriginFlag, FlagName: "local", FlagShort: "l"}}}),
+		declaring("alpha", Schema{
+			Namespace: "a", Mounts: []Mount{{Value: &addrCarrier{}}},
+			Items: map[string]Item{"addr": {Origins: OriginFlag, FlagName: "listen", FlagShort: "l"}},
+		}),
+		declaring("beta", Schema{
+			Namespace: "b", Mounts: []Mount{{Value: &addrCarrier{}}},
+			Items: map[string]Item{"addr": {Origins: OriginFlag, FlagName: "local", FlagShort: "l"}},
+		}),
 	)
 }
 
@@ -156,31 +164,41 @@ func TestEnvNameConflictDerivedVsPinned(t *testing.T) {
 	collectRejects(t, []string{"alpha", "beta", "MYAPP_A__ADDR"},
 		identifying("host", HostIdentity{Prefix: "MYAPP"}),
 		declaring("alpha", Schema{Namespace: "a", Mounts: []Mount{{Value: &addrCarrier{}}}}),
-		declaring("beta", Schema{Namespace: "b", Mounts: []Mount{{Value: &addrCarrier{}}},
-			Items: map[string]Item{"addr": {EnvName: "MYAPP_A__ADDR"}}}),
+		declaring("beta", Schema{
+			Namespace: "b", Mounts: []Mount{{Value: &addrCarrier{}}},
+			Items: map[string]Item{"addr": {EnvName: "MYAPP_A__ADDR"}},
+		}),
 	)
 }
 
 func TestEnvNameConflictTwoPinned(t *testing.T) {
 	collectRejects(t, []string{"alpha", "beta", "NO_COLOR"},
-		declaring("alpha", Schema{Namespace: "a", Mounts: []Mount{{Value: &addrCarrier{}}},
-			Items: map[string]Item{"addr": {EnvName: "NO_COLOR"}}}),
-		declaring("beta", Schema{Namespace: "b", Mounts: []Mount{{Value: &addrCarrier{}}},
-			Items: map[string]Item{"addr": {EnvName: "NO_COLOR"}}}),
+		declaring("alpha", Schema{
+			Namespace: "a", Mounts: []Mount{{Value: &addrCarrier{}}},
+			Items: map[string]Item{"addr": {EnvName: "NO_COLOR"}},
+		}),
+		declaring("beta", Schema{
+			Namespace: "b", Mounts: []Mount{{Value: &addrCarrier{}}},
+			Items: map[string]Item{"addr": {EnvName: "NO_COLOR"}},
+		}),
 	)
 }
 
 func TestReservedFlagConfig(t *testing.T) {
 	collectRejects(t, []string{"alpha", "config"},
-		declaring("alpha", Schema{Namespace: "a", Mounts: []Mount{{Value: &addrCarrier{}}},
-			Items: map[string]Item{"addr": {Origins: OriginFlag, FlagName: "config"}}}),
+		declaring("alpha", Schema{
+			Namespace: "a", Mounts: []Mount{{Value: &addrCarrier{}}},
+			Items: map[string]Item{"addr": {Origins: OriginFlag, FlagName: "config"}},
+		}),
 	)
 }
 
 func TestReservedFlagHelp(t *testing.T) {
 	collectRejects(t, []string{"alpha", "help"},
-		declaring("alpha", Schema{Namespace: "a", Mounts: []Mount{{Value: &addrCarrier{}}},
-			Items: map[string]Item{"addr": {Origins: OriginFlag, FlagName: "help"}}}),
+		declaring("alpha", Schema{
+			Namespace: "a", Mounts: []Mount{{Value: &addrCarrier{}}},
+			Items: map[string]Item{"addr": {Origins: OriginFlag, FlagName: "help"}},
+		}),
 	)
 }
 

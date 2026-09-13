@@ -50,8 +50,8 @@ func (l *loader) load(ctx context.Context) (Reader, error) {
 	// rather than exits: core is called by the host and does not call it, and
 	// leaving through the door would skip the host's own cleanup.
 	if flags.help {
-		if err := renderHelp(l.stdout, m); err != nil {
-			return nil, fmt.Errorf("config: writing the help output failed: %w", err)
+		if renderErr := renderHelp(l.stdout, m); renderErr != nil {
+			return nil, fmt.Errorf("config: writing the help output failed: %w", renderErr)
 		}
 		return nil, ErrHelpRequested
 	}
@@ -59,12 +59,12 @@ func (l *loader) load(ctx context.Context) (Reader, error) {
 	environ := environMap(l.environ)
 	d := newData(m)
 	if locator := locate(m, environ, flags); locator != "" {
-		content, err := t.read(ctx, locator)
-		if err != nil {
-			return nil, err
+		content, readErr := t.read(ctx, locator)
+		if readErr != nil {
+			return nil, readErr
 		}
-		if err := d.applyPrimary(m, content); err != nil {
-			return nil, err
+		if applyErr := d.applyPrimary(m, content); applyErr != nil {
+			return nil, applyErr
 		}
 	}
 
@@ -86,6 +86,9 @@ func (l *loader) load(ctx context.Context) (Reader, error) {
 // must not be able to stop the process.
 func (l *loader) reportUnclaimed(m *manifest, names []string) {
 	for _, name := range names {
+		//nolint:errcheck // l.stderr is the diagnostic sink itself: a failed
+		// write has nowhere to be reported, and this line is explicitly not a
+		// failure condition -- see the doc comment above.
 		fmt.Fprintf(l.stderr, "%senvironment variable %s is set under the %q prefix and no input "+
 			"item reads it, so it is ignored\n", diagnosticPrefix, name, m.host.Prefix)
 	}

@@ -3,8 +3,6 @@ package main
 import (
 	"context"
 	"errors"
-	"fmt"
-	"os"
 
 	"github.com/vislake/speed/pkg/config"
 	"github.com/vislake/speed/pkg/core"
@@ -32,7 +30,11 @@ type remoteOptions struct {
 
 // remoteDefaults is the prototype this module declares. Addr has no default:
 // it is the input that decides whether this implementation can run at all, and
-// a default would make "nobody gave it" indistinguishable from a value.
+// a default would make "nobody gave it" indistinguishable from a value. Token
+// does have one, and it is a placeholder that says out loud that no credential
+// was given: the value a host replaces, never one it could authenticate with.
+//
+//nolint:gosec // G101: the placeholder above stands in for a missing credential and is not one, so there is nothing here to leak.
 var remoteDefaults = remoteOptions{Token: "no-token-configured"}
 
 // init registers the module.
@@ -101,11 +103,11 @@ func remoteGreeterModule() core.Module {
 			return &remoteGreeter{addr: opts.Addr}, nil
 		},
 		Stop: func(_ context.Context, _ *core.Registry, _ any) error {
-			fmt.Fprintln(os.Stdout, remoteModuleName+": stop")
+			say(remoteModuleName + ": stop")
 			return nil
 		},
 		Close: func(_ context.Context, _ *core.Registry, _ any) error {
-			fmt.Fprintln(os.Stdout, remoteModuleName+": close")
+			say(remoteModuleName + ": close")
 			return nil
 		},
 	}
