@@ -64,6 +64,7 @@ func TestFormatByExtension(t *testing.T) {
 		"app.yaml": "yaml",
 		"app.yml":  "yaml",
 		"app.JSON": "json",
+		"app.YAML": "yaml",
 	}
 	for name, want := range cases {
 		t.Run(name, func(t *testing.T) {

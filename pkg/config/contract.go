@@ -10,13 +10,17 @@ import (
 // the registry and never imports it.
 type Source interface {
 	// Scheme is the URI scheme this transport answers for, without the
-	// separator, for example "file".
+	// separator, for example "file". It is registered in lower case, so
+	// "FILE" and "file" are one scheme rather than two, and two transports
+	// declaring them conflict.
 	Scheme() string
 	// Fetch reads the primary config source the locator points at and
 	// reports the format name of the data it returns. The name is matched
 	// exactly against the registered formats; config never sniffs content,
 	// because valid JSON is also valid YAML and a wrong guess parses the
-	// same bytes under the other grammar.
+	// same bytes under the other grammar. Exactly is about that and about
+	// priorities, not about case: the name is folded to lower case before
+	// it is matched, so "YAML" reaches the parser registered as yaml.
 	//
 	// A locator this transport cannot serve, such as a remote host handed to
 	// a file source, is an error here rather than a silent fallback.
@@ -26,7 +30,9 @@ type Source interface {
 // Format is the format extension point: one implementation per format name.
 // Like a transport, it is delivered as a resource.
 type Format interface {
-	// Name is the format name, for example "json".
+	// Name is the format name, for example "json". It is registered in
+	// lower case, so "JSON" and "json" are one name rather than two, and
+	// two parsers declaring them conflict.
 	Name() string
 	// Unmarshal decodes the data into a tree of string-keyed maps. A
 	// non-string key anywhere in the tree, which YAML permits, is an error:

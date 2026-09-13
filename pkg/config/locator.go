@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
+	"strings"
 
 	"github.com/vislake/speed/pkg/core"
 )
@@ -24,11 +25,14 @@ type transports struct {
 // of priorities, so a duplicate leaves nothing to choose between; it is found
 // here, while the declaring modules are still in hand, rather than at the
 // moment the primary source is read.
+//
+// Names are registered and compared in lower case, so the case a declaration
+// is spelled in does not tell two of them apart.
 func collectTransports(reg *core.Registry) (*transports, error) {
 	t := &transports{sources: map[string]Source{}, formats: map[string]Format{}}
 	declaredBy := map[string]string{}
 	for _, res := range core.Resources[Source](reg) {
-		scheme := res.Value.Scheme()
+		scheme := strings.ToLower(res.Value.Scheme())
 		if other, taken := declaredBy[scheme]; taken {
 			return nil, fmt.Errorf("%w: modules %q and %q both deliver a Source for the scheme "+
 				"%q, and a scheme selects one transport exactly. Import one of them",
@@ -39,7 +43,7 @@ func collectTransports(reg *core.Registry) (*transports, error) {
 	}
 	declaredBy = map[string]string{}
 	for _, res := range core.Resources[Format](reg) {
-		name := res.Value.Name()
+		name := strings.ToLower(res.Value.Name())
 		if other, taken := declaredBy[name]; taken {
 			return nil, fmt.Errorf("%w: modules %q and %q both deliver a Format named %q, and a "+
 				"format name selects one parser exactly. Import one of them",
@@ -114,14 +118,17 @@ func (t *transports) read(ctx context.Context, locator string) (map[string]any, 
 			"guesses from the content, because valid JSON is also valid YAML",
 			ErrUndeterminedFormat, locator)
 	}
+	formatName = strings.ToLower(formatName)
 	format, known := t.formats[formatName]
 	if !known {
 		// The name is quoted because a transport reports whatever it was told:
 		// on the remote leg that is the operator's own format query parameter,
-		// which may carry spaces, slashes or upper case. The path is built
-		// from that same string unconditionally, with no test of whether it
-		// looks like a path segment, and the lead below covers the odd path a
-		// degenerate name produces.
+		// which may carry spaces or slashes. Case is not among them: the name
+		// is folded to lower case before the lookup, so the message names the
+		// key the lookup failed on. The path is built from that same string
+		// unconditionally, with no test of whether it looks like a path
+		// segment, and the lead below covers the odd path a degenerate name
+		// produces.
 		return nil, fmt.Errorf("%w: %q is in the %q format, which no imported Format parses. "+
 			"Import a parser for it: by convention that is "+
 			"github.com/vislake/speed/pkg/config/format/%s. The convention is a lead, not a "+

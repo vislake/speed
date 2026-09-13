@@ -384,3 +384,118 @@ func TestTransportsAndFormatsAreSeparateNamespaces(t *testing.T) {
 		t.Fatalf("a scheme and a format name that read alike conflicted: %v", err)
 	}
 }
+
+// TestSchemeMatchIgnoresCase pins that a transport answering for an
+// upper-cased scheme is reachable: url.Parse lowercases the scheme of every
+// locator, so a name registered in any other spelling could never be selected.
+func TestSchemeMatchIgnoresCase(t *testing.T) {
+	calls := 0
+	source := fakeSource{scheme: "ETCD", data: []byte("irrelevant"), format: "yaml", calls: &calls}
+	format := defaultFormat()
+	format.content = map[string]any{"cache": map[string]any{"addr": "redis:6379"}}
+	_, tr := locatorSetup(t, HostIdentity{}, source, format)
+
+	for _, locator := range []string{"ETCD:///app/config", "etcd:///app/config"} {
+		content, err := tr.read(t.Context(), locator)
+		if err != nil {
+			t.Fatalf("reading %q failed: %v", locator, err)
+		}
+		section, ok := content["cache"].(map[string]any)
+		if !ok || section["addr"] != "redis:6379" {
+			t.Fatalf("reading %q produced %#v, want what the parser returned", locator, content)
+		}
+	}
+	if calls != 2 {
+		t.Fatalf("the transport was asked %d times, want both spellings to have reached it", calls)
+	}
+}
+
+// TestDuplicateSchemeIgnoringCaseRejected pins the other half of the same
+// rule: two spellings of one scheme are two declarations of the same name, and
+// a duplicate leaves nothing to choose between.
+func TestDuplicateSchemeIgnoringCaseRejected(t *testing.T) {
+	reg := core.New()
+	reg.Register(providing("source.upper", fakeSource{scheme: "ETCD"}))
+	reg.Register(providing("source.lower", fakeSource{scheme: "etcd"}))
+	_, err := collectTransports(reg)
+	if !errors.Is(err, ErrConfigConflict) {
+		t.Fatalf("two transports for one scheme spelled differently returned %v, want "+
+			"ErrConfigConflict", err)
+	}
+	for _, party := range []string{"source.upper", "source.lower", "etcd"} {
+		if !strings.Contains(err.Error(), party) {
+			t.Fatalf("the conflict reads %q, which does not name %q", err, party)
+		}
+	}
+}
+
+// TestFormatMatchIgnoresRegisteredNameCase pins that a parser registered under
+// an upper-cased name answers for the name a transport reports: case is not
+// what tells two formats apart.
+func TestFormatMatchIgnoresRegisteredNameCase(t *testing.T) {
+	format := fakeFormat{name: "YAML", content: map[string]any{"cache": map[string]any{"addr": "redis:6379"}}}
+	_, tr := locatorSetup(t, HostIdentity{}, defaultSource(), format)
+	content, err := tr.read(t.Context(), "file:///app.yaml")
+	if err != nil {
+		t.Fatalf("reading a file whose parser is registered upper-cased failed: %v", err)
+	}
+	section, ok := content["cache"].(map[string]any)
+	if !ok || section["addr"] != "redis:6379" {
+		t.Fatalf("the primary source produced %#v, want what the parser returned", content)
+	}
+}
+
+// TestFormatMatchIgnoresReportedNameCase covers the lookup side of the same
+// rule: the format name reaches a remote transport from the operator's own
+// query parameter, so ?format=YAML selects the parser registered as yaml.
+func TestFormatMatchIgnoresReportedNameCase(t *testing.T) {
+	source := defaultSource()
+	source.format = "YAML"
+	format := defaultFormat()
+	format.content = map[string]any{"cache": map[string]any{"addr": "redis:6379"}}
+	_, tr := locatorSetup(t, HostIdentity{}, source, format)
+	content, err := tr.read(t.Context(), "file:///app.yaml")
+	if err != nil {
+		t.Fatalf("reading a source reporting an upper-cased format name failed: %v", err)
+	}
+	section, ok := content["cache"].(map[string]any)
+	if !ok || section["addr"] != "redis:6379" {
+		t.Fatalf("the primary source produced %#v, want what the parser returned", content)
+	}
+}
+
+func TestDuplicateFormatNameIgnoringCaseRejected(t *testing.T) {
+	reg := core.New()
+	reg.Register(providing("format.upper", fakeFormat{name: "YAML"}))
+	reg.Register(providing("format.lower", fakeFormat{name: "yaml"}))
+	_, err := collectTransports(reg)
+	if !errors.Is(err, ErrConfigConflict) {
+		t.Fatalf("two parsers for one format name spelled differently returned %v, want "+
+			"ErrConfigConflict", err)
+	}
+	for _, party := range []string{"format.upper", "format.lower", "yaml"} {
+		if !strings.Contains(err.Error(), party) {
+			t.Fatalf("the conflict reads %q, which does not name %q", err, party)
+		}
+	}
+}
+
+// TestUnknownFormatPathFollowsTheKeyLookedUp pins for the format leg what
+// TestUnknownSchemeDerivesPathFromRequestedScheme pins for the scheme: the
+// message names the key the lookup actually went by.
+func TestUnknownFormatPathFollowsTheKeyLookedUp(t *testing.T) {
+	source := defaultSource()
+	source.format = "TOML"
+	_, tr := locatorSetup(t, HostIdentity{}, source, defaultFormat())
+	err := readLocator(t, tr, "file:///app.toml")
+	if !errors.Is(err, ErrUnknownFormat) {
+		t.Fatalf("a format no parser answers for returned %v, want ErrUnknownFormat", err)
+	}
+	if !strings.Contains(err.Error(), "github.com/vislake/speed/pkg/config/format/toml") {
+		t.Fatalf("the rejection reads %q, want the lowercased path the lookup went by", err)
+	}
+	if strings.Contains(err.Error(), "format/TOML") {
+		t.Fatalf("the rejection reads %q, which spells the path the way the transport reported "+
+			"the name rather than the way it was looked up", err)
+	}
+}
