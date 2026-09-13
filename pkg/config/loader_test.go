@@ -187,6 +187,33 @@ func TestHelpGoesToStdoutAndTheSentinelCarriesNoText(t *testing.T) {
 	}
 }
 
+// brokenWriter is a stdout whose other end has gone away, which is what
+// `--help | head` leaves behind once head has read its lines and exited.
+type brokenWriter struct{}
+
+func (brokenWriter) Write([]byte) (int, error) { return 0, errors.New("stdout is gone") }
+
+// TestHelpSurvivesAWriteThatFails pins that failing to write the help output
+// does not change what Load returns. Help was asked for and has been answered
+// either way, and the usual way the write fails is a reader that closed the
+// pipe early -- ordinary use of a command-line program, not a startup that
+// went wrong.
+func TestHelpSurvivesAWriteThatFails(t *testing.T) {
+	s := newLoaderSetup(t, HostIdentity{Prefix: "MYAPP"}, nil, []string{"--help"}, nil)
+	s.loader.stdout = brokenWriter{}
+
+	r, err := s.loader.load(t.Context())
+	if !errors.Is(err, ErrHelpRequested) {
+		t.Fatalf("help whose output could not be written returned %v, want ErrHelpRequested", err)
+	}
+	if r != nil {
+		t.Fatal("asking for help produced a reader as well")
+	}
+	if s.stderr.Len() != 0 {
+		t.Fatalf("standard error carries %q; a broken pipe on help is not a diagnostic", s.stderr)
+	}
+}
+
 // TestConflictDetectedBeforeFetch pins that collection comes first: two
 // modules claiming the same path stop the startup before anything is read.
 func TestConflictDetectedBeforeFetch(t *testing.T) {

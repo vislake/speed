@@ -50,9 +50,11 @@ func (l *loader) load(ctx context.Context) (Reader, error) {
 	// rather than exits: core is called by the host and does not call it, and
 	// leaving through the door would skip the host's own cleanup.
 	if flags.help {
-		if renderErr := renderHelp(l.stdout, m); renderErr != nil {
-			return nil, fmt.Errorf("config: writing the help output failed: %w", renderErr)
-		}
+		// A write that fails does not change the outcome: help was asked for
+		// and has been answered either way. The usual failure is a pipe the
+		// other end closed early, as `--help | head` does, and that is
+		// ordinary use rather than a startup that went wrong.
+		_ = renderHelp(l.stdout, m)
 		return nil, ErrHelpRequested
 	}
 
