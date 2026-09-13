@@ -292,10 +292,50 @@ func TestDecodeNeedsAPointerToStruct(t *testing.T) {
 		"a pointer to a scalar": new(int),
 	} {
 		t.Run(name, func(t *testing.T) {
-			if err := r.Decode("cache", target); err == nil {
+			err := r.Decode("cache", target)
+			if err == nil {
 				t.Fatalf("decoding into %s was accepted, and there is nowhere to write", name)
 			}
+			// The sentinel table is closed and covers every startup failure,
+			// so this one is told apart by errors.Is like the rest. A carrier
+			// the module cannot be decoded into is a defect of that module's
+			// declaration alone, and the host fixes it where it fixes the
+			// other defective declarations.
+			if !errors.Is(err, ErrInvalidSchema) {
+				t.Fatalf("decoding into %s returned %v, want ErrInvalidSchema", name, err)
+			}
 		})
+	}
+}
+
+// cyclicTarget is a carrier that reaches itself. Collection refuses a declared
+// one, so a cycle can only arrive through a target the caller assembled for
+// itself and handed to Decode.
+type cyclicTarget struct {
+	Addr string
+	Next *cyclicTarget
+}
+
+// TestDecodeRefusesATargetThatCyclesBack pins that the walk over the target
+// stops on a back edge and says so with the same sentinel the walk over the
+// declaration uses: the two are one defect seen from two ends, and the host's
+// fixing action is the same.
+func TestDecodeRefusesATargetThatCyclesBack(t *testing.T) {
+	m := collect(t, declaring("cache", Schema{Namespace: "cache", Mounts: []Mount{{Value: &decodeOptions{}}}}))
+	r, _ := newReader(t, m)
+
+	var target cyclicTarget
+	target.Next = &target
+	err := r.Decode("cache", &target)
+	if err == nil {
+		t.Fatalf("decoding into a target that reaches itself was accepted, and the walk does " +
+			"not terminate")
+	}
+	if !errors.Is(err, ErrInvalidSchema) {
+		t.Fatalf("a cyclic target returned %v, want ErrInvalidSchema", err)
+	}
+	if !strings.Contains(err.Error(), "Next") {
+		t.Fatalf("the rejection reads %q, which does not name the field that closes the cycle", err)
 	}
 }
 

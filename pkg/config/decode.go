@@ -33,12 +33,15 @@ var _ Reader = (*reader)(nil)
 func (r *reader) Decode(path string, target any) error {
 	v := reflect.ValueOf(target)
 	if v.Kind() != reflect.Pointer || v.IsNil() {
-		return fmt.Errorf("config: Decode writes into a non-nil pointer to a struct, and %T is "+
-			"not one", target)
+		return fmt.Errorf("%w: Decode was given %T for %s, and it writes into a non-nil pointer "+
+			"to a struct. Pass the address of the carrier struct declared for this path",
+			ErrInvalidSchema, target, pathLabel(path))
 	}
 	v = v.Elem()
 	if v.Kind() != reflect.Struct {
-		return fmt.Errorf("config: Decode writes into a struct, and %T points at %s", target, v.Kind())
+		return fmt.Errorf("%w: Decode was given %T for %s, which points at %s, and it writes "+
+			"into a struct. Pass the address of the carrier struct declared for this path",
+			ErrInvalidSchema, target, pathLabel(path), v.Kind())
 	}
 	return r.decodeStruct(v, path, []reflect.Type{v.Type()})
 }
@@ -104,11 +107,15 @@ func (r *reader) decodeStruct(v reflect.Value, prefix string, chain []reflect.Ty
 // descend walks into a nested struct, refusing a type already on the way in.
 // A declared mount cannot hold a cycle, collection rejects those; a target the
 // caller assembled for itself can, and stopping is better than not returning.
+// It is the same defect collection names, so it carries the same sentinel:
+// the sentinel table is closed and every startup failure is in it.
 func (r *reader) descend(v reflect.Value, key string, chain []reflect.Type, f reflect.StructField) error {
 	st := v.Type()
 	if slices.Contains(chain, st) {
-		return fmt.Errorf("config: decoding %s reaches %s again through field %s, so walking the "+
-			"target does not terminate", pathLabel(key), typeName(st), f.Name)
+		return fmt.Errorf("%w: decoding %s reaches %s again through field %s, so walking the "+
+			"target does not terminate. A configuration carrier has no back edges: drop the "+
+			"field, or mirror the part of it that is meant to be configurable",
+			ErrInvalidSchema, pathLabel(key), typeName(st), f.Name)
 	}
 	return r.decodeStruct(v, key, append(chain, st))
 }
