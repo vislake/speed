@@ -167,6 +167,6 @@ speed 不引入进程边界。宿主是单一进程，注册表与全部模块�
 
 | 模块 | 状态 |
 |---|---|
-| [core](modules/design-core.md) | 未实现 |
-| [config](modules/design-config.md) | 未实现 |
+| [core](modules/design-core.md) | 已实现 |
+| [config](modules/design-config.md) | 已实现 |
 | [log](modules/design-log.md) | 未实现 |
