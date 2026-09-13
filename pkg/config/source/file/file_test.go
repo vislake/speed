@@ -3,6 +3,7 @@ package file_test
 import (
 	"context"
 	"errors"
+	"io/fs"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -119,10 +120,18 @@ func TestOpaqueLocatorRejected(t *testing.T) {
 	}
 }
 
+// TestMissingFile also pins that the read error stays on the chain. A host
+// telling "the file is not there" apart from "the file would not open" is the
+// difference between writing one and fixing permissions, and the only thing
+// that carries it is the wrapped fs.ErrNotExist -- which a %v in the wrapping
+// verb would have flattened into text nobody can match on.
 func TestMissingFile(t *testing.T) {
 	_, _, err := fetch(t, "file://"+filepath.Join(t.TempDir(), "absent.yaml"))
 	if !errors.Is(err, config.ErrSourceUnavailable) {
 		t.Fatalf("err = %v, want ErrSourceUnavailable", err)
+	}
+	if !errors.Is(err, fs.ErrNotExist) {
+		t.Fatalf("err = %v, want the absent file to stay reachable as fs.ErrNotExist", err)
 	}
 }
 
@@ -140,6 +149,12 @@ func TestUnreadableFile(t *testing.T) {
 	_, _, err := fetch(t, locator)
 	if !errors.Is(err, config.ErrSourceUnavailable) {
 		t.Fatalf("err = %v, want ErrSourceUnavailable", err)
+	}
+	if !errors.Is(err, fs.ErrPermission) {
+		t.Fatalf("err = %v, want the refused open to stay reachable as fs.ErrPermission", err)
+	}
+	if errors.Is(err, fs.ErrNotExist) {
+		t.Fatalf("err = %v, which claims the file is absent when it is unreadable", err)
 	}
 }
 

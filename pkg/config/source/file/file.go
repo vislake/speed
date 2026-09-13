@@ -81,9 +81,14 @@ func (source) Fetch(_ context.Context, locator *url.URL) (data []byte, format st
 	if err != nil {
 		return nil, "", err
 	}
+	//nolint:gosec // G304: a path taken from the locator is what this
+	// transport is for. The locator comes from the host's own configuration
+	// -- its declared default, its environment prefix or its command line --
+	// and localPath above has already refused every shape but an absolute
+	// local path, so there is no wider input to narrow.
 	data, err = os.ReadFile(name)
 	if err != nil {
-		return nil, "", fmt.Errorf("%w: %s could not be read: %v", config.ErrSourceUnavailable, name, err)
+		return nil, "", fmt.Errorf("%w: %s could not be read: %w", config.ErrSourceUnavailable, name, err)
 	}
 	return data, format, nil
 }

@@ -115,7 +115,7 @@ func (r *reader) leaf(path string, fv reflect.Value) error {
 		return nil
 	}
 	if err := assign(fv, held.value); err != nil {
-		return fmt.Errorf("%w: %q takes %s, and %s", ErrTypeMismatch, path, typeName(fv.Type()), err)
+		return fmt.Errorf("%w: %q takes %s, and %w", ErrTypeMismatch, path, typeName(fv.Type()), err)
 	}
 	return nil
 }

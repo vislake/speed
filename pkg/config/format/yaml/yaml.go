@@ -15,9 +15,10 @@ import (
 	"fmt"
 	"io"
 
+	yamlv3 "go.yaml.in/yaml/v3"
+
 	"github.com/vislake/speed/pkg/config"
 	"github.com/vislake/speed/pkg/core"
-	yamlv3 "go.yaml.in/yaml/v3"
 )
 
 // moduleName is the name this parser registers under. Transports and formats
@@ -171,7 +172,7 @@ func (c *converter) value(node *yamlv3.Node) (any, error) {
 	case yamlv3.ScalarNode:
 		var scalar any
 		if err := node.Decode(&scalar); err != nil {
-			return nil, fmt.Errorf("line %d: %v", node.Line, err)
+			return nil, fmt.Errorf("line %d: %w", node.Line, err)
 		}
 		return scalar, nil
 	}

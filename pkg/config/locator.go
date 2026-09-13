@@ -83,7 +83,7 @@ func locate(m *manifest, environ map[string]string, flags *parsedFlags) string {
 func (t *transports) read(ctx context.Context, locator string) (map[string]any, error) {
 	parsed, err := url.Parse(locator)
 	if err != nil {
-		return nil, fmt.Errorf("%w: %q does not parse as a URI: %v", ErrMalformedLocator, locator, err)
+		return nil, fmt.Errorf("%w: %q does not parse as a URI: %w", ErrMalformedLocator, locator, err)
 	}
 	if parsed.Scheme == "" {
 		return nil, fmt.Errorf("%w: %q names no scheme, and the scheme is what selects the "+
@@ -116,7 +116,7 @@ func (t *transports) read(ctx context.Context, locator string) (map[string]any, 
 
 	content, err := format.Unmarshal(raw)
 	if err != nil {
-		return nil, fmt.Errorf("%w: %q does not parse as %s: %v", ErrMalformedConfig, locator, formatName, err)
+		return nil, fmt.Errorf("%w: %q does not parse as %s: %w", ErrMalformedConfig, locator, formatName, err)
 	}
 	if content == nil {
 		content = map[string]any{}
@@ -135,5 +135,5 @@ func fetchError(locator string, err error) error {
 			return err
 		}
 	}
-	return fmt.Errorf("%w: %q could not be read: %v", ErrSourceUnavailable, locator, err)
+	return fmt.Errorf("%w: %q could not be read: %w", ErrSourceUnavailable, locator, err)
 }

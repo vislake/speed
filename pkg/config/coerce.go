@@ -25,7 +25,7 @@ var durationType = reflect.TypeFor[time.Duration]()
 func coerce(path string, raw any, t reflect.Type) (any, error) {
 	out := reflect.New(t).Elem()
 	if err := assign(out, raw); err != nil {
-		return nil, fmt.Errorf("%w: %q takes %s, and %s", ErrTypeMismatch, path, typeName(t), err)
+		return nil, fmt.Errorf("%w: %q takes %s, and %w", ErrTypeMismatch, path, typeName(t), err)
 	}
 	return out.Interface(), nil
 }
@@ -177,7 +177,7 @@ func assignText(u encoding.TextUnmarshaler, t reflect.Type, raw any) error {
 			typeName(t), describe(raw))
 	}
 	if err := u.UnmarshalText([]byte(s)); err != nil {
-		return fmt.Errorf("%s rejected %q: %v", typeName(t), s, err)
+		return fmt.Errorf("%s rejected %q: %w", typeName(t), s, err)
 	}
 	return nil
 }
