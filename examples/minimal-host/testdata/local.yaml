@@ -1,0 +1,6 @@
+# A config source that only sets the built-in greeter's word. With no address
+# for the remote greeter, that implementation states itself disabled and the
+# built-in one runs.
+greeter:
+  local:
+    salutation: from-file

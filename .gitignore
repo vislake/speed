@@ -19,6 +19,10 @@ Thumbs.db
 # The tool module's in-place build output: configrefgen is run with
 # `go run .` from tools/configrefgen, never as a built binary.
 /tools/configrefgen/configrefgen
+# The example host's in-place build output: `go build ./...` in a main
+# package writes the binary beside the sources, and the end-to-end cases
+# build their own copy into a temporary directory instead.
+/examples/minimal-host/minimal-host
 
 # Python (the checkers and the release coordinator under tools/)
 __pycache__/

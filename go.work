@@ -1,6 +1,7 @@
 go 1.26.8
 
 use (
+	./examples/minimal-host
 	./examples/reference-app
 	./go/admin
 	./go/ai-gateway

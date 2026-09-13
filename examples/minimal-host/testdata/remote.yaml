@@ -1,0 +1,7 @@
+# A config source that configures the remote greeter. Its address is the input
+# that enables the implementation, so the built-in greeter stands down.
+greeter:
+  local:
+    salutation: from-file
+  remote:
+    addr: from-file:1234
