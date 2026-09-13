@@ -305,3 +305,25 @@ func TestEnablementBeforeResolutionReportsNotReady(t *testing.T) {
 		t.Fatal("Enablement answered before resolution had run")
 	}
 }
+
+// TestResolveMatchesCapabilityByTypeIdentity pins how one capability token
+// matches another: by the identity of the element type, not by assignability.
+// A module delivering superCacheCap delivers one capability, and a request for
+// the capability it embeds does not see it -- matching by assignability would
+// put that module in two groups at once, and exclusive resolution could then
+// not name the providers of a capability at all.
+func TestResolveMatchesCapabilityByTypeIdentity(t *testing.T) {
+	reg := New()
+	seed(t, reg, Module{Name: "super", Provides: provides((*superCacheCap)(nil))}, &product{id: "super"})
+
+	if _, err := reg.Resolve((*cacheCap)(nil)); !errors.Is(err, ErrMissingProvider) {
+		t.Fatalf("resolving the embedded capability returned %v, want ErrMissingProvider", err)
+	}
+	got, err := reg.Resolve((*superCacheCap)(nil))
+	if err != nil {
+		t.Fatalf("resolving the declared capability failed: %v", err)
+	}
+	if got.(*product).id != "super" {
+		t.Fatalf("the declared capability resolved to %#v, want the module's own product", got)
+	}
+}

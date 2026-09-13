@@ -211,3 +211,15 @@ func TestResolutionCoversEveryStance(t *testing.T) {
 		t.Fatalf("resolution reported on %v, want %v", got, want)
 	}
 }
+
+// TestExclusiveResolutionGroupsByTypeIdentity pins the resolution half of the
+// same rule: an exclusive provider of superCacheCap and an exclusive provider
+// of the capability it embeds are providers of two capabilities, so neither
+// crowds the other out.
+func TestExclusiveResolutionGroupsByTypeIdentity(t *testing.T) {
+	final := mustResolve(t,
+		stated("super", StateAuto, "", exclusive((*superCacheCap)(nil))),
+		stated("plain", StateAuto, "", exclusive((*cacheCap)(nil))),
+	)
+	assertEnabled(t, final, "super", "plain")
+}

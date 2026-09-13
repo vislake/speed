@@ -13,11 +13,20 @@ type storeCap interface{ storeID() string }
 
 type readerCap interface{ readerID() string }
 
+// superCacheCap embeds cacheCap, so a value satisfying it satisfies cacheCap
+// as well. They are still two capabilities: a declaration matches a request by
+// the identity of the type, never by assignability.
+type superCacheCap interface {
+	cacheCap
+	superID() string
+}
+
 type product struct{ id string }
 
 func (p *product) cacheID() string  { return p.id }
 func (p *product) storeID() string  { return p.id }
 func (p *product) readerID() string { return p.id }
+func (p *product) superID() string  { return p.id }
 
 // schemaRes and the two below stand in for resource declarations: core stores
 // them as given and never interprets them.

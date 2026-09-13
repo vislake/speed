@@ -632,3 +632,27 @@ func TestRunEmitsDiagnosticsAfterResolution(t *testing.T) {
 		t.Errorf("Enablement reported %+v/%v for a disabled module", got, ok)
 	}
 }
+
+// TestProvidesWithoutNewFailsUndelivered pins the consequence of the two rules
+// meeting: a module with no New has nil for its instance in every later stage,
+// so one that declares Provides delivers nothing and must fail. A module
+// carrying resources alone cannot declare a capability on the side, because
+// what is delivered is the instance and it builds none.
+func TestProvidesWithoutNewFailsUndelivered(t *testing.T) {
+	reg := core.New()
+	register(reg, core.Module{
+		Name:      "resources-only",
+		Resources: []any{"a declaration core never interprets"},
+		Provides:  []core.Provision{{Token: (*Reader)(nil)}},
+	})
+
+	err := runToFailure(t, reg)
+	if !errors.Is(err, core.ErrUndeliveredCapability) {
+		t.Fatalf("Run returned %v, want ErrUndeliveredCapability", err)
+	}
+	for _, want := range []string{"resources-only", "Reader", "New"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error %q does not mention %q", err, want)
+		}
+	}
+}
