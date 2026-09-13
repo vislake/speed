@@ -32,6 +32,14 @@ Progress has exactly one source of truth in this file:
 
 Statuses are a closed vocabulary:
   planned -> coding -> review -> fixing -> done, plus blocked.
+
+**A status move is written before the work it announces, never after it.**
+Starting W1 means: edit W1's row to coding, save this file, and only then open
+the first source file. The same order holds for every later move. This is a
+rule about sequence, not a reminder to keep notes -- "I will fill it in when
+the item is done" empties the one window onto a running workflow for exactly
+the stretch of time anyone would have looked through it, and the finished file
+reads the same either way, so nothing catches it afterwards.
 -->
 
 # <Task name>
@@ -54,7 +62,12 @@ agents writing one file is the accident this table exists to prevent.
 
 Owns: the paths (or path globs) this item alone may write.
 Depends on: item IDs that must reach done first, or "--".
-Updated: YYYY-MM-DD HH:MM, touched every time Status changes.
+Updated: YYYY-MM-DD HH:MM, touched in the same edit that changes Status --
+which happens before the work that status describes, never after it.
+
+This table is what the coder monitoring the workflow reads, and while the work
+runs it is nearly all it has. A row that says planned is a claim that nothing
+has been written for that item yet, and someone is acting on that claim now.
 -->
 
 | ID | Item | Owns | Depends on | Status | Updated |
@@ -88,6 +101,10 @@ Updated: YYYY-MM-DD HH:MM, touched every time Status changes.
 Appended as the work happens, newest last. One line per event that changes
 someone's picture of the task: a status move, a review verdict, a failure, a
 decision taken. Not a narration of every edit.
+
+A status move and its log line are written in the same edit, before the work
+they announce -- the table says where the item stands, this says how it got
+there, and they never disagree by being saved at different times.
 
 The coder's progress report is assembled from this log, so an event that never
 lands here never reaches the user.

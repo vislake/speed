@@ -116,7 +116,8 @@ monitored and cannot survive a restart.
 ### In Between — What the Plan Says
 
 The plan owns the middle: how many rounds, how much runs in parallel, when
-things are tested. Two requirements survive whatever shape it picks:
+things are tested. Three requirements survive whatever shape it picks, and none
+of them is a default a plan may depart from:
 
 - **Work is reviewed by someone who did not produce it** — an independent
   adversarial reviewer reading the diff itself rather than the author's account
@@ -126,6 +127,13 @@ things are tested. Two requirements survive whatever shape it picks:
 - **Verification passes before the last stage begins**, under the universal
   standard ([Task to Merge](task-to-merge.md), section 5). No exceptions are
   available here that are not available anywhere else.
+- **The status move is written first, then the work is done.** An agent's first
+  action on an item, before it opens a single source file, is to set that item's
+  row to `coding` and write its `Updated` cell. Every later transition works the
+  same way — the table changes, *then* the thing it names happens: `review`
+  before the diff is handed over, `fixing` before the findings are picked up,
+  `blocked` the moment the block is hit. An agent that codes first and records
+  afterwards has broken this rule even if its file ends up accurate.
 
 Beyond those, the defaults below are recommendations. A plan is free to depart
 from them, and says why when it does.
@@ -135,7 +143,6 @@ from them, and says why when it does.
   narrow checks that keep an agent honest are fine, but the full run waits until
   everything is coded, then happens once over the whole result. Many agents
   running full suites concurrently is where the time and the machine go.
-- Each agent updates the plan document as its item moves.
 
 ### Last Stage — Merge and Clean
 
@@ -188,9 +195,18 @@ It carries, in this order:
 
 Rules:
 
-- **Written by the agents doing the work**, as the work happens. Not
-  reconstructed at the end — a plan document that only becomes accurate at the
-  end is useless while the work runs, which is the only time anyone needs it.
+- **Written by the agents doing the work, each status move ahead of the work it
+  announces** (section 4). The test is not whether the finished file is accurate.
+  It is whether the file, read at any moment while the work runs, says what is
+  true at that moment — and while the work runs is the only time anyone needs it.
+- **DO NOT save the updates up.** "I will record it when the item is done" reads
+  like bookkeeping deferred and is in fact the monitoring window switched off for
+  the entire time there was anything to monitor; the finished document looks the
+  same either way, so nobody catches it afterwards. Two dozen rows sitting at
+  `planned` over a working tree that already holds thousands of lines of new code
+  is exactly this failure, and it leaves counting files on disk as the only way
+  left to find out what is happening — which is the mechanism being bypassed, not
+  the mechanism working.
 - **Read, not written, by the coder.** The monitoring session does not edit it.
 - **A plan document is a process record**, which is why it stays out of version
   control (the entry point's Configuration section) and out of the documentation
@@ -225,8 +241,13 @@ it.
 
 Each heartbeat, in order:
 
-1. **Read every active plan document.** Progress comes from the file, not from
-   asking the agents.
+1. **Read every active plan document, and cross-check it against the branch.**
+   Progress comes from the file, not from asking the agents — and a `git diff
+   --stat` against the target branch says whether the file is still reporting. A
+   tree carrying substantial changes under a table of `planned` rows is a stopped
+   plan document: report it as a finding and have the workflow correct it, rather
+   than quietly switching to reading the filesystem, which loses the window for
+   every other task too.
 2. **Check CI** on the default branch and on any branch a workflow is about to
    land.
 3. **Dispatch into every free slot.** A CI failure first, then the queue in
