@@ -69,7 +69,7 @@ func TestHelpRendersGroupsPlaceholdersAndDefaults(t *testing.T) {
 		"Cache:",
 		"-s, --salutation TEXT",
 		"the greeting to use",
-		`(default: "Hello")`,
+		"(default: Hello)",
 		"--cache-ttl VALUE",
 		"(default: 5m0s)",
 	} {
@@ -172,9 +172,9 @@ func requiredHelpManifest(t *testing.T) *manifest {
 }
 
 // TestHelpMarksRequiredItemsInsteadOfDefaults pins that a required item shows
-// what it asks of the reader. (default: "") would read as "leave it out and
-// get the empty string", while leaving it out really means the module never
-// comes up.
+// what it asks of the reader. A column showing an empty value would read as
+// "leave it out and get the empty string", while leaving it out really means
+// the module never comes up.
 func TestHelpMarksRequiredItemsInsteadOfDefaults(t *testing.T) {
 	line := helpLineFor(t, renderedHelp(t, requiredHelpManifest(t)), "--addr")
 	if !strings.Contains(line, "(required)") {
@@ -251,6 +251,19 @@ type helpLevel int
 
 func (l helpLevel) String() string { return "debug" }
 
+// helpLabel carries its own text form, and that form holds a space while the
+// type is neither a string nor a list of strings. It is the shape the quoting
+// rule has to reach: a rule reading the field's Go kind leaves this one bare,
+// and the reader who copies the line back hands the program two arguments.
+type helpLabel struct{ name string }
+
+func (l helpLabel) MarshalText() ([]byte, error) { return []byte(l.name), nil }
+
+func (l *helpLabel) UnmarshalText(text []byte) error {
+	l.name = string(text)
+	return nil
+}
+
 // helpPercent reads itself from text but writes none: it holds 50 and takes
 // "50%" back. It is the shape a leaf has when its stored value and its own
 // input form are not the same text.
@@ -273,11 +286,22 @@ func (p helpPercent) String() string { return strconv.Itoa(int(p)) + "%" }
 
 // defaultsCorpus carries one field of every shape the default column has to
 // render, so one rendering covers them all: the plain scalars, a named integer
-// that prints a word of its own, a duration, two types that carry their own
+// that prints a word of its own, a duration, three types that carry their own
 // text form, one that reads text without writing any, both states of a scalar
 // pointer, a sensitive unset one, and a list in both of its states.
+//
+// The texts are chosen for the quoting rule as much as for the types: a value
+// needing no quotes, one carrying a space behind a text form, one carrying the
+// characters a shell acts on, one carrying a quote of its own, one carrying a
+// character with no typeable form at all, and one opening with a dash.
 type defaultsCorpus struct {
 	Text    string
+	Spaced  string
+	Tricky  string
+	Quoted  string
+	Control string
+	Offset  int
+	Label   helpLabel
 	Flag    bool
 	Count   int
 	Level   helpLevel
@@ -297,21 +321,28 @@ func defaultsCorpusManifest(t *testing.T) *manifest {
 	t.Helper()
 	held := 7
 	defaults := defaultsCorpus{
-		Text:   "Hello",
-		Flag:   true,
-		Count:  8080,
-		Level:  3,
-		Ratio:  0.1,
-		TTL:    5 * time.Minute,
-		Moment: time.Date(2026, 9, 13, 10, 0, 0, 0, time.UTC),
-		Amount: *big.NewInt(42),
-		Share:  50,
-		Held:   &held,
-		Hosts:  []string{"a", "b"},
+		Text:    "Hello",
+		Spaced:  "Hello there",
+		Tricky:  `a$b;c\d*e`,
+		Quoted:  "it's",
+		Control: "a\tb",
+		Offset:  -42,
+		Label:   helpLabel{name: "west wing"},
+		Flag:    true,
+		Count:   8080,
+		Level:   3,
+		Ratio:   0.1,
+		TTL:     5 * time.Minute,
+		Moment:  time.Date(2026, 9, 13, 10, 0, 0, 0, time.UTC),
+		Amount:  *big.NewInt(42),
+		Share:   50,
+		Held:    &held,
+		Hosts:   []string{"a", "b"},
 	}
-	items := make(map[string]Item, 14)
+	items := make(map[string]Item, 20)
 	for _, key := range []string{
-		"text", "flag", "count", "level", "ratio", "ttl", "moment",
+		"text", "spaced", "tricky", "quoted", "control", "offset", "label",
+		"flag", "count", "level", "ratio", "ttl", "moment",
 		"amount", "share", "held", "missing", "no-hosts", "hosts",
 	} {
 		items[key] = Item{Origins: OriginFlag, FlagName: key}
@@ -331,10 +362,14 @@ func defaultsCorpusManifest(t *testing.T) *manifest {
 
 // notTypedBack names the arguments the round trip leaves out, with the reason
 // each one is left out. A skip is written down rather than silently passed
-// over, so the set of shapes that cannot be typed back stays visible.
+// over, so the set of shapes that cannot be typed back stays visible. The
+// round trip itself runs in help_quoting_test.go, through a real shell.
 var notTypedBack = map[string]string{
 	"share": "the type reads itself from text and writes none, so the column " +
 		"carries Go's own form rather than a value the parser takes back",
+	"control": "its text carries a tab, and a command line has no single-line " +
+		"literal standing for one, so the column renders an escaped form meant " +
+		"to be read rather than copied",
 }
 
 // renderedDefault picks the value out of a rendered line, or reports that the
@@ -351,23 +386,6 @@ func renderedDefault(line string) (string, bool) {
 		return "", false
 	}
 	return rest[:end], true
-}
-
-// asTyped turns a rendered default into the text a reader typing it into a
-// shell would hand the parser: one outer pair of double quotes is what the
-// shell removes, and nothing else. Decoding Go's escapes here would be a step
-// only Go knows how to take, and it would take the question this test asks -
-// whether the rendered value can be typed back as it stands - out of the test.
-// A value carrying a backslash survives no medium unchanged and is reported
-// rather than converted.
-func asTyped(rendered string) (string, bool) {
-	if strings.Contains(rendered, `\`) {
-		return "", false
-	}
-	if len(rendered) >= 2 && strings.HasPrefix(rendered, `"`) && strings.HasSuffix(rendered, `"`) {
-		return rendered[1 : len(rendered)-1], true
-	}
-	return rendered, true
 }
 
 // sameDefault compares what the command line produced with the declared
@@ -387,49 +405,6 @@ func sameDefault(got, want any) bool {
 		return true
 	}
 	return reflect.DeepEqual(got, want)
-}
-
-// TestHelpDefaultsRoundTripThroughTheCommandLine pins the rule the whole
-// default column rests on: the reader copies the value out of the help output
-// into the command line and gets that same default back. The check goes
-// through the real path - the rendered text, the parser, the conversion - so a
-// value that only looks right to the eye does not pass.
-func TestHelpDefaultsRoundTripThroughTheCommandLine(t *testing.T) {
-	m := defaultsCorpusManifest(t)
-	out := renderedHelp(t, m)
-	for _, item := range m.items {
-		name := item.item.FlagName
-		if reason, skipped := notTypedBack[name]; skipped {
-			t.Logf("--%s stays out of the round trip: %s", name, reason)
-			continue
-		}
-		rendered, ok := renderedDefault(helpLineFor(t, out, "--"+name))
-		if !ok {
-			continue // the line carries a marker, and a marker is not a value
-		}
-		typed, typeable := asTyped(rendered)
-		if !typeable {
-			t.Errorf("--%s renders %s, which carries an escape and reaches the parser "+
-				"as different text in every medium", name, rendered)
-			continue
-		}
-		p, err := parseFlags(m, []string{"--" + name + "=" + typed})
-		if err != nil {
-			t.Errorf("--%s renders %s, and the command line does not take it back: %v",
-				name, rendered, err)
-			continue
-		}
-		d := newData(m)
-		if err := d.applyFlags(m, p); err != nil {
-			t.Errorf("--%s renders %s, and the command line does not take it back: %v",
-				name, rendered, err)
-			continue
-		}
-		if got := d.values[item.path].value; !sameDefault(got, item.def) {
-			t.Errorf("--%s renders %s, which reads back as %#v while the default is %#v",
-				name, rendered, got, item.def)
-		}
-	}
 }
 
 // TestHelpPointerDefaultShowsThePointee pins that a scalar pointer renders
@@ -511,24 +486,35 @@ func TestHelpDurationDefaultIsWrittenAsDuration(t *testing.T) {
 func TestHelpStringListDefaultIsCommaSeparated(t *testing.T) {
 	out := renderedHelp(t, defaultsCorpusManifest(t))
 	hosts := helpLineFor(t, out, "--hosts")
-	if !strings.Contains(hosts, `(default: "a,b")`) {
+	if !strings.Contains(hosts, "(default: a,b)") {
 		t.Fatalf("the list default renders as %q, and its flat form is a,b", hosts)
 	}
 	if strings.Contains(hosts, "[a b]") {
 		t.Fatalf("the list default renders as %q, which is Go's printed form", hosts)
 	}
-	if empty := helpLineFor(t, out, "--no-hosts"); !strings.Contains(empty, `(default: "")`) {
+	if empty := helpLineFor(t, out, "--no-hosts"); !strings.Contains(empty, `(default: '')`) {
 		t.Fatalf("the empty list renders as %q, and an empty list is written as nothing", empty)
 	}
 }
 
-// TestHelpQuotesAStringDefaultTheWayTheCommandLineTakesItBack pins the quotes
-// around a string: the reader copies the whole thing, the shell removes one
-// layer, and the parser receives the value as it stands.
-func TestHelpQuotesAStringDefaultTheWayTheCommandLineTakesItBack(t *testing.T) {
-	line := helpLineFor(t, renderedHelp(t, defaultsCorpusManifest(t)), "--text")
-	if !strings.Contains(line, `(default: "Hello")`) {
-		t.Fatalf("the string default renders as %q, and it is quoted so it can be copied whole", line)
+// TestHelpQuotesAStringDefaultOnlyWhenItsTextNeedsIt pins that a string is not
+// quoted for being a string. The quotes follow the text: a word a command line
+// takes as it stands is rendered as it stands, and one the shell would split
+// or rewrite is wrapped so the reader copies the whole of it.
+func TestHelpQuotesAStringDefaultOnlyWhenItsTextNeedsIt(t *testing.T) {
+	out := renderedHelp(t, defaultsCorpusManifest(t))
+	for name, want := range map[string]string{
+		"text":   "Hello",
+		"spaced": `'Hello there'`,
+		"quoted": `'it'\''s'`,
+	} {
+		rendered, ok := renderedDefault(helpLineFor(t, out, "--"+name))
+		if !ok {
+			t.Fatalf("--%s carries no default at all", name)
+		}
+		if rendered != want {
+			t.Errorf("--%s renders %s, and its text asks for %s", name, rendered, want)
+		}
 	}
 }
 

@@ -200,7 +200,10 @@ func TestHelpExitsZeroAndListsFlags(t *testing.T) {
 	// of offering a default nobody can rely on.
 	requireContains(t, got.stdout, "(required)", "the help output")
 	requireContains(t, got.stdout, "the word the built-in greeter opens with", "the help output")
-	requireContains(t, got.stdout, `(default: "`+localDefaults.Salutation+`")`, "the help output")
+	// The default is a word a command line takes as it stands, so it is
+	// rendered as it stands: what gets quoted is decided by the text, not by
+	// the type of the field it came from.
+	requireContains(t, got.stdout, "(default: "+localDefaults.Salutation+")", "the help output")
 	requireContains(t, got.stdout, "--config LOCATOR", "the help output")
 	// Nothing was read: the help output does not depend on a config source
 	// being reachable, so a locator pointing nowhere changes nothing.
