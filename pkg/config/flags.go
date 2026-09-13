@@ -88,6 +88,9 @@ func (p *parsedFlags) long(m *manifest, args []string, i *int, name, value strin
 			"is never derived from a path",
 			ErrUnknownKey, name)
 	}
+	if err := acceptsFlag(item, "--"+name); err != nil {
+		return err
+	}
 	return p.record(item, args, i, "--"+name, value, hasValue)
 }
 
@@ -98,7 +101,27 @@ func (p *parsedFlags) short(m *manifest, args []string, i *int, name, value stri
 			"names do not cluster, so -abc is one name rather than three",
 			ErrUnknownKey, name)
 	}
+	if err := acceptsFlag(item, "-"+name); err != nil {
+		return err
+	}
 	return p.record(item, args, i, "-"+name, value, hasValue)
+}
+
+// acceptsFlag refuses an argument whose item names itself on the command line
+// without taking the command line as an origin. A name alone does not open the
+// origin: the item is in the manifest, where its name still has to be unique
+// and where the help output passes over it, but nothing reads it from here. A
+// value given anyway would be an argument the help does not list and yet
+// changes the configuration, which is the same refusal the primary source
+// makes, told apart by its own message.
+func acceptsFlag(item *manifestItem, written string) error {
+	if item.origins.has(OriginFlag) {
+		return nil
+	}
+	return fmt.Errorf("%w: the command line gives %s, which module %q declares as the name of "+
+		"%q but does not accept from the command line: it reads %s. Add OriginFlag to the item, "+
+		"or drop FlagName",
+		ErrUnknownKey, written, item.module, item.path, originNames(item.origins))
 }
 
 // record takes the value of one argument and files it under the item's path.

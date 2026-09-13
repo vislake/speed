@@ -114,6 +114,34 @@ func TestItemWithoutFlagOriginHasNoFlag(t *testing.T) {
 	}
 }
 
+// TestFlagNameWithoutFlagOriginRejected pins the second half of the
+// unknown-key rule on the command line: the manifest has the name, but the
+// item does not take the command line as an origin, so the value is refused
+// rather than applied. Accepting it would make an argument the help output
+// does not list and yet changes the configuration.
+func TestFlagNameWithoutFlagOriginRejected(t *testing.T) {
+	defaults := serverOptions{Addr: ":8080"}
+	m := collect(t, identifying("host", HostIdentity{Prefix: "MYAPP"}), declaring("server", Schema{
+		Namespace: "server",
+		Mounts:    []Mount{{Value: &defaults}},
+		Items: map[string]Item{
+			"addr": {Origins: OriginPrimary, FlagName: "addr", FlagShort: "a"},
+		},
+	}))
+	for _, args := range [][]string{{"--addr=from-cli"}, {"-a", "from-cli"}} {
+		err := parseRejects(t, m, args...)
+		if !errors.Is(err, ErrUnknownKey) {
+			t.Fatalf("%v returned %v, want ErrUnknownKey", args, err)
+		}
+		if !strings.Contains(err.Error(), "does not accept from the command line") {
+			t.Fatalf("%v returned %q, which does not say the item refuses this origin", args, err)
+		}
+		if !strings.Contains(err.Error(), "server.addr") {
+			t.Fatalf("%v returned %q, which does not name the item", args, err)
+		}
+	}
+}
+
 // TestReservedConfigFlagAcceptedAndNotInData pins that the strict parser lets
 // this module's own name through, and that the value stays out of the config
 // data: were it to go in, the unknown-key check would trip over it first.
