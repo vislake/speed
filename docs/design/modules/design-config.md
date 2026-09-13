@@ -510,12 +510,17 @@ cache.redis.max-conns   ->   MYAPP_CACHE__REDIS__MAX_CONNS
 
 | 功能 | 状态 | 代码 |
 |---|---|---|
-| 输入项声明与收集 | 未实现 | — |
-| 命令行与环境变量解析 | 未实现 | — |
-| 传输扩展点 | 未实现 | — |
-| 格式扩展点 | 未实现 | — |
-| 文件传输实现 | 未实现 | — |
-| JSON 格式实现 | 未实现 | — |
-| YAML 格式实现 | 未实现 | — |
-| 环境变量与命令行覆盖层 | 未实现 | — |
-| 配置数据的产出 | 未实现 | — |
+| 输入项声明与收集 | 已实现 | `pkg/config/schema.go`、`pkg/config/manifest.go` |
+| 冲突判据 | 已实现 | `pkg/config/conflict.go` |
+| 配置定位符 | 已实现 | `pkg/config/locator.go` |
+| 命令行与环境变量解析 | 已实现 | `pkg/config/flags.go`、`pkg/config/env.go` |
+| 帮助输出 | 已实现 | `pkg/config/help.go` |
+| 传输扩展点 | 已实现 | `pkg/config/contract.go` |
+| 格式扩展点 | 已实现 | `pkg/config/contract.go` |
+| 文件传输实现 | 已实现 | `pkg/config/source/file` |
+| JSON 格式实现 | 已实现 | `pkg/config/format/json` |
+| YAML 格式实现 | 已实现 | `pkg/config/format/yaml` |
+| 环境变量与命令行覆盖层 | 已实现 | `pkg/config/data.go`、`pkg/config/loader.go` |
+| 配置数据的产出 | 已实现 | `pkg/config/loader.go` |
+| 取值与校验 | 已实现 | `pkg/config/decode.go`、`pkg/config/coerce.go` |
+| 哨兵错误 | 已实现 | `pkg/config/errors.go` |

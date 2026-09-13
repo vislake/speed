@@ -460,8 +460,12 @@ http.Spec{...}
 
 | 功能 | 状态 | 代码 |
 |---|---|---|
-| 描述符与注册 | 未实现 | — |
-| 描述符与实例查询 | 未实现 | — |
-| 资源查询 | 未实现 | — |
-| 依赖解析与顺序 | 未实现 | — |
-| 生命周期驱动 | 未实现 | — |
+| 描述符与注册 | 已实现 | `pkg/core/module.go`、`pkg/core/registry.go` |
+| 功能标识与校验 | 已实现 | `pkg/core/token.go` |
+| 描述符与实例查询 | 已实现 | `pkg/core/query.go`、`pkg/core/generic.go` |
+| 资源查询 | 已实现 | `pkg/core/query.go` |
+| 启用表态与排他消解 | 已实现 | `pkg/core/enablement.go` |
+| 依赖解析与顺序 | 已实现 | `pkg/core/depgraph.go` |
+| 生命周期驱动与回滚 | 已实现 | `pkg/core/run.go`、`pkg/core/rollback.go` |
+| 启动诊断 | 已实现 | `pkg/core/diagnostics.go` |
+| 哨兵错误 | 已实现 | `pkg/core/errors.go` |
