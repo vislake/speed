@@ -1,0 +1,141 @@
+<!--
+Template for a plan document: <plans>/<task-slug>.md in the main checkout, where
+the slug says what the work is and is the same string that names the workflow and
+appears in every report. The file is untracked and never lives inside a
+workflow's working tree -- that tree is removed when the workflow finishes.
+Delete every comment block before the workflow starts.
+
+One file per task. It is the single coordination surface between the workflow
+doing the work and the coder watching it: the agents write, the coder only
+reads. Section order is fixed so that a monitoring session can scan any plan
+document the same way.
+
+**Language: write the prose in the language of the session.** The task
+statement, the item descriptions, the acceptance criteria and the log entries
+are written in whatever language the work is being discussed in -- this file is
+English because the skill is, not because the plan has to be.
+
+**The structure is not translated.** Section headings, the Work Items table
+header, the Stage and Status vocabularies and the item ids stay exactly as they
+appear here: they are the keys every reader and the checker match on, and a
+translated heading is an unreadable plan to both.
+
+Progress has exactly one source of truth in this file:
+
+  - The Work Items table holds current state. Nowhere else repeats it -- the
+    detail blocks below carry what does not change (what an item touches, what
+    it must satisfy), never its status.
+  - The Progress Log holds what happened. The table says where things stand;
+    the log says how they got there, including the failures and the rework.
+  - How fresh the file is comes from the file's own modification time, not from
+    a timestamp copied into the text where it can go stale.
+
+Statuses are a closed vocabulary:
+  planned -> coding -> review -> fixing -> done, plus blocked.
+-->
+
+# <Task name>
+
+**Stage**: <plan | build | land | done>
+**Branch**: <branch the workflow works on>
+
+## Task
+
+<The task statement, restated as it was accepted. What is being asked for, and
+what "done" means for the task as a whole. No solution design here -- that is
+what the work items are.>
+
+## Work Items
+
+<!--
+The decomposition must partition the files it touches: two items that write the
+same file are one item, or they are serialized through Depends on. Parallel
+agents writing one file is the accident this table exists to prevent.
+
+Owns: the paths (or path globs) this item alone may write.
+Depends on: item IDs that must reach done first, or "--".
+Updated: YYYY-MM-DD HH:MM, touched every time Status changes.
+-->
+
+| ID | Item | Owns | Depends on | Status | Updated |
+|---|---|---|---|---|---|
+| W1 | <short title> | <paths this item owns> | -- | planned | <YYYY-MM-DD HH:MM> |
+| W2 | <short title> | <paths this item owns> | W1 | planned | <YYYY-MM-DD HH:MM> |
+
+### W1 — <short title>
+
+**Changes**: <what this item does, in a sentence or two.>
+
+**Acceptance**:
+- [ ] <A criterion that can fail. "Works correctly" cannot fail; "rejects a
+      negative amount with ErrInvalidAmount" can.>
+- [ ] <The test that proves it, named by file and case.>
+
+**Reviewer**: <agent that reviewed this item -- never the one that wrote it.>
+
+### W2 — <short title>
+
+**Changes**: <...>
+
+**Acceptance**:
+- [ ] <...>
+
+**Reviewer**: <...>
+
+## Progress Log
+
+<!--
+Appended as the work happens, newest last. One line per event that changes
+someone's picture of the task: a status move, a review verdict, a failure, a
+decision taken. Not a narration of every edit.
+
+The coder's progress report is assembled from this log, so an event that never
+lands here never reaches the user.
+-->
+
+- `<YYYY-MM-DD HH:MM>` `W1` <what happened>
+
+## Open Findings
+
+<!--
+Review findings not yet resolved. A finding the author disputes stays here with
+both positions recorded -- dropping it silently is what this table prevents.
+State: open | fixed | disputed | accepted-as-is.
+-->
+
+| ID | Item | Finding | Raised by | State |
+|---|---|---|---|---|
+| F1 | W1 | <what is wrong and why it matters> | <reviewer> | open |
+
+## Verification
+
+<!--
+Run over the whole result once everything is coded and reviewed, before the last
+stage begins. Record the command as it was actually run and what it actually
+returned. A command that was not run is recorded as not run -- never as assumed
+to pass.
+-->
+
+| Command | Result | When |
+|---|---|---|
+| <the project's test command> | <pass / fail: what failed> | <YYYY-MM-DD HH:MM> |
+| <the project's lint command> | <pass / fail: what failed> | <YYYY-MM-DD HH:MM> |
+
+**Warnings**: <every warning surfaced, and for each: fixed, or why it stands and
+what the follow-up is. "None" only when the output genuinely had none.>
+
+## Deliberate Omissions
+
+<!--
+Anything inside the task's scope that is not being delivered, and why. Empty is
+a valid answer; silence is not -- an omission the user learns about at merge
+time is a defect in this document.
+-->
+
+- <what was left out> — <why, and what would have to change to do it>
+
+## Outcome
+
+<!-- Filled at the last stage, immediately before archiving. -->
+
+**Landed**: <merge commit sha, or "not landed: reason">

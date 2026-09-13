@@ -204,7 +204,7 @@ Each of these has bitten real SaaS products:
 
 | Location | Content |
 |---|---|
-| `.claude/skills/**` | Coding standards handbooks — how to write the code, with templates and checklists. Load the relevant skill before writing: `backend-coding-standards`, `frontend-coding-standards`, `commit-convention`. |
+| `.claude/skills/**` | Standards handbooks — how the work is done, with templates and checklists. Load the relevant skill before starting: `development-workflow` (how a task travels from statement to merge, plus the coder coordinator role), `backend-coding-standards`, `frontend-coding-standards`, `commit-convention`, `document-standards`. |
 | `docs/internal/**` | Design decisions and *why* they were made, including rejected alternatives. Start at `00-overview.md`, which carries the full navigation table. |
 | per-module `AGENTS.md` | Module-level discipline that ships with the module to consuming projects, whatever AI tooling they use. |
 
