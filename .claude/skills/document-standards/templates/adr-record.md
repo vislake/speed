@@ -6,9 +6,11 @@ The slug names the TOPIC, not this decision -- every record about the same
 topic carries the same slug, so the topic's decisions group together. The date
 is when the decision was accepted, ISO YYYY-MM-DD, and it never changes.
 
-Once accepted this record is frozen. Change the decision by writing a new
-record that supersedes this one. Only the status field, typos and broken links
-may be edited afterwards.
+This record is a draft until the decision is accepted -- while it is under
+review, revise it freely: rewrite it, retitle it, change its slug, merge or
+split it. Acceptance is the merge that lands it, and it freezes the record:
+from then on, change the decision by writing a new record that supersedes this
+one, and edit only the status field, typos and broken links.
 
 One decision per record. Write it impersonally -- "Adopt X", never "We decided
 to adopt X".

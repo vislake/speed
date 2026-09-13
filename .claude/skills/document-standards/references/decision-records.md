@@ -17,15 +17,25 @@ The failure mode of this document type is inflation: hundreds of records, none o
 - A choice that can be reversed within a day gets no record.
 - **One decision per record.** A record that needs many pages is several decisions that have not been separated.
 
-## 2. A Record Is Immutable
+## 2. A Record Is Immutable — From Acceptance, Not From Authorship
 
-**A record freezes when it is accepted.** Changing a decision means writing a new record that supersedes the old one, never editing the old one.
+**Immutability is a semantic property of an accepted decision, not a rule against editing a file.** Until the decision is accepted, the record is a draft like any other document: rewrite it, restructure it, retitle it, change its slug, merge it into another record, split it in two, or delete it outright. Drafting is where a record is made correct, and nothing in this standard constrains it. A draft that still reads badly, states the options imprecisely or gets the terminology wrong is fixed in place, not superseded.
+
+**A record freezes when the decision is accepted.** From that point, changing the decision means writing a new record that supersedes the old one, never editing the old one.
 
 - Typographic fixes and broken-link repairs are allowed.
 - The status field is updated when the record is superseded or deprecated — that is the one substantive edit a frozen record accepts, and it exists only because a reader of the old record must not act on it unaware.
 - Context, options, decision and consequences **are never edited**.
 
 The reason is the whole point of keeping the tree: a record that can be rewritten cannot be trusted to say what was actually decided at the time, and then it has no value that git does not already provide.
+
+### When Acceptance Happens
+
+**Acceptance is a project event, not a field in the file.** The status field carries the decision's force in the project, not the document's editing state — which is why `Proposed` does not exist (section 4). Writing `Accepted` into a draft does not accept it.
+
+A decision is accepted when the project starts acting on it: the record lands in the documentation tree as the decision in force, and other documents may reference it. **In this repository the boundary is the commit that merges the record.** Before that commit, revise freely; after it, supersede.
+
+Terminology unification across a batch of records under review, a rewrite of an options section that turned out to be imprecise, or renaming a topic slug are therefore ordinary drafting work while the batch is still under review — and become supersession work the moment it is merged. Finish that work before merging.
 
 ## 3. Layout and Naming
 
@@ -116,7 +126,7 @@ Template: `templates/adr-readme.md`.
 - The design detail that follows from the decision (that is the design document's)
 - Proposals that have not been decided
 - TODO lists, schedules, owners
-- Edits to a frozen record's context, options, decision or consequences
+- Edits to an accepted record's context, options, decision or consequences (a draft under review is not yet accepted — see section 2)
 
 ## 8. Checklist
 
@@ -131,5 +141,5 @@ The common checklist in `SKILL.md` applies as well.
 - [ ] The decision is stated impersonally: `Adopt X`
 - [ ] Consequences include the costs accepted, not only the benefits
 - [ ] No design detail that belongs to the design document
-- [ ] No edit to a frozen record beyond its status, typos and broken links
+- [ ] No edit to an accepted record beyond its status, typos and broken links; drafting edits were finished before the merge that accepted it
 - [ ] The record appears in the README index exactly once, under its topic
