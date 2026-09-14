@@ -52,12 +52,29 @@ type Endpoint interface {
 // Order is a preference that only picks among the positions the constraints
 // already allow. The two cannot contradict each other, because Order never
 // selects outside the ready set.
+//
+// Provides is what makes those constraints land: After and Before name
+// capabilities, and which layer on the chain stands for a capability can only
+// be said by that layer itself. The registration surface cannot supply it —
+// Endpoint carries no registrant identity, core offers no "the module
+// currently in Init" query, and a registration may be made from a goroutine,
+// so the call stack says nothing either.
 type Middleware struct {
 	// Name is for diagnostics only: the panic text and the chain listed at
 	// startup. It is not an identity this module matches anything against.
 	Name string
+	// Provides names the capabilities this layer stands for on the chain, so
+	// that another layer's After or Before can point at it. Leaving it empty
+	// is legal, at the cost that nobody can point at this layer.
+	//
+	// It is not checked against the Provides of the registrant's own module
+	// descriptor, for the same reason it has to be declared here at all:
+	// this module does not know who registered the layer. A layer may
+	// therefore claim a capability its module does not deliver.
+	Provides []core.Token
 	// After places this layer inside the middleware of these capabilities.
-	// A capability with no provider in this assembly drops the constraint.
+	// A capability with no provider in this assembly drops the constraint,
+	// and the dropped constraint is listed in the startup diagnostics.
 	After []core.Token
 	// Before places this layer outside the middleware of these
 	// capabilities, with the same treatment of an absent provider.
@@ -66,7 +83,10 @@ type Middleware struct {
 	// smaller value sits further out. Layers with equal Order and no
 	// constraint between them keep their registration order.
 	Order int
-	// Wrap is the layer itself. A nil Wrap panics at registration.
+	// Wrap is the layer itself. A nil Wrap panics at registration; a Wrap
+	// that hands back a nil handler is a chain assembly failure in Serve,
+	// wrapping ErrChainAssembly, because a panic there would skip the
+	// registry's rollback.
 	Wrap func(nethttp.Handler) nethttp.Handler
 }
 

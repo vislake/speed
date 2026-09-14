@@ -4,9 +4,12 @@ import (
 	"errors"
 	"fmt"
 	nethttp "net/http"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
+
+	"github.com/vislake/speed/pkg/core"
 )
 
 // testRouter builds a router over the named endpoints, with the gate still
@@ -231,6 +234,75 @@ func TestIllegalConstraintTokenPanicsAtTheRegistration(t *testing.T) {
 
 	if len(r.endpoints["public"].layers) != 0 {
 		t.Error("the layer with the illegal declaration was recorded anyway")
+	}
+}
+
+// TestIllegalProvidesTokenPanicsNamingTheDeclaration pins that Provides is
+// checked at the call, alongside After and Before, and with the same locating
+// text: which endpoint, which layer, which position in which field.
+//
+// It is the field that decides what every other layer's constraints resolve
+// against, so a token in it that designates nothing does not merely fail to
+// place this layer — it silently removes the target of everybody else's After.
+// An implementation that checks After and Before and leaves Provides alone
+// panics on none of the four rows below.
+func TestIllegalProvidesTokenPanicsNamingTheDeclaration(t *testing.T) {
+	var interfaceValue probe
+	for _, c := range []struct {
+		name  string
+		token core.Token
+		says  string
+	}{
+		{name: "an untyped nil", token: nil, says: "untyped nil"},
+		{name: "a non-pointer", token: concreteProbe{}, says: "must be a typed nil pointer"},
+		{name: "a non-nil pointer", token: &interfaceValue, says: "must be a nil pointer"},
+		{name: "a pointer to a concrete type", token: (*concreteProbe)(nil), says: "must point to an interface"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			r := testRouter("public")
+			e := endpointOf(t, r, "public")
+			r.open()
+
+			text := wantPanic(t, "Use with "+c.name+" in Provides", func() {
+				e.Use(Middleware{
+					Name:     "trace",
+					Provides: []core.Token{(*probe)(nil), c.token},
+					Wrap:     passThrough,
+				})
+			})
+			mustContain(t, text, `endpoint "public"`, "the endpoint the declaration was made on")
+			mustContain(t, text, `middleware "trace"`, "the layer that declared it")
+			mustContain(t, text, "Provides[1]", "which declaration in which field")
+			mustContain(t, text, c.says, "what is wrong with the token")
+
+			if len(r.endpoints["public"].layers) != 0 {
+				t.Error("the layer with the illegal declaration was recorded anyway")
+			}
+		})
+	}
+}
+
+// TestProvidesIsRecordedOnTheLayer pins the field reaching the graph node the
+// ordering reads. Dropped between Use and the record, every constraint on the
+// endpoint would find no provider, and the chain would come out ordered by
+// Order alone with nothing saying so.
+func TestProvidesIsRecordedOnTheLayer(t *testing.T) {
+	r := testRouter("public")
+	e := endpointOf(t, r, "public")
+	r.open()
+
+	e.Use(Middleware{Name: "auth", Provides: []core.Token{(*probe)(nil)}, Wrap: passThrough})
+
+	layers := r.endpoints["public"].layers
+	if len(layers) != 1 {
+		t.Fatalf("%d layers were recorded, want 1", len(layers))
+	}
+	if len(layers[0].provides) != 1 {
+		t.Fatalf("the recorded layer stands for %v, and the registration named one capability",
+			layers[0].provides)
+	}
+	if got := capabilityKey(layers[0].provides[0], "the recorded layer"); got != reflect.TypeOf((*probe)(nil)).Elem() {
+		t.Errorf("the recorded layer stands for %s, and the registration named probe", got)
 	}
 }
 

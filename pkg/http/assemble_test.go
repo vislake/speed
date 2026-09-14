@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	nethttp "net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -85,21 +86,50 @@ func TestRouteConflictIsStartupFailure(t *testing.T) {
 	mustContain(t, err.Error(), `"public"`, "the endpoint the clash is on")
 }
 
-// TestConstraintThroughUseFindsNoProvider pins what an After constraint does
-// today when it is declared the only way a registrant can declare one.
+// TestRouteConflictNamesBothPatternsAndTheEndpoint pins what the failure has to
+// carry. The registration surface does not know who registered either pattern,
+// so the patterns themselves are the only route back to the two calls, and one
+// of them alone sends the reader looking for a second registration they cannot
+// find.
 //
-// A recorded layer carries no capability of its own: Middleware declares none
-// and Use carries no registrant identity, so the provider index the ordering
-// builds is empty whatever is registered. Every After and Before edge is
-// therefore absent and Order alone decides, which is why "tenant" comes out
-// ahead of the layer it declared itself to be inside of. The ordering resolves
-// constraints; what is missing is its input, and the day a registrant can say
-// what its layer delivers this observation changes.
-func TestConstraintThroughUseFindsNoProvider(t *testing.T) {
+// The two patterns here are different strings, which is what makes the
+// assertion discriminating: with one pattern registered twice, naming only the
+// one being mounted would read the same as naming both. The fragment asserted
+// is the pair standing together in this module's own sentence, not merely both
+// appearing somewhere in a message that ends with the engine's own words.
+func TestRouteConflictNamesBothPatternsAndTheEndpoint(t *testing.T) {
+	logger, _ := newRecordingLogger()
+	_, err := assembleEndpoint(t, testSettings("public"), nil, logger, func(e Endpoint) {
+		e.Route("GET /things/{id}", nethttp.NotFoundHandler())
+		e.Route("GET /things/{name}", nethttp.NotFoundHandler())
+	})
+	if !errors.Is(err, ErrRouteConflict) {
+		t.Fatalf("two patterns matching the same requests did not report ErrRouteConflict: %v", err)
+	}
+	mustContain(t, err.Error(), `"GET /things/{id}" and "GET /things/{name}"`,
+		"both patterns, named together, which is the whole of the way back to the two calls")
+	mustContain(t, err.Error(), `endpoint "public"`, "the endpoint the clash is on")
+}
+
+// TestConstraintThroughUseOrdersAgainstItsProvider pins that a constraint
+// declared the only way a registrant can declare one — through Use — reaches
+// the layer it points at.
+//
+// The two Order values are deliberately the wrong way round: left to Order
+// alone the chain is "tenant" then "auth", and that is exactly what an
+// implementation whose provider index stays empty produces, whatever anyone
+// registers. Provides is what the After resolves against, so the constraint
+// wins and "auth" comes out first.
+func TestConstraintThroughUseOrdersAgainstItsProvider(t *testing.T) {
 	tr := &trace{}
 	logger, _ := newRecordingLogger()
 	handler := mustAssemble(t, testSettings("public"), nil, logger, func(e Endpoint) {
-		e.Use(Middleware{Name: "auth", Order: 10, Wrap: noteLayer(tr, "auth")})
+		e.Use(Middleware{
+			Name:     "auth",
+			Order:    10,
+			Provides: []core.Token{(*capAuth)(nil)},
+			Wrap:     noteLayer(tr, "auth"),
+		})
 		e.Use(Middleware{
 			Name:  "tenant",
 			Order: 0,
@@ -111,33 +141,119 @@ func TestConstraintThroughUseFindsNoProvider(t *testing.T) {
 
 	handler.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(nethttp.MethodGet, "/things", nil))
 
-	want := []string{"tenant", "auth"}
+	want := []string{"auth", "tenant"}
 	if got := tr.seen(); !equalStrings(got, want) {
-		t.Errorf("the chain ran in the order %v, and with no provider to bind to it is %v", got, want)
+		t.Errorf("the chain ran in the order %v, want %v: After outranks Order, and %v is what "+
+			"comes out when the constraint finds nothing to bind to", got, want,
+			[]string{"tenant", "auth"})
 	}
 }
 
-// TestMiddlewareCycleIsStartupFailure pins that the ordering's verdict reaches
-// the assembly rather than being swallowed into a chain with layers missing.
-func TestMiddlewareCycleIsStartupFailure(t *testing.T) {
+// TestEmptyProvidesStaysLegal pins the design's word that a layer standing for
+// nothing is a legal registration: it is ordered with the rest and it is in the
+// chain. Making Provides required — the obvious way to make every constraint
+// land — would fail here, and it is a change to the design rather than a fix.
+func TestEmptyProvidesStaysLegal(t *testing.T) {
+	tr := &trace{}
 	logger, _ := newRecordingLogger()
-	r := newRouter([]endpointSettings{testSettings("public")},
-		func() Engine { return nethttp.NewServeMux() })
-	r.open()
-	e := r.endpoints["public"]
-	// The constraints are put on the recorded layers directly: a registrant
-	// cannot yet say which capability its layer delivers, so a cycle cannot
-	// be built through the surface alone.
-	e.layers = []layer{
-		registered("a", 0, tokens((*capAuth)(nil)), tokens((*capTenant)(nil)), nil),
-		registered("b", 0, tokens((*capTenant)(nil)), tokens((*capAuth)(nil)), nil),
-	}
-	r.seal()
+	handler := mustAssemble(t, testSettings("public"), nil, logger, func(e Endpoint) {
+		e.Use(Middleware{Name: "anonymous", Order: 0, Wrap: noteLayer(tr, "anonymous")})
+		e.Use(Middleware{
+			Name:     "auth",
+			Order:    10,
+			Provides: []core.Token{(*capAuth)(nil)},
+			Wrap:     noteLayer(tr, "auth"),
+		})
+		e.Route("GET /things", nethttp.NotFoundHandler())
+	})
 
-	_, err := e.assemble(nethttp.NewServeMux(), nil, logger)
-	if !errors.Is(err, ErrMiddlewareCycle) {
-		t.Fatalf("a cycle in the constraints did not fail the assembly: %v", err)
+	handler.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(nethttp.MethodGet, "/things", nil))
+
+	want := []string{"anonymous", "auth"}
+	if got := tr.seen(); !equalStrings(got, want) {
+		t.Errorf("the chain ran in the order %v, want %v: a layer that names no capability of "+
+			"its own is still ordered and still runs", got, want)
 	}
+}
+
+// TestUnlandedConstraintIsReported pins the diagnostic the design requires.
+//
+// One assembly carries both shapes: "tenant" points at a capability a layer on
+// this endpoint stands for, and "audit" points at one nobody stands for. Three
+// things are asserted together, because each of them alone passes against a
+// different wrong implementation — one that fails the assembly, one that writes
+// nothing, and one that lists every constraint whether it placed anything or
+// not.
+func TestUnlandedConstraintIsReported(t *testing.T) {
+	logger, records := newRecordingLogger()
+	_, err := assembleEndpoint(t, testSettings("public"), nil, logger, func(e Endpoint) {
+		e.Use(Middleware{
+			Name:     "auth",
+			Provides: []core.Token{(*capAuth)(nil)},
+			Wrap:     passThrough,
+		})
+		e.Use(Middleware{
+			Name:  "tenant",
+			After: []core.Token{(*capAuth)(nil)},
+			Wrap:  passThrough,
+		})
+		e.Use(Middleware{
+			Name:  "audit",
+			After: []core.Token{(*capQuota)(nil)},
+			Wrap:  passThrough,
+		})
+		e.Route("GET /things", nethttp.NotFoundHandler())
+	})
+	if err != nil {
+		t.Fatalf("a constraint with no provider must not fail the assembly: %v", err)
+	}
+
+	written := strings.Join(records.at(slog.LevelWarn), "\n")
+	if written == "" {
+		t.Fatal("nothing was written about the constraint that landed on nothing, so a module " +
+			"absent from the process and a module that forgot its Provides look the same")
+	}
+	mustContain(t, written, "audit", "the layer whose constraint placed nothing")
+	mustContain(t, written, "After[0]", "which declaration on that layer")
+	mustContain(t, written, typeName(reflect.TypeOf((*capQuota)(nil)).Elem()),
+		"the capability nobody stands for")
+	mustContain(t, written, `endpoint=public`, "the endpoint the declaration was made on")
+	if strings.Contains(written, "tenant") {
+		t.Errorf("the report lists tenant, whose constraint found a provider and placed it. "+
+			"Listing the constraints that worked buries the ones that did not:\n%s", written)
+	}
+}
+
+// TestCycleThroughUseFailsTheAssembly pins that a cycle is reachable through
+// the public surface at all, and that the ordering's verdict reaches the
+// assembly rather than being swallowed into a chain with layers missing.
+//
+// Both layers are registered with Use, as a registrant would. With the
+// provider index empty neither After binds to anything, the graph has no edges
+// and the assembly succeeds — which is the observation this replaces.
+func TestCycleThroughUseFailsTheAssembly(t *testing.T) {
+	logger, _ := newRecordingLogger()
+	_, err := assembleEndpoint(t, testSettings("public"), nil, logger, func(e Endpoint) {
+		e.Use(Middleware{
+			Name:     "a",
+			Provides: []core.Token{(*capAuth)(nil)},
+			After:    []core.Token{(*capTenant)(nil)},
+			Wrap:     passThrough,
+		})
+		e.Use(Middleware{
+			Name:     "b",
+			Provides: []core.Token{(*capTenant)(nil)},
+			After:    []core.Token{(*capAuth)(nil)},
+			Wrap:     passThrough,
+		})
+		e.Route("GET /things", nethttp.NotFoundHandler())
+	})
+	if !errors.Is(err, ErrMiddlewareCycle) {
+		t.Fatalf("two layers each declaring itself inside the other did not fail the assembly: %v", err)
+	}
+	mustContain(t, err.Error(), `"a"`, "one member of the cycle")
+	mustContain(t, err.Error(), `"b"`, "the other member of the cycle")
+	mustContain(t, err.Error(), `endpoint "public"`, "the endpoint the cycle is on")
 }
 
 // TestChainOrderIsOutermostFirst pins that the chain is wrapped in the order
@@ -290,17 +406,38 @@ func TestAssembledChainIsListed(t *testing.T) {
 	mustContain(t, written, "endpoint=public", "the endpoint the chain belongs to")
 }
 
-// TestWrapReturningNilPanicsNamingTheLayer pins the hole a layer can leave in
-// the chain. Left alone, the request dies on a nil handler with nothing to say
-// which layer produced it.
-func TestWrapReturningNilPanicsNamingTheLayer(t *testing.T) {
+// TestWrapReturningNilFailsTheAssembly pins the hole a layer can leave in the
+// chain, and how it is reported. Left alone the request would die on a nil
+// handler with nothing to say which layer produced it.
+//
+// It is a startup failure and not a panic, and both halves are asserted here.
+// Assembly runs in Serve: a panic there unwinds past the registry, which then
+// never runs the rollback, so the endpoints bound before this one keep their
+// sockets and their accept goroutines with nobody left to close them. A
+// returned error ends the startup the ordinary way and the rollback runs.
+func TestWrapReturningNilFailsTheAssembly(t *testing.T) {
 	logger, _ := newRecordingLogger()
-	text := wantPanic(t, "assembling a chain with a layer whose Wrap returns nil", func() {
-		mustAssemble(t, testSettings("public"), nil, logger, func(e Endpoint) {
+
+	var err error
+	func() {
+		defer func() {
+			if raised := recover(); raised != nil {
+				t.Fatalf("assembling panicked with %v; in Serve a panic skips the registry's "+
+					"rollback and strands the endpoints already bound", raised)
+			}
+		}()
+		_, err = assembleEndpoint(t, testSettings("public"), nil, logger, func(e Endpoint) {
 			e.Use(Middleware{Name: "hollow", Wrap: func(nethttp.Handler) nethttp.Handler { return nil }})
+			e.Route("GET /things", nethttp.NotFoundHandler())
 		})
-	})
-	mustContain(t, text, "hollow", "the layer that returned nothing")
+	}()
+
+	if !errors.Is(err, ErrChainAssembly) {
+		t.Fatalf("a layer whose Wrap returned nil reported %v, want an error wrapping "+
+			"ErrChainAssembly", err)
+	}
+	mustContain(t, err.Error(), `"hollow"`, "the layer that returned nothing")
+	mustContain(t, err.Error(), `endpoint "public"`, "the endpoint whose chain has the hole")
 }
 
 // equalStrings compares two sequences element by element.

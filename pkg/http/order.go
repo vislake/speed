@@ -11,29 +11,53 @@ import (
 )
 
 // layer is one middleware as an endpoint recorded it: the registration itself,
-// and the capabilities its registrant delivers.
+// and the capabilities it stands for on the chain.
 //
 // provides is what an After or a Before constraint resolves against. A
-// constraint names a capability, and the layers delivering that capability are
-// the ones this layer is placed against; a layer that delivers nothing is
-// still ordered, it is just never the target of anyone's constraint. The
+// constraint names a capability, and the layers standing for that capability
+// are the ones this layer is placed against; a layer that stands for nothing
+// is still ordered, it is just never the target of anyone's constraint. The
 // ordering reads the field and nothing about where it came from.
 type layer struct {
 	mw       Middleware
 	provides []core.Token
 }
 
-// orderLayers returns an endpoint's middleware from outermost to innermost.
-// The layers arrive in registration order, and that order is the final
-// tie-breaker, so the caller appends as it registers and does not sort.
+// unlandedConstraint is one After or Before whose capability no layer on this
+// endpoint stands for, so the constraint drew no edge and placed nothing.
+//
+// It is not a failure: a capability absent from the assembly is a legal
+// configuration, and the layer runs unconstrained by design. It is reported
+// because the two ways of arriving here are the same shape in the graph — the
+// module that would stand for the capability is not in this process, or it is
+// in it and left its Provides empty — and without the report neither of them
+// produces any signal at all.
+type unlandedConstraint struct {
+	// endpoint and layer say where the declaration was made.
+	endpoint string
+	layer    string
+	// field is "After" or "Before" and at is the position in it, which is
+	// what locates the one declaration among several on the same layer.
+	field string
+	at    int
+	// capability is the type the token designates, rendered with its
+	// package path, so the reader can go and look at who was meant to
+	// stand for it.
+	capability string
+}
+
+// orderLayers returns an endpoint's middleware from outermost to innermost,
+// together with the constraints that landed on nothing. The layers arrive in
+// registration order, and that order is the final tie-breaker, so the caller
+// appends as it registers and does not sort.
 //
 // After and Before give the graph its edges: After C places this layer inside
-// the middleware delivering C, so an edge runs from each provider of C to this
-// layer, the provider coming out first and landing further out. Before C is
-// the same edge reversed. A constraint naming a capability no layer on this
-// endpoint delivers has no provider to draw an edge to, so the constraint
-// disappears with no signal of any kind: a layer declaring itself inside
-// authentication runs unconstrained in a process carrying no authentication.
+// the middleware standing for C, so an edge runs from each provider of C to
+// this layer, the provider coming out first and landing further out. Before C
+// is the same edge reversed. A constraint naming a capability no layer on this
+// endpoint stands for has no provider to draw an edge to, so it places
+// nothing; it is not a failure, and it comes back in the second return value
+// for the caller to write out, because nothing else about it is observable.
 //
 // Order decides only within the ready set — among the layers whose
 // constraints are already satisfied at that point — so it can never select a
@@ -45,8 +69,26 @@ type layer struct {
 // The graph is built per endpoint, per assembly, and thrown away with the
 // call. It costs O(V+E) in the number of layers and the constraints that hold
 // between them, once per endpoint at startup.
-func orderLayers(endpoint string, layers []layer) ([]layer, error) {
+func orderLayers(endpoint string, layers []layer) ([]layer, []unlandedConstraint, error) {
 	providers := providersByCapability(endpoint, layers)
+
+	var unlanded []unlandedConstraint
+	// note records a constraint that found no provider. A layer standing
+	// for the capability itself counts as a provider even though the edge
+	// to itself is dropped: the capability is represented on this chain,
+	// which is what the reader of this list is being told about.
+	note := func(name, field string, at int, key reflect.Type) {
+		if len(providers[key]) > 0 {
+			return
+		}
+		unlanded = append(unlanded, unlandedConstraint{
+			endpoint:   endpoint,
+			layer:      name,
+			field:      field,
+			at:         at,
+			capability: typeName(key),
+		})
+	}
 
 	edges := make([]map[int]bool, len(layers))
 	indegree := make([]int, len(layers))
@@ -71,12 +113,14 @@ func orderLayers(endpoint string, layers []layer) ([]layer, error) {
 	for i, l := range layers {
 		for j, token := range l.mw.After {
 			key := capabilityKey(token, declarationSite(endpoint, l.mw.Name, "After", j))
+			note(l.mw.Name, "After", j, key)
 			for _, p := range providers[key] {
 				addEdge(p, i)
 			}
 		}
 		for j, token := range l.mw.Before {
 			key := capabilityKey(token, declarationSite(endpoint, l.mw.Name, "Before", j))
+			note(l.mw.Name, "Before", j, key)
 			for _, p := range providers[key] {
 				addEdge(i, p)
 			}
@@ -111,17 +155,20 @@ func orderLayers(endpoint string, layers []layer) ([]layer, error) {
 		}
 	}
 	if len(order) != len(layers) {
-		return nil, cycleError(endpoint, layers, order, edges)
+		// No chain comes out of a cyclic graph, and the unlanded list
+		// describes an assembly that is about to be abandoned; the
+		// failure is the only thing worth reading here.
+		return nil, nil, cycleError(endpoint, layers, order, edges)
 	}
 
 	out := make([]layer, 0, len(order))
 	for _, at := range order {
 		out = append(out, layers[at])
 	}
-	return out, nil
+	return out, unlanded, nil
 }
 
-// providersByCapability indexes the layers by the capabilities they deliver.
+// providersByCapability indexes the layers by the capabilities they stand for.
 // Two tokens designating one capability land on one key, whoever wrote them,
 // which is what lets a constraint reach a layer registered by a module it
 // never names.
@@ -129,7 +176,7 @@ func providersByCapability(endpoint string, layers []layer) map[reflect.Type][]i
 	providers := make(map[reflect.Type][]int)
 	for i, l := range layers {
 		for j, token := range l.provides {
-			key := capabilityKey(token, declarationSite(endpoint, l.mw.Name, "provides", j))
+			key := capabilityKey(token, declarationSite(endpoint, l.mw.Name, "Provides", j))
 			providers[key] = append(providers[key], i)
 		}
 	}

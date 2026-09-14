@@ -22,12 +22,28 @@ var (
 	// routing engine judged to be in conflict. It surfaces while the chain
 	// is assembled in Serve, not at registration: a registration records a
 	// declaration, and conflict is a property of the assembled set.
+	//
+	// The text names both patterns and the endpoint they are on, and not
+	// the registrants: the registration surface does not know who called
+	// it, the same reason a layer has to declare its own Provides. A
+	// pattern is a literal in the source, so naming it locates the call.
 	ErrRouteConflict = errors.New("http: two route patterns on one endpoint conflict")
 	// ErrMiddlewareCycle reports that the After and Before constraints of
 	// an endpoint's middleware form a cycle, so no order satisfies them.
 	// The text names every member of the cycle along with its own
 	// declarations.
 	ErrMiddlewareCycle = errors.New("http: middleware constraints form a cycle")
+	// ErrChainAssembly reports that an endpoint's middleware chain could
+	// not be built out of the layers registered on it. A Wrap that hands
+	// back a nil handler is that class: the layer would leave a hole in the
+	// chain, and the request would die on a nil handler with nothing naming
+	// the layer that produced it. The text names the layer and the endpoint.
+	//
+	// It is a startup failure and not a panic, although the mistake is at
+	// the call site: assembly runs in Serve, where a panic would skip the
+	// registry's rollback and leave the sockets and goroutines of the
+	// endpoints already bound with nobody to release them.
+	ErrChainAssembly = errors.New("http: endpoint's middleware chain could not be assembled")
 	// ErrInvalidSpec reports a declared OpenAPI fragment whose shape is not
 	// usable: empty, not UTF-8, not JSON, not an object at the top level, or
 	// an object without an openapi field. The content beyond that shape is

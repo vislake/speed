@@ -25,23 +25,22 @@ type (
 // carries one, so the fixtures do too.
 func passThrough(h nethttp.Handler) nethttp.Handler { return h }
 
-// registered builds one layer with its own delivery list supplied directly.
-// That list is what the constraints of the other layers resolve against, and
-// the registration surface has no way to fill it: Middleware declares no
-// capability and Use carries no registrant identity. These fixtures therefore
-// reach a state Use cannot produce, and what they pin is the ordering itself,
-// not what a registrant can express through the surface today.
+// registered builds one layer the way Use records one: the declaration and the
+// capabilities it stands for, which are the registration's own Provides.
+//
+// Calling orderLayers on such a slice is the ordering seen on its own, with no
+// gate, no engine and no chain around it. The same declarations made through
+// the public surface are exercised in assemble_test.go; what is pinned here is
+// the solver.
 func registered(name string, order int, provides, after, before []core.Token) layer {
-	return layer{
-		mw: Middleware{
-			Name:   name,
-			After:  after,
-			Before: before,
-			Order:  order,
-			Wrap:   passThrough,
-		},
-		provides: provides,
-	}
+	return registeredLayer(Middleware{
+		Name:     name,
+		Provides: provides,
+		After:    after,
+		Before:   before,
+		Order:    order,
+		Wrap:     passThrough,
+	})
 }
 
 // tokens is shorthand for a constraint or delivery list.
@@ -59,9 +58,13 @@ func layerNames(layers []layer) []string {
 
 func solve(t *testing.T, layers []layer) []layer {
 	t.Helper()
-	out, err := orderLayers("public", layers)
+	out, unlanded, err := orderLayers("public", layers)
 	if err != nil {
 		t.Fatalf("ordering %v failed: %v", layerNames(layers), err)
+	}
+	if len(unlanded) != 0 {
+		t.Fatalf("ordering %v reported the constraints %+v as landing on nothing, and these "+
+			"fixtures declare a provider for every capability they name", layerNames(layers), unlanded)
 	}
 	return out
 }
@@ -166,18 +169,22 @@ func TestEqualOrderKeepsRegistrationOrder(t *testing.T) {
 }
 
 // TestMissingProviderDropsConstraint pins the cost the design accepts: a
-// constraint naming a capability nothing on this endpoint delivers disappears,
-// and the assembly carries on with no failure and no diagnostic. The layer
-// that declared itself inside recovery is ordered by its Order alone, which
-// here puts it where its constraint would never have allowed it to be if a
-// recovery layer had been present.
+// constraint naming a capability no layer on this endpoint stands for
+// disappears, and the assembly carries on without failing. The layer that
+// declared itself inside recovery is ordered by its Order alone, which here
+// puts it where its constraint would never have allowed it to be if a recovery
+// layer had been present.
+//
+// Carrying on is not the same as saying nothing: the dropped constraint comes
+// back in the report, because the layer that declared it believes it has a
+// position it does not have, and this list is the only place that shows.
 func TestMissingProviderDropsConstraint(t *testing.T) {
 	layers := []layer{
 		registered("trace", 5, nil, tokens((*capRecovery)(nil)), nil),
 		registered("metrics", 1, nil, nil, nil),
 	}
 
-	out, err := orderLayers("public", layers)
+	out, unlanded, err := orderLayers("public", layers)
 	if err != nil {
 		t.Fatalf("a constraint with no provider must not fail the assembly, got: %v", err)
 	}
@@ -186,6 +193,62 @@ func TestMissingProviderDropsConstraint(t *testing.T) {
 	if !slices.Equal(got, want) {
 		t.Errorf("chain is %v, want %v: with no provider for the capability the constraint "+
 			"draws no edge, leaving Order to decide", got, want)
+	}
+
+	if len(unlanded) != 1 {
+		t.Fatalf("the dropped constraint was reported as %+v, want exactly the one that "+
+			"landed on nothing", unlanded)
+	}
+	only := unlanded[0]
+	if only.endpoint != "public" || only.layer != "trace" || only.field != "After" || only.at != 0 {
+		t.Errorf("the report locates the constraint at %+v, and it was declared as "+
+			"endpoint public, middleware trace, After[0]", only)
+	}
+	if want := typeName(reflect.TypeOf((*capRecovery)(nil)).Elem()); only.capability != want {
+		t.Errorf("the report names the capability %q, want %q: without the type name the "+
+			"reader cannot tell which module was meant to stand for it", only.capability, want)
+	}
+}
+
+// TestLandedConstraintIsNotReported is the other half. A constraint that found
+// a provider placed the layer, so listing it would bury the ones that did not
+// among the ones that did, and the list stops being a signal.
+func TestLandedConstraintIsNotReported(t *testing.T) {
+	layers := []layer{
+		registered("auth", 0, tokens((*capAuth)(nil)), nil, nil),
+		registered("tenant", 0, nil, tokens((*capAuth)(nil)), nil),
+	}
+
+	_, unlanded, err := orderLayers("public", layers)
+	if err != nil {
+		t.Fatalf("ordering failed: %v", err)
+	}
+	if len(unlanded) != 0 {
+		t.Errorf("a constraint with a provider on this endpoint was reported as landing on "+
+			"nothing: %+v", unlanded)
+	}
+}
+
+// TestSelfProvidedConstraintCountsAsLanded pins the one case where the edge is
+// dropped and the constraint is still not reported: a layer that stands for
+// the capability it names places nothing, but the capability is represented on
+// this chain, which is what the report is about. Counting it as unlanded would
+// put a line in front of the reader that names no missing module.
+func TestSelfProvidedConstraintCountsAsLanded(t *testing.T) {
+	layers := []layer{
+		registered("recover", 0,
+			tokens((*capRecovery)(nil)),
+			tokens((*capRecovery)(nil)),
+			nil),
+	}
+
+	_, unlanded, err := orderLayers("public", layers)
+	if err != nil {
+		t.Fatalf("ordering failed: %v", err)
+	}
+	if len(unlanded) != 0 {
+		t.Errorf("a layer naming a capability it stands for itself was reported as landing "+
+			"on nothing: %+v", unlanded)
 	}
 }
 
@@ -222,7 +285,7 @@ func TestDuplicateEdgeIsCountedOnce(t *testing.T) {
 		registered("outer", 0, tokens((*capTenant)(nil)), nil, tokens((*capAuth)(nil))),
 	}
 
-	out, err := orderLayers("public", layers)
+	out, _, err := orderLayers("public", layers)
 	if err != nil {
 		t.Fatalf("one relation declared from both ends must solve, got: %v", err)
 	}
@@ -249,13 +312,17 @@ func TestCycleNamesEveryMemberAndTheirDeclarations(t *testing.T) {
 		registered("offcycle", 0, nil, nil, nil),
 	}
 
-	out, err := orderLayers("public", layers)
+	out, unlanded, err := orderLayers("public", layers)
 	if !errors.Is(err, ErrMiddlewareCycle) {
 		t.Fatalf("error is %v, want one wrapping ErrMiddlewareCycle", err)
 	}
 	if out != nil {
 		t.Errorf("a failed solve returned a chain of %v, want none: a partial order is not a "+
 			"chain anyone may assemble", layerNames(out))
+	}
+	if unlanded != nil {
+		t.Errorf("a failed solve reported %+v as landing on nothing; the assembly is being "+
+			"abandoned, and the failure is the only thing worth reading", unlanded)
 	}
 
 	text := err.Error()
@@ -289,13 +356,13 @@ func TestCycleReportIsDeterministic(t *testing.T) {
 		registered("offcycle", 0, nil, nil, nil),
 	}
 
-	_, err := orderLayers("public", layers)
+	_, _, err := orderLayers("public", layers)
 	if err == nil {
 		t.Fatal("the fixture no longer forms a cycle, so nothing is being pinned")
 	}
 	first := err.Error()
 	for i := range 100 {
-		_, again := orderLayers("public", layers)
+		_, _, again := orderLayers("public", layers)
 		if again == nil {
 			t.Fatalf("run %d solved a cyclic graph", i)
 		}
@@ -329,7 +396,7 @@ func TestIllegalConstraintTokenPanicsNamingTheDeclaration(t *testing.T) {
 		}
 	}()
 
-	_, _ = orderLayers("public", []layer{
+	_, _, _ = orderLayers("public", []layer{
 		registered("trace", 0, nil, tokens(nil), nil),
 	})
 }
@@ -337,7 +404,7 @@ func TestIllegalConstraintTokenPanicsNamingTheDeclaration(t *testing.T) {
 // TestNoLayersIsNotAFailure pins the endpoint that nobody registered a
 // middleware on: it assembles, with the routing engine as the whole chain.
 func TestNoLayersIsNotAFailure(t *testing.T) {
-	out, err := orderLayers("public", nil)
+	out, _, err := orderLayers("public", nil)
 	if err != nil {
 		t.Fatalf("an endpoint with no middleware must solve, got: %v", err)
 	}

@@ -236,6 +236,9 @@ func (e *endpoint) Use(mw Middleware) {
 			"so the layer would wrap nothing. Give Wrap the func(http.Handler) http.Handler "+
 			"this layer is made of", e.settings.name, mw.Name))
 	}
+	for j, token := range mw.Provides {
+		capabilityKey(token, declarationSite(e.settings.name, mw.Name, "Provides", j))
+	}
 	for j, token := range mw.After {
 		capabilityKey(token, declarationSite(e.settings.name, mw.Name, "After", j))
 	}
@@ -249,17 +252,13 @@ func (e *endpoint) Use(mw Middleware) {
 
 // registeredLayer turns a registration into the graph node the ordering reads.
 //
-// The capabilities the registrant delivers are what an After or a Before
-// constraint of another layer resolves against, and they are empty here: the
-// registration surface carries no module identity, and Middleware declares no
-// capability of its own, so nothing on this path can say who registered a
-// layer. Every constraint therefore finds no provider and drops, which is the
-// same silence the design accepts for a capability absent from the assembly —
-// except that here it holds even when the provider is present. Filling the
-// field is the whole of the change once the design settles where that identity
-// comes from.
+// The capabilities a layer stands for are what the After and Before
+// constraints of the other layers resolve against, and they come from the
+// registration's own Provides. They cannot come from anywhere else: the
+// surface carries no registrant identity, so the layer is the only thing on
+// this path that can say what it stands for.
 func registeredLayer(mw Middleware) layer {
-	return layer{mw: mw}
+	return layer{mw: mw, provides: mw.Provides}
 }
 
 // Accepting reports whether this endpoint is still taking requests. It is not

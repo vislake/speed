@@ -17,6 +17,7 @@ var sentinels = map[string]error{
 	"ErrUnknownEndpoint": ErrUnknownEndpoint,
 	"ErrRouteConflict":   ErrRouteConflict,
 	"ErrMiddlewareCycle": ErrMiddlewareCycle,
+	"ErrChainAssembly":   ErrChainAssembly,
 	"ErrInvalidSpec":     ErrInvalidSpec,
 	"ErrListen":          ErrListen,
 	"ErrDrainTimeout":    ErrDrainTimeout,
@@ -50,8 +51,11 @@ func TestSentinelsAreDistinct(t *testing.T) {
 }
 
 // TestSentinelTableHasNoStrayMember reads the sentinels back out of the source
-// and checks the table above accounts for every one of them. A tenth sentinel
-// added to errors.go and to nothing else would otherwise never be checked for
+// and checks the table above accounts for every one of them, in both
+// directions. The count is never written down here: it is a snapshot of what
+// errors.go happens to declare today, and pinning it would make this test
+// disagree with the source the moment a class is added. A sentinel added to
+// errors.go and to nothing else would otherwise never be checked for
 // distinctness, and two overlapping sentinels are only found by checking.
 func TestSentinelTableHasNoStrayMember(t *testing.T) {
 	_, files := parseProductionFiles(t)
