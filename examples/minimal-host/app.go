@@ -66,6 +66,7 @@ func appModule() core.Module {
 		Name: appModuleName,
 		Requires: []core.Requirement{
 			{Token: (*Greeter)(nil)},
+			{Token: (*log.Logger)(nil)},
 		},
 		New: func(_ context.Context, reg *core.Registry) (any, error) {
 			greeter, err := core.Resolve[Greeter](reg)
