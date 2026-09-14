@@ -12,4 +12,5 @@ speed 是一个配置驱动的模块化应用程序框架，以 Go 库的形式�
 | [core](modules/design-core.md) | 模块化基础设施：描述符、注册、查询、生命周期驱动 |
 | [config](modules/design-config.md) | 启动必须项的加载：输入项收集、传输与格式扩展点、各来源的覆盖 |
 | [log](modules/design-log.md) | 结构化日志：处理链、内置的格式与目的地、上下文传递、脱敏、文件滚动与清理 |
+| [http](modules/design-http.md) | HTTP 入口：监听端、路由与中间件的登记、中间件排序、请求上下文、两拍停机 |
 | [db](modules/design-db.md) | 数据库访问：连接的建立与关闭、迁移的收齐与应用、插件扩展点 |
