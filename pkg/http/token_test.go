@@ -14,8 +14,9 @@ type probe interface{ Probe() }
 type concreteProbe struct{}
 
 // wantPanic runs fn and returns the panic text, failing when fn returns
-// normally. A token check that quietly accepted an illegal declaration would
-// leave the middleware graph keyed on something that designates nothing.
+// normally. The text is handed back rather than asserted here: this module
+// panics where the mistake is a call-site one, and a refusal that says nothing
+// about which call was refused leaves the author exactly where they were.
 func wantPanic(t *testing.T, what string, fn func()) string {
 	t.Helper()
 	var text string
@@ -26,7 +27,7 @@ func wantPanic(t *testing.T, what string, fn func()) string {
 			}
 		}()
 		fn()
-		t.Fatalf("%s did not panic; an illegal capability token has to be refused where it is written", what)
+		t.Fatalf("%s returned instead of panicking", what)
 	}()
 	if text == "" {
 		t.Fatalf("%s panicked with something other than a message string", what)

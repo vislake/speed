@@ -5,6 +5,7 @@ import (
 	"go/token"
 	"go/types"
 	nethttp "net/http"
+	"net/http/httptest"
 	"slices"
 	"testing"
 )
@@ -29,6 +30,7 @@ var exportedSurface = []string{
 	"field Spec.Document",
 	"field Spec.Endpoint",
 	"func Decode",
+	"func Module",
 	"func StatusFor",
 	"func WriteJSON",
 	"method Endpoint.Accepting",
@@ -184,7 +186,12 @@ func exportedMembers(s *ast.TypeSpec) []string {
 // silently until the subpackage is compiled.
 func TestStandardServeMuxSatisfiesEngine(t *testing.T) {
 	var engine Engine = nethttp.NewServeMux()
-	if engine == nil {
-		t.Fatal("a fresh ServeMux is nil as an Engine")
+	engine.Handle("GET /things", nethttp.NotFoundHandler())
+
+	recorder := httptest.NewRecorder()
+	engine.ServeHTTP(recorder, httptest.NewRequest(nethttp.MethodGet, "/things", nil))
+	if recorder.Code != nethttp.StatusNotFound {
+		t.Errorf("the multiplexer answered %d through the seam, and the handler bound writes %d",
+			recorder.Code, nethttp.StatusNotFound)
 	}
 }
