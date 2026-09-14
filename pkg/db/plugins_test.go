@@ -336,6 +336,47 @@ func TestPluginFromDisabledModuleFollowsTheRuling(t *testing.T) {
 	}
 }
 
+// failingPlugin refuses to install, reporting why itself.
+type failingPlugin struct {
+	name  string
+	cause error
+}
+
+func (p failingPlugin) Name() string { return p.name }
+
+func (p failingPlugin) Initialize(*gorm.DB) error { return p.cause }
+
+// TestAFailingPluginIsErrPluginFailed pins the sentinel on the plugin's own
+// refusal, which is the way a plugin that needs a model convention or a column
+// it cannot find fails.
+//
+// The plugin's error stays in the chain. It is the only account of what the
+// plugin wanted: this module does not know the plugin's content, so a text that
+// replaced it with "the plugin failed" would leave the operator with a name and
+// nothing to fix.
+func TestAFailingPluginIsErrPluginFailed(t *testing.T) {
+	cause := errors.New("the model this plugin filters by has no tenant column")
+	_, err := startHost(t, sqliteSpec(), hostConfig(t),
+		pluginModule("audit", failingPlugin{name: "audit-plugin", cause: cause}),
+	)
+	if err == nil {
+		t.Fatal("a plugin that refused to install did not fail the startup, so the handle was " +
+			"delivered with a declaration that is not in force")
+	}
+	if !errors.Is(err, db.ErrPluginFailed) {
+		t.Errorf("the startup reported %v, want ErrPluginFailed", err)
+	}
+	if !errors.Is(err, cause) {
+		t.Errorf("the startup reported %v, and what the plugin said is not in the chain: it is the "+
+			"only account of what the plugin needed", err)
+	}
+	for _, want := range []string{"audit", "audit-plugin"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("the error text %q does not name %q", err, want)
+		}
+	}
+}
+
 // nilPlugin is a plugin whose methods have value receivers, so a nil pointer to
 // it still satisfies gorm.Plugin — and panics on the first call.
 type nilPlugin struct{}
