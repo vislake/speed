@@ -3,9 +3,11 @@ package main
 import (
 	"context"
 	"errors"
+	"log/slog"
 
 	"github.com/vislake/speed/pkg/config"
 	"github.com/vislake/speed/pkg/core"
+	"github.com/vislake/speed/pkg/log"
 )
 
 // The two greeter modules share a namespace and keep their paths disjoint,
@@ -21,6 +23,26 @@ const remoteModuleName = "greeter.remote"
 
 // remotePath is where this module's input items live in the config data.
 const remotePath = greeterNamespace + ".remote"
+
+// remoteTokenKey names the credential three times over: it is this module's
+// input item, the redaction rule this module registers, and the attribute key
+// the credential is logged under. One name, so a reader sees that the item
+// declared Sensitive and the key the logging layer masks are the same thing,
+// and so that renaming the input cannot leave the rule pointing at nothing.
+const remoteTokenKey = "remote.token"
+
+// The rest of this module's logging vocabulary.
+//
+// tokenGivenKey carries whether the credential this module was built with came
+// from the configuration or is the placeholder default. It is derived from the
+// credential without carrying any of it, which is what makes it safe to log
+// beside a masked value and useful next to one: a masked attribute looks the
+// same whether the host configured a credential or never gave one.
+const (
+	configuredMsg = "configured"
+	addrAttrKey   = "addr"
+	tokenGivenKey = "token_given"
+)
 
 // remoteOptions is the carrier struct of the remote implementation.
 type remoteOptions struct {
@@ -51,6 +73,7 @@ func init() { core.ProcessRegistry.Register(remoteGreeterModule()) }
 func remoteGreeterModule() core.Module {
 	return core.Module{
 		Name:     remoteModuleName,
+		Requires: []core.Requirement{{Token: (*log.Logger)(nil)}},
 		Provides: []core.Provision{{Token: (*Greeter)(nil), Exclusive: true}},
 		Resources: []any{config.Schema{
 			Namespace: greeterNamespace,
@@ -64,7 +87,7 @@ func remoteGreeterModule() core.Module {
 					Description: "the address of the greeting service",
 					Required:    true,
 				},
-				"remote.token": {
+				remoteTokenKey: {
 					Origins:     config.OriginPrimary | config.OriginEnv | config.OriginFlag,
 					FlagName:    "remote-token",
 					Placeholder: "TOKEN",
@@ -100,14 +123,36 @@ func remoteGreeterModule() core.Module {
 			if err != nil {
 				return nil, err
 			}
-			return &remoteGreeter{addr: opts.Addr}, nil
+			logger, err := core.Resolve[log.Logger](reg)
+			if err != nil {
+				return nil, err
+			}
+			// Register the rule before taking the logger, and never the
+			// other way round. A rule governs the judgements made after
+			// it, and an attribute bound through With is judged once when
+			// it is bound — Named binds one already, and the credential
+			// below is bound too. Registering after the binding leaves
+			// the credential in the clear in every record this module
+			// writes, while the call sites go on looking correct.
+			logger.Redaction().AddKeys(remoteTokenKey)
+			bound := logger.Named(remoteModuleName).With(
+				addrAttrKey, opts.Addr,
+				remoteTokenKey, opts.Token,
+				tokenGivenKey, opts.Token != remoteDefaults.Token,
+			)
+			// A record written from inside New, and it is already in the
+			// configured destination: declaring the dependency on the
+			// Logger capability is what put log ahead of this module, and
+			// nobody wrote that order down anywhere.
+			bound.Info(configuredMsg)
+			return &remoteGreeter{addr: opts.Addr, log: bound}, nil
 		},
-		Stop: func(_ context.Context, _ *core.Registry, _ any) error {
-			say(remoteModuleName + ": stop")
+		Stop: func(_ context.Context, _ *core.Registry, instance any) error {
+			remoteOf(instance).log.Info(stopMsg)
 			return nil
 		},
-		Close: func(_ context.Context, _ *core.Registry, _ any) error {
-			say(remoteModuleName + ": close")
+		Close: func(_ context.Context, _ *core.Registry, instance any) error {
+			remoteOf(instance).log.Info(closeMsg)
 			return nil
 		},
 	}
@@ -128,11 +173,22 @@ func remoteConfig(reg *core.Registry) (remoteOptions, error) {
 	return opts, nil
 }
 
+// remoteOf recovers this module's own product from what the driver hands back,
+// for the same reason and with the same guarantee as the application module's.
+func remoteOf(instance any) *remoteGreeter {
+	//nolint:errcheck // the value came from this module's own New, so another
+	// type would be a defect in the driver and the panic is the report.
+	return instance.(*remoteGreeter)
+}
+
 // remoteGreeter is the product this module constructs. The example does not
 // open a connection: what it demonstrates is which implementation the assembly
 // picked, and the address it was configured with is the visible evidence.
 type remoteGreeter struct {
 	addr string
+	// log carries this module's name and the connection it was built with,
+	// the credential among them and masked by the rule registered above.
+	log *slog.Logger
 }
 
 var _ Greeter = (*remoteGreeter)(nil)

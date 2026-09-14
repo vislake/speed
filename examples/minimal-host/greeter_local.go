@@ -2,9 +2,11 @@ package main
 
 import (
 	"context"
+	"log/slog"
 
 	"github.com/vislake/speed/pkg/config"
 	"github.com/vislake/speed/pkg/core"
+	"github.com/vislake/speed/pkg/log"
 )
 
 // localModuleName is the built-in implementation's module name. It is also the
@@ -44,6 +46,7 @@ func init() { core.ProcessRegistry.Register(localGreeterModule()) }
 func localGreeterModule() core.Module {
 	return core.Module{
 		Name:     localModuleName,
+		Requires: []core.Requirement{{Token: (*log.Logger)(nil)}},
 		Provides: []core.Provision{{Token: (*Greeter)(nil), Exclusive: true}},
 		Resources: []any{config.Schema{
 			Namespace: greeterNamespace,
@@ -70,26 +73,45 @@ func localGreeterModule() core.Module {
 			if err != nil {
 				return nil, err
 			}
+			// This module has nothing sensitive to register, so it takes
+			// its logger straight away. The one that does register is the
+			// remote greeter, and the order it has to keep is written
+			// down there.
+			logger, err := core.Resolve[log.Logger](reg)
+			if err != nil {
+				return nil, err
+			}
 			var opts localOptions
 			if err := cfg.Decode(localPath, &opts); err != nil {
 				return nil, err
 			}
-			return &localGreeter{salutation: opts.Salutation}, nil
+			return &localGreeter{salutation: opts.Salutation, log: logger.Named(localModuleName)}, nil
 		},
-		Stop: func(_ context.Context, _ *core.Registry, _ any) error {
-			say(localModuleName + ": stop")
+		Stop: func(_ context.Context, _ *core.Registry, instance any) error {
+			localOf(instance).log.Info(stopMsg)
 			return nil
 		},
-		Close: func(_ context.Context, _ *core.Registry, _ any) error {
-			say(localModuleName + ": close")
+		Close: func(_ context.Context, _ *core.Registry, instance any) error {
+			localOf(instance).log.Info(closeMsg)
 			return nil
 		},
 	}
 }
 
+// localOf recovers this module's own product from what the driver hands back,
+// for the same reason and with the same guarantee as the application module's.
+func localOf(instance any) *localGreeter {
+	//nolint:errcheck // the value came from this module's own New, so another
+	// type would be a defect in the driver and the panic is the report.
+	return instance.(*localGreeter)
+}
+
 // localGreeter is the product this module constructs.
 type localGreeter struct {
 	salutation string
+	// log carries this module's name, so its records say who wrote them
+	// without the module spelling it into every call.
+	log *slog.Logger
 }
 
 // Compile-time proof that the product delivers the capability the descriptor
