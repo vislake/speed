@@ -98,7 +98,7 @@ func assertMasked(t *testing.T, out, secret string) {
 	if strings.Contains(out, secret) {
 		t.Errorf("the secret reached the destination in the clear: %s", out)
 	}
-	if !strings.Contains(out, maskText) {
+	if !strings.Contains(out, MaskedText) {
 		t.Errorf("nothing was masked: %s", out)
 	}
 }
@@ -128,7 +128,7 @@ func TestRedactResolvesLogValuerBeforeKeyMatch(t *testing.T) {
 
 	out := buf.String()
 	assertMasked(t, out, secret)
-	assertContains(t, out, "creds.password-under-valuer="+maskText)
+	assertContains(t, out, "creds.password-under-valuer="+MaskedText)
 }
 
 // TestRedactResolvesLogValuerNestedInsideAResolvedGroup puts a second deferred
@@ -152,7 +152,7 @@ func TestRedactResolvesLogValuerNestedInsideAResolvedGroup(t *testing.T) {
 
 	out := buf.String()
 	assertMasked(t, out, secret)
-	assertContains(t, out, "creds.inner.token-nested-under-valuer="+maskText)
+	assertContains(t, out, "creds.inner.token-nested-under-valuer="+MaskedText)
 }
 
 // TestRedactResolvesLogValuerBoundThroughWithAttrs runs the same fixture
@@ -177,7 +177,7 @@ func TestRedactResolvesLogValuerBoundThroughWithAttrs(t *testing.T) {
 
 	out := buf.String()
 	assertMasked(t, out, secret)
-	assertContains(t, out, "creds.inner.token-bound-under-valuer="+maskText)
+	assertContains(t, out, "creds.inner.token-bound-under-valuer="+MaskedText)
 }
 
 // TestRedactAppliesPatternToResolvedStringValue pins resolution ahead of the
@@ -194,7 +194,7 @@ func TestRedactAppliesPatternToResolvedStringValue(t *testing.T) {
 
 	out := buf.String()
 	assertMasked(t, out, secret)
-	assertContains(t, out, "key "+maskText+" end")
+	assertContains(t, out, "key "+MaskedText+" end")
 }
 
 // TestRedactAppliesPatternToErrorText pins the other half of the value-shape
@@ -209,7 +209,7 @@ func TestRedactAppliesPatternToErrorText(t *testing.T) {
 
 	out := buf.String()
 	assertMasked(t, out, secret)
-	assertContains(t, out, "refused with "+maskText+" attached")
+	assertContains(t, out, "refused with "+MaskedText+" attached")
 }
 
 // TestSourceLocationSurvivesRedaction pins the call site through the rebuild. A
@@ -350,7 +350,7 @@ func TestRedactMatchesGroupNameOpenedByWithGroup(t *testing.T) {
 
 	out := buf.String()
 	assertMasked(t, out, secret)
-	assertContains(t, out, "credentials-opened-group.token="+maskText)
+	assertContains(t, out, "credentials-opened-group.token="+MaskedText)
 }
 
 // TestRedactMatchesAttrBoundUnderWithGroup runs the same registration through
@@ -367,7 +367,7 @@ func TestRedactMatchesAttrBoundUnderWithGroup(t *testing.T) {
 
 	out := buf.String()
 	assertMasked(t, out, secret)
-	assertContains(t, out, "credentials-bound-group.token="+maskText)
+	assertContains(t, out, "credentials-bound-group.token="+MaskedText)
 }
 
 // TestRedactMatchesNestedWithGroupPath pins that every segment of the prefix is
@@ -384,7 +384,7 @@ func TestRedactMatchesNestedWithGroupPath(t *testing.T) {
 
 			out := buf.String()
 			assertMasked(t, out, secret)
-			assertContains(t, out, "outer-nested-group.inner-nested-group.token="+maskText)
+			assertContains(t, out, "outer-nested-group.inner-nested-group.token="+MaskedText)
 		})
 	}
 }
@@ -401,7 +401,7 @@ func TestRedactMatchesInlineGroupName(t *testing.T) {
 
 	out := buf.String()
 	assertMasked(t, out, secret)
-	assertContains(t, out, "credentials-inline-group.token="+maskText)
+	assertContains(t, out, "credentials-inline-group.token="+MaskedText)
 }
 
 // TestRedactWithEmptyGroupNameReturnsReceiver pins the standard library's
@@ -423,7 +423,7 @@ func TestRedactWithEmptyGroupNameReturnsReceiver(t *testing.T) {
 
 	out := buf.String()
 	assertMasked(t, out, secret)
-	assertContains(t, out, "token-after-empty-group="+maskText)
+	assertContains(t, out, "token-after-empty-group="+MaskedText)
 	if strings.Contains(out, ".token-after-empty-group") {
 		t.Errorf("an empty segment entered the key path: %s", out)
 	}

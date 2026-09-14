@@ -13,6 +13,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/vislake/speed/pkg/log"
 )
 
 // The cases run the host as a real child process. What they have to prove is
@@ -179,7 +181,7 @@ func TestAbsentLogSectionYieldsOneStdoutTextOutputAtInfo(t *testing.T) {
 	if strings.Contains(got.stdout, plaintextValue) {
 		t.Errorf("the sensitive value reached stdout in plaintext:\n%s", got.stdout)
 	}
-	if !strings.Contains(got.stdout, sensitiveKey+"=[REDACTED]") {
+	if !strings.Contains(got.stdout, sensitiveKey+"="+log.MaskedText) {
 		t.Errorf("stdout carries no masked value under %q:\n%s", sensitiveKey, got.stdout)
 	}
 }
@@ -235,7 +237,7 @@ func TestNamedLoggerReachesTheConfiguredFile(t *testing.T) {
 		t.Errorf("the injected logger's record appears %d times in the configured file, want 1:\n%s",
 			n, body)
 	}
-	if !strings.Contains(body, `"module":"`+appModuleName+`"`) {
+	if !strings.Contains(body, `"`+log.ModuleAttrKey+`":"`+appModuleName+`"`) {
 		t.Errorf("the configured file carries no record from the named logger:\n%s", body)
 	}
 	if n := countOccurrences(got.stdout, injectedMessage); n != 0 {

@@ -119,7 +119,7 @@ func redactAttr(rules *ruleSet, inherited bool, a slog.Attr) slog.Attr {
 		return slog.Attr{Key: a.Key, Value: slog.GroupValue(judged...)}
 	}
 	if hit {
-		return slog.Attr{Key: a.Key, Value: slog.StringValue(maskText)}
+		return slog.Attr{Key: a.Key, Value: slog.StringValue(MaskedText)}
 	}
 	return slog.Attr{Key: a.Key, Value: maskValue(rules, value)}
 }

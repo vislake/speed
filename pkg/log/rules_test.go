@@ -51,7 +51,7 @@ func TestRuleSetSnapshotIsReadWithoutLock(t *testing.T) {
 	for i, record := range seen {
 		masked := 0
 		record.Attrs(func(a slog.Attr) bool {
-			if a.Value.String() == maskText {
+			if a.Value.String() == MaskedText {
 				masked++
 			}
 			return true
@@ -67,7 +67,7 @@ func TestRuleSetSnapshotIsReadWithoutLock(t *testing.T) {
 	logger.LogAttrs(context.Background(), slog.LevelInfo, "judge", attrs...)
 	last := capture.state.last(t)
 	last.Attrs(func(a slog.Attr) bool {
-		if a.Value.String() != maskText {
+		if a.Value.String() != MaskedText {
 			t.Errorf("a record written after the registration carries %q", a.Value.String())
 		}
 		return true
@@ -108,7 +108,7 @@ func TestPatternMasksOnlyTheMatchedSpans(t *testing.T) {
 	if !ok {
 		t.Fatal("nothing was masked")
 	}
-	want := "head " + maskText + " middle " + maskText + " tail"
+	want := "head " + MaskedText + " middle " + MaskedText + " tail"
 	if got != want {
 		t.Errorf("masked value is %q, want %q", got, want)
 	}
@@ -129,7 +129,7 @@ func TestKeyPathMatchesAnySegment(t *testing.T) {
 
 			out := buf.String()
 			assertMasked(t, out, secret)
-			assertContains(t, out, "a-path-segment.b-path-segment.token-path-leaf="+maskText)
+			assertContains(t, out, "a-path-segment.b-path-segment.token-path-leaf="+MaskedText)
 		})
 	}
 }
@@ -167,7 +167,7 @@ func TestOverlappingSpansAreMaskedOnce(t *testing.T) {
 	if !ok {
 		t.Fatal("nothing was masked")
 	}
-	want := "head " + maskText + " tail"
+	want := "head " + MaskedText + " tail"
 	if got != want {
 		t.Errorf("masked value is %q, want %q", got, want)
 	}

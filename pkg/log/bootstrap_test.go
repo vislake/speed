@@ -73,7 +73,7 @@ func TestBootstrapChainContainsRedactionLayer(t *testing.T) {
 	if strings.Contains(out, secret) {
 		t.Errorf("the default logger wrote the credential in the clear: %q", out)
 	}
-	if !strings.Contains(out, maskText) {
+	if !strings.Contains(out, MaskedText) {
 		t.Errorf("nothing was masked on the bootstrap chain: %q", out)
 	}
 }

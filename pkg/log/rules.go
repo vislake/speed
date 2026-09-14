@@ -9,10 +9,17 @@ import (
 	"sync/atomic"
 )
 
-// maskText is what a rule leaves behind: it replaces the value of an attribute
-// whose key path carries a registered name, and the spans a value-shape rule
-// reports inside a string.
-const maskText = "[REDACTED]"
+// MaskedText is what a rule leaves behind: it replaces the value of an
+// attribute whose key path carries a registered name, and the spans a
+// value-shape rule reports inside a string.
+//
+// It is part of this module's observable surface, and that is why it is
+// exported: a destination carries this text where a value was masked, and a
+// dependant asserting that a credential was masked compares against it, so it
+// is a contract whether this module states one or not. A dependant taking the
+// replacement from this constant rather than restating the literal is what
+// lets a change to it reach every reader instead of breaking them.
+const MaskedText = "[REDACTED]"
 
 // rootMu is the root package's mutex over the process-level state this package
 // holds. It covers the construction of a new redaction snapshot and the pointer
@@ -116,7 +123,7 @@ func (rs *ruleSet) maskString(s string) (string, bool) {
 	written := 0
 	for _, span := range merged {
 		b.WriteString(s[written:span.Start])
-		b.WriteString(maskText)
+		b.WriteString(MaskedText)
 		written = span.End
 	}
 	b.WriteString(s[written:])

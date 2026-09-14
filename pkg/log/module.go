@@ -86,10 +86,17 @@ func prepare(reader config.Reader) (core.Enablement, error) {
 	return core.Enablement{State: core.StateEnabled}, nil
 }
 
-// moduleAttrKey is the key of the attribute Named binds. It identifies which
+// ModuleAttrKey is the key of the attribute Named binds. It identifies which
 // module wrote a record, which is what the key says; it is not the logger's
 // own name.
-const moduleAttrKey = "module"
+//
+// It is part of this module's observable surface, and that is why it is
+// exported: the key is what an operator greps a destination for and what a
+// dependant reads a record by, so it is a contract whether this module states
+// one or not. A dependant taking the key from this constant rather than
+// restating the literal is what lets a change to it reach every reader instead
+// of breaking them.
+const ModuleAttrKey = "module"
 
 // logger is this module's product, the implementation of the Logger
 // capability. It is not a logger object: it hands out *slog.Logger values over
@@ -115,7 +122,7 @@ var _ Logger = (*logger)(nil)
 // redaction rules before it asks for a logger: an attribute bound earlier is
 // governed by the rules that existed at binding time.
 func (l *logger) Named(name string) *slog.Logger {
-	return slog.New(l.chain).With(moduleAttrKey, name)
+	return slog.New(l.chain).With(ModuleAttrKey, name)
 }
 
 // Redaction returns the process-wide registration interface. The rule set is

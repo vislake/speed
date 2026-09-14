@@ -78,7 +78,7 @@ func TestInjectedLoggerReachesTheConfiguredDestination(t *testing.T) {
 	FromContext(ctx).Info("served")
 
 	out := read(t, path)
-	for _, want := range []string{`"msg":"served"`, `"trace_id":"t-3"`, `"` + moduleAttrKey + `":"http"`} {
+	for _, want := range []string{`"msg":"served"`, `"trace_id":"t-3"`, `"` + ModuleAttrKey + `":"http"`} {
 		if !strings.Contains(out, want) {
 			t.Errorf("the configured destination lacks %s: %q", want, out)
 		}
@@ -100,7 +100,7 @@ func TestFromContextFallbackStillPassesThroughRedaction(t *testing.T) {
 	if strings.Contains(out, secret) {
 		t.Errorf("the fallback path wrote the credential in the clear: %q", out)
 	}
-	if !strings.Contains(out, maskText) {
+	if !strings.Contains(out, MaskedText) {
 		t.Errorf("nothing was masked on the fallback path: %q", out)
 	}
 }

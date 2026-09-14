@@ -214,9 +214,9 @@ func TestNamedLoggerCarriesTheModuleAttribute(t *testing.T) {
 	if err := json.Unmarshal([]byte(line), &record); err != nil {
 		t.Fatalf("the record is not one JSON object: %q: %v", line, err)
 	}
-	if record[moduleAttrKey] != "http" {
+	if record[ModuleAttrKey] != "http" {
 		t.Errorf("the record carries %s=%v, want the module name it was taken under",
-			moduleAttrKey, record[moduleAttrKey])
+			ModuleAttrKey, record[ModuleAttrKey])
 	}
 }
 
