@@ -56,6 +56,16 @@ func (s Spec) newDatabase(ctx context.Context, reader config.Reader, plugins []p
 	if err != nil {
 		return nil, err
 	}
+	// The blind index is answered from the product rather than from the
+	// connection, so it needs the subkey on its own. The same derivation
+	// assembled the connection, over the same section, so the two agree by
+	// construction instead of by a value travelling between them — and a
+	// root key this package cannot use has already failed the connection,
+	// so nothing is refused here that was not refused before it.
+	digest, err := digestFor(s.ConfigNamespace, cfg.Config)
+	if err != nil {
+		return nil, errors.Join(err, Close(handle))
+	}
 	// The plugins go on here, before the product exists: a handle without
 	// them never reaches a caller, so nobody can hold the capability and
 	// issue a statement the declarations were meant to reach.
@@ -64,7 +74,13 @@ func (s Spec) newDatabase(ctx context.Context, reader config.Reader, plugins []p
 		// pool is released here — no caller could release it instead.
 		return nil, errors.Join(err, Close(handle))
 	}
-	return &database{spec: s, cfg: cfg, handle: handle, plugins: plugins}, nil
+	return &database{
+		spec:    s,
+		cfg:     cfg,
+		handle:  handle,
+		plugins: plugins,
+		digest:  digest,
+	}, nil
 }
 
 // DB returns the handle the module delivers.

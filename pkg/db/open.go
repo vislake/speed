@@ -14,8 +14,9 @@ import (
 //
 // Every connection this package hands out is opened here — the one the module
 // delivers, and each one a caller builds with Open — so one place decides how
-// a pool is sized and what a failed connection reports. The dialector is the
-// only part that differs between engines.
+// a pool is sized, what a failed connection reports, and what a handle carries
+// before anyone can issue a statement on it. The dialector is the only part
+// that differs between engines.
 //
 // The connectivity check is bound to ctx, which is the ctx the stage received:
 // a host that wants a bound on how long a startup may wait for the database
@@ -51,6 +52,15 @@ func openHandle(ctx context.Context, spec Spec, cfg lockingConfig) (*gorm.DB, er
 			fmt.Errorf("%w: the %s database did not answer the connectivity check: %w",
 				ErrConnectFailed, spec.Dialect, err),
 			closeUnusablePool(pool))
+	}
+	// The encryption support is installed here rather than by the callers,
+	// because it is the section that decides it: the key material comes out
+	// of the same configuration the pool parameters do, and both callers of
+	// this function have only a section to hand. What the registry decides
+	// instead — the declared plugins — is installed by the callers, which
+	// are the sites that hold it.
+	if err := installEncryption(session, spec.ConfigNamespace, cfg.Config); err != nil {
+		return nil, errors.Join(err, Close(session))
 	}
 	return session, nil
 }
