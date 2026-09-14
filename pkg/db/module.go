@@ -89,7 +89,14 @@ func NewModule(spec Spec) core.Module {
 			if err != nil {
 				return nil, err
 			}
-			return spec.newDatabase(ctx, reader)
+			// The declarations are read before the connection is opened:
+			// reading them is not a database action, so a defective one
+			// fails the startup with nothing yet opened to release.
+			plugins, err := collectPlugins(reg)
+			if err != nil {
+				return nil, err
+			}
+			return spec.newDatabase(ctx, reader, plugins)
 		},
 		Migrate: func(ctx context.Context, reg *core.Registry, instance any) error {
 			reader, err := spec.reader(reg, "the bound on waiting for the migration mutex")
