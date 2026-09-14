@@ -17,9 +17,15 @@ import (
 // first time the declaration is read. The text names the offending token and
 // states the fixing action.
 //
-// The rules restated here are core's own, which core applies to the tokens in
-// Requires and Provides. core does not export the judgement, so this module
-// carries a second copy, and where is what tells the two apart in a message.
+// The rules restated here are core's own, the ones it applies to the tokens in
+// Requires and Provides. core does not export that judgement and will not: its
+// exported package-level functions are held to the registry constructor, the
+// process registry, the sentinel errors and the wrappers that need a type
+// parameter, and a predicate is none of those. This second copy is therefore
+// permanent rather than a stopgap, and TestCapabilityRuleAgreesWithCore holds
+// it against core's public behaviour so that the two drifting apart shows up as
+// a red test. The where argument is what tells the two copies apart in a
+// message.
 func capabilityKey(t core.Token, where string) reflect.Type {
 	v := reflect.ValueOf(t)
 	if !v.IsValid() {

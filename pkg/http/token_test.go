@@ -3,6 +3,8 @@ package http
 import (
 	"strings"
 	"testing"
+
+	"github.com/vislake/speed/pkg/core"
 )
 
 // probe is a capability an After or Before declaration may point at. The
@@ -88,5 +90,83 @@ func TestTokenAcceptsInterfacePointer(t *testing.T) {
 	if same := capabilityKey((*probe)(nil), "another site"); same != got {
 		t.Error("two tokens designating one capability yielded different keys, " +
 			"so the middleware graph would treat them as two capabilities")
+	}
+}
+
+// panics reports whether fn panicked, without judging that either way. It is
+// the shape the cross-check below needs: there both verdicts are observations,
+// and it is their agreement that is asserted.
+func panics(fn func()) (did bool) {
+	defer func() {
+		if recover() != nil {
+			did = true
+		}
+	}()
+	fn()
+	return false
+}
+
+// TestCapabilityRuleAgreesWithCore holds this module's copy of the token rule
+// against core's. core does not export its judgement and, by the design, will
+// not, so the baseline is core's public behaviour: Register panics on an
+// illegal token in Requires. Each row observes both verdicts and asserts they
+// agree, which is what turns a drift between the two copies into a red test
+// rather than two modules quietly disagreeing about what a token is.
+//
+// The legal row is what makes the agreement mean something: without it a
+// capabilityKey that refuses everything would agree with core on every
+// remaining row.
+//
+// Two of the rows are shapes nobody would write by hand. They are here because
+// the obvious illegal tokens do not isolate the rule that refuses them: drop
+// the pointer rule and a struct token is still refused, by IsNil; drop the
+// non-nil rule and &concreteProbe{} is still refused, by the interface rule.
+// A nil channel of an interface element type and a non-nil pointer to an
+// interface are the shapes each of those two rules alone stands between, so
+// they are what turns the rule's removal into a red row.
+//
+// The untyped-nil rule has no such row and cannot have one: the untyped nil is
+// a single value, and removing that rule leaves it refused by the pointer rule
+// all the same. What the rule carries is the message, and that is pinned by
+// TestTokenRejectsUntypedNil rather than here.
+func TestCapabilityRuleAgreesWithCore(t *testing.T) {
+	var interfaceValue probe
+	cases := []struct {
+		name    string
+		token   core.Token
+		illegal bool
+	}{
+		{name: "an untyped nil", token: nil, illegal: true},
+		{name: "a non-pointer", token: concreteProbe{}, illegal: true},
+		{name: "a nil channel of an interface", token: (chan probe)(nil), illegal: true},
+		{name: "a non-nil pointer", token: &concreteProbe{}, illegal: true},
+		{name: "a non-nil pointer to an interface", token: &interfaceValue, illegal: true},
+		{name: "a pointer to a concrete type", token: (*concreteProbe)(nil), illegal: true},
+		{name: "a pointer to an interface", token: (*probe)(nil), illegal: false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			// A fresh registry per row: a name collision panics too, and
+			// reusing one would read as a verdict on the token.
+			byCore := panics(func() {
+				core.New().Register(core.Module{
+					Name:     "probe-module",
+					Requires: []core.Requirement{{Token: c.token}},
+				})
+			})
+			byModule := panics(func() {
+				capabilityKey(c.token, `Use on endpoint "public"`)
+			})
+			if byCore != byModule {
+				t.Fatalf("%s: core.Register panicked=%v, capabilityKey panicked=%v. "+
+					"The two copies of the capability token rule have drifted apart",
+					c.name, byCore, byModule)
+			}
+			if byModule != c.illegal {
+				t.Fatalf("%s: both refused=%v, want %v. "+
+					"core and this module agree, so the rule itself has moved",
+					c.name, byModule, c.illegal)
+			}
+		})
 	}
 }
