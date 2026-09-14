@@ -37,6 +37,7 @@ type Validator interface {
 // by that limit reaches here as an error wrapping ErrBodyTooLarge.
 //
 // The returned errors wrap ErrMalformedBody, ErrBodyTooLarge or ErrValidation.
+// An empty body is one of the malformed ones and has no class of its own.
 // Decode writes nothing to the response: the shape of an error response
 // belongs to the module that provides the API, so a caller turns the error
 // into a status code with StatusFor and writes the body it wants.
@@ -81,10 +82,11 @@ func decodeFailure(err error) error {
 		return fmt.Errorf("%w: the endpoint's limit is %d bytes: %w", ErrBodyTooLarge, tooLarge.Limit, err)
 	}
 	if errors.Is(err, io.EOF) {
-		// An empty body is classified as malformed provisionally: the
-		// design does not rule on whether it is a failure at all, and a
-		// handler that accepts an absent body can test for it before
-		// calling Decode. Pending that ruling, see the plan's F12.
+		// An empty body is one more malformed body, not a class of its
+		// own: calling Decode is how a handler declares it needs a
+		// body, and what the caller does about an absent one is what it
+		// does about a misshapen one. A handler that does not need a
+		// body does not call Decode.
 		return fmt.Errorf("%w: the body is empty, and an empty body is not a JSON value. "+
 			"Send the JSON document the endpoint expects", ErrMalformedBody)
 	}

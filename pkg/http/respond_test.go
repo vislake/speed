@@ -66,26 +66,24 @@ func TestWriteJSONReportsAWriteFailure(t *testing.T) {
 	}
 }
 
-// startupSentinels are the classes that can only arise while the assembly is
-// being built. They never travel to a client, so a handler that hands one to
-// StatusFor is reporting a defect of its own.
-var startupSentinels = []string{
-	"ErrUnknownEndpoint", "ErrRouteConflict", "ErrMiddlewareCycle",
-	"ErrInvalidSpec", "ErrListen", "ErrDrainTimeout",
+// requestSentinels are the classes Decode produces, each with the status the
+// design gives it. Every other sentinel in the table maps to 500: it can only
+// arise while the assembly is being built, never travels to a client, and a
+// handler that hands one to StatusFor is reporting a defect of its own.
+//
+// The 500 side is derived rather than listed. A second written-out list would
+// stop covering the table the day a sentinel is added to it, and the addition
+// would look like nothing happened here.
+var requestSentinels = map[string]int{
+	"ErrMalformedBody": nethttp.StatusBadRequest,
+	"ErrBodyTooLarge":  nethttp.StatusRequestEntityTooLarge,
+	"ErrValidation":    nethttp.StatusUnprocessableEntity,
 }
 
-// requestSentinels are the classes Decode produces, which the design says
-// StatusFor maps to a status code of their own.
-var requestSentinels = []string{"ErrMalformedBody", "ErrBodyTooLarge", "ErrValidation"}
-
-// TestStatusForMapsEachSentinel checks every sentinel has a determinate
-// mapping, and that the mapping is read with errors.Is rather than by
-// comparison, so a wrapped sentinel maps the same way a bare one does.
-//
-// The exact code for ErrValidation and for a nil error is not written here:
-// the design rules on neither (see the plan's F12), and pinning a provisional
-// value would turn the ruling into a test failure. What is pinned is the part
-// the design does settle.
+// TestStatusForMapsEachSentinel pins the whole table: the three request
+// classes each map to the code the design gives them, everything else maps to
+// 500, and the mapping is read with errors.Is rather than by comparison, so a
+// wrapped sentinel maps the way a bare one does.
 func TestStatusForMapsEachSentinel(t *testing.T) {
 	for name, sentinel := range sentinels {
 		bare := StatusFor(sentinel)
@@ -94,28 +92,49 @@ func TestStatusForMapsEachSentinel(t *testing.T) {
 			t.Errorf("%s maps to %d bare and %d wrapped; the mapping has to be read with errors.Is, "+
 				"so that a handler may wrap the error with its own context", name, bare, wrapped)
 		}
-		if bare < 100 || bare > 599 {
-			t.Errorf("%s maps to %d, which is not an HTTP status code", name, bare)
+		want, isRequestClass := requestSentinels[name]
+		if !isRequestClass {
+			want = nethttp.StatusInternalServerError
+		}
+		if bare != want {
+			t.Errorf("%s maps to %d, want %d", name, bare, want)
 		}
 	}
-	for _, name := range startupSentinels {
-		if got := StatusFor(sentinels[name]); got != nethttp.StatusInternalServerError {
-			t.Errorf("%s maps to %d, want 500: it cannot be caused by the request", name, got)
+	for name := range requestSentinels {
+		if _, ok := sentinels[name]; !ok {
+			t.Errorf("%s is expected here but is not in the package's sentinel table, so the "+
+				"status it is given above was never checked against anything", name)
 		}
 	}
-	for _, name := range requestSentinels {
-		got := StatusFor(sentinels[name])
-		if got < 400 || got >= 500 {
-			t.Errorf("%s maps to %d, want a 4xx: the request is what is wrong, and a 5xx tells "+
-				"the client to retry an identical request", name, got)
-		}
-		t.Logf("%s currently maps to %d", name, got)
+}
+
+// TestStatusForDecodeFailureIsBadRequest and
+// TestStatusForValidationIsUnprocessable pin the distinction the design draws
+// between the two: 400 says these bytes are not a shape this API can read, 422
+// says the shape is right and a value in it is not allowed. Both start from a
+// real Decode call rather than a bare sentinel, so the classification Decode
+// performs is part of what is pinned. Mapping validation to 400 as well turns
+// the second one red.
+func TestStatusForDecodeFailureIsBadRequest(t *testing.T) {
+	var got thing
+	err := Decode(postWithBody(`{"name":`), &got)
+	if err == nil {
+		t.Fatal("a truncated JSON body was accepted")
 	}
-	if got := StatusFor(ErrMalformedBody); got != nethttp.StatusBadRequest {
-		t.Errorf("ErrMalformedBody maps to %d, want 400", got)
+	if status := StatusFor(err); status != nethttp.StatusBadRequest {
+		t.Errorf("a body that could not be decoded maps to %d, want 400", status)
 	}
-	if got := StatusFor(ErrBodyTooLarge); got != nethttp.StatusRequestEntityTooLarge {
-		t.Errorf("ErrBodyTooLarge maps to %d, want 413, the code that names the limit that was hit", got)
+}
+
+func TestStatusForValidationIsUnprocessable(t *testing.T) {
+	var got checkedThing
+	err := Decode(postWithBody(`{"name":""}`), &got)
+	if err == nil {
+		t.Fatal("a body its own Validate rejects was accepted")
+	}
+	if status := StatusFor(err); status != nethttp.StatusUnprocessableEntity {
+		t.Errorf("a body that parsed but failed its own rule maps to %d, want 422: 400 would "+
+			"tell the client its JSON is malformed, which it is not", status)
 	}
 }
 
@@ -127,13 +146,34 @@ func TestStatusForMapsAStrangerTo500(t *testing.T) {
 	}
 }
 
-// TestStatusForOnNoError records what a nil error maps to. Which code that
-// should be is not ruled on (the plan's F12); what is asserted is only that a
-// caller who reached here without a failure is not told the server broke.
-func TestStatusForOnNoError(t *testing.T) {
-	got := StatusFor(nil)
-	if got >= 400 {
-		t.Errorf("a nil error maps to %d, which reports a failure where there was none", got)
+// TestStatusForNilIsOK pins the mapping that lets one call site serve both
+// outcomes. nil is not a failure, and 200 is what makes
+// WriteJSON(w, StatusFor(err), v) stand on the path where nothing went wrong.
+func TestStatusForNilIsOK(t *testing.T) {
+	if got := StatusFor(nil); got != nethttp.StatusOK {
+		t.Errorf("a nil error maps to %d, want 200", got)
 	}
-	t.Logf("a nil error currently maps to %d", got)
+}
+
+// TestWriteJSONWithStatusForNilSendsTheValue walks the call the mapping exists
+// for, rather than reading StatusFor(nil) on its own: the successful response
+// has to arrive at the writer as 200 with the value's encoding. A StatusFor
+// that answered 0 or 500 for nil would be visible here as the status on the
+// wire.
+func TestWriteJSONWithStatusForNilSendsTheValue(t *testing.T) {
+	var err error
+	w := newSpyWriter()
+	value := thing{Name: "a", Count: 3}
+	if writeErr := WriteJSON(w, StatusFor(err), value); writeErr != nil {
+		t.Fatalf("writing the success response failed: %v", writeErr)
+	}
+	if !w.wroteHeader {
+		t.Fatal("no status was written at all")
+	}
+	if w.status != nethttp.StatusOK {
+		t.Errorf("the success response went out as %d, want 200", w.status)
+	}
+	if got := string(w.body); got != `{"name":"a","count":3}` {
+		t.Errorf("the body is %q, want the value's JSON encoding", got)
+	}
 }

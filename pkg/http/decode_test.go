@@ -200,34 +200,42 @@ func TestDecodeSkipsValidationForATypeWithoutARule(t *testing.T) {
 	}
 }
 
-// TestDecodeClassifiesAnEmptyBody pins what is decided about an empty body: it
-// is classified, whatever the class turns out to be. The design does not rule
-// on whether an absent body is a failure at all (see the plan's F12), so the
-// expected class is deliberately not written here — what is written is that
-// the caller never receives a bare io.EOF, which StatusFor would have to map
-// to 500 and which names no fixing action.
-func TestDecodeClassifiesAnEmptyBody(t *testing.T) {
+// TestEmptyBodyIsMalformed pins the ruling on an absent body: it joins the
+// malformed ones instead of getting a class of its own, and it reaches the
+// client as 400. Calling Decode is how a handler declares it needs a body, so
+// accepting an empty one is not an option either. An implementation that adds
+// a sentinel for the empty case, that lets it through, or that answers 415 or
+// 500 fails here.
+func TestEmptyBodyIsMalformed(t *testing.T) {
 	var got thing
 	err := Decode(postWithBody(""), &got)
 	if err == nil {
-		return // a legal outcome under one of the rulings still open
+		t.Fatal("an empty body was accepted, so a handler that needs a body would " +
+			"proceed with the target's zero value")
 	}
-	if errors.Is(err, io.EOF) {
-		t.Fatalf("an empty body surfaces as a bare io.EOF: %v", err)
+	if !errors.Is(err, ErrMalformedBody) {
+		t.Fatalf("an empty body does not match ErrMalformedBody: %v", err)
 	}
-	matched := 0
 	for name, sentinel := range sentinels {
+		if name == "ErrMalformedBody" {
+			continue
+		}
 		if errors.Is(err, sentinel) {
-			matched++
-			t.Logf("an empty body is currently classified as %s", name)
+			t.Errorf("an empty body also matches %s; it carries no class of its own, "+
+				"and two matching classes leave the failure unclassifiable", name)
 		}
 	}
-	if matched != 1 {
-		t.Errorf("an empty body matches %d of this package's sentinels, want exactly 1: %v", matched, err)
+	if errors.Is(err, io.EOF) {
+		t.Errorf("an empty body surfaces the decoder's bare io.EOF, which names no fixing "+
+			"action: %v", err)
 	}
-	if StatusFor(err) >= nethttp.StatusInternalServerError {
-		t.Errorf("an empty body maps to %d; a body the client chose not to send is not a "+
-			"server-side failure", StatusFor(err))
+	if status := StatusFor(err); status != nethttp.StatusBadRequest {
+		t.Errorf("an empty body reaches the client as %d, want 400: the body is the thing "+
+			"that is wrong with the request", status)
+	}
+	if !strings.Contains(err.Error(), "empty") {
+		t.Errorf("the failure %q does not say the body was empty, so the caller reads it as "+
+			"a parse error over bytes it did send", err)
 	}
 }
 
