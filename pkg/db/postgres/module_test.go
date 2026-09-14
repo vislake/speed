@@ -67,15 +67,7 @@ func TestPostgresModuleShape(t *testing.T) {
 			"database nobody mentioned")
 	}
 
-	if len(module.Resources) != 1 {
-		t.Fatalf("the module carries %d resources, and an implementation carries its input item "+
-			"declaration and nothing else", len(module.Resources))
-	}
-	schema, ok := module.Resources[0].(config.Schema)
-	if !ok {
-		t.Fatalf("the module's resource is %T, and an implementation hands over a config.Schema",
-			module.Resources[0])
-	}
+	schema := schemaOf(t, module)
 	if schema.Namespace != "db.postgres" {
 		t.Errorf("the items are mounted on %q, and this implementation's own section is db.postgres",
 			schema.Namespace)
@@ -130,19 +122,45 @@ func TestPostgresModuleShape(t *testing.T) {
 // package is the whole gesture: the module reaches the registry the host runs
 // on, not a registry built by hand in a case. Without the registration a host
 // would get no database at all, and nothing else in this package would notice.
+//
+// What is compared is the registered descriptor against the one Module builds,
+// field by content. The name is deliberately not asserted: a lookup by a name
+// returns the descriptor filed under it, so its name equals that key by
+// construction and an assertion about it would hold for any registration,
+// including one that registered something else entirely.
 func TestTheProcessRegistrationCarriesTheModule(t *testing.T) {
 	registered, ok := core.ProcessRegistry.Lookup(postgres.ModuleName)
 	if !ok {
 		t.Fatalf("importing this package did not register %q with the process registry, so a host that "+
 			"imports it runs without a database", postgres.ModuleName)
 	}
-	if registered.Name != postgres.ModuleName {
-		t.Errorf("the registry holds %q under the name %q", registered.Name, postgres.ModuleName)
-	}
-	if want := postgres.Module().Provides; !reflect.DeepEqual(registered.Provides, want) {
+	built := postgres.Module()
+	if !reflect.DeepEqual(registered.Provides, built.Provides) {
 		t.Errorf("the registered descriptor delivers %v, and Module builds %v: the registration is the "+
-			"descriptor hosts actually run on", registered.Provides, want)
+			"descriptor hosts actually run on", registered.Provides, built.Provides)
 	}
+	registeredSchema, builtSchema := schemaOf(t, registered), schemaOf(t, built)
+	if !reflect.DeepEqual(registeredSchema, builtSchema) {
+		t.Errorf("the registration mounts its input items on %q and Module builds the declaration for "+
+			"%q, so hosts mount theirs through a declaration no case here has looked at",
+			registeredSchema.Namespace, builtSchema.Namespace)
+	}
+}
+
+// schemaOf takes the input item declaration out of a descriptor, and reports
+// the shapes that would leave a case looking at nothing.
+func schemaOf(t *testing.T, module core.Module) config.Schema {
+	t.Helper()
+	if len(module.Resources) != 1 {
+		t.Fatalf("the module carries %d resources, and an implementation carries its input item "+
+			"declaration and nothing else", len(module.Resources))
+	}
+	schema, ok := module.Resources[0].(config.Schema)
+	if !ok {
+		t.Fatalf("the module's resource is %T, and an implementation hands over a config.Schema",
+			module.Resources[0])
+	}
+	return schema
 }
 
 // dependantName is the module that declares the migration set below. Its name
@@ -206,10 +224,10 @@ func (d *dependant) module() core.Module {
 // that is only observable through the whole of it — a call to a callback in
 // isolation would not show whether the stages were wired to one another.
 //
-// The configuration is written under this implementation's namespace, so an
-// implementation that mounted its items somewhere else is not configured at
-// all: it disables itself and the dependant's requirement, not its silent
-// absence, is what the case reports.
+// The configuration is written under this implementation's namespace. An
+// implementation that mounted its items somewhere else is therefore not
+// configured at all: it disables itself, and what the case reports is the
+// dependant's unmet requirement rather than a run that quietly did nothing.
 func runAssembly(t *testing.T, dsn string) (db.Database, error) {
 	t.Helper()
 	body, err := json.Marshal(map[string]any{
