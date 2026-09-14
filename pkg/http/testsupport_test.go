@@ -16,6 +16,8 @@ import (
 	"time"
 
 	"github.com/vislake/speed/pkg/config"
+	"github.com/vislake/speed/pkg/core"
+	"github.com/vislake/speed/pkg/log"
 )
 
 // parseProductionFiles parses this package's production files. The test files
@@ -237,4 +239,321 @@ func testSettings(name string) endpointSettings {
 		drainTimeout:      5 * time.Second,
 		maxBodyBytes:      defaultMaxBodyBytes,
 	}
+}
+
+// The fixtures below drive a whole assembly: core.New() with a hand-built set
+// of modules, and Run advancing every stage the way a host's would. They live
+// here rather than in the file of whichever test needed one first, so that the
+// stubs are one shape shared instead of several that drift.
+//
+// A probe's position in the assembly comes from what it declares and from
+// nothing else. core promises dependency order; how it linearises what
+// dependency order leaves open is its own implementation choice, so no fixture
+// here and no test built on one may read an order out of module names.
+
+// stubConfigModule is the module named config, the one name the registry
+// recognises: it is constructed ahead of every stance and is an implicit
+// dependency of everyone.
+//
+// The real module's New reads os.Args unconditionally and refuses the
+// arguments go test passes a test binary, so an assembly is handed this one
+// and reads back the endpoints the test wrote.
+func stubConfigModule(cfg moduleConfig) core.Module {
+	return core.Module{
+		Name:     "config",
+		Provides: []core.Provision{{Token: (*config.Reader)(nil)}},
+		New: func(context.Context, *core.Registry) (any, error) {
+			return &stubReader{cfg: cfg}, nil
+		},
+	}
+}
+
+// stubLogger delivers the Logger capability over a logger the test holds. A
+// module carrying it is constructed before this one and stopped after it: the
+// dependency on Logger is optional, and an optional requirement whose provider
+// is present still draws the ordering edge.
+type stubLogger struct{ logger *slog.Logger }
+
+func (s stubLogger) Named(string) *slog.Logger { return s.logger }
+func (s stubLogger) Redaction() log.Redaction  { return noRedaction{} }
+
+// noRedaction takes registrations and masks nothing. What an assembly test
+// observes of the Logger capability is the ordering it causes, not the masking.
+type noRedaction struct{}
+
+func (noRedaction) AddKeys(...string)              {}
+func (noRedaction) AddPattern(string, log.Matcher) {}
+
+var _ log.Logger = stubLogger{}
+
+// capA and capB are capabilities a probe module really delivers, product and
+// declaration both. A middleware layer that names one of them in Provides is
+// then standing for something the assembly actually contains, which is the
+// state the constraints have to be exercised in: a layer pointing at a
+// capability nobody delivers is the other case, and it drops its constraint.
+type capA interface{ standsForA() }
+
+type capB interface{ standsForB() }
+
+type deliveredA struct{}
+
+type deliveredB struct{}
+
+func (deliveredA) standsForA() {}
+
+func (deliveredB) standsForB() {}
+
+var (
+	_ capA = deliveredA{}
+	_ capB = deliveredB{}
+)
+
+// stageProbe is a module a test puts in an assembly to watch a stage from the
+// inside, and to make the registrations a real registrant would make.
+//
+// A nil callback is left off the descriptor. A callback reports a failed
+// observation by returning an error, which fails that stage: the goroutine
+// running Run is not the test's, so t.Fatal cannot be called from one, and an
+// error carries the text out to where the test reads it.
+type stageProbe struct {
+	name     string
+	requires []core.Requirement
+	provides []core.Provision
+	// product is what New hands back. It has to satisfy every capability in
+	// provides, because core checks the product against the declaration as
+	// it constructs.
+	product any
+
+	onNew     func(*core.Registry) error
+	onMigrate func(*core.Registry) error
+	onInit    func(*core.Registry) error
+	onStart   func(*core.Registry) error
+	onServe   func(*core.Registry) error
+	onStop    func(*core.Registry) error
+	onClose   func(*core.Registry) error
+}
+
+// module renders the probe as the descriptor a registry takes.
+func (p *stageProbe) module() core.Module {
+	stage := func(f func(*core.Registry) error) func(context.Context, *core.Registry, any) error {
+		if f == nil {
+			return nil
+		}
+		return func(_ context.Context, reg *core.Registry, _ any) error { return f(reg) }
+	}
+	return core.Module{
+		Name:     p.name,
+		Requires: p.requires,
+		Provides: p.provides,
+		New: func(_ context.Context, reg *core.Registry) (any, error) {
+			if p.onNew != nil {
+				if err := p.onNew(reg); err != nil {
+					return nil, err
+				}
+			}
+			return p.product, nil
+		},
+		Migrate: stage(p.onMigrate),
+		Init:    stage(p.onInit),
+		Start:   stage(p.onStart),
+		Serve:   stage(p.onServe),
+		Stop:    stage(p.onStop),
+		Close:   stage(p.onClose),
+	}
+}
+
+// requiresRouter is the declaration that puts a probe after this module: it is
+// constructed, initialised, started and served once this module has been, and
+// stopped and closed before it. It is the only thing a test may rely on for
+// that position.
+func requiresRouter() []core.Requirement {
+	return []core.Requirement{{Token: (*Router)(nil)}}
+}
+
+// inOrder runs several stage callbacks one after another, for a probe with
+// more than one thing to do in a stage.
+func inOrder(steps ...func(*core.Registry) error) func(*core.Registry) error {
+	return func(reg *core.Registry) error {
+		for _, step := range steps {
+			if err := step(reg); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+}
+
+// routeOn is the stage callback that registers one route through the public
+// surface, the path a real registrant takes.
+func routeOn(endpoint, pattern string, h nethttp.Handler) func(*core.Registry) error {
+	return func(reg *core.Registry) error {
+		e, err := endpointFrom(reg, endpoint)
+		if err != nil {
+			return err
+		}
+		e.Route(pattern, h)
+		return nil
+	}
+}
+
+// useLayer is the stage callback that registers one middleware layer through
+// the public surface.
+func useLayer(endpoint string, mw Middleware) func(*core.Registry) error {
+	return func(reg *core.Registry) error {
+		e, err := endpointFrom(reg, endpoint)
+		if err != nil {
+			return err
+		}
+		e.Use(mw)
+		return nil
+	}
+}
+
+// assembly is one registry going through the whole lifecycle on its own
+// goroutine, with the two handles a test needs: the cancellation that ends the
+// run, and the error Run came back with.
+type assembly struct {
+	reg    *core.Registry
+	cancel context.CancelFunc
+	result chan error
+
+	mu       sync.Mutex
+	finished bool
+	err      error
+}
+
+// startAssembly registers the modules, starts Run and hands back the handle.
+// The run is ended and waited for whatever the test does, so a failing
+// assertion leaves no registry serving for the rest of the binary.
+func startAssembly(t *testing.T, modules ...core.Module) *assembly {
+	t.Helper()
+	reg := core.New()
+	for _, m := range modules {
+		reg.Register(m)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	a := &assembly{reg: reg, cancel: cancel, result: make(chan error, 1)}
+	go func() { a.result <- reg.Run(ctx) }()
+	t.Cleanup(func() {
+		cancel()
+		a.wait(t)
+	})
+	return a
+}
+
+// wait takes the result of Run, to this package's deadline. The result is
+// kept, so the cleanup may ask for it again after the test already has.
+func (a *assembly) wait(t *testing.T) error {
+	t.Helper()
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.finished {
+		return a.err
+	}
+	select {
+	case err := <-a.result:
+		a.finished, a.err = true, err
+		return err
+	case <-time.After(waitDeadline):
+		t.Fatalf("timed out after %s waiting for Run to return", waitDeadline)
+		return nil
+	}
+}
+
+// stop ends the run and reports what Run came back with.
+func (a *assembly) stop(t *testing.T) error {
+	t.Helper()
+	a.cancel()
+	return a.wait(t)
+}
+
+// routerFrom takes this module's product out of a registry. It reports a
+// failure rather than failing a test, because the callers that need it most
+// are the probe callbacks, which run on the goroutine driving Run.
+func routerFrom(reg *core.Registry) (*router, error) {
+	delivered, err := core.Resolve[Router](reg)
+	if err != nil {
+		return nil, fmt.Errorf("taking up the Router capability: %w", err)
+	}
+	r, ok := delivered.(*router)
+	if !ok {
+		return nil, fmt.Errorf("the Router capability is delivered by %T, not by this module", delivered)
+	}
+	return r, nil
+}
+
+// endpointFrom looks one endpoint up through the public surface.
+func endpointFrom(reg *core.Registry, name string) (Endpoint, error) {
+	r, err := routerFrom(reg)
+	if err != nil {
+		return nil, err
+	}
+	e, err := r.Endpoint(name)
+	if err != nil {
+		return nil, fmt.Errorf("looking up endpoint %q: %w", name, err)
+	}
+	return e, nil
+}
+
+// boundAddr is the address an endpoint really bound, which is where a request
+// in these tests goes: the configuration asks for port 0 and the operating
+// system picks.
+func boundAddr(r *router, name string) (string, error) {
+	e, ok := r.endpoints[name]
+	if !ok {
+		return "", fmt.Errorf("endpoint %q is not declared in this assembly", name)
+	}
+	addr := e.socket.addr()
+	if addr == nil {
+		return "", fmt.Errorf("endpoint %q never bound an address", name)
+	}
+	return addr.String(), nil
+}
+
+// listenerState reports what an endpoint's socket looks like at one moment of
+// the shutdown: whether Stop has run on it, and whether the drain that Stop
+// leaves running in the background is still going.
+//
+// The pair is what tells the two beats apart. A Stop that waited for its own
+// drain would be seen from a later module with the drain already finished.
+func listenerState(l *listener) (stopped, draining bool) {
+	l.mu.Lock()
+	stopping, drained := l.stopping, l.drained
+	l.mu.Unlock()
+	if drained == nil {
+		return stopping, false
+	}
+	select {
+	case <-drained:
+		return stopping, false
+	default:
+		return stopping, true
+	}
+}
+
+// getStatus issues one GET against a bound endpoint and reports the status it
+// answered with. Unlike get, which only needs a request to be in flight, this
+// one is for the assertions that turn on what the chain actually answered.
+func getStatus(ctx context.Context, addr, path string) (int, error) {
+	req, err := nethttp.NewRequestWithContext(ctx, nethttp.MethodGet, "http://"+addr+path, nil)
+	if err != nil {
+		return 0, err
+	}
+	client := &nethttp.Client{Timeout: waitDeadline}
+	resp, err := client.Do(req)
+	if err != nil {
+		return 0, err
+	}
+	defer resp.Body.Close()
+	return resp.StatusCode, nil
+}
+
+// endpointsAt is a configuration with one endpoint per name, each on a
+// loopback port the operating system picks, sharing one drain timeout.
+func endpointsAt(drain time.Duration, names ...string) moduleConfig {
+	cfg := moduleConfig{Endpoints: make(map[string]endpointConfig, len(names))}
+	for _, name := range names {
+		cfg.Endpoints[name] = endpointConfig{Address: "127.0.0.1:0", DrainTimeout: &drain}
+	}
+	return cfg
 }
