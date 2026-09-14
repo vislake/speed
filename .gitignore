@@ -16,6 +16,8 @@ Thumbs.db
 /go/**/bin/
 *.test
 *.out
+# Workspace-mode dependency checksums; go.work lists only in-repo modules.
+go.work.sum
 # The example host's in-place build output: `go build ./...` in a main
 # package writes the binary beside the sources, and the end-to-end cases
 # build their own copy into a temporary directory instead.
