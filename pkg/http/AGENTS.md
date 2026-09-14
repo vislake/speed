@@ -30,7 +30,11 @@ here must not cross, and how to run it.
 - **The engine seam is `Engine`, and it is not for registrants.** A change that
   puts the engine's type, or any other plumbing type, on the surface is the
   shape to reject: a registrant goes through `Endpoint`, and the request
-  helpers use `net/http`'s types.
+  helpers use `net/http`'s types. The seam asks an implementation subpackage
+  for one thing besides the interface: a refused mount has to be attributed to
+  the mounted pattern it clashes with. The subpackage's engine answers
+  `AttributeRefusal`, and an engine that does not leaves the startup failure
+  saying the refusal was not attributed — see `Engine`'s godoc.
 - **No knowledge of any capability, and no interpretation of a layer.** The
   ordering reads capability tokens and nothing else: a `switch` on a concrete
   token, or anything else that reads what a layer stands for, is the shape to
