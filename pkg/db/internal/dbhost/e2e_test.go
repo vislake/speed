@@ -42,24 +42,42 @@ const runLimit = 90 * time.Second
 const buildLimit = 5 * time.Minute
 
 func TestMain(m *testing.M) {
+	// The docker-free case runs this binary again with an environment that has
+	// no docker on it, and the child reaches pgtest before it needs a host: a
+	// build there would fail first, on an environment that cannot run one, and
+	// the case would say nothing about the ruling it is about.
+	var built string
+	if os.Getenv(dockerlessEnv) == "" {
+		dir, err := buildHost()
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		built = dir
+	}
+	code := m.Run()
+	if built != "" {
+		os.RemoveAll(built)
+	}
+	os.Exit(code)
+}
+
+// buildHost compiles the host into a directory of its own and reports where it
+// put it.
+func buildHost() (string, error) {
 	dir, err := os.MkdirTemp("", "dbhost")
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "creating the build directory failed:", err)
-		os.Exit(1)
+		return "", fmt.Errorf("creating the build directory failed: %w", err)
 	}
 	hostBinary = filepath.Join(dir, "dbhost")
 	ctx, cancel := context.WithTimeout(context.Background(), buildLimit)
-	build := exec.CommandContext(ctx, "go", "build", "-o", hostBinary, ".")
-	out, err := build.CombinedOutput()
-	cancel()
+	defer cancel()
+	out, err := exec.CommandContext(ctx, "go", "build", "-o", hostBinary, ".").CombinedOutput()
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "building the host failed: %v\n%s", err, out)
 		os.RemoveAll(dir)
-		os.Exit(1)
+		return "", fmt.Errorf("building the host failed: %w\n%s", err, out)
 	}
-	code := m.Run()
-	os.RemoveAll(dir)
-	os.Exit(code)
+	return dir, nil
 }
 
 // outcome is what one run of the host produced.
@@ -526,4 +544,110 @@ func TestConcurrentFirstMigrationProvesTheWindowOverlapped(t *testing.T) {
 		t.Fatalf("%s was inside its migration for %s, and the migration is written to hold it for %s: "+
 			"the window this case needs is not there", applier.role, window, applyDuration)
 	}
+}
+
+// dockerlessEnv marks the re-executed child the docker-free case drives. It stays
+// outside this host's prefix for the same reason the scenario variables do, and
+// TestMain reads it: the child needs no host binary, and building one there would
+// fail before the case it was asked for ever ran.
+const dockerlessEnv = "SPEED_DB_E2E_DOCKERLESS"
+
+// TestDockerlessProbe is the child half of the case below. It asks pgtest for a
+// database on a machine that has no docker on it, which is a skip where CI is
+// unset and a failure where it is set. It runs only from that case: started on
+// its own it says which case it belongs to.
+func TestDockerlessProbe(t *testing.T) {
+	if os.Getenv(dockerlessEnv) == "" {
+		t.Skip("the child half of TestTheDockerlessSkipUpgradesUnderCI, which runs it on a machine that " +
+			"has no docker on it")
+	}
+	pgtest.Acquire(t)
+	t.Errorf("docker was found on a PATH that has none, so this run says nothing about the ruling")
+}
+
+// TestTheDockerlessSkipUpgradesUnderCI pins the ruling the two concurrency cases
+// rest on: a machine without docker skips the container cases, so that the suite
+// runs on a laptop that has none, and under CI the skip becomes a failure —
+// because a gate that is skipped wherever it is actually meant to run is not a
+// gate.
+//
+// Both settings are observed, and the reading that was weighed against this one
+// — skip everywhere, so that make test behaves the same in every environment —
+// is what the second half rules out: under it this gate would pass silently on
+// exactly the machine it exists for. What the skip costs instead is an
+// environment-dependent `make test`, which the two cases say out loud.
+func TestTheDockerlessSkipUpgradesUnderCI(t *testing.T) {
+	withoutCI := runDockerlessChild(t, nil)
+	if withoutCI.code != 0 {
+		t.Errorf("a machine without docker and without CI left with status %d, and the suite is meant to run "+
+			"there by skipping:\n%s", withoutCI.code, withoutCI.output())
+	}
+	if !withoutCI.saidSkip() {
+		t.Errorf("the container case neither skipped nor failed for want of docker on a machine without it, "+
+			"so this run says nothing about the ruling:\n%s", withoutCI.output())
+	}
+
+	underCI := runDockerlessChild(t, []string{"CI=1"})
+	if underCI.code == 0 {
+		t.Errorf("the container case was skipped under CI, which is the silent pass this ruling exists to "+
+			"prevent:\n%s", underCI.output())
+	}
+	if !underCI.saidSkip() {
+		t.Errorf("the run failed for a reason other than the missing docker, so this run says nothing about "+
+			"the ruling:\n%s", underCI.output())
+	}
+}
+
+// dockerlessReason is what pgtest says when there is no docker to run the
+// container cases against. It is the reason text rather than the test's outcome
+// that the case asserts, so that a child which failed for another reason — a
+// binary that would not start, a case that never ran — reads as the case saying
+// nothing rather than as the ruling holding.
+const dockerlessReason = "docker is not on PATH"
+
+// childRun is what one re-executed child produced.
+type childRun struct {
+	code   int
+	stdout string
+	stderr string
+}
+
+// output is both streams, for the messages that say what the child was doing.
+func (r childRun) output() string { return r.stdout + r.stderr }
+
+// saidSkip reports whether the child reached pgtest's docker-free path.
+func (r childRun) saidSkip() bool { return strings.Contains(r.output(), dockerlessReason) }
+
+// runDockerlessChild runs this binary again with an environment that has no
+// docker on it, and collects what it did.
+//
+// The environment is built rather than inherited, and the empty PATH is the
+// point: the child is started by absolute path, so it needs nothing on it to
+// run, and it must find no docker anywhere. That is also why it builds no host
+// binary — see TestMain.
+func runDockerlessChild(t *testing.T, extra []string) childRun {
+	t.Helper()
+	binary, err := os.Executable()
+	if err != nil {
+		t.Fatalf("locating this test binary to re-execute it: %v", err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), runLimit)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, binary, "-test.run", "^TestDockerlessProbe$", "-test.v")
+	cmd.Env = append([]string{dockerlessEnv + "=1", "PATH=" + t.TempDir()}, extra...)
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout, cmd.Stderr = &stdout, &stderr
+
+	run := childRun{}
+	runErr := cmd.Run()
+	run.stdout, run.stderr = stdout.String(), stderr.String()
+	var exit *exec.ExitError
+	switch {
+	case runErr == nil:
+	case errors.As(runErr, &exit):
+		run.code = exit.ExitCode()
+	default:
+		t.Fatalf("running the child failed: %v\n%s", runErr, run.output())
+	}
+	return run
 }
