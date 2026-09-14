@@ -84,6 +84,13 @@ func NewModule(spec Spec) core.Module {
 			}
 			return spec.prepare(reader)
 		},
+		New: func(ctx context.Context, reg *core.Registry) (any, error) {
+			reader, err := spec.reader(reg, "the connection locator")
+			if err != nil {
+				return nil, err
+			}
+			return spec.newDatabase(ctx, reader)
+		},
 		Migrate: func(ctx context.Context, reg *core.Registry, instance any) error {
 			reader, err := spec.reader(reg, "the bound on waiting for the migration mutex")
 			if err != nil {
