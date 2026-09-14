@@ -2,6 +2,7 @@ package postgres_test
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"strings"
 	"testing"
@@ -23,7 +24,7 @@ func TestLockTimeoutIsErrMigrationLockTimeout(t *testing.T) {
 	dsn := pgtest.Acquire(t)
 	ctx := t.Context()
 
-	holder := replica(t, dsn, time.Minute)
+	holder := newReplica(t, dsn, time.Minute)
 	if err := holder.Acquire(ctx); err != nil {
 		t.Fatalf("the first replica could not take the mutex: %v", err)
 	}
@@ -33,7 +34,7 @@ func TestLockTimeoutIsErrMigrationLockTimeout(t *testing.T) {
 		}
 	})
 
-	waiter := replica(t, dsn, time.Second)
+	waiter := newReplica(t, dsn, time.Second)
 	start := time.Now()
 	err := waiter.Acquire(ctx)
 	waited := time.Since(start)
@@ -70,7 +71,7 @@ func TestTheMutexIsReleasedAfterARun(t *testing.T) {
 	dsn := pgtest.Acquire(t)
 	ctx := t.Context()
 
-	first := replica(t, dsn, time.Second)
+	first := newReplica(t, dsn, time.Second)
 	if err := first.Acquire(ctx); err != nil {
 		t.Fatalf("the first replica could not take the mutex: %v", err)
 	}
@@ -78,7 +79,7 @@ func TestTheMutexIsReleasedAfterARun(t *testing.T) {
 		t.Fatalf("the first replica could not give the mutex up: %v", err)
 	}
 
-	second := replica(t, dsn, time.Second)
+	second := newReplica(t, dsn, time.Second)
 	if err := second.Acquire(ctx); err != nil {
 		t.Fatalf("the mutex was still held after the first replica released it: %v", err)
 	}
@@ -102,7 +103,7 @@ func TestTheMutexIsReleasedAfterARunThatWasCutShort(t *testing.T) {
 	ctx := t.Context()
 
 	runCtx, abandon := context.WithCancel(ctx)
-	first := replica(t, dsn, time.Second)
+	first := newReplica(t, dsn, time.Second)
 	if err := first.Acquire(runCtx); err != nil {
 		t.Fatalf("the first replica could not take the mutex: %v", err)
 	}
@@ -111,7 +112,7 @@ func TestTheMutexIsReleasedAfterARunThatWasCutShort(t *testing.T) {
 	if err := first.Release(runCtx); err != nil {
 		t.Fatalf("giving the mutex up after the run was cut short: %v", err)
 	}
-	second := replica(t, dsn, time.Second)
+	second := newReplica(t, dsn, time.Second)
 	if err := second.Acquire(ctx); err != nil {
 		t.Fatalf("a run that was cut short left the mutex held, so every other replica waits out its "+
 			"whole allowance against a process that has already given up: %v", err)
@@ -133,7 +134,7 @@ func TestReleasingAMutexWhoseSessionDiedReportsIt(t *testing.T) {
 	dsn := pgtest.Acquire(t)
 	ctx := t.Context()
 
-	holder := replica(t, dsn, time.Second)
+	holder := newReplica(t, dsn, time.Second)
 	if err := holder.Acquire(ctx); err != nil {
 		t.Fatalf("taking the mutex: %v", err)
 	}
@@ -154,7 +155,7 @@ func TestReleasingAMutexWhoseSessionDiedReportsIt(t *testing.T) {
 	// The server released the lock when it dropped the session, so the next
 	// replica gets in. This is here so that the case above cannot be read as
 	// the mutex having been stranded.
-	next := replica(t, dsn, time.Second)
+	next := newReplica(t, dsn, time.Second)
 	if err := next.Acquire(ctx); err != nil {
 		t.Fatalf("the mutex was still held after its session was dropped: %v", err)
 	}
@@ -168,7 +169,7 @@ func TestReleasingAMutexWhoseSessionDiedReportsIt(t *testing.T) {
 // release that objected to that would replace the real startup failure with
 // noise about a mutex.
 func TestReleasingAMutexThatWasNeverTakenIsNotAnError(t *testing.T) {
-	lock := replica(t, pgtest.Acquire(t), time.Second)
+	lock := newReplica(t, pgtest.Acquire(t), time.Second)
 	if err := lock.Release(t.Context()); err != nil {
 		t.Errorf("releasing a mutex that was never taken reported %v", err)
 	}
@@ -180,7 +181,7 @@ func TestReleasingAMutexThatWasNeverTakenIsNotAnError(t *testing.T) {
 // could give it up — a lock leaked for the lifetime of the process.
 func TestTakingTheMutexTwiceIsRefused(t *testing.T) {
 	ctx := t.Context()
-	lock := replica(t, pgtest.Acquire(t), time.Second)
+	lock := newReplica(t, pgtest.Acquire(t), time.Second)
 	if err := lock.Acquire(ctx); err != nil {
 		t.Fatalf("taking the mutex: %v", err)
 	}
@@ -202,8 +203,8 @@ func TestTakingTheMutexTwiceIsRefused(t *testing.T) {
 // would have to become a derived one.
 func TestTwoDatabasesDoNotBlockEachOther(t *testing.T) {
 	ctx := t.Context()
-	here := replica(t, pgtest.Acquire(t), time.Second)
-	there := replica(t, pgtest.Acquire(t), time.Second)
+	here := newReplica(t, pgtest.Acquire(t), time.Second)
+	there := newReplica(t, pgtest.Acquire(t), time.Second)
 
 	if err := here.Acquire(ctx); err != nil {
 		t.Fatalf("taking the mutex on the first database: %v", err)
@@ -221,103 +222,88 @@ func TestTwoDatabasesDoNotBlockEachOther(t *testing.T) {
 	}
 }
 
-// TestAPoolWithNoRoomForTheMutexIsRefused holds the mutex to the one failure it
-// cannot leave to the caller to notice.
+// TestAPoolOfOneConnectionCarriesTheMutexAndTheRun pins that the mutex costs no
+// connection of its own.
 //
-// The mutex pins a connection of the handle's own pool for the whole run, and
-// the run's statements need another. A pool capped at one therefore hands the
-// mutex the only connection there is and every statement afterwards waits for
-// one that cannot come free — no error, no log line, a startup that simply
-// stops until the context expires, or for the life of the process when there is
-// no deadline on it. max-open-conns is a published input item with no floor, so
-// one is a configuration a host may legitimately write.
-//
-// The refusal names the dial rather than the migrations: the reader has to
-// raise a pool size, not go looking through migration files.
-func TestAPoolWithNoRoomForTheMutexIsRefused(t *testing.T) {
-	dsn := pgtest.Acquire(t)
-	handle, lock := replicaOnACappedPool(t, dsn, time.Minute, 1)
-
-	// Bounded so that an implementation which pins the only connection fails
-	// this case instead of hanging the suite.
-	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
-	defer cancel()
-
-	err := lock.Acquire(ctx)
-	if err == nil {
-		t.Fatal("the mutex was taken on a pool of one, leaving the migration run without a connection " +
-			"to reach the database on; it has to be refused instead")
-	}
-	if errors.Is(err, db.ErrMigrationLockTimeout) {
-		// That sentinel sends the reader to another replica. Nothing is
-		// holding the mutex here; the pool is too small.
-		t.Error("a pool too small was reported as contention with another replica")
-	}
-	text := err.Error()
-	if item := postgres.ConfigNamespace + ".max-open-conns"; !strings.Contains(text, item) {
-		t.Errorf("the refusal does not name %s, which is the dial that has to be raised: %s", item, text)
-	}
-
-	// The connection was not pinned on the way out, so the pool is whole and
-	// the caller's own diagnostics can still reach the database.
-	if err := handle.WithContext(ctx).Exec(`SELECT 1`).Error; err != nil {
-		t.Errorf("the refused mutex kept the pool's only connection: %v", err)
-	}
-}
-
-// TestTheRunReachesTheDatabaseWhileTheMutexIsHeld checks the other side of that
-// floor: at the smallest pool the mutex admits, the run really does have a
-// connection left to work on.
-//
-// Without it the floor could be raised to any number and nothing would notice.
-func TestTheRunReachesTheDatabaseWhileTheMutexIsHeld(t *testing.T) {
-	dsn := pgtest.Acquire(t)
-	handle, lock := replicaOnACappedPool(t, dsn, time.Minute, 2)
+// max-open-conns is a published input item with no floor, so one is a value a
+// host may legitimately write. The mutex is taken on the connection the run has
+// already borrowed, which is what a session-scoped advisory lock needs anyway,
+// so that configuration starts. An implementation that pinned a second
+// connection for the mutex would take the only one there is, and every
+// statement of the run would then wait for a connection that cannot come free
+// until the run finishes — no error, no log line, a startup that simply stops.
+// The deadline below is what turns that into a failure this case can report.
+func TestAPoolOfOneConnectionCarriesTheMutexAndTheRun(t *testing.T) {
+	only := replicaOnAPoolOf(t, pgtest.Acquire(t), time.Minute, 1)
 
 	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
 	defer cancel()
 
-	if err := lock.Acquire(ctx); err != nil {
-		t.Fatalf("the mutex was refused on a pool that has room for it: %v", err)
+	if err := only.Acquire(ctx); err != nil {
+		t.Fatalf("taking the mutex on a pool of one connection: %v", err)
 	}
 	t.Cleanup(func() {
-		if err := lock.Release(context.Background()); err != nil {
+		if err := only.Release(context.Background()); err != nil {
 			t.Errorf("releasing the mutex: %v", err)
 		}
 	})
-	if err := handle.WithContext(ctx).Exec(`CREATE TABLE widgets (id INT)`).Error; err != nil {
-		t.Errorf("a migration statement could not run while the mutex was held: %v", err)
+	if err := only.run(ctx, `CREATE TABLE widgets (id INT)`); err != nil {
+		t.Errorf("a migration statement could not run while the mutex was held, on the same pool of "+
+			"one connection: %v", err)
 	}
 }
 
-// replica hands back a migration mutex on a handle of its own, standing for one
-// replica of a multi-replica deployment. Each one is a separate connection
-// pool, which is what a separate process would be.
-func replica(t *testing.T, dsn string, timeout time.Duration) db.MigrationLock {
+// replica stands for one replica of a multi-replica deployment: its own
+// connection pool, its own borrowed connection, its own mutex. A separate
+// process is what it models, and a separate pool is as close as a test inside
+// one process gets.
+//
+// The connection is borrowed here because that is what a migration run does. It
+// keeps one connection for the whole run and hands it to both halves of the
+// mutex: an advisory lock belongs to the session that took it, so the lock and
+// the statements it orders have to be on the same one.
+type replica struct {
+	handle *gorm.DB
+	conn   *sql.Conn
+	lock   db.MigrationLock
+}
+
+// newReplica hands back a replica on a pool of the driver's default size.
+func newReplica(t *testing.T, dsn string, timeout time.Duration) *replica {
 	t.Helper()
-	lock, err := postgres.NewMigrationLock(open(t, dsn), timeout)
-	if err != nil {
-		t.Fatalf("building a migration mutex: %v", err)
-	}
-	return lock
+	return replicaOnAPoolOf(t, dsn, timeout, 0)
 }
 
-// replicaOnACappedPool is replica with the pool size a host would have
-// configured, and hands the handle back as well so a case can see what the run
-// itself would see.
-func replicaOnACappedPool(
-	t *testing.T, dsn string, timeout time.Duration, maxOpen int,
-) (*gorm.DB, db.MigrationLock) {
+// replicaOnAPoolOf is newReplica with the pool size a host would have
+// configured. Zero leaves it as the driver set it.
+func replicaOnAPoolOf(t *testing.T, dsn string, timeout time.Duration, maxOpen int) *replica {
 	t.Helper()
 	handle := open(t, dsn)
 	pool, err := handle.DB()
 	if err != nil {
 		t.Fatalf("reaching the handle's connection pool: %v", err)
 	}
-	pool.SetMaxOpenConns(maxOpen)
-	lock, err := postgres.NewMigrationLock(handle, timeout)
-	if err != nil {
-		t.Fatalf("building a migration mutex: %v", err)
+	if maxOpen > 0 {
+		pool.SetMaxOpenConns(maxOpen)
 	}
-	return handle, lock
+	conn, err := pool.Conn(t.Context())
+	if err != nil {
+		t.Fatalf("borrowing the connection the run would use: %v", err)
+	}
+	// The connection goes back before the pool closes. A case that dropped
+	// its session on purpose gets ErrConnDone here, which is the same end.
+	t.Cleanup(func() { _ = conn.Close() })
+	return &replica{handle: handle, conn: conn, lock: postgres.NewMigrationLock(timeout)}
+}
+
+// Acquire and Release put the mutex on this replica's borrowed connection, the
+// way the migration run does.
+func (r *replica) Acquire(ctx context.Context) error { return r.lock.Acquire(ctx, r.conn) }
+func (r *replica) Release(ctx context.Context) error { return r.lock.Release(ctx, r.conn) }
+
+// run issues a statement the way the migration run issues one: on the borrowed
+// connection, the one the mutex is on.
+func (r *replica) run(ctx context.Context, statement string) error {
+	_, err := r.conn.ExecContext(ctx, statement)
+	return err
 }

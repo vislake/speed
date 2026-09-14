@@ -16,12 +16,15 @@
 // runs. Importing several implementations and configuring one is the intended
 // shape, and separate namespaces are what make it work.
 //
-// A dialect has two admission conditions to meet before it may carry
-// migrations, and both are properties of the engine rather than of this code:
-// it must put DDL inside a transaction, or a migration's execution and its
-// record stop being atomic; and, appearing as it does in multi-replica
-// deployments, it must offer a cross-process mutex. TestPostgresPutsDDLInsideATransaction
-// and the cases around NewMigrationLock are where each of them is held to.
+// A dialect has three admission conditions to meet before it may carry
+// migrations, and all three are properties of the engine and its driver rather
+// than of this code: it must put DDL inside a transaction, or a migration's
+// execution and its record stop being atomic; it must run a migration file
+// holding several statements without pkg/db splitting the text, or the same
+// migration set would stop working on a change of engine; and, appearing as it
+// does in multi-replica deployments, it must offer a cross-process mutex. The
+// dialect-neutral suite holds the first two on every engine it runs on, and the
+// cases around NewMigrationLock hold the third.
 package postgres
 
 import (

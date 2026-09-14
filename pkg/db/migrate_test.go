@@ -2,6 +2,7 @@ package db
 
 import (
 	"context"
+	"database/sql"
 	"embed"
 	"errors"
 	"fmt"
@@ -463,7 +464,8 @@ func TestDuplicateFileNameWithinOneModuleIsRejected(t *testing.T) {
 func TestDirectoryInsideADialectDirectoryIsRejected(t *testing.T) {
 	forEachDialect(t, func(t *testing.T, dialect Dialect, handle *gorm.DB) {
 		reg := registryOf(declaring("catalog", migrationSet(dialect, map[string]string{
-			"archive/0001_create_widgets.sql": createWidgets,
+			"0001_create_widgets.sql":         createWidgets,
+			"archive/0002_create_gadgets.sql": `CREATE TABLE gadgets (id INTEGER)`,
 		})))
 
 		err := applyMigrations(t.Context(), reg, handle, dialect, nil)
@@ -473,7 +475,58 @@ func TestDirectoryInsideADialectDirectoryIsRejected(t *testing.T) {
 		if !strings.Contains(err.Error(), "archive") {
 			t.Errorf("the error text %q does not name the directory that was not applied", err)
 		}
+		assertNothingWasApplied(t, handle)
 	})
+}
+
+// TestAFileThatIsNotSQLIsRejected pins the other half of the same rule. Only
+// .sql files are migrations, and anything else in the directory is an error
+// rather than something to pass over.
+//
+// Both of the wider rules hide a failure. Applying every regular file sends a
+// note somebody left in there to the database to be executed. Applying the .sql
+// files and ignoring the rest turns a migration whose name was typed wrong into
+// a table that is never created — and that is found at run time, a long way
+// from the start that skipped it.
+//
+// The legal migration sorts before the rejected entry, so an engine that
+// checked each entry as it reached it would have applied it before refusing.
+func TestAFileThatIsNotSQLIsRejected(t *testing.T) {
+	forEachDialect(t, func(t *testing.T, dialect Dialect, handle *gorm.DB) {
+		reg := registryOf(declaring("catalog", migrationSet(dialect, map[string]string{
+			"0001_create_widgets.sql": createWidgets,
+			"NOTES.txt":               "this directory holds the widget migrations",
+		})))
+
+		err := applyMigrations(t.Context(), reg, handle, dialect, nil)
+		if !errors.Is(err, ErrMigrationFailed) {
+			t.Fatalf("an entry that is not a migration reported %v, want %v", err, ErrMigrationFailed)
+		}
+		if !strings.Contains(err.Error(), "NOTES.txt") {
+			t.Errorf("the error text %q does not name the entry that was not applied", err)
+		}
+		assertNothingWasApplied(t, handle)
+	})
+}
+
+// assertNothingWasApplied checks that a rejected entry stopped the run before it
+// reached the database.
+//
+// The declaration under test holds one legal migration beside the rejected
+// entry. An engine that refused the entry only when it got to it would have
+// applied that migration first and recorded it, and the next start would take a
+// half-applied set for a complete one.
+func assertNothingWasApplied(t *testing.T, handle *gorm.DB) {
+	t.Helper()
+	if hasTable(t, handle, "widgets") {
+		t.Error("the legal migration standing beside the rejected entry was applied: the directory has " +
+			"to be refused while it is read, not part-way through the run")
+	}
+	if hasTable(t, handle, recordTableName) {
+		if rows := recordedMigrations(t, handle); len(rows) != 0 {
+			t.Errorf("the record table holds %v although the declaration was rejected", rows)
+		}
+	}
 }
 
 // TestTheDialectPutsDDLInsideATransaction pins the admission condition every
@@ -519,20 +572,26 @@ type probeLock struct {
 	recordsAtRelease     int
 }
 
-func (l *probeLock) Acquire(context.Context) error {
+// Both halves look at the database through the connection they are handed,
+// which is the connection the run itself is on. Reaching for the pool instead
+// would ask it for a second connection, and a pool of one has none to give:
+// the observation would wait for the connection the run is holding.
+
+func (l *probeLock) Acquire(ctx context.Context, conn *sql.Conn) error {
 	l.acquires++
 	if l.acquireErr != nil {
 		return l.acquireErr
 	}
-	l.recordTableAtAcquire = l.handle.Migrator().HasTable(recordTableName)
+	l.recordTableAtAcquire = pinned(ctx, l.handle, conn).Migrator().HasTable(recordTableName)
 	return nil
 }
 
-func (l *probeLock) Release(context.Context) error {
+func (l *probeLock) Release(ctx context.Context, conn *sql.Conn) error {
 	l.releases++
-	if l.handle.Migrator().HasTable(recordTableName) {
+	session := pinned(ctx, l.handle, conn)
+	if session.Migrator().HasTable(recordTableName) {
 		var rows []recordRow
-		if err := l.handle.Raw(selectRecords).Scan(&rows).Error; err == nil {
+		if err := session.Raw(selectRecords).Scan(&rows).Error; err == nil {
 			l.recordsAtRelease = len(rows)
 		}
 	}
@@ -730,4 +789,251 @@ func allErrors(err error) []error {
 		}
 	}
 	return out
+}
+
+// createWidgetsAndIndex is one migration holding two statements: a table and
+// the index that belongs with it. Written as two files it would be the same
+// change scattered over two migrations.
+const createWidgetsAndIndex = createWidgets + ";\n" +
+	`CREATE INDEX widgets_by_id ON widgets (id);`
+
+// TestEveryStatementInAMigrationFileIsExecuted pins that a migration file may
+// hold more than one statement, and that all of them run.
+//
+// Two failures are ruled out at once. An engine that executed only the first
+// statement leaves the index out and says nothing: the table is there, the
+// migration is recorded, and the missing index turns up as a slow query
+// months later. An engine that refused the file outright leaves the table out
+// as well, which at least fails loudly, and this case tells the two apart by
+// looking for both objects.
+func TestEveryStatementInAMigrationFileIsExecuted(t *testing.T) {
+	forEachDialect(t, func(t *testing.T, dialect Dialect, handle *gorm.DB) {
+		reg := registryOf(declaring("catalog", migrationSet(dialect, map[string]string{
+			"0001_create_widgets.sql": createWidgetsAndIndex,
+		})))
+
+		if err := applyMigrations(t.Context(), reg, handle, dialect, nil); err != nil {
+			t.Fatalf("applying a migration of two statements: %v", err)
+		}
+		if !hasTable(t, handle, "widgets") {
+			t.Fatal("the table the first statement creates does not exist, so the file did not run")
+		}
+		if !handle.Migrator().HasIndex("widgets", "widgets_by_id") {
+			t.Error("the index the second statement creates does not exist: only the first statement " +
+				"of the file was executed, and the rest was dropped without a word")
+		}
+		if rows := recordedMigrations(t, handle); len(rows) != 1 {
+			t.Errorf("the record table holds %v, want the one migration this file is", rows)
+		}
+	})
+}
+
+// TestTheDialectRunsAMigrationFileWithSeveralStatements is the admission
+// condition under the case above, and it belongs to the engine and its driver
+// rather than to this module: the file goes to the driver whole, because
+// splitting it here would mean parsing SQL. A driver with no path for a text of
+// several statements fails this case first, with none of the engine in the way,
+// and a migration set that holds such a file would stop working on it.
+func TestTheDialectRunsAMigrationFileWithSeveralStatements(t *testing.T) {
+	forEachDialect(t, func(t *testing.T, dialect Dialect, handle *gorm.DB) {
+		if err := handle.Exec(createWidgetsAndIndex).Error; err != nil {
+			t.Fatalf("%s would not run a text of two statements, so a migration set holding one stops "+
+				"working on this engine: %v", dialect, err)
+		}
+		if !hasTable(t, handle, "widgets") {
+			t.Error("the first statement of the text did not take effect")
+		}
+		if !handle.Migrator().HasIndex("widgets", "widgets_by_id") {
+			t.Errorf("%s executed only the first statement of the text", dialect)
+		}
+	})
+}
+
+// TestReleaseFailureSaysTheMigrationsWereApplied pins what the run reports when
+// every migration went in and only the release failed.
+//
+// The sentinel on its own reads as a migration that would not apply, and an
+// operator following it goes through migration files that have nothing wrong
+// with them. The text has to say where the failure fell.
+func TestReleaseFailureSaysTheMigrationsWereApplied(t *testing.T) {
+	forEachDialect(t, func(t *testing.T, dialect Dialect, handle *gorm.DB) {
+		lock := &probeLock{handle: handle, releaseErr: errors.New("the connection went away")}
+		reg := registryOf(declaring("catalog", migrationSet(dialect, map[string]string{
+			"0001_create_widgets.sql": createWidgets,
+		})))
+
+		err := applyMigrations(t.Context(), reg, handle, dialect, lock)
+		if !errors.Is(err, ErrMigrationFailed) {
+			t.Fatalf("a mutex that would not be released reported %v, want %v", err, ErrMigrationFailed)
+		}
+		if !errors.Is(err, lock.releaseErr) {
+			t.Errorf("the error %v does not carry the reason the mutex stayed held", err)
+		}
+		if !strings.Contains(err.Error(), "every migration was applied") {
+			t.Errorf("the text %q does not say the migrations went in, so it reads as a migration that "+
+				"would not apply and sends the reader to the wrong files", err)
+		}
+		// The claim the text makes has to be true, which is why both of
+		// these are here rather than only the string.
+		if !hasTable(t, handle, "widgets") {
+			t.Error("the message says every migration was applied, and the table is not there")
+		}
+		if rows := recordedMigrations(t, handle); len(rows) != 1 {
+			t.Errorf("the message says every migration was recorded, and the record table holds %v", rows)
+		}
+	})
+}
+
+// TestReleaseFailureAfterAFailedRunDoesNotClaimSuccess is the other direction.
+// A run that failed and then could not give the mutex up must not report that
+// the migrations were applied, and both reasons have to stay in the chain.
+func TestReleaseFailureAfterAFailedRunDoesNotClaimSuccess(t *testing.T) {
+	forEachDialect(t, func(t *testing.T, dialect Dialect, handle *gorm.DB) {
+		lock := &probeLock{handle: handle, releaseErr: errors.New("the connection went away")}
+		reg := registryOf(declaring("catalog", migrationSet(dialect, map[string]string{
+			"0001_broken.sql": `THIS IS NOT SQL IN ANY DIALECT`,
+		})))
+
+		err := applyMigrations(t.Context(), reg, handle, dialect, lock)
+		if !errors.Is(err, ErrMigrationFailed) {
+			t.Fatalf("a failed run whose mutex would not be released reported %v, want %v",
+				err, ErrMigrationFailed)
+		}
+		if strings.Contains(err.Error(), "every migration was applied") {
+			t.Errorf("the text claims the migrations went in although the run failed: %q", err)
+		}
+		if !errors.Is(err, lock.releaseErr) {
+			t.Errorf("the error %v does not carry the reason the mutex stayed held", err)
+		}
+		if !strings.Contains(err.Error(), "0001_broken.sql") {
+			t.Errorf("the error %v does not name the migration that failed, which is the other reason "+
+				"this startup is stopping", err)
+		}
+	})
+}
+
+// TestAPoolOfOneConnectionCarriesTheWholeRun pins that a run needs one
+// connection and not two.
+//
+// max-open-conns is an input item a host writes, and one is a value it may
+// legitimately write. The mutex is scoped to a session, so it has to be taken
+// on the connection the migrations travel on; an implementation that took it on
+// a second connection would leave every statement of the run waiting for one
+// that cannot come free until the run finishes — no error, no log line, a
+// startup that simply stops. The deadline below is what turns that hang into a
+// failure this case can report.
+func TestAPoolOfOneConnectionCarriesTheWholeRun(t *testing.T) {
+	forEachDialect(t, func(t *testing.T, dialect Dialect, handle *gorm.DB) {
+		pool, err := handle.DB()
+		if err != nil {
+			t.Fatalf("reaching the fixture's connection pool: %v", err)
+		}
+		pool.SetMaxOpenConns(1)
+
+		ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
+		defer cancel()
+
+		lock := &probeLock{handle: handle}
+		reg := registryOf(declaring("catalog", migrationSet(dialect, map[string]string{
+			"0001_create_widgets.sql": createWidgets,
+			"0002_fill_widgets.sql":   `INSERT INTO widgets (id) VALUES (1)`,
+		})))
+
+		if err := applyMigrations(ctx, reg, handle, dialect, lock); err != nil {
+			t.Fatalf("a run on a pool of one connection reported %v: the mutex and the migrations have "+
+				"to share the one connection the pool allows", err)
+		}
+		if lock.acquires != 1 || lock.releases != 1 {
+			t.Errorf("the mutex was taken %d times and released %d, want once each", lock.acquires, lock.releases)
+		}
+		if rows := recordedMigrations(t, handle); len(rows) != 2 {
+			t.Errorf("the record table holds %v after a run on a pool of one, want both migrations", rows)
+		}
+	})
+}
+
+// pinnedSchema is where the schema probe sends everything the run issues.
+const pinnedSchema = "pinned_to_the_mutex"
+
+// schemaProbeLock observes which connection the run is on, by setting session
+// state on the connection it is handed and looking for the consequences.
+//
+// A schema search path set without LOCAL belongs to the session, and a session
+// is one connection. Every object that lands in pinnedSchema afterwards was
+// created by a statement issued on that connection, and every object that lands
+// anywhere else was not.
+type schemaProbeLock struct {
+	schemaAtRelease string
+}
+
+func (l *schemaProbeLock) Acquire(ctx context.Context, conn *sql.Conn) error {
+	if _, err := conn.ExecContext(ctx, `CREATE SCHEMA `+pinnedSchema); err != nil {
+		return err
+	}
+	_, err := conn.ExecContext(ctx, `SET search_path TO `+pinnedSchema)
+	return err
+}
+
+func (l *schemaProbeLock) Release(ctx context.Context, conn *sql.Conn) error {
+	return conn.QueryRowContext(ctx, `SELECT current_schema()`).Scan(&l.schemaAtRelease)
+}
+
+var _ MigrationLock = (*schemaProbeLock)(nil)
+
+// TestTheWholeRunStaysOnOnePhysicalConnection is the structural half of the
+// case above: not that the run fits in one connection, but that all four of its
+// parts are on the same one.
+//
+// Taking the mutex sets the session's schema. The record table and the
+// migration's own table are then looked for twice — in that schema, where a run
+// on the same connection puts them, and in public, where a run that reached the
+// database on a second connection would have put them. Giving the mutex up
+// reads the schema back, which is the fourth part.
+//
+// Only PostgreSQL runs it. SQLite has no session setting of this kind to hang
+// the observation on, and its fixture allows one connection anyway, so there
+// would be nothing to tell apart.
+func TestTheWholeRunStaysOnOnePhysicalConnection(t *testing.T) {
+	forEachDialect(t, func(t *testing.T, dialect Dialect, handle *gorm.DB) {
+		if dialect != Postgres {
+			t.Skipf("%s has no session-scoped schema to observe the connection through", dialect)
+		}
+		lock := &schemaProbeLock{}
+		reg := registryOf(declaring("catalog", migrationSet(dialect, map[string]string{
+			"0001_create_widgets.sql": createWidgets,
+		})))
+
+		if err := applyMigrations(t.Context(), reg, handle, dialect, lock); err != nil {
+			t.Fatalf("applying under the mutex: %v", err)
+		}
+		if lock.schemaAtRelease != pinnedSchema {
+			t.Errorf("the mutex was given up on a session whose schema is %q, want %q: the release ran "+
+				"on a different connection from the one that took it", lock.schemaAtRelease, pinnedSchema)
+		}
+		for _, table := range []string{recordTableName, "widgets"} {
+			if !tableExistsIn(t, handle, pinnedSchema, table) {
+				t.Errorf("%s.%s does not exist, so that statement went to a connection other than the "+
+					"one the mutex was taken on", pinnedSchema, table)
+			}
+			if tableExistsIn(t, handle, "public", table) {
+				t.Errorf("public.%s exists, so that statement went to a connection other than the one "+
+					"the mutex was taken on", table)
+			}
+		}
+	})
+}
+
+// tableExistsIn reports whether a table exists in a named schema. The question
+// is asked with both names spelled out, so the answer does not depend on the
+// search path of whichever connection the pool hands over to ask it.
+func tableExistsIn(t *testing.T, handle *gorm.DB, schema, table string) bool {
+	t.Helper()
+	var found int64
+	err := handle.Raw(`SELECT count(*) FROM pg_catalog.pg_class c
+		JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+		WHERE n.nspname = ? AND c.relname = ?`, schema, table).Scan(&found).Error
+	if err != nil {
+		t.Fatalf("looking for %s.%s: %v", schema, table, err)
+	}
+	return found > 0
 }

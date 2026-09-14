@@ -3,10 +3,13 @@ package db
 import (
 	"cmp"
 	"context"
+	"database/sql"
+	"database/sql/driver"
 	"errors"
 	"fmt"
 	"io/fs"
 	"maps"
+	"path"
 	"reflect"
 	"slices"
 	"time"
@@ -28,6 +31,13 @@ import (
 // exists. A single-process test cannot reproduce it, which is why the seam is
 // here rather than folded into the engine.
 //
+// Both halves are handed the connection the whole run is pinned to, and both
+// have to use it. A mutex of this kind belongs to the session that took it,
+// not to a transaction and not to a pool: taken on one connection and given up
+// on another, it is never given up at all. The run's own statements travel on
+// the same connection, so the mutex stays held across every BEGIN and COMMIT
+// between the two calls without any of them touching it.
+//
 // Acquire waits for the mutex and reports ErrMigrationLockTimeout, unwrapped
 // into no other sentinel, once the implementation's own deadline passes: a
 // replica stuck holding the mutex must not hang the rest forever, and the
@@ -39,11 +49,13 @@ import (
 // transaction: it orders processes against each other and does not change what
 // one migration's execution and its record are atomic with.
 type MigrationLock interface {
-	// Acquire takes the mutex, waiting for another process to release it.
-	Acquire(ctx context.Context) error
-	// Release gives the mutex up. It runs on the failing path too, so a
-	// migration that did not apply does not strand the other replicas.
-	Release(ctx context.Context) error
+	// Acquire takes the mutex on conn, waiting for another process to
+	// release it.
+	Acquire(ctx context.Context, conn *sql.Conn) error
+	// Release gives the mutex up on conn, which is the connection it was
+	// taken on. It runs on the failing path too, so a migration that did not
+	// apply does not strand the other replicas.
+	Release(ctx context.Context, conn *sql.Conn) error
 }
 
 // recordTableName is the table that records which migrations have been applied.
@@ -84,13 +96,46 @@ type recordKey struct {
 // applyMigrations collects every declared migration set, applies what the
 // record table does not already list, and records what it applied.
 //
+// One connection is borrowed from the handle's pool and kept for the whole run.
+// Taking the mutex, creating the record table, applying each migration and
+// giving the mutex up all travel on it, and it goes back to the pool at the
+// end. A mutex an implementation supplies is scoped to a session, so it and the
+// statements it exists to order have to sit on the same connection; and being
+// on the same one, the run occupies one connection rather than two, which is
+// what makes a pool of one enough to start on.
+//
 // The whole run happens under lock when the dialect supplies one. The order is
 // the modules' dependency order, and file-name order within a module; only the
 // subdirectory named after the running dialect is read, and a declaration
 // without one contributes nothing rather than failing.
 func applyMigrations(ctx context.Context, reg *core.Registry, handle *gorm.DB, dialect Dialect, lock MigrationLock) (err error) {
+	pool, err := handle.DB()
+	if err != nil {
+		return fmt.Errorf("%w: the %s handle has no connection pool to apply migrations on: %w",
+			ErrMigrationFailed, dialect, err)
+	}
+	conn, err := pool.Conn(ctx)
+	if err != nil {
+		return fmt.Errorf("%w: taking the connection to apply the %s migrations on failed: %w",
+			ErrMigrationFailed, dialect, err)
+	}
+	// Set when the mutex would not be given up: the connection is then
+	// thrown away rather than handed back. See discard.
+	stranded := false
+	defer func() {
+		if stranded {
+			err = errors.Join(err, discard(conn))
+			return
+		}
+		if closeErr := conn.Close(); closeErr != nil {
+			err = errors.Join(err, fmt.Errorf(
+				"%w: handing the migration run's connection back to the pool failed: %w",
+				ErrMigrationFailed, closeErr))
+		}
+	}()
+
 	if lock != nil {
-		if lockErr := lock.Acquire(ctx); lockErr != nil {
+		if lockErr := lock.Acquire(ctx, conn); lockErr != nil {
 			// A timeout travels as it is. Wrapping it in
 			// ErrMigrationFailed would make both sentinels match and
 			// point the host at the migrations, when what it has to
@@ -102,23 +147,87 @@ func applyMigrations(ctx context.Context, reg *core.Registry, handle *gorm.DB, d
 				ErrMigrationFailed, dialect, lockErr)
 		}
 		defer func() {
-			if releaseErr := lock.Release(ctx); releaseErr != nil {
-				// Joined rather than swallowed: a mutex left held
-				// blocks every other replica's startup, and the
-				// failure that led here is still worth reporting.
-				err = errors.Join(err, fmt.Errorf(
-					"%w: releasing the migration mutex on the %s database failed, and the "+
-						"other replicas stay blocked until this connection drops: %w",
-					ErrMigrationFailed, dialect, releaseErr))
+			// Read before the join below changes it: whether every
+			// migration went in is what the message has to say.
+			applied := err == nil
+			if releaseErr := lock.Release(ctx, conn); releaseErr != nil {
+				stranded = true
+				err = errors.Join(err, releaseFailed(dialect, applied, releaseErr))
 			}
 		}()
 	}
-	return applyUnderLock(ctx, reg, handle, dialect)
+	return applyUnderLock(reg, pinned(ctx, handle, conn), dialect)
 }
 
-// applyUnderLock is the run itself, with the mutex already held.
-func applyUnderLock(ctx context.Context, reg *core.Registry, handle *gorm.DB, dialect Dialect) error {
+// pinned returns a session that issues every statement on one connection.
+//
+// GORM reaches the database through the connection pool on the statement, and a
+// *sql.Conn is one of those: pointing the session at the borrowed connection is
+// what keeps the run — and the session-scoped mutex around it — on that
+// connection instead of on whichever one the pool hands out next. Transactions
+// the session starts begin on it too.
+func pinned(ctx context.Context, handle *gorm.DB, conn *sql.Conn) *gorm.DB {
 	session := handle.WithContext(ctx)
+	session.Statement.ConnPool = conn
+	return session
+}
+
+// releaseFailed builds the error a run reports when the mutex would not be
+// given up.
+//
+// It says where the failure fell, because the sentinel alone does not. A run
+// whose migrations all applied and then could not release the mutex reads, from
+// ErrMigrationFailed on its own, as a migration that would not apply, and the
+// operator goes through migration files that have nothing wrong with them. The
+// other direction matters as much: after a run that had already failed, the
+// text must not claim the migrations went in.
+//
+// Either way the startup stops, and the reason is that the mutex belongs to a
+// session. A process that carried on would keep that session — for its whole
+// life, in the ordinary case — with every other replica waiting out its
+// allowance against it. Stopping ends the process, the session ends with it,
+// and the server releases the mutex.
+func releaseFailed(dialect Dialect, applied bool, cause error) error {
+	if applied {
+		return fmt.Errorf("%w: every migration was applied and recorded, and what failed afterwards is "+
+			"giving the migration mutex on the %s database up — there is nothing wrong with the "+
+			"migrations. This startup stops so that the session holding the mutex ends and the other "+
+			"replicas are not left waiting for it: %w",
+			ErrMigrationFailed, dialect, cause)
+	}
+	return fmt.Errorf("%w: the migration run did not finish, and giving the migration mutex on the %s "+
+		"database up afterwards failed as well, so the other replicas wait for it until this session "+
+		"ends: %w",
+		ErrMigrationFailed, dialect, cause)
+}
+
+// discard throws the run's connection away instead of handing it back to the
+// pool.
+//
+// It is what follows a mutex that could not be given up. The mutex belongs to
+// the session on that connection, so ending the session is the one remaining
+// way to release it: handing the connection back would keep the session alive,
+// with the mutex on it, and pass it to the next caller in that state.
+func discard(conn *sql.Conn) error {
+	// Raw reports the error the callback returned; ErrBadConn is what asks
+	// database/sql to drop the underlying connection rather than reuse it,
+	// so seeing it come back is the success case. ErrConnDone is the other
+	// success case: database/sql has already thrown the connection away,
+	// which is the same end — the session is over and the mutex with it.
+	err := conn.Raw(func(any) error { return driver.ErrBadConn })
+	if err != nil && !errors.Is(err, driver.ErrBadConn) && !errors.Is(err, sql.ErrConnDone) {
+		return fmt.Errorf("%w: dropping the migration run's connection failed, and the mutex stays held "+
+			"until the server drops that session: %w", ErrMigrationFailed, err)
+	}
+	if err := conn.Close(); err != nil && !errors.Is(err, sql.ErrConnDone) {
+		return fmt.Errorf("%w: closing the migration run's connection failed: %w", ErrMigrationFailed, err)
+	}
+	return nil
+}
+
+// applyUnderLock is the run itself, with the mutex already held, on the session
+// pinned to the connection the mutex was taken on.
+func applyUnderLock(reg *core.Registry, session *gorm.DB, dialect Dialect) error {
 	if err := session.Exec(createRecordTable).Error; err != nil {
 		return fmt.Errorf("%w: creating the migration record table %q failed: %w",
 			ErrMigrationFailed, recordTableName, err)
@@ -167,6 +276,15 @@ func readRecords(session *gorm.DB) (map[recordKey]struct{}, error) {
 // later startup rather than on the one that caused it. Holding them together
 // rests on the dialect putting DDL inside a transaction, which is an admission
 // condition every implementation subpackage has to meet.
+//
+// The file goes to the driver whole, with no bind variables, and the driver's
+// own path for a text of several statements executes all of them. A file may
+// hold more than one: creating a table and then its indexes is one migration,
+// and splitting it across two files only scatters one change. Splitting the
+// text here instead would mean parsing SQL — semicolons inside string literals
+// and function bodies have to come out right — and that is not this module's
+// work. Running a file of several statements is therefore the dialect's
+// admission condition too, alongside putting DDL inside a transaction.
 func applyOne(session *gorm.DB, m migration) error {
 	err := session.Transaction(func(tx *gorm.DB) error {
 		if execErr := tx.Exec(m.body).Error; execErr != nil {
@@ -250,12 +368,8 @@ func filesFor(module string, sets []Migrations, dialect Dialect) ([]migration, e
 				ErrMigrationFailed, dialect, module, err)
 		}
 		for _, entry := range entries {
-			if entry.IsDir() {
-				// Nothing descends into it, so passing over it
-				// would drop whatever it holds without a word.
-				return nil, fmt.Errorf("%w: module %q has a directory %q inside its %q migrations, "+
-					"and only files are applied. Move the migrations up into %q or drop the directory",
-					ErrMigrationFailed, module, entry.Name(), dialect, dialect)
+			if err := admit(module, dialect, entry); err != nil {
+				return nil, err
 			}
 			if _, duplicate := seen[entry.Name()]; duplicate {
 				// The record table is keyed by module and file
@@ -277,6 +391,39 @@ func filesFor(module string, sets []Migrations, dialect Dialect) ([]migration, e
 	}
 	slices.SortFunc(files, func(a, b migration) int { return cmp.Compare(a.file, b.file) })
 	return files, nil
+}
+
+// migrationFileExtension is the only extension a migration file carries.
+const migrationFileExtension = ".sql"
+
+// admit reports why an entry of a dialect's migration directory cannot be
+// applied, or nil when it can.
+//
+// The directory holds regular .sql files and nothing else, and anything outside
+// that is an error rather than something to pass over. Both of the wider rules
+// hide a failure instead: applying every regular file sends a note left in
+// there to the database to be executed, and applying the .sql files while
+// ignoring the rest turns a migration whose name was typed wrong into a table
+// that is simply never created — found at run time, a long way from the start
+// that skipped it.
+func admit(module string, dialect Dialect, entry fs.DirEntry) error {
+	switch {
+	case entry.IsDir():
+		// Nothing descends into it, so passing over it would drop
+		// whatever it holds without a word.
+		return fmt.Errorf("%w: module %q has a directory %q inside its %q migrations, and only %s files "+
+			"are applied. Move the migrations up into %q or drop the directory",
+			ErrMigrationFailed, module, entry.Name(), dialect, migrationFileExtension, dialect)
+	case !entry.Type().IsRegular():
+		return fmt.Errorf("%w: %q inside module %q's %q migrations is not a regular file, and only "+
+			"regular %s files are applied",
+			ErrMigrationFailed, entry.Name(), module, dialect, migrationFileExtension)
+	case path.Ext(entry.Name()) != migrationFileExtension:
+		return fmt.Errorf("%w: module %q has %q inside its %q migrations, and only %s files are applied. "+
+			"Rename it if it is a migration; move it out of the %q directory if it is not",
+			ErrMigrationFailed, module, entry.Name(), dialect, migrationFileExtension, dialect)
+	}
+	return nil
 }
 
 // dependencyRank places every registered module in dependency order and reports

@@ -99,10 +99,12 @@ type Database interface {
 // closing a handle uses none of this module's state, and a handle from Open has
 // to be closable by a caller that may not hold the instance.
 //
-// It is reentrant: closing an already closed handle reports no error, which is
-// what lets a rollback path call it on an instance that never reached Init. A
-// nil handle is likewise not an error, for the same reason — the rollback
-// reaches instances that were never constructed.
+// It is reentrant: closing an already closed handle reports no error, and a nil
+// handle reports none either. A caller that took a handle from Open gives the
+// close to a defer, and that defer runs when Open failed as well — so reporting
+// an error on nothing would ask every call site to test for nil first, over an
+// error with no remedy behind it: there is no connection left to release, which
+// is the state closing is trying to reach.
 func Close(handle *gorm.DB) error {
 	if handle == nil {
 		return nil

@@ -27,14 +27,20 @@ var (
 	ErrConnectFailed = errors.New("db: connection could not be established")
 	// ErrPluginFailed reports that a declared plugin did not install.
 	ErrPluginFailed = errors.New("db: declared plugin failed to install")
-	// ErrMigrationFailed reports that a migration did not apply, or that the
-	// migration record table could not be read or written.
+	// ErrMigrationFailed reports that a migration did not apply, that the
+	// migration record table could not be read or written, that a migration
+	// directory holds something other than a .sql file, or that the
+	// migration mutex could not be given up.
 	//
 	// On a migration it names the declaring module and the file: that module
-	// is what has to change, and this one has no way to know how. On the
-	// record table there is nothing comparable to name, so the text gives the
-	// operation that failed. One sentinel covers both because the host's
-	// response is the same.
+	// is what has to change, and this one has no way to know how. On an entry
+	// that is not a migration it names that entry. On the record table there
+	// is nothing comparable to name, so the text gives the operation that
+	// failed. On a mutex that would not be released the text says whether the
+	// migrations went in first, because the sentinel on its own would send
+	// the reader to migration files that are not the problem. One sentinel
+	// covers them all because the host's response is the same: the process
+	// must not run.
 	ErrMigrationFailed = errors.New("db: migration could not be applied")
 	// ErrMigrationLockTimeout reports that the migration mutex was not
 	// acquired within migration-lock-timeout. It is separate from

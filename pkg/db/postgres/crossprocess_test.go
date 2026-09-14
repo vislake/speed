@@ -2,6 +2,7 @@ package postgres_test
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"os"
@@ -76,8 +77,8 @@ const (
 	applied_at TIMESTAMP NOT NULL,
 	PRIMARY KEY (module, file)
 )`
-	countRecord   = `SELECT count(*) FROM db_migrations WHERE module = ? AND file = ?`
-	insertRecord  = `INSERT INTO db_migrations (module, file, applied_at) VALUES (?, ?, ?)`
+	countRecord   = `SELECT count(*) FROM db_migrations WHERE module = $1 AND file = $2`
+	insertRecord  = `INSERT INTO db_migrations (module, file, applied_at) VALUES ($1, $2, $3)`
 	createWidgets = `CREATE TABLE widgets (id INTEGER PRIMARY KEY)`
 )
 
@@ -263,6 +264,12 @@ func runScenario(scenario string) error {
 
 // firstMigration is one replica starting against the shared database: meet the
 // other replica, take the mutex, apply what is not applied, give the mutex up.
+//
+// One connection is borrowed and everything travels on it, which is what the
+// migration run does. The pool is held to that one connection, so a replica
+// that needed a second one for any part of this would stop here rather than
+// pass quietly — the whole run has to fit in the smallest pool a host can
+// configure.
 func firstMigration(dsn, rendezvous, role string) error {
 	handle, err := gorm.Open(postgres.Dialector(dsn), &gorm.Config{Logger: logger.Discard})
 	if err != nil {
@@ -272,24 +279,28 @@ func firstMigration(dsn, rendezvous, role string) error {
 	if err != nil {
 		return fmt.Errorf("reaching the connection pool: %w", err)
 	}
+	pool.SetMaxOpenConns(1)
 	defer func() { _ = pool.Close() }()
 
-	lock, err := postgres.NewMigrationLock(handle, scenarioLockTimeout)
+	ctx := context.Background()
+	conn, err := pool.Conn(ctx)
 	if err != nil {
-		return fmt.Errorf("building the migration mutex: %w", err)
+		return fmt.Errorf("borrowing the connection to run on: %w", err)
 	}
+	defer func() { _ = conn.Close() }()
+
+	lock := postgres.NewMigrationLock(scenarioLockTimeout)
 	if err := meetOtherReplicas(rendezvous, role); err != nil {
 		return err
 	}
 
-	ctx := context.Background()
 	mark(markStart)
-	if err := lock.Acquire(ctx); err != nil {
+	if err := lock.Acquire(ctx, conn); err != nil {
 		return fmt.Errorf("taking the migration mutex: %w", err)
 	}
 	mark(markLocked)
-	applyErr := applyFirstMigration(handle)
-	releaseErr := lock.Release(ctx)
+	applyErr := applyFirstMigration(ctx, conn)
+	releaseErr := lock.Release(ctx, conn)
 	if applyErr != nil {
 		return applyErr
 	}
@@ -301,30 +312,31 @@ func firstMigration(dsn, rendezvous, role string) error {
 
 // applyFirstMigration does what the migration engine does on a first start:
 // create the record table, read what it lists, and apply and record what it
-// does not.
-func applyFirstMigration(handle *gorm.DB) error {
-	if err := handle.Exec(createRecordTable).Error; err != nil {
+// does not. Every statement goes on the connection the mutex was taken on,
+// which is what keeps the mutex held for the length of the run.
+func applyFirstMigration(ctx context.Context, conn *sql.Conn) error {
+	if _, err := conn.ExecContext(ctx, createRecordTable); err != nil {
 		return fmt.Errorf("creating the migration record table: %w", err)
 	}
 	var applied int64
-	if err := handle.Raw(countRecord, probeModule, probeFile).Scan(&applied).Error; err != nil {
+	if err := conn.QueryRowContext(ctx, countRecord, probeModule, probeFile).Scan(&applied); err != nil {
 		return fmt.Errorf("reading the migration record table: %w", err)
 	}
 	if applied > 0 {
 		mark(markNoop)
 		return nil
 	}
-	err := handle.Transaction(func(tx *gorm.DB) error {
+	err := inTransaction(ctx, conn, func(tx *sql.Tx) error {
 		// The sleep is inside the transaction, so the window this
 		// replica holds the mutex for is a window in which the record
 		// table is still empty to anyone who could read it.
-		if err := tx.Exec(`SELECT pg_sleep(?)`, scenarioApplyDuration.Seconds()).Error; err != nil {
+		if _, err := tx.ExecContext(ctx, `SELECT pg_sleep($1)`, scenarioApplyDuration.Seconds()); err != nil {
 			return fmt.Errorf("widening the window: %w", err)
 		}
-		if err := tx.Exec(createWidgets).Error; err != nil {
+		if _, err := tx.ExecContext(ctx, createWidgets); err != nil {
 			return fmt.Errorf("executing it failed: %w", err)
 		}
-		if err := tx.Exec(insertRecord, probeModule, probeFile, time.Now().UTC()).Error; err != nil {
+		if _, err := tx.ExecContext(ctx, insertRecord, probeModule, probeFile, time.Now().UTC()); err != nil {
 			return fmt.Errorf("recording it failed: %w", err)
 		}
 		return nil
@@ -334,6 +346,19 @@ func applyFirstMigration(handle *gorm.DB) error {
 	}
 	mark(markApplied)
 	return nil
+}
+
+// inTransaction runs body in one transaction on the borrowed connection, the
+// way a migration's execution and its record are held together.
+func inTransaction(ctx context.Context, conn *sql.Conn, body func(tx *sql.Tx) error) error {
+	tx, err := conn.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("beginning the transaction: %w", err)
+	}
+	if err := body(tx); err != nil {
+		return errors.Join(err, tx.Rollback())
+	}
+	return tx.Commit()
 }
 
 // meetOtherReplicas blocks until every replica has reached this point, so that

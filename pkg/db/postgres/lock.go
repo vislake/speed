@@ -3,12 +3,9 @@ package postgres
 import (
 	"context"
 	"database/sql"
-	"database/sql/driver"
 	"errors"
 	"fmt"
 	"time"
-
-	"gorm.io/gorm"
 
 	"github.com/vislake/speed/pkg/db"
 )
@@ -19,9 +16,18 @@ import (
 // number derived at run time from anything that varies between builds would
 // leave two replicas holding two different locks and neither of them waiting.
 //
-// PostgreSQL scopes advisory locks to a database, so this one key serves every
-// deployment: two hosts on two databases of one cluster do not block each
-// other, and two replicas on one database do.
+// Its scope is one database, because PostgreSQL scopes advisory locks that way.
+// Every process on a database shares this mutex, and processes on other
+// databases of the same cluster are left alone.
+//
+// The key is fixed rather than derived from the assembly, and the price is a
+// queue: two unrelated deployments sharing one database, separated by schema
+// say, wait for each other. A migration run is a startup-time one-off, so that
+// wait is paid once. Deriving the key from session state — the schema search
+// path is the obvious candidate — would remove the queue and put in its place a
+// mutex whose reach depends on how a connection happens to be configured, and
+// two replicas configured differently would not exclude each other at all. Of
+// the two, the queue is the one to live with.
 const migrationLockKey int64 = 3798569497438843947
 
 // lockPollInterval is how often a waiting replica asks again.
@@ -37,27 +43,8 @@ const lockPollInterval = 250 * time.Millisecond
 // a single round trip against a server this connection is already talking to.
 const releaseTimeout = 10 * time.Second
 
-// minPoolSize is the smallest connection pool a migration run fits in.
-//
-// The mutex pins one connection for the whole run — that is what keeps the
-// session owning the advisory lock alive — and the run's own statements need a
-// second one. A pool capped at one gives the mutex the only connection there
-// is, and every statement of the run then waits for a connection that cannot
-// come free until the run finishes. Nothing reports anything: the startup stops
-// there until the caller's context expires, or for as long as the process
-// lives when it has none.
-const minPoolSize = 2
-
-// maxOpenConnsKey is the pool input item whose value has to leave room for the
-// pinned connection, relative to ConfigNamespace.
-//
-// The item is declared by pkg/db and shared by every implementation, mounted
-// under this implementation's namespace; the name is repeated here so the
-// refusal below can say which dial to raise.
-const maxOpenConnsKey = "max-open-conns"
-
-// NewMigrationLock returns the cross-process mutex the migration run against
-// this handle's database is held under, giving up after timeout.
+// NewMigrationLock returns the cross-process mutex a migration run on this
+// engine is held under, giving up after timeout.
 //
 // What it defends against never appears in one process. Several replicas start
 // at once against an empty database, each reads the record table and finds
@@ -66,82 +53,54 @@ const maxOpenConnsKey = "max-open-conns"
 // queue: the second one waits, and by the time it looks, the record table is
 // complete and it has nothing to do.
 //
-// The mutex costs one connection of the handle's pool for the whole run, on top
-// of the one the run's own statements use, so the pool has to allow at least
-// minPoolSize of them. Acquire refuses a pool smaller than that instead of
-// entering the wait it would never come out of.
-func NewMigrationLock(handle *gorm.DB, timeout time.Duration) (db.MigrationLock, error) {
-	pool, err := handle.DB()
-	if err != nil {
-		return nil, fmt.Errorf(
-			"postgres: the handle has no connection pool to take the migration mutex on: %w", err)
-	}
-	return &migrationLock{pool: pool, timeout: timeout}, nil
+// It costs no connection of its own. The run pins one connection for its whole
+// length and hands it to both halves of this mutex, which is exactly what a
+// session-scoped advisory lock needs: it is taken outside any transaction, it
+// stays held across every BEGIN and COMMIT the run issues on that connection,
+// and it is given up on the same one at the end. A migration run therefore
+// fits in a pool of one connection.
+func NewMigrationLock(timeout time.Duration) db.MigrationLock {
+	return &migrationLock{timeout: timeout}
 }
 
-// migrationLock holds the mutex on one pinned connection.
+// migrationLock holds the advisory lock on the connection the run pinned.
 //
-// The connection is pinned rather than taken from the pool per statement
-// because a PostgreSQL advisory lock belongs to the session that took it. A
-// second statement arriving on a different pooled connection is a different
-// session, and would neither see the lock nor be able to give it up.
-//
-// It is pinned from the handle's own pool because that is the pool the
-// configured parameters apply to: the design gives them every connection this
-// module establishes, and a connection opened around them would be outside
-// what the host asked for. The cost is the extra connection minPoolSize
-// accounts for.
+// It keeps no connection of its own, and it has to keep none: an advisory lock
+// belongs to the session that took it, so the one connection that may take it
+// is the one carrying the statements it orders. A lock on a second connection
+// would be a second session — it would not see the migrations it is meant to
+// exclude, and the pool would have to be large enough to hold both.
 type migrationLock struct {
-	pool    *sql.DB
 	timeout time.Duration
-	// conn is the session holding the lock, nil while it is not held. Only
-	// the lifecycle's single goroutine touches it: the migration run is
-	// driven from there, before anything else in the process works.
-	conn *sql.Conn
+	// held records whether this process took the lock. Only the lifecycle's
+	// single goroutine touches it: the migration run is driven from there,
+	// before anything else in the process works.
+	held bool
 }
 
-// Acquire takes the mutex, waiting for whichever replica holds it.
-//
-// It refuses a pool that cannot hold the pinned connection alongside the run's
-// own, because the alternative is a startup that stops without reporting
-// anything.
-func (l *migrationLock) Acquire(ctx context.Context) error {
-	if l.conn != nil {
+// Acquire takes the mutex on the run's connection, waiting for whichever
+// replica holds it.
+func (l *migrationLock) Acquire(ctx context.Context, conn *sql.Conn) error {
+	if l.held {
 		return errors.New("postgres: the migration mutex is already held by this process")
-	}
-	// Refused before the connection is pinned, not diagnosed after the run
-	// has stopped moving: a pool with no room for both the mutex and the run
-	// produces no error of its own, only a startup that goes quiet.
-	if allowed := l.pool.Stats().MaxOpenConnections; allowed > 0 && allowed < minPoolSize {
-		return fmt.Errorf(
-			"postgres: the migration mutex holds a connection of its own for the whole run and the pool "+
-				"allows %d, so the migrations would wait for a connection that cannot come free until "+
-				"they finish; raise %s.%s to at least %d",
-			allowed, ConfigNamespace, maxOpenConnsKey, minPoolSize)
-	}
-	conn, err := l.pool.Conn(ctx)
-	if err != nil {
-		return fmt.Errorf("postgres: pinning a connection for the migration mutex failed: %w", err)
 	}
 	deadline := time.Now().Add(l.timeout)
 	for {
 		var taken bool
 		if err := conn.QueryRowContext(ctx,
 			"SELECT pg_try_advisory_lock($1)", migrationLockKey).Scan(&taken); err != nil {
-			return errors.Join(
-				fmt.Errorf("postgres: asking for the migration mutex failed: %w", err), conn.Close())
+			return fmt.Errorf("postgres: asking for the migration mutex failed: %w", err)
 		}
 		if taken {
-			l.conn = conn
+			l.held = true
 			return nil
 		}
 		if !time.Now().Before(deadline) {
-			return errors.Join(l.timedOut(ctx, conn), conn.Close())
+			return l.timedOut(ctx, conn)
 		}
 		select {
 		case <-ctx.Done():
-			return errors.Join(fmt.Errorf(
-				"postgres: waiting for the migration mutex was cut short: %w", ctx.Err()), conn.Close())
+			return fmt.Errorf("postgres: waiting for the migration mutex was cut short: %w", ctx.Err())
 		case <-time.After(lockPollInterval):
 		}
 	}
@@ -168,15 +127,19 @@ func (l *migrationLock) timedOut(ctx context.Context, conn *sql.Conn) error {
 		db.ErrMigrationLockTimeout, database, l.timeout, ConfigNamespace, MigrationLockTimeoutKey)
 }
 
-// Release gives the mutex up, on the failing path as well as the succeeding
-// one: a migration that would not apply must not strand the other replicas
-// behind a mutex nobody is going to release.
-func (l *migrationLock) Release(ctx context.Context) error {
-	if l.conn == nil {
+// Release gives the mutex up on the connection it was taken on, on the failing
+// path as well as the succeeding one: a migration that would not apply must not
+// strand the other replicas behind a mutex nobody is going to release.
+//
+// What becomes of the connection afterwards is the run's business. A release
+// that did not go through leaves the mutex on this session, and the run throws
+// the connection away rather than hand a session in that state back to the
+// pool.
+func (l *migrationLock) Release(ctx context.Context, conn *sql.Conn) error {
+	if !l.held {
 		return nil
 	}
-	conn := l.conn
-	l.conn = nil
+	l.held = false
 	// The unlock is issued on a context detached from the caller's. The
 	// failing path arrives here with the run's context often already
 	// cancelled, and an unlock skipped for that reason would leave the mutex
@@ -186,42 +149,14 @@ func (l *migrationLock) Release(ctx context.Context) error {
 	unlockCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), releaseTimeout)
 	defer cancel()
 	var released bool
-	err := conn.QueryRowContext(unlockCtx, "SELECT pg_advisory_unlock($1)", migrationLockKey).Scan(&released)
-	switch {
-	case err != nil:
-		return errors.Join(
-			fmt.Errorf("postgres: releasing the migration mutex failed: %w", err), discard(conn))
-	case !released:
-		return errors.Join(errors.New(
-			"postgres: the migration mutex was not held by this connection when it was given up, so another "+
-				"replica may have been applying migrations alongside this one"), discard(conn))
+	if err := conn.QueryRowContext(unlockCtx,
+		"SELECT pg_advisory_unlock($1)", migrationLockKey).Scan(&released); err != nil {
+		return fmt.Errorf("postgres: releasing the migration mutex failed: %w", err)
 	}
-	if err := conn.Close(); err != nil {
-		return fmt.Errorf("postgres: returning the migration mutex's connection to the pool failed: %w", err)
-	}
-	return nil
-}
-
-// discard throws the pinned connection away instead of returning it to the
-// pool.
-//
-// It is the fallback for an unlock that did not go through. The lock belongs to
-// the session, so ending the session is the one remaining way to release it —
-// returning the connection to the pool would keep the session alive, with the
-// lock on it, and hand it out to the next caller in that state.
-func discard(conn *sql.Conn) error {
-	// Raw reports the error the callback returned; ErrBadConn is what asks
-	// database/sql to drop the underlying connection rather than reuse it,
-	// so seeing it back is the success case. ErrConnDone is the other
-	// success case: database/sql has already thrown the connection away,
-	// which is the same end — the session is over and the lock with it.
-	err := conn.Raw(func(any) error { return driver.ErrBadConn })
-	if err != nil && !errors.Is(err, driver.ErrBadConn) && !errors.Is(err, sql.ErrConnDone) {
-		return fmt.Errorf("postgres: dropping the migration mutex's connection failed, and the mutex stays "+
-			"held until the server drops that session: %w", err)
-	}
-	if err := conn.Close(); err != nil && !errors.Is(err, sql.ErrConnDone) {
-		return fmt.Errorf("postgres: closing the migration mutex's connection failed: %w", err)
+	if !released {
+		return errors.New(
+			"postgres: the migration mutex was not held by this connection when it was given up, so " +
+				"another replica may have been applying migrations alongside this one")
 	}
 	return nil
 }
