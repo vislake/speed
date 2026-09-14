@@ -73,8 +73,10 @@ type Middleware struct {
 	// therefore claim a capability its module does not deliver.
 	Provides []core.Token
 	// After places this layer inside the middleware of these capabilities.
-	// A capability with no provider in this assembly drops the constraint,
-	// and the dropped constraint is listed in the startup diagnostics.
+	// A capability no other layer stands for drops the constraint, and the
+	// dropped constraint is listed in the startup diagnostics with the cause
+	// it dropped for: no layer on the endpoint represents the capability, or
+	// only this one does, and that edge to itself is dropped too.
 	After []core.Token
 	// Before places this layer outside the middleware of these
 	// capabilities, with the same treatment of an absent provider.
