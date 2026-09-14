@@ -166,11 +166,16 @@ func TestSQLiteModuleShape(t *testing.T) {
 
 	registered, ok := core.ProcessRegistry.Lookup(module.Name)
 	if !ok {
-		t.Errorf("importing this package did not register %s in the process registry, so a host "+
+		t.Fatalf("importing this package did not register %s in the process registry, so a host "+
 			"running on SQLite would find no module to configure", module.Name)
 	}
-	if registered.Name != module.Name {
-		t.Errorf("the process registry holds %q under the name %q", registered.Name, module.Name)
+	// The registration has to be the descriptor this subpackage builds, not a
+	// name under which nothing is delivered: a stub satisfies the lookup
+	// above and leaves every dependant without a handle.
+	if len(registered.Provides) != 1 || !registered.Provides[0].Exclusive || registered.Migrate == nil {
+		t.Errorf("the process registry holds a descriptor under %s that is not the one this "+
+			"subpackage builds: it delivers nothing, or does not claim the capability exclusively, "+
+			"or applies no migrations", module.Name)
 	}
 }
 
@@ -226,9 +231,10 @@ func firstSchema(t *testing.T) config.Schema {
 // open opens a handle on a database this package's cases own, using the
 // dialector this subpackage exports, and closes it when the test ends.
 //
-// The GORM logger is discarded: a case that fails the engine on purpose would
-// otherwise print each statement as an error line that reads like a test
-// failure, and the error itself travels back through the call anyway.
+// The GORM logger is discarded: the rollback case ends a transaction with an
+// error on purpose, and the default logger prints that as an error line which
+// reads like a test failure. Nothing is lost, because the error itself travels
+// back through the call and the cases assert on it.
 func open(t *testing.T, dsn string) *gorm.DB {
 	t.Helper()
 	handle, err := gorm.Open(sqlite.Dialector(dsn), &gorm.Config{Logger: logger.Discard})
