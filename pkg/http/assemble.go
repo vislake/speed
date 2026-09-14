@@ -59,10 +59,11 @@ func (e *endpoint) assemble(engine Engine, injected, logger *slog.Logger) (netht
 // This is the whole of their observability. The assembly carries on — a
 // capability absent from the process is a legal configuration — so the layer
 // that declared itself inside authentication runs anyway, in the position its
-// Order happens to give it. Whether that is because no module stands for
-// authentication here, or because the one that does left its Provides empty,
-// is the same shape in the graph and cannot be told apart from it; the line
-// below is what lets a reader tell them apart by looking.
+// Order happens to give it. The cause is written with each line because the
+// two causes are answered by different edits: a capability nobody stands for
+// sends the reader looking for the module that should have been in the
+// assembly, while a capability only the declaring layer stands for is that
+// layer correcting what it said about itself.
 //
 // It goes to this module's own logger because core does not export a startup
 // diagnostics surface. The level is Warn: written at Info it would sit beside
@@ -74,7 +75,8 @@ func reportUnlanded(logger *slog.Logger, unlanded []unlandedConstraint) {
 			"endpoint", u.endpoint,
 			"middleware", u.layer,
 			"declaration", fmt.Sprintf("%s[%d]", u.field, u.at),
-			"capability", u.capability)
+			"capability", u.capability,
+			"cause", string(u.cause))
 	}
 }
 
@@ -88,12 +90,14 @@ func reportUnlanded(logger *slog.Logger, unlanded []unlandedConstraint) {
 //
 // What is left to catch here is the clash: every pattern was offered to an
 // engine of its own when it was registered, and one the engine refuses by
-// itself never reaches this point.
+// itself never reaches this point. Which pattern the refused one clashes with
+// is the engine's answer too, asked through the attribution the seam requires
+// of an implementation subpackage; see refusalAttributor.
 func (e *endpoint) mount(engine Engine) error {
 	mounted := make([]route, 0, len(e.routes))
 	for _, r := range e.routes {
 		if raised := offerRoute(engine, r); raised != nil {
-			return e.conflictError(mounted, r, raised)
+			return e.conflictError(engine, mounted, r, raised)
 		}
 		mounted = append(mounted, r)
 	}
@@ -108,6 +112,27 @@ func offerRoute(engine Engine, r route) (raised any) {
 	return nil
 }
 
+// refusalAttributor is what the engine seam asks of an implementation
+// subpackage: given the pattern an engine refused and the patterns already
+// mounted on it, name the one the refused pattern cannot stand beside.
+//
+// The mounting point here sees only that a mount was refused. How the engine
+// reaches that verdict is its own business — one that judges a set as a whole
+// may not be able to answer the way one that judges pairs does — so the
+// answer has to come from the layer that binds the engine. An engine that does
+// not answer leaves the failure below saying so rather than naming one pattern
+// as if that were the whole story.
+//
+// The method is exported although this interface is not: the implementation
+// lives in another package, and an exported method name is the only way a type
+// there can satisfy it.
+type refusalAttributor interface {
+	// AttributeRefusal returns the already-mounted pattern that the refused
+	// one conflicts with, or false when the engine cannot single one out.
+	// It is asked once, on the failing path, as the startup ends.
+	AttributeRefusal(refused string, mounted []string) (conflicting string, ok bool)
+}
+
 // conflictError names both patterns and the endpoint they are on.
 //
 // It names neither registrant: the registration surface does not know who
@@ -115,40 +140,38 @@ func offerRoute(engine Engine, r route) (raised any) {
 // Provides. A pattern is a literal in the source, so the two of them locate
 // both calls.
 //
-// The second pattern is found by offering the pair to an engine of its own
-// rather than by reading it out of what the engine raised: the raised value is
-// the engine's own wording, and this module does not parse it. The search runs
-// only on the failing path, once, and the startup ends with it.
-func (e *endpoint) conflictError(mounted []route, refused route, raised any) error {
-	if with, ok := clashingPattern(e.gate.newEngine, mounted, refused); ok {
-		return fmt.Errorf("%w: endpoint %q: the patterns %q and %q cannot both be mounted: %v. "+
-			"Either two registrations claim the same pattern, or the two match one request "+
-			"with neither being more specific; change one of them or move it to another "+
-			"endpoint", ErrRouteConflict, e.settings.name, with.pattern, refused.pattern, raised)
+// The second pattern comes from the engine, through the attribution the seam
+// asks of it. It is not read out of what the engine raised: that value is the
+// engine's own wording, and this module does not parse it.
+func (e *endpoint) conflictError(engine Engine, mounted []route, refused route, raised any) error {
+	if attributor, answers := engine.(refusalAttributor); answers {
+		if with, found := attributor.AttributeRefusal(refused.pattern, mountedPatterns(mounted)); found {
+			return fmt.Errorf("%w: endpoint %q: the patterns %q and %q cannot both be mounted: %v. "+
+				"Either two registrations claim the same pattern, or the two match one request "+
+				"with neither being more specific; change one of them or move it to another "+
+				"endpoint", ErrRouteConflict, e.settings.name, with, refused.pattern, raised)
+		}
 	}
-	// No single earlier pattern reproduces the refusal on its own, so the
-	// engine judged this one against the set. Saying which pattern arrived
-	// and what the engine said is then everything this module knows.
-	return fmt.Errorf("%w: endpoint %q: the routing engine refused the pattern %q alongside the "+
-		"%d already mounted on this endpoint, and no single one of them reproduces the "+
-		"refusal on its own: %v. Change the pattern or move it to another endpoint",
-		ErrRouteConflict, e.settings.name, refused.pattern, len(mounted), raised)
+	// The engine refused this pattern without naming a partner. That is a
+	// gap in the engine rather than a normal conflict: the seam requires the
+	// attribution, so saying the refusal was not attributed beats naming the
+	// one pattern this module is sure about and letting it read like a
+	// verdict about that pattern alone.
+	return fmt.Errorf("%w: endpoint %q: the routing engine refused the pattern %q beside the %d "+
+		"already mounted on this endpoint and did not attribute the refusal to a pair of patterns: "+
+		"%v. Naming that pair is what the engine seam asks of an implementation subpackage, so "+
+		"this is that engine not answering for itself; change the pattern or move it to another "+
+		"endpoint", ErrRouteConflict, e.settings.name, refused.pattern, len(mounted), raised)
 }
 
-// clashingPattern reports which already-mounted route the refused one cannot
-// stand beside, by mounting each pair on an engine of its own. The scan runs in
-// registration order, so one set of routes always names the same pair.
-func clashingPattern(newEngine func() Engine, mounted []route, refused route) (route, bool) {
-	for _, candidate := range mounted {
-		engine := newEngine()
-		if raised := offerRoute(engine, candidate); raised != nil {
-			continue
-		}
-		if raised := offerRoute(engine, refused); raised != nil {
-			return candidate, true
-		}
+// mountedPatterns renders the patterns already bound on one endpoint, in
+// registration order, which is what the attribution is asked over.
+func mountedPatterns(mounted []route) []string {
+	out := make([]string, 0, len(mounted))
+	for _, r := range mounted {
+		out = append(out, r.pattern)
 	}
-	return route{}, false
+	return out
 }
 
 // base is the outermost layer of the chain, the one this module puts there

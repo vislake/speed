@@ -23,15 +23,18 @@ type layer struct {
 	provides []core.Token
 }
 
-// unlandedConstraint is one After or Before whose capability no layer on this
-// endpoint stands for, so the constraint drew no edge and placed nothing.
+// unlandedConstraint is one After or Before that placed nothing: after the
+// edge to the declaring layer itself was dropped, no layer was left for it to
+// point at, so it drew no edge and the declared position is not what the layer
+// gets.
 //
 // It is not a failure: a capability absent from the assembly is a legal
 // configuration, and the layer runs unconstrained by design. It is reported
-// because the two ways of arriving here are the same shape in the graph — the
-// module that would stand for the capability is not in this process, or it is
-// in it and left its Provides empty — and without the report neither of them
-// produces any signal at all.
+// because nothing else about it is observable, and because the ways of
+// arriving here are the same shape in the graph — the module that would stand
+// for the capability is not in this process, or it is in it and left its
+// Provides empty — so without the report none of them produces any signal at
+// all.
 type unlandedConstraint struct {
 	// endpoint and layer say where the declaration was made.
 	endpoint string
@@ -44,7 +47,30 @@ type unlandedConstraint struct {
 	// package path, so the reader can go and look at who was meant to
 	// stand for it.
 	capability string
+	// cause is why the constraint placed nothing. The two causes have
+	// different fixing actions, so a report that does not tell them apart
+	// sends half its readers after a module that is not the problem.
+	cause unlandedCause
 }
+
+// unlandedCause is why a constraint placed nothing on the chain. The two are
+// told apart because the fixing action differs: one asks who should have been
+// in the assembly and was not, the other asks the declaring layer to correct
+// what it said about itself.
+type unlandedCause string
+
+const (
+	// causeNoProvider is a capability no layer on this endpoint stands for:
+	// the module that would stand for it is not in this process, or it is in
+	// it and left its Provides empty. The graph cannot tell those two apart.
+	causeNoProvider unlandedCause = "no layer on this endpoint stands for the capability"
+	// causeSelfOnly is a capability whose only representative is the layer
+	// declaring the constraint. The self edge is dropped, so the constraint
+	// places nothing; nobody is absent, and the declaration is what is wrong.
+	// A capability another layer stands for as well is not this case: that
+	// part of the claim holds, so the constraint did what it said.
+	causeSelfOnly unlandedCause = "the declaring layer is the only layer standing for the capability"
+)
 
 // orderLayers returns an endpoint's middleware from outermost to innermost,
 // together with the constraints that landed on nothing. The layers arrive in
@@ -54,10 +80,12 @@ type unlandedConstraint struct {
 // After and Before give the graph its edges: After C places this layer inside
 // the middleware standing for C, so an edge runs from each provider of C to
 // this layer, the provider coming out first and landing further out. Before C
-// is the same edge reversed. A constraint naming a capability no layer on this
-// endpoint stands for has no provider to draw an edge to, so it places
-// nothing; it is not a failure, and it comes back in the second return value
-// for the caller to write out, because nothing else about it is observable.
+// is the same edge reversed. A constraint a provider stands beside places the
+// layer; one that does not places nothing, and comes back in the second return
+// value for the caller to write out with the reason, because nothing else
+// about it is observable. That is not a failure — a capability absent from the
+// assembly is a legal configuration — but a constraint nobody placed is a
+// position the declaring layer believes it has and does not.
 //
 // Order decides only within the ready set — among the layers whose
 // constraints are already satisfied at that point — so it can never select a
@@ -73,12 +101,14 @@ func orderLayers(endpoint string, layers []layer) ([]layer, []unlandedConstraint
 	providers := providersByCapability(endpoint, layers)
 
 	var unlanded []unlandedConstraint
-	// note records a constraint that found no provider. A layer standing
-	// for the capability itself counts as a provider even though the edge
-	// to itself is dropped: the capability is represented on this chain,
-	// which is what the reader of this list is being told about.
-	note := func(name, field string, at int, key reflect.Type) {
-		if len(providers[key]) > 0 {
+	// note records a constraint that placed nothing, with the reason. The
+	// declaring layer's own standing is what the answer turns on: the edge
+	// to it is dropped, so a layer that is the only one standing for the
+	// capability it names places nothing either, and a layer another
+	// provider stands beside still draws that edge.
+	note := func(self int, name, field string, at int, key reflect.Type) {
+		cause, unplaced := unplacedCause(providers[key], self)
+		if !unplaced {
 			return
 		}
 		unlanded = append(unlanded, unlandedConstraint{
@@ -87,6 +117,7 @@ func orderLayers(endpoint string, layers []layer) ([]layer, []unlandedConstraint
 			field:      field,
 			at:         at,
 			capability: typeName(key),
+			cause:      cause,
 		})
 	}
 
@@ -113,14 +144,14 @@ func orderLayers(endpoint string, layers []layer) ([]layer, []unlandedConstraint
 	for i, l := range layers {
 		for j, token := range l.mw.After {
 			key := capabilityKey(token, declarationSite(endpoint, l.mw.Name, "After", j))
-			note(l.mw.Name, "After", j, key)
+			note(i, l.mw.Name, "After", j, key)
 			for _, p := range providers[key] {
 				addEdge(p, i)
 			}
 		}
 		for j, token := range l.mw.Before {
 			key := capabilityKey(token, declarationSite(endpoint, l.mw.Name, "Before", j))
-			note(l.mw.Name, "Before", j, key)
+			note(i, l.mw.Name, "Before", j, key)
 			for _, p := range providers[key] {
 				addEdge(i, p)
 			}
@@ -166,6 +197,27 @@ func orderLayers(endpoint string, layers []layer) ([]layer, []unlandedConstraint
 		out = append(out, layers[at])
 	}
 	return out, unlanded, nil
+}
+
+// unplacedCause reports whether a constraint placed nothing, and why. The
+// declaring layer is skipped when its own edge is dropped, so what decides it
+// is whether any other layer stands for the capability: if one does, the
+// constraint binds to that one and placed the layer; if none does, the
+// constraint placed nothing, and the capability having no representative at
+// all is a different fixing action from the declaring layer being its only
+// representative.
+func unplacedCause(providers []int, self int) (unlandedCause, bool) {
+	selfOnly := false
+	for _, p := range providers {
+		if p != self {
+			return "", false
+		}
+		selfOnly = true
+	}
+	if selfOnly {
+		return causeSelfOnly, true
+	}
+	return causeNoProvider, true
 }
 
 // providersByCapability indexes the layers by the capabilities they stand for.

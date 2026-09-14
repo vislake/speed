@@ -208,15 +208,25 @@ func TestMissingProviderDropsConstraint(t *testing.T) {
 		t.Errorf("the report names the capability %q, want %q: without the type name the "+
 			"reader cannot tell which module was meant to stand for it", only.capability, want)
 	}
+	if only.cause != causeNoProvider {
+		t.Errorf("the report gives the cause as %q, and no layer on this endpoint stands for "+
+			"the capability: the reader has to go and find the module that should have been here, "+
+			"not correct a declaration", only.cause)
+	}
 }
 
 // TestLandedConstraintIsNotReported is the other half. A constraint that found
 // a provider placed the layer, so listing it would bury the ones that did not
 // among the ones that did, and the list stops being a signal.
+//
+// "warden" is the case the design keeps out of the self-only report: it stands
+// for the capability it names and another layer does too, so the edge to itself
+// is dropped and the edge to that other layer still places it.
 func TestLandedConstraintIsNotReported(t *testing.T) {
 	layers := []layer{
 		registered("auth", 0, tokens((*capAuth)(nil)), nil, nil),
 		registered("tenant", 0, nil, tokens((*capAuth)(nil)), nil),
+		registered("warden", 0, tokens((*capAuth)(nil)), tokens((*capAuth)(nil)), nil),
 	}
 
 	_, unlanded, err := orderLayers("public", layers)
@@ -229,12 +239,16 @@ func TestLandedConstraintIsNotReported(t *testing.T) {
 	}
 }
 
-// TestSelfProvidedConstraintCountsAsLanded pins the one case where the edge is
-// dropped and the constraint is still not reported: a layer that stands for
-// the capability it names places nothing, but the capability is represented on
-// this chain, which is what the report is about. Counting it as unlanded would
-// put a line in front of the reader that names no missing module.
-func TestSelfProvidedConstraintCountsAsLanded(t *testing.T) {
+// TestSelfProvidedConstraintIsReportedUnderItsOwnCause pins the case the design
+// gives a cause of its own: a layer that stands for the capability it names and
+// is the only layer that does. The self edge is dropped, so the constraint
+// places nothing — and nobody is absent, the declaration is what is wrong.
+//
+// Reporting it at all is the first half; a chain that drops it silently leaves
+// the layer believing it has a position it does not have. Reading it as an
+// absent module is the second: the reader would go looking for a module that is
+// not the problem, which is why the cause travels with the line.
+func TestSelfProvidedConstraintIsReportedUnderItsOwnCause(t *testing.T) {
 	layers := []layer{
 		registered("recover", 0,
 			tokens((*capRecovery)(nil)),
@@ -242,13 +256,26 @@ func TestSelfProvidedConstraintCountsAsLanded(t *testing.T) {
 			nil),
 	}
 
-	_, unlanded, err := orderLayers("public", layers)
+	out, unlanded, err := orderLayers("public", layers)
 	if err != nil {
 		t.Fatalf("ordering failed: %v", err)
 	}
-	if len(unlanded) != 0 {
-		t.Errorf("a layer naming a capability it stands for itself was reported as landing "+
-			"on nothing: %+v", unlanded)
+	if got := layerNames(out); !slices.Equal(got, []string{"recover"}) {
+		t.Errorf("chain is %v, and the layer still runs whatever its constraint did", got)
+	}
+	if len(unlanded) != 1 {
+		t.Fatalf("the constraint of a layer standing only for itself was reported as %+v, want "+
+			"exactly that one", unlanded)
+	}
+	only := unlanded[0]
+	if only.layer != "recover" || only.field != "After" || only.at != 0 {
+		t.Errorf("the report locates the constraint at %+v, and it was declared as "+
+			"endpoint public, middleware recover, After[0]", only)
+	}
+	if only.cause != causeSelfOnly {
+		t.Errorf("the report gives the cause as %q, and the only layer standing for this "+
+			"capability is the one that declared the constraint: its fixing action is to "+
+			"correct the declaration, not to go looking for an absent module", only.cause)
 	}
 }
 
@@ -267,10 +294,27 @@ func TestSelfConstraintIsNotACycle(t *testing.T) {
 		registered("trace", 1, nil, nil, nil),
 	}
 
-	got := layerNames(solve(t, layers))
+	out, unlanded, err := orderLayers("public", layers)
+	if err != nil {
+		t.Fatalf("a layer naming a capability it stands for itself must not fail the ordering: %v", err)
+	}
+	got := layerNames(out)
 	want := []string{"recover", "trace"}
 	if !slices.Equal(got, want) {
 		t.Errorf("chain is %v, want %v", got, want)
+	}
+
+	// Both of the layer's constraints are the self-only case and are reported
+	// as such; they are not a cycle is the point of the fixture.
+	if len(unlanded) != 2 {
+		t.Errorf("the layer's two self-referring constraints were reported as %+v, want both "+
+			"of them under the self-only cause", unlanded)
+	}
+	for _, u := range unlanded {
+		if u.cause != causeSelfOnly {
+			t.Errorf("the constraint on %q was reported with the cause %q, and the layer "+
+				"standing only for itself is the case this fixture is", u.layer, u.cause)
+		}
 	}
 }
 

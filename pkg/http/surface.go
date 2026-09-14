@@ -115,6 +115,17 @@ type Spec struct {
 // The engine's own type never appears on this package's surface, which is what
 // keeps a routing library out of the dependency list of every module that
 // registers a route.
+//
+// The seam asks one thing of an implementation subpackage beyond this
+// interface: when the engine refuses to mount a pattern beside the others, the
+// subpackage has to attribute that refusal to a pair — the refused pattern and
+// the mounted one it cannot stand beside — because only the layer holding the
+// engine can ask it. The subpackage's engine answers
+// AttributeRefusal(refused string, mounted []string) (string, bool). An engine
+// that does not answer leaves the startup failure saying the refusal was not
+// attributed, rather than naming one pattern as though that were the verdict:
+// a diagnostic that holds for one engine alone goes quietly wrong on the next
+// one.
 type Engine interface {
 	nethttp.Handler
 	// Handle binds h to a pattern. The engine refuses a pattern however it

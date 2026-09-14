@@ -548,6 +548,45 @@ func getStatus(ctx context.Context, addr, path string) (int, error) {
 	return resp.StatusCode, nil
 }
 
+// attributingEngine is the standard library's multiplexer carrying the
+// attribution the seam asks of an implementation subpackage, answered the way
+// that multiplexer can answer it: by offering the pair to an engine of its own.
+//
+// The engine the module really ships with lives in pkg/http/stdmux, which this
+// package's tests cannot import without dragging a cycle in. This stands in for
+// it, so what the tests here pin is what the assembly does with an answer; the
+// answer itself is pinned in that subpackage's own tests.
+type attributingEngine struct{ *nethttp.ServeMux }
+
+func (attributingEngine) AttributeRefusal(refused string, mounted []string) (string, bool) {
+	for _, candidate := range mounted {
+		mux := nethttp.NewServeMux()
+		if refusedByMux(mux, candidate) {
+			continue
+		}
+		if refusedByMux(mux, refused) {
+			return candidate, true
+		}
+	}
+	return "", false
+}
+
+// unattributableEngine refuses a mount the way the real engine does and answers
+// the attribution with nothing: a refusal it cannot pin on a single mounted
+// pattern. The assembly has to say that rather than present an empty pair as
+// the verdict.
+type unattributableEngine struct{ *nethttp.ServeMux }
+
+func (unattributableEngine) AttributeRefusal(string, []string) (string, bool) { return "", false }
+
+// refusedByMux mounts the pattern on the multiplexer and reports whether the
+// engine refused it.
+func refusedByMux(mux *nethttp.ServeMux, pattern string) (refused bool) {
+	defer func() { refused = recover() != nil }()
+	mux.Handle(pattern, nethttp.NotFoundHandler())
+	return false
+}
+
 // endpointsAt is a configuration with one endpoint per name, each on a
 // loopback port the operating system picks, sharing one drain timeout.
 func endpointsAt(drain time.Duration, names ...string) moduleConfig {

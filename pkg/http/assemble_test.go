@@ -16,8 +16,18 @@ import (
 )
 
 // assembleEndpoint registers through the real surface and assembles the chain
-// the way Serve does, so what these tests exercise is the path a run takes.
+// the way Serve does, so what these tests exercise is the path a run takes. Its
+// engine is the bare multiplexer, an engine that answers no attribution.
 func assembleEndpoint(t *testing.T, s endpointSettings, injected, logger *slog.Logger,
+	register func(Endpoint),
+) (nethttp.Handler, error) {
+	t.Helper()
+	return assembleEndpointOn(t, nethttp.NewServeMux(), s, injected, logger, register)
+}
+
+// assembleEndpointOn is assembleEndpoint with the engine under the test's
+// control, for the tests whose subject is what the assembly asks the engine.
+func assembleEndpointOn(t *testing.T, engine Engine, s endpointSettings, injected, logger *slog.Logger,
 	register func(Endpoint),
 ) (nethttp.Handler, error) {
 	t.Helper()
@@ -25,7 +35,7 @@ func assembleEndpoint(t *testing.T, s endpointSettings, injected, logger *slog.L
 	r.open()
 	register(endpointOf(t, r, s.name))
 	r.seal()
-	return r.endpoints[s.name].assemble(nethttp.NewServeMux(), injected, logger)
+	return r.endpoints[s.name].assemble(engine, injected, logger)
 }
 
 // mustAssemble is assembleEndpoint for the tests whose subject is the chain
@@ -97,9 +107,14 @@ func TestRouteConflictIsStartupFailure(t *testing.T) {
 // one being mounted would read the same as naming both. The fragment asserted
 // is the pair standing together in this module's own sentence, not merely both
 // appearing somewhere in a message that ends with the engine's own words.
+//
+// The engine answers the attribution, which every engine the seam is made for
+// is asked for; an assembly that did not ask would fall to the one-pattern
+// failure this test is here to rule out.
 func TestRouteConflictNamesBothPatternsAndTheEndpoint(t *testing.T) {
 	logger, _ := newRecordingLogger()
-	_, err := assembleEndpoint(t, testSettings("public"), nil, logger, func(e Endpoint) {
+	engine := attributingEngine{nethttp.NewServeMux()}
+	_, err := assembleEndpointOn(t, engine, testSettings("public"), nil, logger, func(e Endpoint) {
 		e.Route("GET /things/{id}", nethttp.NotFoundHandler())
 		e.Route("GET /things/{name}", nethttp.NotFoundHandler())
 	})
@@ -109,6 +124,47 @@ func TestRouteConflictNamesBothPatternsAndTheEndpoint(t *testing.T) {
 	mustContain(t, err.Error(), `"GET /things/{id}" and "GET /things/{name}"`,
 		"both patterns, named together, which is the whole of the way back to the two calls")
 	mustContain(t, err.Error(), `endpoint "public"`, "the endpoint the clash is on")
+}
+
+// TestConflictWithoutAttributionSaysSo pins the failure for an engine that
+// refuses a mount and answers no attribution: it has to say the refusal was
+// not attributed, rather than name the one pattern this module is sure about as
+// though that were the verdict.
+//
+// The discriminating assertion is that sentence. The engine here is the bare
+// multiplexer, which answers nothing; an assembly that worked the pair out on
+// its own — the shape this module used to have — writes the pair instead and
+// fails here, while an implementation that reads the engine's own complaint
+// fails on the pattern it names.
+func TestConflictWithoutAttributionSaysSo(t *testing.T) {
+	logger, _ := newRecordingLogger()
+	_, err := assembleEndpoint(t, testSettings("public"), nil, logger, func(e Endpoint) {
+		e.Route("GET /things/{id}", nethttp.NotFoundHandler())
+		e.Route("GET /things/{name}", nethttp.NotFoundHandler())
+	})
+	if !errors.Is(err, ErrRouteConflict) {
+		t.Fatalf("two patterns matching the same requests did not report ErrRouteConflict: %v", err)
+	}
+	mustContain(t, err.Error(), "did not attribute the refusal", "that the engine named no pair")
+	mustContain(t, err.Error(), `"GET /things/{name}"`, "the pattern the engine refused")
+	mustContain(t, err.Error(), `endpoint "public"`, "the endpoint the clash is on")
+}
+
+// TestConflictAnsweredWithNoPairSaysSo is the same statement for the engine
+// that does take the attribution on and comes back with nothing: an empty
+// answer is no pair either, and the failure must not present it as one.
+func TestConflictAnsweredWithNoPairSaysSo(t *testing.T) {
+	logger, _ := newRecordingLogger()
+	engine := unattributableEngine{nethttp.NewServeMux()}
+	_, err := assembleEndpointOn(t, engine, testSettings("public"), nil, logger, func(e Endpoint) {
+		e.Route("GET /things/{id}", nethttp.NotFoundHandler())
+		e.Route("GET /things/{name}", nethttp.NotFoundHandler())
+	})
+	if !errors.Is(err, ErrRouteConflict) {
+		t.Fatalf("two patterns matching the same requests did not report ErrRouteConflict: %v", err)
+	}
+	mustContain(t, err.Error(), "did not attribute the refusal", "that no pair was named")
+	mustContain(t, err.Error(), `"GET /things/{name}"`, "the pattern the engine refused")
 }
 
 // TestConstraintThroughUseOrdersAgainstItsProvider pins that a constraint
@@ -178,12 +234,13 @@ func TestEmptyProvidesStaysLegal(t *testing.T) {
 
 // TestUnlandedConstraintIsReported pins the diagnostic the design requires.
 //
-// One assembly carries both shapes: "tenant" points at a capability a layer on
-// this endpoint stands for, and "audit" points at one nobody stands for. Three
-// things are asserted together, because each of them alone passes against a
-// different wrong implementation — one that fails the assembly, one that writes
-// nothing, and one that lists every constraint whether it placed anything or
-// not.
+// One assembly carries three shapes: "tenant" points at a capability a layer on
+// this endpoint stands for, "audit" points at one nobody stands for, and
+// "recover" stands for the capability it names and is the only layer that does.
+// The assembly carries on through all three — a capability absent from the
+// process is a legal configuration — so each of the two unplaced constraints
+// has to be visible, located, and told apart from the other, because the two
+// are answered by different edits.
 func TestUnlandedConstraintIsReported(t *testing.T) {
 	logger, records := newRecordingLogger()
 	_, err := assembleEndpoint(t, testSettings("public"), nil, logger, func(e Endpoint) {
@@ -202,26 +259,54 @@ func TestUnlandedConstraintIsReported(t *testing.T) {
 			After: []core.Token{(*capQuota)(nil)},
 			Wrap:  passThrough,
 		})
+		e.Use(Middleware{
+			Name:     "recover",
+			Provides: []core.Token{(*capRecovery)(nil)},
+			After:    []core.Token{(*capRecovery)(nil)},
+			Wrap:     passThrough,
+		})
 		e.Route("GET /things", nethttp.NotFoundHandler())
 	})
 	if err != nil {
-		t.Fatalf("a constraint with no provider must not fail the assembly: %v", err)
+		t.Fatalf("a constraint that placed nothing must not fail the assembly: %v", err)
 	}
 
-	written := strings.Join(records.at(slog.LevelWarn), "\n")
-	if written == "" {
-		t.Fatal("nothing was written about the constraint that landed on nothing, so a module " +
+	warned := records.at(slog.LevelWarn)
+	if len(warned) == 0 {
+		t.Fatal("nothing was written about the constraints that placed nothing, so a module " +
 			"absent from the process and a module that forgot its Provides look the same")
 	}
-	mustContain(t, written, "audit", "the layer whose constraint placed nothing")
-	mustContain(t, written, "After[0]", "which declaration on that layer")
-	mustContain(t, written, typeName(reflect.TypeOf((*capQuota)(nil)).Elem()),
-		"the capability nobody stands for")
-	mustContain(t, written, `endpoint=public`, "the endpoint the declaration was made on")
+	written := strings.Join(warned, "\n")
 	if strings.Contains(written, "tenant") {
 		t.Errorf("the report lists tenant, whose constraint found a provider and placed it. "+
 			"Listing the constraints that worked buries the ones that did not:\n%s", written)
 	}
+
+	var absent, self string
+	for _, line := range warned {
+		switch {
+		case strings.Contains(line, "middleware=audit"):
+			absent = line
+		case strings.Contains(line, "middleware=recover"):
+			self = line
+		}
+	}
+	if absent == "" || self == "" {
+		t.Fatalf("the diagnostics were\n%s\nwant one line each for audit and recover", written)
+	}
+
+	mustContain(t, absent, typeName(reflect.TypeOf((*capQuota)(nil)).Elem()),
+		"the capability nobody stands for")
+	mustContain(t, absent, "After[0]", "which declaration on that layer")
+	mustContain(t, absent, `endpoint=public`, "the endpoint the declaration was made on")
+	mustContain(t, absent, "cause="+string(causeNoProvider),
+		"the cause of a capability no layer on this endpoint stands for")
+
+	mustContain(t, self, typeName(reflect.TypeOf((*capRecovery)(nil)).Elem()),
+		"the capability the declaring layer stands for on its own")
+	mustContain(t, self, "cause="+string(causeSelfOnly),
+		"the cause of a layer standing only for the capability it names: nobody is absent here, "+
+			"the declaration is what is wrong")
 }
 
 // TestCycleThroughUseFailsTheAssembly pins that a cycle is reachable through

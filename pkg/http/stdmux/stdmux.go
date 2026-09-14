@@ -9,6 +9,10 @@
 // sub-router mounted on a prefix — imports another subpackage instead, and
 // nothing in the modules that register routes changes.
 //
+// Besides the engine itself, the seam asks this package to attribute a refused
+// mount to the mounted pattern it clashes with; the engine here answers that
+// with the multiplexer's own pairwise judgement.
+//
 // In this package net/http keeps its own name and the parent package takes the
 // alias, the opposite of the direction inside the parent package itself, which
 // is named http and has to alias the standard library.
@@ -46,8 +50,59 @@ func init() { core.ProcessRegistry.Register(Module()) }
 // inherit the process-level registrations.
 func Module() core.Module { return speedhttp.Module(moduleName, newEngine) }
 
+// engine is this subpackage's routing engine: the standard library's
+// multiplexer, plus the attribution the parent's mounting point asks of the
+// layer that binds an engine.
+//
+// The type is unexported and nothing outside this package names it. What
+// crosses the seam is the parent's Engine interface; the attribution method is
+// answered from here, where the engine is.
+type engine struct{ mux *http.ServeMux }
+
 // newEngine builds the routing engine of one endpoint. A fresh multiplexer per
 // endpoint: the routes of the management endpoint and those of the public one
 // are separate sets, which is the whole reason an assembly has more than one
 // endpoint.
-func newEngine() speedhttp.Engine { return http.NewServeMux() }
+func newEngine() speedhttp.Engine { return &engine{mux: http.NewServeMux()} }
+
+// ServeHTTP dispatches the request through the multiplexer.
+func (e *engine) ServeHTTP(w http.ResponseWriter, r *http.Request) { e.mux.ServeHTTP(w, r) }
+
+// Handle binds h to a pattern on the multiplexer.
+func (e *engine) Handle(pattern string, h http.Handler) { e.mux.Handle(pattern, h) }
+
+// AttributeRefusal names the pattern already mounted that a refused one cannot
+// stand beside, by offering the pair to a multiplexer of its own. ServeMux
+// carries the mounted patterns as a set, but judges a registration against
+// them one at a time — that is what its own complaint quotes — so the partner
+// is the one mounted pattern whose pair reproduces the refusal.
+//
+// The mounted patterns arrive in registration order, and the scan follows it,
+// so one set of routes always names the same pair. A pattern that cannot be
+// mounted on its own is skipped: it reproduces nothing, and the mount already
+// bound it.
+//
+// An engine that judged a set as a whole could only answer differently, and
+// the parent's seam leaves that to the engine; this one judges pairs, so an
+// unanswerable refusal is not a case it has.
+func (e *engine) AttributeRefusal(refused string, mounted []string) (string, bool) {
+	for _, candidate := range mounted {
+		mux := http.NewServeMux()
+		if refusedByMux(mux, candidate) {
+			continue
+		}
+		if refusedByMux(mux, refused) {
+			return candidate, true
+		}
+	}
+	return "", false
+}
+
+// refusedByMux mounts the pattern on the multiplexer and reports whether the
+// engine refused it. The pattern is mounted on a fresh multiplexer, so a
+// refusal is about this pattern beside nothing else.
+func refusedByMux(mux *http.ServeMux, pattern string) (refused bool) {
+	defer func() { refused = recover() != nil }()
+	mux.Handle(pattern, http.NotFoundHandler())
+	return false
+}
