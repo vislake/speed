@@ -40,18 +40,20 @@ type moduleConfig struct {
 // The durations and the body limit are pointers because the endpoint set is a
 // container leaf: the primary source replaces the whole map rather than merging
 // into it, so a value type could not tell "the key is absent" from "the key is
-// 0", and 0 is the legal way to switch a timeout off. A duration is written as
-// a string time.ParseDuration accepts; config refuses a bare number, because
-// 300 would read as five minutes and mean three hundred nanoseconds.
+// 0", and 0 is the legal way to switch most of the timeouts off. A duration is
+// written as a string time.ParseDuration accepts; config refuses a bare number,
+// because 300 would read as five minutes and mean three hundred nanoseconds.
+// Two of the durations refuse an explicit 0 instead of switching off, and
+// resolve says which and why.
 type endpointConfig struct {
 	// Address is the address to listen on, in net.Listen's form, for
 	// example ":8080" or "127.0.0.1:8080".
 	Address string `config:"address"`
 
 	// ReadHeaderTimeout bounds how long the request headers may take to
-	// arrive. Unlike the others it cannot be switched off: a server with no
-	// header timeout is held open indefinitely by a client that sends its
-	// headers one byte at a time.
+	// arrive. It is one of the two durations that cannot be switched off: a
+	// server with no header timeout is held open indefinitely by a client
+	// that sends its headers one byte at a time.
 	ReadHeaderTimeout *time.Duration `config:"read-header-timeout"`
 	// ReadTimeout bounds the whole request read, 0 for no bound.
 	ReadTimeout *time.Duration `config:"read-timeout"`
@@ -61,9 +63,9 @@ type endpointConfig struct {
 	// for no bound.
 	IdleTimeout *time.Duration `config:"idle-timeout"`
 	// DrainTimeout is how long Close waits for this endpoint's in-flight
-	// requests, 0 for no bound. It is the bound on the drain, which the
-	// shutdown context cannot carry: the context Stop and Close receive has
-	// its cancellation stripped.
+	// requests. It is the other duration that cannot be switched off: it is
+	// the only bound the drain has, because the context Stop and Close
+	// receive has its cancellation stripped.
 	DrainTimeout *time.Duration `config:"drain-timeout"`
 
 	// MaxBodyBytes is the request body limit the outermost layer of the
@@ -120,7 +122,9 @@ func schema() config.Schema {
 
 // endpointSettings is one endpoint's configuration, validated and completed:
 // every optional item carries a number, and a 0 means that item is switched
-// off, which is also what an explicit 0 in the configuration means.
+// off, which is also what an explicit 0 in the configuration means. The header
+// timeout and the drain timeout never arrive as 0 — an explicit 0 for either is
+// refused before any of this is built.
 type endpointSettings struct {
 	name    string
 	address string
@@ -186,16 +190,35 @@ func (e endpointConfig) resolve(name string) (endpointSettings, error) {
 					"positive duration sets it", name, d.key, *d.given)
 		}
 	}
-	// The header timeout is the one bound that cannot be switched off. A
-	// server without it is held open by a client dribbling out its headers,
-	// and the endpoint stops accepting anything else once the connections
-	// pile up; the endpoint is reported as accepting all the while.
-	if e.ReadHeaderTimeout != nil && *e.ReadHeaderTimeout == 0 {
-		return endpointSettings{}, fmt.Errorf(
-			"http: endpoint %q switches read-header-timeout off with 0, and this is the one "+
-				"bound that has to stay on: without it a client that sends its headers one "+
-				"byte at a time holds a connection open indefinitely. Give it a positive "+
-				"duration, or drop the key to take the default of %s", name, defaultReadHeaderTimeout)
+	// Two of the durations refuse an explicit 0 rather than reading it as
+	// "switch this bound off". The criterion is who carries the consequence
+	// of switching the item off: for the rest it falls on the endpoint that
+	// asked for it, and for these two it falls on the host's ability to go
+	// on serving and to stop at all.
+	cannotBeSwitchedOff := [...]struct {
+		key    string
+		given  *time.Duration
+		def    time.Duration
+		reason string
+	}{
+		{"read-header-timeout", e.ReadHeaderTimeout, defaultReadHeaderTimeout,
+			"without it a client that sends its headers one byte at a time holds a " +
+				"connection open indefinitely, and the endpoint goes on reporting that " +
+				"it accepts requests while the connections pile up"},
+		{"drain-timeout", e.DrainTimeout, defaultDrainTimeout,
+			"without it Close waits for ever on an in-flight request that cannot " +
+				"finish: the context Stop and Close receive has its cancellation " +
+				"stripped and the registry imposes no shutdown timeout of its own, so a " +
+				"host blocked in Run is left with nothing to interrupt it with"},
+	}
+	for _, d := range cannotBeSwitchedOff {
+		if d.given != nil && *d.given == 0 {
+			return endpointSettings{}, fmt.Errorf(
+				"http: endpoint %q switches %s off with 0, and it is one of the two bounds "+
+					"that have to stay on: %s. Give %s.%s.%s.%s a positive duration, or drop "+
+					"the key to take the default of %s",
+				name, d.key, d.reason, configNamespace, endpointsItem, name, d.key, d.def)
+		}
 	}
 	if e.MaxBodyBytes != nil && *e.MaxBodyBytes < 0 {
 		return endpointSettings{}, fmt.Errorf(
@@ -224,7 +247,8 @@ func (e endpointConfig) resolve(name string) (endpointSettings, error) {
 
 // valueOrDefault reads an optional item in its three states: absent takes the
 // default, an explicit 0 switches the item off, and any other value is taken as
-// given.
+// given. The two items that cannot be switched off never reach it with a 0:
+// resolve has refused such a configuration before it gets here.
 func valueOrDefault[T any](given *T, def T) T {
 	if given == nil {
 		return def

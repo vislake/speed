@@ -261,9 +261,10 @@ func TestReadHeaderTimeoutAlwaysSet(t *testing.T) {
 	}
 }
 
-// TestReadHeaderTimeoutCannotBeSwitchedOff pins the one bound that has no "off"
-// state. Every other timeout takes 0 as "no bound"; this one takes it as a
-// configuration mistake, and says why.
+// TestReadHeaderTimeoutCannotBeSwitchedOff pins one of the two bounds that have
+// no "off" state. The criterion is who carries the consequence of switching the
+// item off: this one is carried by whoever reaches the endpoint, not by the host
+// that wrote the 0, so the 0 is a configuration mistake and the message says why.
 func TestReadHeaderTimeoutCannotBeSwitchedOff(t *testing.T) {
 	off := time.Duration(0)
 	_, err := moduleConfig{Endpoints: map[string]endpointConfig{
@@ -274,6 +275,115 @@ func TestReadHeaderTimeoutCannotBeSwitchedOff(t *testing.T) {
 	}
 	mustContain(t, err.Error(), "read-header-timeout", "the item that cannot be switched off")
 	mustContain(t, err.Error(), "one byte at a time", "why it cannot")
+}
+
+// TestDrainTimeoutRefusesExplicitZero pins the second of the two bounds that
+// cannot be switched off, and pins it through the real config module: what makes
+// the refusal reachable at all is that config delivers an explicit "0s" as a
+// pointer to 0 rather than as an absent key, which is the difference between
+// "switch it off" and "take the default".
+//
+// Switching this one off would have Close wait forever on a request that cannot
+// finish: the context Stop and Close receive has its cancellation stripped and
+// the registry imposes no shutdown timeout of its own, so a host blocked in Run
+// has nothing left to interrupt it with. The drain timeout is the item
+// adr-http-shutdown names as the one that meets "a callback has to be bounded".
+func TestDrainTimeoutRefusesExplicitZero(t *testing.T) {
+	got, decodeErr, runErr := readThrough(t,
+		`{"http":{"endpoints":{"public":{"address":":8080","drain-timeout":"0s"}}}}`, schema())
+	if runErr != nil {
+		t.Fatalf("the run failed: %v", runErr)
+	}
+	if decodeErr != nil {
+		t.Fatalf("decoding this module's section: %v", decodeErr)
+	}
+	given := got.Endpoints["public"].DrainTimeout
+	if given == nil {
+		t.Fatal("config delivered an explicit \"0s\" as an absent key, so the endpoint would " +
+			"silently take the default instead of being refused")
+	}
+	if *given != 0 {
+		t.Fatalf("an explicit \"0s\" arrived as %v", *given)
+	}
+
+	// resolve is what Prepare runs the decoded section through, so its
+	// refusal is the startup failure.
+	_, err := got.resolve()
+	if err == nil {
+		t.Fatal("drain-timeout was switched off with 0")
+	}
+	mustContain(t, err.Error(), "drain-timeout", "the item that cannot be switched off")
+	mustContain(t, err.Error(), `"public"`, "the endpoint it was given on")
+	mustContain(t, err.Error(), "for ever", "why it cannot be switched off")
+}
+
+// TestDrainTimeoutAbsentTakesTheDefault and its positive-value twin below are
+// what keep the refusal aimed at the explicit 0 alone. An implementation that
+// made the item mandatory, or refused it outright, would fail these two while
+// still passing the refusal test above.
+func TestDrainTimeoutAbsentTakesTheDefault(t *testing.T) {
+	settings, err := moduleConfig{Endpoints: map[string]endpointConfig{
+		"public": {Address: ":8080"},
+	}}.resolve()
+	if err != nil {
+		t.Fatalf("an endpoint that gives no drain-timeout was refused: %v", err)
+	}
+	if settings[0].drainTimeout != defaultDrainTimeout {
+		t.Errorf("an absent drain-timeout resolved to %v, and the default is %v",
+			settings[0].drainTimeout, defaultDrainTimeout)
+	}
+}
+
+func TestDrainTimeoutAcceptsAPositiveValue(t *testing.T) {
+	given := 90 * time.Second
+	settings, err := moduleConfig{Endpoints: map[string]endpointConfig{
+		"public": {Address: ":8080", DrainTimeout: &given},
+	}}.resolve()
+	if err != nil {
+		t.Fatalf("a positive drain-timeout was refused: %v", err)
+	}
+	if settings[0].drainTimeout != given {
+		t.Errorf("a drain-timeout of %v resolved to %v", given, settings[0].drainTimeout)
+	}
+}
+
+// TestOtherDurationsStillAcceptExplicitZero pins that the exceptions are exactly
+// two. Every other duration takes 0 as "this bound is off", and the consequence
+// of switching one off is carried by the endpoint that asked for it. Refusing a
+// third item fails this test item by item.
+func TestOtherDurationsStillAcceptExplicitZero(t *testing.T) {
+	off := time.Duration(0)
+	cases := []struct {
+		key   string
+		give  func(*endpointConfig)
+		taken func(endpointSettings) time.Duration
+	}{
+		{"read-timeout",
+			func(e *endpointConfig) { e.ReadTimeout = &off },
+			func(s endpointSettings) time.Duration { return s.readTimeout }},
+		{"write-timeout",
+			func(e *endpointConfig) { e.WriteTimeout = &off },
+			func(s endpointSettings) time.Duration { return s.writeTimeout }},
+		{"idle-timeout",
+			func(e *endpointConfig) { e.IdleTimeout = &off },
+			func(s endpointSettings) time.Duration { return s.idleTimeout }},
+	}
+	for _, c := range cases {
+		t.Run(c.key, func(t *testing.T) {
+			given := endpointConfig{Address: ":8080"}
+			c.give(&given)
+			settings, err := moduleConfig{Endpoints: map[string]endpointConfig{
+				"public": given,
+			}}.resolve()
+			if err != nil {
+				t.Fatalf("an explicit 0 for %s was refused: %v", c.key, err)
+			}
+			if taken := c.taken(settings[0]); taken != 0 {
+				t.Errorf("an explicit 0 for %s resolved to %v; 0 is how the bound is "+
+					"switched off", c.key, taken)
+			}
+		})
+	}
 }
 
 // TestNegativeDurationIsRejected pins the difference between switching a bound
