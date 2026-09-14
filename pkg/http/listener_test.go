@@ -3,6 +3,7 @@ package http
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net"
 	nethttp "net/http"
@@ -374,5 +375,62 @@ func TestDoubleCloseOfTheSocketIsNotAFailure(t *testing.T) {
 	}
 	if err := once.Close(); err != nil {
 		t.Errorf("the second close reported %v, and a clean shutdown would carry it as a failure", err)
+	}
+}
+
+// TestDrainsOfSeveralEndpointsRunTogether pins where the drain is started, which
+// no single-endpoint assertion above can reach. Started in Close instead of in
+// Stop, every one of them still holds: Stop still returns while a request is in
+// flight, Close still waits, the expired budget is still reported. What changes
+// is that the endpoints then drain one after another — a shutdown costs the sum
+// of the budgets rather than the longest one, and the budget of the endpoint
+// waited on last only begins long after it stopped accepting.
+func TestDrainsOfSeveralEndpointsRunTogether(t *testing.T) {
+	const budget = 300 * time.Millisecond
+	const endpoints = 3
+
+	gate := newGateHandler(t)
+	logger, _ := newRecordingLogger()
+
+	bound := make([]*listener, 0, endpoints)
+	for i := range endpoints {
+		s := testSettings(fmt.Sprintf("endpoint-%d", i))
+		s.drainTimeout = budget
+		l, addr := startTestEndpoint(t, s, gate, logger)
+		bound = append(bound, l)
+		go func() { _ = get("http://" + addr + "/") }()
+	}
+	for range endpoints {
+		waitFor(t, gate.entered, "a request to reach the handler")
+	}
+
+	// Every endpoint stops before any of them is waited on, which is the
+	// order the lifecycle uses: the whole Stop stage runs before the Close
+	// stage begins.
+	for _, l := range bound {
+		if err := l.stop(context.Background()); err != nil {
+			t.Fatalf("Stop: %v", err)
+		}
+	}
+
+	started := time.Now()
+	for i, l := range bound {
+		name := fmt.Sprintf("endpoint-%d", i)
+		err := l.close(context.Background())
+		if !errors.Is(err, ErrDrainTimeout) {
+			t.Fatalf("the drain of %s ran out of time without reporting ErrDrainTimeout: %v", name, err)
+		}
+		mustContain(t, err.Error(), `"`+name+`"`, "the endpoint whose drain ran out of time")
+	}
+	elapsed := time.Since(started)
+
+	// Drains that overlap cost the longest budget; drains that are started
+	// one at a time cost their sum. The bound sits between the two, far
+	// enough from either that a loaded machine does not decide it.
+	if elapsed >= 2*budget {
+		t.Errorf("waiting on %d endpoints with a drain budget of %s each took %s, which is the "+
+			"cost of draining them one after another. Each drain has to have been running "+
+			"since its own Stop, so waiting on them in turn costs the longest budget",
+			endpoints, budget, elapsed)
 	}
 }
