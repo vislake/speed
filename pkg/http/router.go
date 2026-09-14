@@ -59,8 +59,11 @@ var _ Router = (*router)(nil)
 // newRouter builds the endpoints from configuration. Nothing is bound here:
 // the address is bound in Serve, and until then an endpoint is a registration
 // surface with no listener behind it.
-func newRouter(settings []endpointSettings) *router {
-	r := &router{endpoints: make(map[string]*endpoint, len(settings))}
+func newRouter(settings []endpointSettings, newEngine func() Engine) *router {
+	r := &router{
+		endpoints: make(map[string]*endpoint, len(settings)),
+		newEngine: newEngine,
+	}
 	for _, s := range settings {
 		r.endpoints[s.name] = &endpoint{settings: s, gate: r}
 		r.names = append(r.names, s.name)
@@ -180,18 +183,43 @@ var _ Endpoint = (*endpoint)(nil)
 
 // Route binds h to a pattern on this endpoint.
 //
-// The pattern's grammar is the routing engine's. A conflict between two
-// patterns is not judged here: a registration records a declaration, and
-// whether the set of them conflicts is a property of the assembled set,
-// reported as a startup failure when the chain is built.
+// The pattern's grammar is the routing engine's, and the engine is asked here
+// whether it takes this pattern at all. A pattern the engine refuses on its own
+// is a mistake in this one call, knowable from this one registration, which is
+// the class of failure the surface panics for, alongside a nil handler and an
+// illegal capability token.
+//
+// A conflict between two patterns is not of that class and is not judged here:
+// a registration records a declaration, and whether the set of them conflicts
+// is a property of the assembled set, reported as a startup failure when the
+// chain is built.
 func (e *endpoint) Route(pattern string, h nethttp.Handler) {
 	if h == nil {
 		panic(fmt.Sprintf("http: endpoint %q: Route(%q, nil) has no handler to bind. "+
 			"Pass the handler this route is served by", e.settings.name, pattern))
 	}
+	if refused := patternRefusal(e.gate.newEngine, pattern, h); refused != nil {
+		panic(fmt.Sprintf("http: endpoint %q: Route(%q, ...) was given a pattern the routing "+
+			"engine refuses on its own: %v. The grammar is the engine's, not this "+
+			"package's; correct the pattern at this call", e.settings.name, pattern, refused))
+	}
 	e.gate.write(e.settings.name, "Route", func() {
 		e.routes = append(e.routes, route{pattern: pattern, handler: h})
 	})
+}
+
+// patternRefusal offers the pattern to an engine of its own and reports what
+// the engine raised, or nil when it took it. The engines this seam is made for
+// refuse a pattern by panicking, whether the pattern is malformed or clashes
+// with another one, and the two are told apart by what else is on the engine:
+// nothing is on this one, so anything raised here is about this pattern alone.
+//
+// The engine is thrown away with the call. It costs one engine per route
+// registered, once, during Init.
+func patternRefusal(newEngine func() Engine, pattern string, h nethttp.Handler) (raised any) {
+	defer func() { raised = recover() }()
+	newEngine().Handle(pattern, h)
+	return nil
 }
 
 // Use registers a middleware layer on this endpoint. The layer applies to every

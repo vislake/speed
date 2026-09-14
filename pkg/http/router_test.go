@@ -16,7 +16,7 @@ func testRouter(names ...string) *router {
 	for _, name := range names {
 		settings = append(settings, testSettings(name))
 	}
-	return newRouter(settings)
+	return newRouter(settings, func() Engine { return nethttp.NewServeMux() })
 }
 
 // endpointOf takes an endpoint out, failing the test if it is not there.
@@ -160,6 +160,57 @@ func TestNilHandlerPanics(t *testing.T) {
 
 	text := wantPanic(t, "Route with a nil handler", func() { e.Route("GET /things", nil) })
 	mustContain(t, text, "GET /things", "the pattern that was registered")
+}
+
+// TestMalformedPatternPanicsAtTheCall pins that a pattern the engine refuses on
+// its own is the call-site mistake it is, named where it was written.
+//
+// It is knowable from this one registration, with nothing else mounted, which
+// is what separates it from a conflict: a conflict is a property of the set and
+// only exists once the chain is assembled. Left to be discovered in Serve, a
+// malformed pattern comes back as a clash between two registrations, so a
+// caller reading ErrRouteConflict goes looking for a second registration that
+// is not there.
+func TestMalformedPatternPanicsAtTheCall(t *testing.T) {
+	for _, c := range []struct {
+		pattern string
+		reason  string
+	}{
+		{"/{", "bad wildcard segment"},
+		{"GET /things/{id}/{id}", `duplicate wildcard name "id"`},
+		{"", "invalid pattern"},
+	} {
+		t.Run(c.pattern, func(t *testing.T) {
+			r := testRouter("public")
+			e := endpointOf(t, r, "public")
+			r.open()
+
+			text := wantPanic(t, "Route with a malformed pattern", func() {
+				e.Route(c.pattern, nethttp.NotFoundHandler())
+			})
+			mustContain(t, text, fmt.Sprintf("%q", c.pattern), "the pattern that was registered")
+			mustContain(t, text, `endpoint "public"`, "the endpoint it was registered on")
+			mustContain(t, text, c.reason, "what the engine said is wrong with it")
+		})
+	}
+}
+
+// TestMalformedPatternIsNotARouteConflict is the other half of the
+// classification: a single malformed registration must not reach the assembly
+// as a clash between two of them.
+func TestMalformedPatternIsNotARouteConflict(t *testing.T) {
+	r := testRouter("public")
+	e := endpointOf(t, r, "public")
+	r.open()
+
+	wantPanic(t, "Route with a malformed pattern", func() {
+		e.Route("/{", nethttp.NotFoundHandler())
+	})
+	r.seal()
+
+	if got := len(r.endpoints["public"].routes); got != 0 {
+		t.Fatalf("a refused pattern was recorded on the endpoint: %d routes", got)
+	}
 }
 
 // TestIllegalConstraintTokenPanicsAtTheRegistration pins where an illegal

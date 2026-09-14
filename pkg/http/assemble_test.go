@@ -10,6 +10,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/vislake/speed/pkg/core"
 	"github.com/vislake/speed/pkg/log"
 )
 
@@ -19,7 +20,7 @@ func assembleEndpoint(t *testing.T, s endpointSettings, injected, logger *slog.L
 	register func(Endpoint),
 ) (nethttp.Handler, error) {
 	t.Helper()
-	r := newRouter([]endpointSettings{s})
+	r := newRouter([]endpointSettings{s}, func() Engine { return nethttp.NewServeMux() })
 	r.open()
 	register(endpointOf(t, r, s.name))
 	r.seal()
@@ -84,11 +85,44 @@ func TestRouteConflictIsStartupFailure(t *testing.T) {
 	mustContain(t, err.Error(), `"public"`, "the endpoint the clash is on")
 }
 
+// TestConstraintThroughUseFindsNoProvider pins what an After constraint does
+// today when it is declared the only way a registrant can declare one.
+//
+// A recorded layer carries no capability of its own: Middleware declares none
+// and Use carries no registrant identity, so the provider index the ordering
+// builds is empty whatever is registered. Every After and Before edge is
+// therefore absent and Order alone decides, which is why "tenant" comes out
+// ahead of the layer it declared itself to be inside of. The ordering resolves
+// constraints; what is missing is its input, and the day a registrant can say
+// what its layer delivers this observation changes.
+func TestConstraintThroughUseFindsNoProvider(t *testing.T) {
+	tr := &trace{}
+	logger, _ := newRecordingLogger()
+	handler := mustAssemble(t, testSettings("public"), nil, logger, func(e Endpoint) {
+		e.Use(Middleware{Name: "auth", Order: 10, Wrap: noteLayer(tr, "auth")})
+		e.Use(Middleware{
+			Name:  "tenant",
+			Order: 0,
+			After: []core.Token{(*capAuth)(nil)},
+			Wrap:  noteLayer(tr, "tenant"),
+		})
+		e.Route("GET /things", nethttp.NotFoundHandler())
+	})
+
+	handler.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(nethttp.MethodGet, "/things", nil))
+
+	want := []string{"tenant", "auth"}
+	if got := tr.seen(); !equalStrings(got, want) {
+		t.Errorf("the chain ran in the order %v, and with no provider to bind to it is %v", got, want)
+	}
+}
+
 // TestMiddlewareCycleIsStartupFailure pins that the ordering's verdict reaches
 // the assembly rather than being swallowed into a chain with layers missing.
 func TestMiddlewareCycleIsStartupFailure(t *testing.T) {
 	logger, _ := newRecordingLogger()
-	r := newRouter([]endpointSettings{testSettings("public")})
+	r := newRouter([]endpointSettings{testSettings("public")},
+		func() Engine { return nethttp.NewServeMux() })
 	r.open()
 	e := r.endpoints["public"]
 	// The constraints are put on the recorded layers directly: a registrant

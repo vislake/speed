@@ -97,9 +97,11 @@ type Spec struct {
 // registers a route.
 type Engine interface {
 	nethttp.Handler
-	// Handle binds h to a pattern. The engine reports a conflict between
-	// two patterns however it sees fit, including by panicking; the caller
-	// catches that at the mounting point and turns it into a startup
-	// failure wrapping ErrRouteConflict.
+	// Handle binds h to a pattern. The engine refuses a pattern however it
+	// sees fit, including by panicking, and the caller catches that at both
+	// moments it asks: a pattern offered alone at registration, where a
+	// refusal is a malformed pattern and panics at the call, and a pattern
+	// mounted beside the others in Serve, where a refusal is a conflict and
+	// becomes a startup failure wrapping ErrRouteConflict.
 	Handle(pattern string, h nethttp.Handler)
 }

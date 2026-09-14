@@ -71,13 +71,18 @@ func (e *endpoint) mount(engine Engine) error {
 // mountRoute binds one route, turning a panic from the engine into an error.
 // The message carries the pattern being mounted and what the engine said, which
 // is where the pattern it clashes with is named.
+//
+// What is left to catch here is the clash: every pattern was offered to an
+// engine of its own when it was registered, and one the engine refuses by
+// itself never reaches this point.
 func mountRoute(engine Engine, name string, r route) (err error) {
 	defer func() {
 		if raised := recover(); raised != nil {
-			err = fmt.Errorf("%w: endpoint %q: the routing engine refused the pattern %q: %v. "+
-				"Two registrations claim the same pattern, or two patterns match one request "+
-				"with neither being more specific; change one of them or move it to another "+
-				"endpoint", ErrRouteConflict, name, r.pattern, raised)
+			err = fmt.Errorf("%w: endpoint %q: the routing engine refused the pattern %q "+
+				"alongside the ones already mounted on this endpoint: %v. Two registrations "+
+				"claim the same pattern, or two patterns match one request with neither "+
+				"being more specific; change one of them or move it to another endpoint",
+				ErrRouteConflict, name, r.pattern, raised)
 		}
 	}()
 	engine.Handle(r.pattern, r.handler)

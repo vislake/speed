@@ -25,7 +25,12 @@ type (
 // carries one, so the fixtures do too.
 func passThrough(h nethttp.Handler) nethttp.Handler { return h }
 
-// registered builds one layer the way an endpoint records a Use call.
+// registered builds one layer with its own delivery list supplied directly.
+// That list is what the constraints of the other layers resolve against, and
+// the registration surface has no way to fill it: Middleware declares no
+// capability and Use carries no registrant identity. These fixtures therefore
+// reach a state Use cannot produce, and what they pin is the ordering itself,
+// not what a registrant can express through the surface today.
 func registered(name string, order int, provides, after, before []core.Token) layer {
 	return layer{
 		mw: Middleware{

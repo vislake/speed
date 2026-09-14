@@ -162,8 +162,7 @@ func newModule(reader config.Reader, newEngine func() Engine, injected *slog.Log
 	if err != nil {
 		return nil, err
 	}
-	r := newRouter(settings)
-	r.newEngine = newEngine
+	r := newRouter(settings, newEngine)
 	r.injected = injected
 	r.logger = injected
 	if r.logger == nil {
