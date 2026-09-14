@@ -80,10 +80,12 @@ func (l *listener) start(s endpointSettings, h nethttp.Handler, logger *slog.Log
 		return fmt.Errorf("%w: endpoint %q on %q: %w", ErrListen, s.name, s.address, err)
 	}
 	if s.tls() {
-		// A certificate that cannot be loaded is a bind failure of this
-		// endpoint and joins ErrListen rather than adding a sentinel: the
-		// class a caller acts on is "this endpoint did not come up", and
-		// the text carries which half of it failed.
+		// A certificate that cannot be loaded joins ErrListen rather than
+		// adding a sentinel of its own. The criterion is the host's
+		// remedy: a mistyped certificate path and an address already in
+		// use are both fixed by changing the configuration and starting
+		// again, so they are one class to act on, and the text carries
+		// which half of the pair failed and why.
 		cert, certErr := tls.LoadX509KeyPair(s.tlsCertFile, s.tlsKeyFile)
 		if certErr != nil {
 			closeErr := socket.Close()

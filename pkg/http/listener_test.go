@@ -113,6 +113,52 @@ func TestTLSCertFailureIsSynchronous(t *testing.T) {
 	}
 }
 
+// TestCertificateFailureIsAListenFailure pins how the failure is classified.
+// The design folds a certificate that cannot be loaded into ErrListen instead of
+// giving it a sentinel, on the criterion that the host's remedy is the same one
+// a taken address calls for: change the configuration and start again. A caller
+// that acts on "this endpoint did not come up" therefore needs one class, and
+// the two paths in the text are what says which half to fix.
+func TestCertificateFailureIsAListenFailure(t *testing.T) {
+	dir := t.TempDir()
+	s := testSettings("public")
+	s.tlsCertFile = filepath.Join(dir, "absent.pem")
+	s.tlsKeyFile = filepath.Join(dir, "absent-key.pem")
+	logger, _ := newRecordingLogger()
+
+	var l listener
+	err := l.start(s, nethttp.NotFoundHandler(), logger)
+	if !errors.Is(err, ErrListen) {
+		t.Fatalf("a certificate that cannot be loaded was not reported as ErrListen: %v", err)
+	}
+	mustContain(t, err.Error(), s.tlsCertFile, "the certificate path")
+	mustContain(t, err.Error(), s.tlsKeyFile, "the key path")
+	mustContain(t, err.Error(), `"public"`, "the endpoint that did not come up")
+
+	// The other half of "no sentinel of its own": a sentinel added for this
+	// failure would make one of these match, and the class a caller switches
+	// on would have grown without anybody noticing.
+	others := []struct {
+		name     string
+		sentinel error
+	}{
+		{"ErrUnknownEndpoint", ErrUnknownEndpoint},
+		{"ErrRouteConflict", ErrRouteConflict},
+		{"ErrMiddlewareCycle", ErrMiddlewareCycle},
+		{"ErrInvalidSpec", ErrInvalidSpec},
+		{"ErrDrainTimeout", ErrDrainTimeout},
+		{"ErrMalformedBody", ErrMalformedBody},
+		{"ErrBodyTooLarge", ErrBodyTooLarge},
+		{"ErrValidation", ErrValidation},
+	}
+	for _, other := range others {
+		if errors.Is(err, other.sentinel) {
+			t.Errorf("a certificate failure also matches %s; it is a bind failure and "+
+				"nothing else", other.name)
+		}
+	}
+}
+
 // TestStopClosesListenerSynchronously is the first beat: when Stop returns, the
 // endpoint has already stopped accepting and a new connection is refused, while
 // a request that was already in flight is still being served.
