@@ -7,6 +7,8 @@ import (
 	"testing"
 	"time"
 
+	"gorm.io/gorm"
+
 	"github.com/vislake/speed/pkg/db"
 	"github.com/vislake/speed/pkg/db/internal/pgtest"
 	"github.com/vislake/speed/pkg/db/postgres"
@@ -219,6 +221,75 @@ func TestTwoDatabasesDoNotBlockEachOther(t *testing.T) {
 	}
 }
 
+// TestAPoolWithNoRoomForTheMutexIsRefused holds the mutex to the one failure it
+// cannot leave to the caller to notice.
+//
+// The mutex pins a connection of the handle's own pool for the whole run, and
+// the run's statements need another. A pool capped at one therefore hands the
+// mutex the only connection there is and every statement afterwards waits for
+// one that cannot come free — no error, no log line, a startup that simply
+// stops until the context expires, or for the life of the process when there is
+// no deadline on it. max-open-conns is a published input item with no floor, so
+// one is a configuration a host may legitimately write.
+//
+// The refusal names the dial rather than the migrations: the reader has to
+// raise a pool size, not go looking through migration files.
+func TestAPoolWithNoRoomForTheMutexIsRefused(t *testing.T) {
+	dsn := pgtest.Acquire(t)
+	handle, lock := replicaOnACappedPool(t, dsn, time.Minute, 1)
+
+	// Bounded so that an implementation which pins the only connection fails
+	// this case instead of hanging the suite.
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
+
+	err := lock.Acquire(ctx)
+	if err == nil {
+		t.Fatal("the mutex was taken on a pool of one, leaving the migration run without a connection " +
+			"to reach the database on; it has to be refused instead")
+	}
+	if errors.Is(err, db.ErrMigrationLockTimeout) {
+		// That sentinel sends the reader to another replica. Nothing is
+		// holding the mutex here; the pool is too small.
+		t.Error("a pool too small was reported as contention with another replica")
+	}
+	text := err.Error()
+	if item := postgres.ConfigNamespace + ".max-open-conns"; !strings.Contains(text, item) {
+		t.Errorf("the refusal does not name %s, which is the dial that has to be raised: %s", item, text)
+	}
+
+	// The connection was not pinned on the way out, so the pool is whole and
+	// the caller's own diagnostics can still reach the database.
+	if err := handle.WithContext(ctx).Exec(`SELECT 1`).Error; err != nil {
+		t.Errorf("the refused mutex kept the pool's only connection: %v", err)
+	}
+}
+
+// TestTheRunReachesTheDatabaseWhileTheMutexIsHeld checks the other side of that
+// floor: at the smallest pool the mutex admits, the run really does have a
+// connection left to work on.
+//
+// Without it the floor could be raised to any number and nothing would notice.
+func TestTheRunReachesTheDatabaseWhileTheMutexIsHeld(t *testing.T) {
+	dsn := pgtest.Acquire(t)
+	handle, lock := replicaOnACappedPool(t, dsn, time.Minute, 2)
+
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
+
+	if err := lock.Acquire(ctx); err != nil {
+		t.Fatalf("the mutex was refused on a pool that has room for it: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := lock.Release(context.Background()); err != nil {
+			t.Errorf("releasing the mutex: %v", err)
+		}
+	})
+	if err := handle.WithContext(ctx).Exec(`CREATE TABLE widgets (id INT)`).Error; err != nil {
+		t.Errorf("a migration statement could not run while the mutex was held: %v", err)
+	}
+}
+
 // replica hands back a migration mutex on a handle of its own, standing for one
 // replica of a multi-replica deployment. Each one is a separate connection
 // pool, which is what a separate process would be.
@@ -229,4 +300,24 @@ func replica(t *testing.T, dsn string, timeout time.Duration) db.MigrationLock {
 		t.Fatalf("building a migration mutex: %v", err)
 	}
 	return lock
+}
+
+// replicaOnACappedPool is replica with the pool size a host would have
+// configured, and hands the handle back as well so a case can see what the run
+// itself would see.
+func replicaOnACappedPool(
+	t *testing.T, dsn string, timeout time.Duration, maxOpen int,
+) (*gorm.DB, db.MigrationLock) {
+	t.Helper()
+	handle := open(t, dsn)
+	pool, err := handle.DB()
+	if err != nil {
+		t.Fatalf("reaching the handle's connection pool: %v", err)
+	}
+	pool.SetMaxOpenConns(maxOpen)
+	lock, err := postgres.NewMigrationLock(handle, timeout)
+	if err != nil {
+		t.Fatalf("building a migration mutex: %v", err)
+	}
+	return handle, lock
 }

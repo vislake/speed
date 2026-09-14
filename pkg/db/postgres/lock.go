@@ -37,6 +37,25 @@ const lockPollInterval = 250 * time.Millisecond
 // a single round trip against a server this connection is already talking to.
 const releaseTimeout = 10 * time.Second
 
+// minPoolSize is the smallest connection pool a migration run fits in.
+//
+// The mutex pins one connection for the whole run — that is what keeps the
+// session owning the advisory lock alive — and the run's own statements need a
+// second one. A pool capped at one gives the mutex the only connection there
+// is, and every statement of the run then waits for a connection that cannot
+// come free until the run finishes. Nothing reports anything: the startup stops
+// there until the caller's context expires, or for as long as the process
+// lives when it has none.
+const minPoolSize = 2
+
+// maxOpenConnsKey is the pool input item whose value has to leave room for the
+// pinned connection, relative to ConfigNamespace.
+//
+// The item is declared by pkg/db and shared by every implementation, mounted
+// under this implementation's namespace; the name is repeated here so the
+// refusal below can say which dial to raise.
+const maxOpenConnsKey = "max-open-conns"
+
 // NewMigrationLock returns the cross-process mutex the migration run against
 // this handle's database is held under, giving up after timeout.
 //
@@ -46,6 +65,11 @@ const releaseTimeout = 10 * time.Second
 // first fails on an object that already exists. Under the mutex they are a
 // queue: the second one waits, and by the time it looks, the record table is
 // complete and it has nothing to do.
+//
+// The mutex costs one connection of the handle's pool for the whole run, on top
+// of the one the run's own statements use, so the pool has to allow at least
+// minPoolSize of them. Acquire refuses a pool smaller than that instead of
+// entering the wait it would never come out of.
 func NewMigrationLock(handle *gorm.DB, timeout time.Duration) (db.MigrationLock, error) {
 	pool, err := handle.DB()
 	if err != nil {
@@ -61,6 +85,12 @@ func NewMigrationLock(handle *gorm.DB, timeout time.Duration) (db.MigrationLock,
 // because a PostgreSQL advisory lock belongs to the session that took it. A
 // second statement arriving on a different pooled connection is a different
 // session, and would neither see the lock nor be able to give it up.
+//
+// It is pinned from the handle's own pool because that is the pool the
+// configured parameters apply to: the design gives them every connection this
+// module establishes, and a connection opened around them would be outside
+// what the host asked for. The cost is the extra connection minPoolSize
+// accounts for.
 type migrationLock struct {
 	pool    *sql.DB
 	timeout time.Duration
@@ -71,9 +101,23 @@ type migrationLock struct {
 }
 
 // Acquire takes the mutex, waiting for whichever replica holds it.
+//
+// It refuses a pool that cannot hold the pinned connection alongside the run's
+// own, because the alternative is a startup that stops without reporting
+// anything.
 func (l *migrationLock) Acquire(ctx context.Context) error {
 	if l.conn != nil {
 		return errors.New("postgres: the migration mutex is already held by this process")
+	}
+	// Refused before the connection is pinned, not diagnosed after the run
+	// has stopped moving: a pool with no room for both the mutex and the run
+	// produces no error of its own, only a startup that goes quiet.
+	if allowed := l.pool.Stats().MaxOpenConnections; allowed > 0 && allowed < minPoolSize {
+		return fmt.Errorf(
+			"postgres: the migration mutex holds a connection of its own for the whole run and the pool "+
+				"allows %d, so the migrations would wait for a connection that cannot come free until "+
+				"they finish; raise %s.%s to at least %d",
+			allowed, ConfigNamespace, maxOpenConnsKey, minPoolSize)
 	}
 	conn, err := l.pool.Conn(ctx)
 	if err != nil {
