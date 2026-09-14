@@ -293,24 +293,28 @@ func disabledModule(name string, plugin gorm.Plugin, set db.Migrations) core.Mod
 	}
 }
 
-// TestPluginFromDisabledModuleFollowsTheRuling pins what the two declarations
-// of a module that resolved to disabled are worth.
+// TestTheDeclarationsOfADisabledModuleAreNotInForce pins both halves of what a
+// module that stated it does not run leaves behind: its migrations are not
+// applied, and its plugin is not installed.
 //
-// The migration set is filtered and the plugin is not, and the asymmetry is the
-// design's: a module that does not run creates no tables, but a plugin is a
-// statement about the handle rather than about the declaring module's own work,
-// and dropping it would take a cross-cutting capability away from every
-// dependant, silently, by way of a module that is not even constructed.
-func TestPluginFromDisabledModuleFollowsTheRuling(t *testing.T) {
+// The two halves are one ruling, and they used to differ — the migration set was
+// filtered and the plugin was not. A module that does not run has nothing in
+// force, whatever kind of declaration it is, and keeping the plugin would put a
+// declaration of a module that was never constructed into force: a hole in "not
+// enabled, not in force" that reports nothing.
+//
+// The positives sit beside the negatives. Without them, "the migration was not
+// applied" would hold for a run that applied nothing at all, and "the plugin is
+// not installed" for a handle that installs none.
+func TestTheDeclarationsOfADisabledModuleAreNotInForce(t *testing.T) {
 	h, err := startHost(t, sqliteSpec(), hostConfig(t),
 		pluginModule("audit", recordingPlugin{name: "audit-plugin"}),
 		disabledModule("optout", recordingPlugin{name: "optout-plugin"},
 			migrationSet(db.SQLite, map[string]string{
 				"0001_create_optout_rows.sql": `CREATE TABLE optout_rows (id INTEGER NOT NULL, PRIMARY KEY (id))`,
 			})),
-		pluginModule("bookkeeper", recordingPlugin{name: "bookkeeper-plugin"}),
-		// A module that does run, so "the migration was not applied" cannot
-		// pass on a run that applied nothing at all.
+		// A module that does run, so neither negative below can pass on a run
+		// that applied no migration and installed no plugin.
 		core.Module{Name: "ledger", Resources: []any{
 			migrationSet(db.SQLite, map[string]string{
 				"0001_create_ledger_rows.sql": `CREATE TABLE ledger_rows (id INTEGER NOT NULL, PRIMARY KEY (id))`,
@@ -329,10 +333,66 @@ func TestPluginFromDisabledModuleFollowsTheRuling(t *testing.T) {
 	if handle.Migrator().HasTable("optout_rows") {
 		t.Error("the disabled module's migration was applied although it declared that it does not run")
 	}
-	if got := installedOn(handle); !slices.Contains(got, "optout-plugin") {
-		t.Errorf("the handle carries the plugins %v, and the declaration of the module that declared "+
-			"itself disabled is not among them: a dependant would run without it and nothing would say so",
-			got)
+	if got := installedOn(handle); !slices.Contains(got, "audit-plugin") {
+		t.Fatalf("the handle carries the plugins %v, and an enabled module's plugin is not among "+
+			"them: what the next assertion observes is a handle that installs nothing", got)
+	}
+	if got := installedOn(handle); slices.Contains(got, "optout-plugin") {
+		t.Errorf("the handle carries the plugins %v, including one declared by the module that "+
+			"declared itself disabled: a module that did not run has a declaration in force, and "+
+			"every dependant that relies on it loses it without a word", got)
+	}
+}
+
+// TestOnlyTheEnabledModulesPluginReachesTheHandle pins the plugin side of the
+// ruling at the handles a caller looks at: the one the capability delivered, and
+// a second one built with Open.
+//
+// The delivered handle's plugin table is checked for being non-empty before it
+// is checked for what is absent from it: "the disabled module's plugin is not on
+// the handle" holds just as well for a handle that carries nothing, which is
+// what an implementation that installed no plugin at all would deliver.
+//
+// Open is read too because the two handles are installed from one collection —
+// the set the delivered handle got is the set the product kept. An
+// implementation that filtered at the install site of the delivered handle alone
+// would pass the first assertion and install the disabled module's plugin on the
+// second, which is the handle a caller moves a query to.
+func TestOnlyTheEnabledModulesPluginReachesTheHandle(t *testing.T) {
+	h, err := startHost(t, sqliteSpec(), hostConfig(t),
+		pluginModule("audit", recordingPlugin{name: "audit-plugin"}),
+		// This case is about the plugin side, so the module declares no
+		// migration of its own beyond what every module may declare.
+		disabledModule("optout", recordingPlugin{name: "optout-plugin"}, migrationSet(db.SQLite, nil)),
+	)
+	if err != nil {
+		t.Fatalf("starting a host beside a module that declared itself disabled: %v", err)
+	}
+
+	handle := h.Instance.DB()
+	if got := installedOn(handle); len(got) == 0 {
+		t.Fatal("the delivered handle carries no plugins at all, so \"only the enabled module's " +
+			"plugin is on it\" would hold for the wrong reason")
+	}
+	want := []string{"audit-plugin"}
+	if got := installedOn(handle); !slices.Equal(got, want) {
+		t.Errorf("the delivered handle carries the plugins %v, want exactly %v: the declaration of "+
+			"the module that declared itself disabled is not in force", got, want)
+	}
+
+	opened, err := h.Instance.Open(t.Context(), filepath.Join(t.TempDir(), "elsewhere.db"))
+	if err != nil {
+		t.Fatalf("building a second connection: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := db.Close(opened); err != nil {
+			t.Errorf("releasing the second connection: %v", err)
+		}
+	})
+	if got := installedOn(opened); !slices.Equal(got, want) {
+		t.Errorf("a connection built with Open carries the plugins %v, want exactly %v: both handles "+
+			"are installed from the one collection the assembly made, and a caller that moved a query "+
+			"to another database got a declaration the delivered handle never had", got, want)
 	}
 }
 

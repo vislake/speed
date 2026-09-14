@@ -21,14 +21,16 @@ type pluginInstall struct {
 // collectPlugins takes the declared plugins out of the registry, in the order
 // they are installed.
 //
-// Every declaration is taken, including one from a module resolution left out.
-// The enablement filter the migration sets get is deliberately not applied
-// here: a disabled module is not constructed, but its plugin is a statement
-// about the handle rather than about its own work, and dropping it would take a
-// cross-cutting capability away from every dependant without a word — the
-// queries would run, unfiltered. The declarations say which plugins this
-// assembly runs with, and an assembly that declared a module disabled has not
-// thereby withdrawn what that module declared.
+// A declaration from a module that resolution left out is dropped, the way that
+// module's migrations are: a module that does not run has nothing in force here.
+// The price is real and it is what "not enabled" means rather than a defect — a
+// module whose whole work is declaring a plugin, the shape of a cross-cutting
+// capability that needs nothing back from the database, takes that capability
+// away from every dependant when it is disabled, and the statements those
+// dependants go on to issue run unfiltered and unaudited with nothing said. An
+// assembly that disabled the module did not ask for its plugin, and installing
+// it anyway is the other reading, the one where a declaration of a module that
+// never ran is in force.
 //
 // The order is the dependency order of the declaring modules, and declaration
 // order inside one module. Install order is callback order in GORM: plugins
@@ -43,6 +45,9 @@ func collectPlugins(reg *core.Registry) ([]pluginInstall, error) {
 	byModule := make(map[string][]Plugin)
 	var modules []string
 	for _, declared := range core.Resources[Plugin](reg) {
+		if state, known := reg.Enablement(declared.Module); known && state.State == core.StateDisabled {
+			continue
+		}
 		if absent(declared.Value.Plugin) {
 			// Nothing to install, and installing it anyway would
 			// panic inside GORM on the first call rather than report
