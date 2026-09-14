@@ -201,15 +201,19 @@ func (e endpointConfig) resolve(name string) (endpointSettings, error) {
 		def    time.Duration
 		reason string
 	}{
-		{"read-header-timeout", e.ReadHeaderTimeout, defaultReadHeaderTimeout,
+		{
+			"read-header-timeout", e.ReadHeaderTimeout, defaultReadHeaderTimeout,
 			"without it a client that sends its headers one byte at a time holds a " +
 				"connection open indefinitely, and the endpoint goes on reporting that " +
-				"it accepts requests while the connections pile up"},
-		{"drain-timeout", e.DrainTimeout, defaultDrainTimeout,
+				"it accepts requests while the connections pile up",
+		},
+		{
+			"drain-timeout", e.DrainTimeout, defaultDrainTimeout,
 			"without it Close waits for ever on an in-flight request that cannot " +
 				"finish: the context Stop and Close receive has its cancellation " +
 				"stripped and the registry imposes no shutdown timeout of its own, so a " +
-				"host blocked in Run is left with nothing to interrupt it with"},
+				"host blocked in Run is left with nothing to interrupt it with",
+		},
 	}
 	for _, d := range cannotBeSwitchedOff {
 		if d.given != nil && *d.given == 0 {

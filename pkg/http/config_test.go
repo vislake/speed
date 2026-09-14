@@ -358,15 +358,21 @@ func TestOtherDurationsStillAcceptExplicitZero(t *testing.T) {
 		give  func(*endpointConfig)
 		taken func(endpointSettings) time.Duration
 	}{
-		{"read-timeout",
+		{
+			"read-timeout",
 			func(e *endpointConfig) { e.ReadTimeout = &off },
-			func(s endpointSettings) time.Duration { return s.readTimeout }},
-		{"write-timeout",
+			func(s endpointSettings) time.Duration { return s.readTimeout },
+		},
+		{
+			"write-timeout",
 			func(e *endpointConfig) { e.WriteTimeout = &off },
-			func(s endpointSettings) time.Duration { return s.writeTimeout }},
-		{"idle-timeout",
+			func(s endpointSettings) time.Duration { return s.writeTimeout },
+		},
+		{
+			"idle-timeout",
 			func(e *endpointConfig) { e.IdleTimeout = &off },
-			func(s endpointSettings) time.Duration { return s.idleTimeout }},
+			func(s endpointSettings) time.Duration { return s.idleTimeout },
+		},
 	}
 	for _, c := range cases {
 		t.Run(c.key, func(t *testing.T) {
