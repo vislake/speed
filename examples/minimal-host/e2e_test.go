@@ -15,6 +15,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/vislake/speed/pkg/log"
 )
 
 // The cases run the host as a real child process rather than calling into it.
@@ -31,12 +33,6 @@ var hostBinary string
 // leave. It is generous: exceeding it means the host hung, and the case says
 // so with both streams attached rather than with a timeout of the test binary.
 const waitLimit = 15 * time.Second
-
-// maskedValue is what the redaction layer leaves in place of a value whose key
-// a module registered. pkg/log does not export it, so this is a copy: an
-// operator confirming that a credential is masked reads this same text, and a
-// case asserting it has to write it down.
-const maskedValue = "[REDACTED]"
 
 // filePollInterval is how often a case waiting on a log file looks at it again.
 const filePollInterval = 20 * time.Millisecond
@@ -351,7 +347,7 @@ func runHost(t *testing.T, spec runSpec) outcome {
 			if spec.logFile != "" {
 				continue
 			}
-			if rec, ok := parseTextRecord(line); ok && rec.is(readyMsg, moduleAttrKey, appModuleName) {
+			if rec, ok := parseTextRecord(line); ok && rec.is(readyMsg, log.ModuleAttrKey, appModuleName) {
 				announceReady()
 			}
 		}
@@ -365,7 +361,7 @@ func runHost(t *testing.T, spec runSpec) outcome {
 				// does not parse is skipped and the next pass looks
 				// again; it is never a failure.
 				if data, err := os.ReadFile(spec.logFile); err == nil &&
-					hasRecord(jsonRecords(string(data)), readyMsg, moduleAttrKey, appModuleName) {
+					hasRecord(jsonRecords(string(data)), readyMsg, log.ModuleAttrKey, appModuleName) {
 					announceReady()
 					return
 				}
@@ -410,7 +406,7 @@ func runHost(t *testing.T, spec runSpec) outcome {
 			left = true
 		case <-time.After(waitLimit):
 			fail("no record %s turned up in %s within %s",
-				describe(readyMsg, []string{moduleAttrKey, appModuleName}), where, waitLimit)
+				describe(readyMsg, []string{log.ModuleAttrKey, appModuleName}), where, waitLimit)
 		}
 		if !left {
 			if err := cmd.Process.Signal(os.Interrupt); err != nil {
@@ -585,7 +581,7 @@ func TestUnknownPrefixedEnvIsDiagnosedNotFatal(t *testing.T) {
 		t.Errorf("a variable under the prefix that no item reads left the host with status %d",
 			got.code)
 	}
-	requireRecord(t, textRecords(got.stdout), "stdout", readyMsg, moduleAttrKey, appModuleName)
+	requireRecord(t, textRecords(got.stdout), "stdout", readyMsg, log.ModuleAttrKey, appModuleName)
 	requireContains(t, got.stderr, "MINIHOST_SERVICE_HOST", "the startup diagnostics")
 }
 
@@ -634,10 +630,10 @@ func TestSigintTriggersReverseOrderShutdown(t *testing.T) {
 			got.code)
 	}
 	recs := textRecords(got.stdout)
-	appStop := recordIndex(t, recs, stopMsg, moduleAttrKey, appModuleName)
-	greeterStop := recordIndex(t, recs, stopMsg, moduleAttrKey, localModuleName)
-	appClose := recordIndex(t, recs, closeMsg, moduleAttrKey, appModuleName)
-	greeterClose := recordIndex(t, recs, closeMsg, moduleAttrKey, localModuleName)
+	appStop := recordIndex(t, recs, stopMsg, log.ModuleAttrKey, appModuleName)
+	greeterStop := recordIndex(t, recs, stopMsg, log.ModuleAttrKey, localModuleName)
+	appClose := recordIndex(t, recs, closeMsg, log.ModuleAttrKey, appModuleName)
+	greeterClose := recordIndex(t, recs, closeMsg, log.ModuleAttrKey, localModuleName)
 
 	// The application requires the greeter capability, so the greeter is
 	// constructed first and released last, in both stages.
@@ -669,9 +665,12 @@ func TestRecordsCarryTheWritingModule(t *testing.T) {
 	// Neither module puts its own name into the call: the name is on the
 	// logger each took through Named, so a module logging through the
 	// process default logger instead would write these same messages with
-	// no module attribute at all.
-	requireRecord(t, recs, "stdout", stopMsg, moduleAttrKey, appModuleName)
-	requireRecord(t, recs, "stdout", closeMsg, moduleAttrKey, localModuleName)
+	// no module attribute at all. The key these records are read by is the
+	// one pkg/log exports, and what is read is the child process's real
+	// output: a binding that moved to another key would leave these records
+	// unfound rather than satisfy the case.
+	requireRecord(t, recs, "stdout", stopMsg, log.ModuleAttrKey, appModuleName)
+	requireRecord(t, recs, "stdout", closeMsg, log.ModuleAttrKey, localModuleName)
 }
 
 func TestDependantCloseRecordStillReachesTheFile(t *testing.T) {
@@ -689,8 +688,8 @@ func TestDependantCloseRecordStillReachesTheFile(t *testing.T) {
 	// while the process would still exit cleanly, which is why the exit
 	// status cannot be the judge of this.
 	for _, module := range [...]string{appModuleName, localModuleName} {
-		stop := recordIndex(t, recs, stopMsg, moduleAttrKey, module)
-		closed := recordIndex(t, recs, closeMsg, moduleAttrKey, module)
+		stop := recordIndex(t, recs, stopMsg, log.ModuleAttrKey, module)
+		closed := recordIndex(t, recs, closeMsg, log.ModuleAttrKey, module)
 		if closed < stop {
 			t.Errorf("%s closed at %d, before it stopped at %d:\n%s",
 				module, closed, stop, formatRecords(recs))
@@ -709,7 +708,7 @@ func TestModuleRecordDuringNewReachesTheConfiguredFile(t *testing.T) {
 	// already in the configured file: declaring the dependency on the
 	// logging capability is what put logging ahead of it.
 	requireRecord(t, readLog(t, logFile), "the log file", configuredMsg,
-		moduleAttrKey, remoteModuleName, addrAttrKey, "cli:7000")
+		log.ModuleAttrKey, remoteModuleName, addrAttrKey, "cli:7000")
 	requireNoRecord(t, textRecords(got.stdout), "stdout", configuredMsg)
 }
 
@@ -730,7 +729,7 @@ func TestContextPathCarriesTheInjectedLogger(t *testing.T) {
 	// passed log.Default() would put this record on standard output with no
 	// module attribute, and the call site would look exactly the same.
 	greeting := requireRecord(t, readLog(t, logFile), "the log file", greetingMsg,
-		moduleAttrKey, appModuleName)
+		log.ModuleAttrKey, appModuleName)
 	if greeting[greetingIDAttrKey] == "" {
 		t.Errorf("the greeting record carries no %s, so the attributes bound at the "+
 			"injection point did not travel with the logger:\n%s", greetingIDAttrKey, greeting)
@@ -750,7 +749,7 @@ func TestDefaultOutputIsTextOnStdout(t *testing.T) {
 	// Exactly one: the default is a single output to standard output, and a
 	// configuration that ended up with two of them would write every record
 	// twice down the same stream.
-	if n := countRecords(textRecords(got.stdout), readyMsg, moduleAttrKey, appModuleName); n != 1 {
+	if n := countRecords(textRecords(got.stdout), readyMsg, log.ModuleAttrKey, appModuleName); n != 1 {
 		t.Errorf("stdout carries %d ready records in the text format, want exactly 1:\n%s",
 			n, got.stdout)
 	}
@@ -769,10 +768,10 @@ func TestConfiguredOutputTakesRecordsOffStdout(t *testing.T) {
 	}
 	inFile := readLog(t, logFile)
 	onStdout := textRecords(got.stdout)
-	requireRecord(t, inFile, "the log file", readyMsg, moduleAttrKey, appModuleName)
-	requireRecord(t, inFile, "the log file", stopMsg, moduleAttrKey, appModuleName)
-	requireNoRecord(t, onStdout, "stdout", readyMsg, moduleAttrKey, appModuleName)
-	requireNoRecord(t, onStdout, "stdout", stopMsg, moduleAttrKey, appModuleName)
+	requireRecord(t, inFile, "the log file", readyMsg, log.ModuleAttrKey, appModuleName)
+	requireRecord(t, inFile, "the log file", stopMsg, log.ModuleAttrKey, appModuleName)
+	requireNoRecord(t, onStdout, "stdout", readyMsg, log.ModuleAttrKey, appModuleName)
+	requireNoRecord(t, onStdout, "stdout", stopMsg, log.ModuleAttrKey, appModuleName)
 	// main is not a module and writes through the process default logger,
 	// which goes to standard output whatever the configuration says. That is
 	// the whole point of the split: a record turning up here rather than in
@@ -808,6 +807,10 @@ func TestConfiguredCredentialNeverReachesAnyDestination(t *testing.T) {
 	// a module that stopped logging the credential at all. token_given is
 	// derived from the credential without carrying it, so it is true only if
 	// the value from the command line really reached the binding.
+	//
+	// The replacement asserted below is the one pkg/log exports, and it is
+	// asserted on both destinations' real output: a redaction layer leaving
+	// any other text behind would leave these records unfound.
 	for _, side := range [...]struct {
 		what string
 		recs []record
@@ -816,8 +819,8 @@ func TestConfiguredCredentialNeverReachesAnyDestination(t *testing.T) {
 		{"the log file", jsonRecords(string(logged))},
 	} {
 		requireRecord(t, side.recs, side.what, configuredMsg,
-			moduleAttrKey, remoteModuleName,
-			remoteTokenKey, maskedValue,
+			log.ModuleAttrKey, remoteModuleName,
+			remoteTokenKey, log.MaskedText,
 			tokenGivenKey, "true")
 	}
 }

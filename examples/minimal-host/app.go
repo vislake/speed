@@ -36,12 +36,6 @@ const (
 	greetingIDAttrKey = "greeting_id"
 )
 
-// moduleAttrKey is the key of the attribute log.Logger.Named binds, the one an
-// operator filters a module's records by. It is reproduced here because pkg/log
-// does not export it: this host's own cases have to name it, and a host that
-// filters its records in a collector has to write it down as well.
-const moduleAttrKey = "module"
-
 // greetings counts the greetings this process produced, and is what gives each
 // one the identifier its records are correlated by. A real entry point mints
 // one per request; this host produces exactly one.
