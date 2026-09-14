@@ -16,6 +16,8 @@ that takes the capability up without naming either.
   [`docs/design/modules/design-core.md`](../../docs/design/modules/design-core.md)
   and
   [`docs/design/modules/design-config.md`](../../docs/design/modules/design-config.md).
+- The logging this host narrates its run through:
+  [`docs/design/modules/design-log.md`](../../docs/design/modules/design-log.md).
 - The decisions behind the shape of a host:
   [`docs/adr/`](../../docs/adr/) — the assembly bootstrap above all.
 - What this host itself demonstrates: the package comment in `main.go`
