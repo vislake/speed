@@ -13,8 +13,10 @@ import (
 
 // Module is the descriptor an implementation subpackage registers. name is the
 // module's name in the registry, and newEngine builds the routing engine one
-// endpoint's routes are mounted on — the seam that keeps the engine's own type
-// off this package's surface.
+// endpoint's routes are mounted on. That function is the seam between this
+// package and an implementation subpackage, and it is what keeps the engine's
+// own type off this package's surface; a module that registers routes goes
+// through Endpoint and never meets an engine.
 //
 // The root package registers nothing by itself. A host chooses an entry point
 // by importing the subpackage that binds the engine it wants, and importing
@@ -27,10 +29,20 @@ import (
 // fails the startup instead of quietly taking the registrations that were meant
 // for this one.
 //
-// config is an implicit dependency of every module and is not declared. The
-// Logger capability is declared optional: without it nothing is injected into
-// the request context, and the request path's records reach the process default
-// logger's destination rather than the configured one.
+// Three packages are depended on. core carries the capability tokens, the
+// declared resources and the instance lookups; config is where the endpoints
+// are read from, an implicit dependency of every module that no descriptor
+// declares; log supplies the token of the optional dependency below and the
+// context accessors the base layer injects through.
+//
+// The dependency on Logger is declared optional, and that declaration is a
+// statement of contract rather than a branch a host reaches. This package
+// imports pkg/log, which registers itself with the process registry at package
+// initialisation, so every host that imports this module transitively carries a
+// logging module. The absent case only stands in a registry assembled by hand,
+// which is how the tests here reach it: nothing is injected into the request
+// context, and the request path's records reach the process default logger's
+// destination rather than the configured one.
 func Module(name string, newEngine func() Engine) core.Module {
 	if newEngine == nil {
 		panic(fmt.Sprintf("http: Module(%q, nil) has no engine to build. Pass the function that "+
@@ -65,14 +77,18 @@ func Module(name string, newEngine func() Engine) core.Module {
 			return newModule(reader, newEngine, injected)
 		},
 
-		// The gate is opened in Migrate and sealed in Start, so the window
-		// registrations are accepted in is exactly the Init stage. Neither
-		// end of it could be this module's own Init or Serve callback: a
+		// The gate is opened in Migrate and sealed in Start, the two
+		// stage slots the design's stage table gives it. The window that
+		// leaves open is exactly the Init stage, because stages advance one
+		// at a time: this module's Migrate callback runs before the assembly
+		// enters Init, and its Start callback runs once Init has ended.
+		// Neither end could be this module's own Init or Serve callback — a
 		// module that never declared a dependency on Router may legally
-		// resolve it and register in an Init that runs before this one, and
-		// the Start stage together with the Serve callbacks ordered ahead of
-		// this module are all outside Init while this module has not reached
-		// its own Serve yet.
+		// resolve it and register from an Init that runs before this one,
+		// and the Start stage together with the Serve callbacks ordered
+		// ahead of this module all lie outside Init. This module migrates
+		// nothing and has no service of its own to start, so the two slots
+		// have no other use.
 		Migrate: func(_ context.Context, _ *core.Registry, instance any) error {
 			if r, ok := productOf(instance); ok {
 				r.open()
@@ -166,9 +182,11 @@ func newModule(reader config.Reader, newEngine func() Engine, injected *slog.Log
 	r.injected = injected
 	r.logger = injected
 	if r.logger == nil {
-		// No Logger capability in this assembly. This module's own
-		// diagnostics still have somewhere to go; what the absence changes
-		// is that nothing is injected into the request context.
+		// No Logger capability in this assembly, a state reached only by
+		// building the registry by hand: importing this package pulls in
+		// pkg/log, which registers itself. This module's own diagnostics
+		// still have somewhere to go; what the absence changes is that
+		// nothing is injected into the request context.
 		r.logger = log.Default()
 	}
 	return r, nil

@@ -8,6 +8,7 @@ import (
 	"reflect"
 	"testing"
 
+	"github.com/vislake/speed/pkg/config"
 	"github.com/vislake/speed/pkg/core"
 	"github.com/vislake/speed/pkg/log"
 )
@@ -143,9 +144,15 @@ func TestLoggerRequirementIsOptional(t *testing.T) {
 // port. A host chooses an entry point by importing the subpackage that binds
 // the engine it wants; the registration surface and the request helpers come
 // without one.
+//
+// Both names are looked up: "http" names this release unit and "http.stdmux"
+// is what the shipped subpackage registers as, and neither may appear from an
+// import of this package alone.
 func TestRootPackageRegistersNothing(t *testing.T) {
-	if _, found := core.ProcessRegistry.Lookup("http"); found {
-		t.Error("importing the root package registered an entry point module")
+	for _, name := range []string{"http", "http.stdmux"} {
+		if _, found := core.ProcessRegistry.Lookup(name); found {
+			t.Errorf("importing the root package registered a module named %q", name)
+		}
 	}
 	for _, m := range core.ProcessRegistry.Modules() {
 		for _, p := range m.Provides {
@@ -154,6 +161,51 @@ func TestRootPackageRegistersNothing(t *testing.T) {
 			}
 		}
 	}
+}
+
+// TestConfigIsUndeclaredAndStillRequired pins the one dependency no descriptor
+// states. config is implicit for every module and is therefore absent from
+// Requires, which does not make it optional: the endpoints are read from it and
+// there is nothing to serve without them. A Prepare that swallowed the missing
+// provider, or fell back to an empty endpoint set, would let a host that forgot
+// the config module start up and stand down for "no endpoint configured",
+// naming a configuration key instead of the module that has to deliver the
+// reader.
+func TestConfigIsUndeclaredAndStillRequired(t *testing.T) {
+	m := testModule()
+	for i, req := range m.Requires {
+		if reflect.TypeOf(req.Token) == reflect.TypeFor[*config.Reader]() {
+			t.Errorf("Requires[%d] declares config, which every module depends on implicitly", i)
+		}
+	}
+
+	_, err := m.Prepare(context.Background(), core.New())
+	if !errors.Is(err, core.ErrMissingProvider) {
+		t.Fatalf("Prepare against a registry that has no config module: %v", err)
+	}
+	mustContain(t, err.Error(), "configuration", "what the startup is missing")
+}
+
+// TestImportingThisPackageCarriesALoggingModule pins the half of the optional
+// dependency that makes it a statement of contract rather than a branch hosts
+// reach: this package imports pkg/log, which registers itself at package
+// initialisation, so every host that imports this module transitively carries a
+// logging module. The absent case documented on Module stands only in a
+// registry assembled by hand.
+//
+// Should the import go — or should pkg/log stop registering itself — the
+// documented default behaviour would start applying to real hosts, and this is
+// where that shows up.
+func TestImportingThisPackageCarriesALoggingModule(t *testing.T) {
+	for _, m := range core.ProcessRegistry.Modules() {
+		for _, p := range m.Provides {
+			if reflect.TypeOf(p.Token) == reflect.TypeFor[*log.Logger]() {
+				return
+			}
+		}
+	}
+	t.Error("no module in the process registry delivers Logger, although importing this " +
+		"package pulls pkg/log in and that registers itself")
 }
 
 // TestModuleWithoutAnEngineIsACallSiteError pins the seam's one requirement.

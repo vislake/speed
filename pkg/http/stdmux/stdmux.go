@@ -21,13 +21,22 @@ import (
 	speedhttp "github.com/vislake/speed/pkg/http"
 )
 
-// moduleName is this module's name in the registry. It is the plain "http"
-// rather than the subpackage's own name: the name is what a diagnostic line
-// calls the entry point, and which engine is behind it is not what a reader of
-// that line is asking about. Two entry point implementations in one process
-// therefore collide on the name at registration, before the exclusive delivery
-// of Router could be resolved.
-const moduleName = "http"
+// moduleName is this module's name in the registry: the release unit's name
+// plus this subpackage's, which is the form the design gives an implementation
+// subpackage. A diagnostic line naming it therefore says both which entry point
+// it is about and which engine is behind it, and two entry point
+// implementations in one process are two distinct registrations rather than a
+// duplicate name at init time.
+//
+// The configuration namespace is a different thing and stays "http". Input
+// items hang from the namespace a schema declares and the module name takes no
+// part in those paths, so this name does not move the configuration section.
+// Both implementation subpackages consequently read the same namespace, which
+// is one of the reasons the design gives for the exclusive delivery of Router
+// seldom being where a second entry point is caught: two of them declare the
+// same input items, and the manifest config collects fails over that before
+// resolution is reached.
+const moduleName = "http.stdmux"
 
 // init registers this module with the process registry, so a host that imports
 // this package has its entry point assembled from its configuration.

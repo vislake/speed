@@ -14,10 +14,24 @@ import (
 // TestModuleRegistersItself pins what importing this package is meant to be
 // enough for: the host writes the import and the entry point is assembled from
 // its configuration, with no registration call of its own.
+//
+// The name is written out here instead of being read from the constant, which
+// is the only way this pins anything: a lookup by moduleName follows the
+// constant wherever it goes and passes under any name at all. The absence of a
+// module under "http" is the other half of the same statement — that is the
+// release unit, and no module registers under it.
 func TestModuleRegistersItself(t *testing.T) {
-	registered, found := core.ProcessRegistry.Lookup(moduleName)
+	const name = "http.stdmux"
+	if moduleName != name {
+		t.Errorf("this module registers as %q, and an implementation subpackage is named %q, "+
+			"the release unit plus the subpackage", moduleName, name)
+	}
+	if _, found := core.ProcessRegistry.Lookup("http"); found {
+		t.Error(`a module is registered under "http", which names the release unit and not a module`)
+	}
+	registered, found := core.ProcessRegistry.Lookup(name)
 	if !found {
-		t.Fatalf("importing this package did not register a module named %q", moduleName)
+		t.Fatalf("importing this package did not register a module named %q", name)
 	}
 	if len(registered.Provides) != 1 ||
 		reflect.TypeOf(registered.Provides[0].Token) != reflect.TypeFor[*speedhttp.Router]() {
