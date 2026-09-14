@@ -2,10 +2,11 @@
 // pkg/db declares.
 //
 // It binds the PostgreSQL driver, names the configuration namespace this
-// engine's input items hang under, and supplies the cross-process migration
-// mutex its dialect owes the migration run. The connection, plugin, encryption
-// and migration logic are pkg/db's, shared with every other implementation;
-// what is dialect-specific stops at the driver, the mutex and the namespace.
+// engine's input items hang under, supplies the cross-process migration mutex
+// its dialect owes the migration run, and registers the module that assembles
+// all of it. The connection, plugin, encryption and migration logic are
+// pkg/db's, shared with every other implementation; what is dialect-specific
+// stops at the driver, the mutex, the namespace and the module registration.
 //
 // The namespace is this engine's alone, and that is load-bearing rather than
 // tidy. The configuration manifest is collected from every registered module,
@@ -55,7 +56,13 @@ const (
 	// migration mutex, relative to ConfigNamespace. Only an implementation
 	// that offers a mutex declares it; one that needs none has nothing to
 	// wait for and would be offering a dial that does nothing.
-	MigrationLockTimeoutKey = "migration-lock-timeout"
+	//
+	// The name is pkg/db's, and this is that constant rather than a second
+	// spelling of it. The declaration of the item is synthesised by the root
+	// package, so a copy here would be free to drift from the one a host can
+	// actually set, and this subpackage names the item in the timeout message
+	// — a message pointing at a key that does not exist is worse than none.
+	MigrationLockTimeoutKey = db.MigrationLockTimeoutKey
 	// DefaultMigrationLockTimeout is how long a replica waits for another
 	// replica to finish applying migrations before it gives up.
 	DefaultMigrationLockTimeout = 5 * time.Minute
