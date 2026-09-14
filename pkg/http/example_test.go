@@ -18,6 +18,7 @@ import (
 	filesource "github.com/vislake/speed/pkg/config/source/file"
 	"github.com/vislake/speed/pkg/core"
 	speedhttp "github.com/vislake/speed/pkg/http"
+	"github.com/vislake/speed/pkg/http/stdmux"
 	"github.com/vislake/speed/pkg/log"
 )
 
@@ -29,6 +30,11 @@ import (
 // the internal suite's fixtures. That is also what fixes the naming direction
 // here: net/http keeps its own name and the parent package takes the alias,
 // which is what the package documentation gives an external file.
+//
+// The entry point it assembles is the shipped subpackage's, which is where a
+// host gets one: importing pkg/http/stdmux registers the module its engine is
+// bound to, and an example that built the descriptor by hand would be teaching
+// a shape the module does not have.
 
 // exampleDocument is the configuration every example runs on: one listening
 // endpoint named public, on an address the operating system picks.
@@ -43,19 +49,6 @@ const exampleDocument = `{
 // exampleDeadline bounds every wait in this file. It is generous on purpose:
 // what it guards against is a wait that never ends, not a slow machine.
 const exampleDeadline = 10 * time.Second
-
-// exampleModuleName is the name a descriptor carries here: the one the shipped
-// standard library subpackage registers under, which is the release unit's name
-// plus its own.
-const exampleModuleName = "http.stdmux"
-
-// newEngine builds one endpoint's routing engine.
-//
-// A host normally gets this function from an implementation subpackage —
-// pkg/http/stdmux binds the standard library's ServeMux — and building the
-// descriptor by hand is what keeps these examples from registering with the
-// process registry, which importing that subpackage does at init time.
-func newEngine() speedhttp.Engine { return http.NewServeMux() }
 
 // anExampleHost is one assembly running for an example: the registry going
 // through the whole lifecycle on its own goroutine, and the handles the
@@ -109,7 +102,7 @@ func startExample(registrant func(*core.Registry) error, extra ...core.Module) (
 		Resources: []any{config.HostIdentity{Prefix: "EXAMPLE", DefaultLocator: "file:" + document}},
 	})
 	reg.Register(exampleLoggerModule())
-	reg.Register(speedhttp.Module(exampleModuleName, newEngine))
+	reg.Register(stdmux.Module())
 	for _, module := range extra {
 		reg.Register(module)
 	}

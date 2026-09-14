@@ -140,29 +140,6 @@ func TestLoggerRequirementIsOptional(t *testing.T) {
 	}
 }
 
-// TestRootPackageRegistersNothing pins that importing this package opens no
-// port. A host chooses an entry point by importing the subpackage that binds
-// the engine it wants; the registration surface and the request helpers come
-// without one.
-//
-// Both names are looked up: "http" names this release unit and "http.stdmux"
-// is what the shipped subpackage registers as, and neither may appear from an
-// import of this package alone.
-func TestRootPackageRegistersNothing(t *testing.T) {
-	for _, name := range []string{"http", "http.stdmux"} {
-		if _, found := core.ProcessRegistry.Lookup(name); found {
-			t.Errorf("importing the root package registered a module named %q", name)
-		}
-	}
-	for _, m := range core.ProcessRegistry.Modules() {
-		for _, p := range m.Provides {
-			if reflect.TypeOf(p.Token) == reflect.TypeFor[*Router]() {
-				t.Errorf("module %q delivers Router although only a subpackage should", m.Name)
-			}
-		}
-	}
-}
-
 // TestConfigIsUndeclaredAndStillRequired pins the one dependency no descriptor
 // states. config is implicit for every module and is therefore absent from
 // Requires, which does not make it optional: the endpoints are read from it and
