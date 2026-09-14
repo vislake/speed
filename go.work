@@ -4,6 +4,7 @@ use (
 	./examples/minimal-host
 	./pkg/config
 	./pkg/core
+	./pkg/db
 	./pkg/http
 	./pkg/log
 )
